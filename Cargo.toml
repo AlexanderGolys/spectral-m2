@@ -1,0 +1,16 @@
+[package]
+name = "pretty-shell"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "m2sh"
+path = "src/main.rs"
+
+[dependencies]
+crossterm = { version = "0.29.0", features = ["osc52"] }
+ratatui = "0.30.0"
+tree-sitter = "0.26.8"
+tree-sitter-highlight = "0.26.8"
+tree-sitter-language = "0.1.7"
+tree-sitter-macaulay2 = "2.3.2"
