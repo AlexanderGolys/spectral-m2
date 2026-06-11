@@ -1,10 +1,10 @@
 [package]
-name = "pretty-shell"
+name = "spectral-m2"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "m2sh"
+name = "spectral-m2"
 path = "src/main.rs"
 
 [dependencies]

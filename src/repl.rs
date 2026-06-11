@@ -3,8 +3,7 @@ use std::time::Duration;
 
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyModifiers,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -18,15 +17,26 @@ use ratatui::widgets::Paragraph;
 use ratatui::Terminal;
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
+use std::error::Error;
+
 use crate::m2_backend::{M2Backend, M2Result};
 
 const USER_BG: Color = Color::Rgb(20, 22, 30);
-const OUTPUT_BG: Color = Color::Rgb(34, 36, 40);
-const ERROR_BG: Color = Color::Rgb(36, 18, 18);
-const LINE_NUMBER_FG: Color = Color::DarkGray;
-const INPUT_BOTTOM_GAP: u16 = 1;
+/// Tint behind code lines (live input and transcript echoes). Code has no
+/// border, so a background band can't collide with a frame.
+const INPUT_BG: Color = Color::Rgb(26, 28, 38);
+const VALUE_FG: Color = Color::Rgb(214, 217, 224);
+const ERROR_FG: Color = Color::Rgb(240, 150, 150);
+const TYPE_FG: Color = Color::Rgb(196, 167, 110);
+/// Muted, low-contrast frame around output boxes — felt, not shouted.
+const BORDER_FG: Color = Color::Rgb(72, 78, 96);
+const ERROR_BORDER_FG: Color = Color::Rgb(128, 78, 78);
 const MAX_INPUT_HEIGHT: u16 = 8;
 const INPUT_PLACEHOLDER: &str = "Type M2 code...";
+/// Width of the left status column carrying the `oN` / prompt marker.
+const GUTTER_W: u16 = 5;
+/// Floor for the output box width on very narrow terminals.
+const MIN_BOX_W: u16 = 8;
 
 const HIGHLIGHT_NAMES: &[&str] = &[
     "comment",
@@ -67,7 +77,6 @@ enum TranscriptEntry {
         code: String,
     },
     Output {
-        number: usize,
         result: String,
         type_info: Option<String>,
         is_error: bool,
@@ -93,9 +102,9 @@ impl App {
             input: String::new(),
             input_cursor: 0,
             input_number,
-            transcript: vec![TranscriptEntry::System(format!(
-                "pretty-shell — Macaulay2 highlighted REPL"
-            ))],
+            transcript: vec![TranscriptEntry::System(
+                "spectral-m2 — Macaulay2 highlighted REPL".to_string(),
+            )],
             highlighter: SyntaxHighlighter::new(),
             scroll_offset: 0,
         }
@@ -108,13 +117,16 @@ impl App {
         }
         let number = self.input_number;
 
-        self.transcript.push(TranscriptEntry::Input { number, code: self.input.clone() });
+        self.transcript.push(TranscriptEntry::Input {
+            number,
+            code: self.input.clone(),
+        });
 
         match self.backend.evaluate(self.input.trim()) {
             Ok(M2Result { is_error, output }) => {
-                let (result_text, type_info) = parse_m2_output(&output);
+                let (result_text, type_info) =
+                    clean_m2_output(&output, self.input.trim(), is_error);
                 self.transcript.push(TranscriptEntry::Output {
-                    number,
                     result: result_text,
                     type_info,
                     is_error,
@@ -122,7 +134,6 @@ impl App {
             }
             Err(e) => {
                 self.transcript.push(TranscriptEntry::Output {
-                    number,
                     result: format!("Communication error: {}", e),
                     type_info: None,
                     is_error: true,
@@ -142,8 +153,9 @@ impl App {
             (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
                 return false;
             }
-            (KeyCode::Enter, modifiers) if modifiers.contains(KeyModifiers::SHIFT)
-                || modifiers.contains(KeyModifiers::ALT) =>
+            (KeyCode::Enter, modifiers)
+                if modifiers.contains(KeyModifiers::SHIFT)
+                    || modifiers.contains(KeyModifiers::ALT) =>
             {
                 self.insert_input_char('\n');
             }
@@ -241,7 +253,11 @@ impl App {
             .unwrap_or(line_starts.len());
 
         if current_line > 0 {
-            let target_line_start = if current_line == 0 { 0 } else { line_starts[current_line - 1] };
+            let target_line_start = if current_line == 0 {
+                0
+            } else {
+                line_starts[current_line - 1]
+            };
             self.input_cursor = target_line_start;
         } else {
             self.input_cursor = 0;
@@ -287,11 +303,13 @@ impl App {
     }
 
     fn calculate_input_height(&self) -> u16 {
-        if self.input.is_empty() {
-            return 2 + INPUT_BOTTOM_GAP;
-        }
-        let lines = self.input.lines().count().max(1) as u16;
-        (lines + INPUT_BOTTOM_GAP + 1).min(MAX_INPUT_HEIGHT + 2).max(2)
+        let lines = if self.input.is_empty() {
+            1
+        } else {
+            self.input.lines().count().max(1) as u16
+        };
+        // +1 for the breathing-room row below the prompt.
+        (lines + 1).clamp(2, MAX_INPUT_HEIGHT + 1)
     }
 
     fn draw_transcript(&mut self, frame: &mut ratatui::Frame, area: Rect) {
@@ -300,73 +318,54 @@ impl App {
         for entry in &self.transcript {
             match entry {
                 TranscriptEntry::Input { number, code } => {
-                    let prompt = format!("i{} : ", number);
+                    lines.push(Line::default()); // margin above the code
                     for (i, line) in code.lines().enumerate() {
                         let highlighted = self.highlighter.highlight_m2(line);
-                        let spans = highlight_to_spans(&highlighted);
-                        if i == 0 {
-                            let mut line_spans = vec![Span::styled(
-                                prompt.clone(),
-                                Style::default().fg(Color::Cyan),
-                            )];
-                            line_spans.extend(spans);
-                            lines.push(Line::from(line_spans));
+                        let marker = if i == 0 {
+                            format!("i{number}")
                         } else {
-                            let mut line_spans = vec![Span::styled(
-                                "     ".to_string(),
-                                Style::default().fg(LINE_NUMBER_FG),
-                            )];
-                            line_spans.extend(spans);
-                            lines.push(Line::from(line_spans));
+                            String::new()
+                        };
+                        // The code line is a borderless tinted band: gutter + the
+                        // highlighted code (re-backed onto the tint) + a fill to
+                        // the right edge.
+                        let mut spans = vec![gutter_span(&marker, Color::Cyan, INPUT_BG)];
+                        for mut s in highlight_to_spans(&highlighted) {
+                            s.style = s.style.bg(INPUT_BG);
+                            spans.push(s);
                         }
+                        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+                        if (used as u16) < area.width {
+                            spans.push(Span::styled(
+                                " ".repeat(area.width as usize - used),
+                                Style::default().bg(INPUT_BG),
+                            ));
+                        }
+                        lines.push(Line::from(spans));
                     }
+                    lines.push(Line::default()); // margin below the code
                 }
                 TranscriptEntry::Output {
-                    number,
                     result,
                     type_info,
                     is_error,
                 } => {
-                    let bg = if *is_error { ERROR_BG } else { OUTPUT_BG };
-                    let result_fg = if *is_error {
-                        Color::LightRed
+                    let content: Vec<String> = if result.is_empty() {
+                        Vec::new()
                     } else {
-                        Color::White
+                        result.lines().map(|s| s.to_string()).collect()
                     };
-
-                    for (i, line) in result.lines().enumerate() {
-                        if i == 0 {
-                            let mut line_spans = vec![
-                                Span::styled(
-                                    format!("o{} : ", number),
-                                    Style::default().fg(Color::Green),
-                                ),
-                                Span::styled(line.to_string(), Style::default().fg(result_fg).bg(bg)),
-                            ];
-                            if let Some(ti) = type_info {
-                                line_spans.push(Span::styled(
-                                    format!("  {}", ti),
-                                    Style::default()
-                                        .fg(Color::Yellow)
-                                        .bg(bg)
-                                        .add_modifier(Modifier::ITALIC),
-                                ));
-                            }
-                            lines.push(Line::from(line_spans));
-                        } else {
-                            lines.push(Line::from(Span::styled(
-                                format!("     {}", line),
-                                Style::default().fg(result_fg).bg(bg),
-                            )));
-                        }
+                    // Suppressed output (e.g. `z = 7;`) — nothing to show.
+                    if content.is_empty() && type_info.is_none() && !*is_error {
+                        continue;
                     }
-                    lines.push(Line::default());
+                    push_output_block(&mut lines, &content, type_info, *is_error, area.width);
                 }
                 TranscriptEntry::System(msg) => {
-                    lines.push(Line::from(Span::styled(
-                        msg.to_string(),
-                        Style::default().fg(Color::DarkGray),
-                    )));
+                    lines.push(Line::from(vec![
+                        gutter_span("", Color::DarkGray, USER_BG),
+                        Span::styled(msg.to_string(), Style::default().fg(Color::DarkGray)),
+                    ]));
                     lines.push(Line::default());
                 }
             }
@@ -374,18 +373,20 @@ impl App {
 
         let total_lines = lines.len();
         let visible_lines = area.height as usize;
-        let scroll = self.scroll_offset.max(
-            total_lines.saturating_sub(visible_lines),
-        );
+        let scroll = self
+            .scroll_offset
+            .max(total_lines.saturating_sub(visible_lines));
 
-        let visible: Vec<Line<'static>> = lines.into_iter().skip(scroll).take(visible_lines).collect();
+        let visible: Vec<Line<'static>> =
+            lines.into_iter().skip(scroll).take(visible_lines).collect();
 
         let paragraph = Paragraph::new(visible).style(Style::default().bg(USER_BG));
         frame.render_widget(paragraph, area);
     }
 
     fn draw_input_area(&mut self, frame: &mut ratatui::Frame, area: Rect) {
-        let prompt = format!("i{} : ", self.input_number);
+        // A borderless full-width tinted band; the distinct background separates
+        // it from the transcript above.
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         let input_lines: Vec<&str> = if self.input.is_empty() {
@@ -396,69 +397,226 @@ impl App {
 
         for (i, line) in input_lines.iter().enumerate() {
             let highlighted = self.highlighter.highlight_m2(line);
-            let spans = highlight_to_spans(&highlighted);
-            if i == 0 {
-                let mut line_spans = vec![Span::styled(
-                    prompt.clone(),
-                    Style::default().fg(Color::Cyan),
-                )];
-                line_spans.extend(spans);
-                if self.input.is_empty() {
-                    line_spans.push(Span::styled(
-                        INPUT_PLACEHOLDER.to_string(),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-                lines.push(Line::from(line_spans));
-            } else {
-                let mut line_spans = vec![Span::styled(
-                    "     ".to_string(),
-                    Style::default().fg(LINE_NUMBER_FG),
-                )];
-                line_spans.extend(spans);
-                lines.push(Line::from(line_spans));
+            // The live prompt keeps the `❯` glyph; only the released/echoed code
+            // in the transcript gets the `iN` label.
+            let marker = if i == 0 { "❯" } else { "" };
+            let mut line_spans = vec![gutter_span(marker, Color::Cyan, INPUT_BG)];
+            line_spans.extend(highlight_to_spans(&highlighted));
+            if i == 0 && self.input.is_empty() {
+                line_spans.push(Span::styled(
+                    INPUT_PLACEHOLDER.to_string(),
+                    Style::default().fg(Color::DarkGray),
+                ));
             }
+            lines.push(Line::from(line_spans));
         }
+        // Breathing room below the prompt (keeps it off the very bottom edge).
+        lines.push(Line::default());
 
-        let paragraph = Paragraph::new(lines).style(Style::default().bg(USER_BG));
+        let paragraph = Paragraph::new(lines).style(Style::default().bg(INPUT_BG));
         frame.render_widget(paragraph, area);
 
-        let cursor_line = self.input[..self.input_cursor]
-            .lines()
-            .count()
-            .max(1)
-            - 1;
+        let cursor_line = self.input[..self.input_cursor].lines().count().max(1) - 1;
         let cursor_col = self.input[..self.input_cursor]
             .lines()
             .last()
             .map(|l| l.chars().count())
             .unwrap_or(0);
 
-        let prompt_width = prompt.chars().count() as u16;
         frame.set_cursor_position(Position::new(
-            area.x + prompt_width + cursor_col as u16,
+            area.x + GUTTER_W + cursor_col as u16,
             area.y + cursor_line as u16,
         ));
     }
 }
 
-fn parse_m2_output(output: &str) -> (String, Option<String>) {
-    let lines: Vec<&str> = output.lines().collect();
-    if lines.is_empty() {
-        return (String::new(), None);
+/// The left status column: a right-aligned marker (`oN`, prompt glyph, …) padded
+/// to [`GUTTER_W`] on its own background, so it reads like an editor's gutter.
+fn gutter_span(label: &str, fg: Color, bg: Color) -> Span<'static> {
+    let w = GUTTER_W as usize;
+    let label_w = label.chars().count();
+    // Right-align the marker, always leaving one trailing space before content.
+    let pad = w.saturating_sub(label_w + 1);
+    let trailing = w.saturating_sub(pad + label_w);
+    let text = format!("{}{}{}", " ".repeat(pad), label, " ".repeat(trailing));
+    Span::styled(
+        text,
+        Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
+    )
+}
+
+/// Match a Macaulay2 session prefix like `i12 = ` or `o3 : `, returning the
+/// byte length of the prefix (tag, digits, space, separator, space) if present.
+fn io_prefix(s: &str, tag: u8, sep: u8) -> Option<usize> {
+    let b = s.as_bytes();
+    if b.is_empty() || b[0] != tag {
+        return None;
+    }
+    let mut i = 1;
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == 1 {
+        return None; // no digits after the tag
+    }
+    if i + 3 <= b.len() && b[i] == b' ' && b[i + 1] == sep && b[i + 2] == b' ' {
+        Some(i + 3)
+    } else {
+        None
+    }
+}
+
+/// A trailing `iN : ` prompt with nothing meaningful after it.
+fn is_trailing_prompt(s: &str) -> bool {
+    io_prefix(s, b'i', b':').is_some_and(|p| s[p..].trim().is_empty())
+}
+
+fn trim_leading_blank(lines: &mut Vec<String>) {
+    while lines.first().is_some_and(|l| l.trim().is_empty()) {
+        lines.remove(0);
+    }
+}
+
+fn trim_trailing_blank(lines: &mut Vec<String>) {
+    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
+}
+
+/// Strip the session scaffolding that `capture(.., UserMode => true)` wraps
+/// around a result: the echoed input prompt, the trailing next prompt, and the
+/// `oN = ` / `oN : Type` labels. Returns `(value, type)`.
+fn clean_m2_output(raw: &str, code: &str, is_error: bool) -> (String, Option<String>) {
+    let mut lines: Vec<String> = raw.lines().map(|s| s.to_string()).collect();
+
+    trim_leading_blank(&mut lines);
+
+    // Drop the echoed input: one transcript line per submitted input line.
+    if lines
+        .first()
+        .is_some_and(|l| io_prefix(l, b'i', b':').is_some())
+    {
+        let echo_n = code.lines().count().max(1);
+        for _ in 0..echo_n {
+            if lines.is_empty() {
+                break;
+            }
+            lines.remove(0);
+        }
+    }
+    trim_leading_blank(&mut lines);
+
+    if !is_error {
+        trim_trailing_blank(&mut lines);
+        if lines.last().is_some_and(|l| is_trailing_prompt(l)) {
+            lines.pop();
+        }
+        trim_trailing_blank(&mut lines);
     }
 
-    let last_line = lines.last().unwrap();
-    let type_pattern = " : ";
-    if let Some(pos) = last_line.rfind(type_pattern) {
-        let type_info = last_line[pos + 3..].to_string();
-        if !type_info.is_empty() && lines.len() > 1 {
-            let result_lines: Vec<&str> = lines[..lines.len() - 1].to_vec();
-            return (result_lines.join("\n"), Some(type_info));
+    // Pull off a trailing `oN : Type` annotation.
+    let mut type_info = None;
+    if !is_error {
+        if let Some(p) = lines.last().and_then(|l| io_prefix(l, b'o', b':')) {
+            type_info = Some(lines.last().unwrap()[p..].trim().to_string());
+            lines.pop();
+            trim_trailing_blank(&mut lines);
         }
     }
 
-    (output.to_string(), None)
+    // Drop the `oN = ` value prefix, preserving 2-D net alignment by removing
+    // the same number of leading columns from every value line.
+    if !is_error {
+        if let Some(plen) = lines.iter().find_map(|l| io_prefix(l, b'o', b'=')) {
+            for l in lines.iter_mut() {
+                *l = l.chars().skip(plen).collect();
+            }
+        }
+    }
+    trim_trailing_blank(&mut lines);
+
+    (lines.join("\n"), type_info)
+}
+
+/// Render a result as a framed box inset by one gutter on each side (so its
+/// right margin matches the left): a muted rounded border, the result type
+/// tucked into the top-right of the frame, and the value lines inside, wrapped
+/// to the interior width. The interior shares the transcript background, so the
+/// border is the box's only boundary — no offset fill box. The `iN` label lives
+/// on the code line above, not here (input and output share the counter).
+fn push_output_block(
+    out: &mut Vec<Line<'static>>,
+    content: &[String],
+    type_info: &Option<String>,
+    is_error: bool,
+    area_width: u16,
+) {
+    let value_fg = if is_error { ERROR_FG } else { VALUE_FG };
+    let border_fg = if is_error { ERROR_BORDER_FG } else { BORDER_FG };
+
+    // The box is inset by one gutter on each side, so its right margin matches
+    // the left. `inner` is the dash span between the corner glyphs; `text_w` is
+    // the value area, inset one padding space inside each vertical border.
+    let box_w = area_width.saturating_sub(2 * GUTTER_W).max(MIN_BOX_W) as usize;
+    let inner = box_w - 2;
+    let text_w = box_w - 4;
+
+    let border_style = Style::default().fg(border_fg);
+    let value_style = Style::default().fg(value_fg);
+    let type_style = Style::default().fg(TYPE_FG).add_modifier(Modifier::ITALIC);
+    let gutter = || gutter_span("", border_fg, USER_BG);
+
+    let type_str = type_info.as_deref().filter(|t| !t.is_empty());
+    let type_len = type_str.map(|t| t.chars().count()).unwrap_or(0);
+
+    // Top border: `╭──── Type ─╮`, the type tucked right (dropped if it won't fit).
+    let mut top = vec![gutter()];
+    match type_str.filter(|_| type_len + 4 <= inner) {
+        Some(t) => {
+            let lead = inner - (type_len + 2) - 1;
+            top.push(Span::styled(
+                format!("╭{} ", "─".repeat(lead)),
+                border_style,
+            ));
+            top.push(Span::styled(t.to_string(), type_style));
+            top.push(Span::styled(" ─╮".to_string(), border_style));
+        }
+        None => top.push(Span::styled(
+            format!("╭{}╮", "─".repeat(inner)),
+            border_style,
+        )),
+    }
+    out.push(Line::from(top));
+
+    // Value rows: `│ value… │`, wrapped to the interior width so a long result
+    // is never lost off the right edge.
+    for line in content {
+        let pieces: Vec<String> = if line.is_empty() {
+            vec![String::new()]
+        } else {
+            line.chars()
+                .collect::<Vec<_>>()
+                .chunks(text_w)
+                .map(|c| c.iter().collect())
+                .collect()
+        };
+        for val in pieces {
+            let pad = text_w - val.chars().count();
+            out.push(Line::from(vec![
+                gutter(),
+                Span::styled("│ ".to_string(), border_style),
+                Span::styled(val, value_style),
+                Span::styled(" ".repeat(pad), value_style),
+                Span::styled(" │".to_string(), border_style),
+            ]));
+        }
+    }
+
+    // Bottom border.
+    out.push(Line::from(vec![
+        gutter(),
+        Span::styled(format!("╰{}╯", "─".repeat(inner)), border_style),
+    ]));
 }
 
 struct SyntaxHighlighter {
@@ -469,18 +627,12 @@ struct SyntaxHighlighter {
 impl SyntaxHighlighter {
     fn new() -> Self {
         let lang = tree_sitter_macaulay2::language();
-        let config = HighlightConfiguration::new(
-            lang,
-            "macaulay2",
-            M2_HIGHLIGHTS_QUERY,
-            "",
-            "",
-        )
-        .ok()
-        .map(|mut c| {
-            c.configure(HIGHLIGHT_NAMES);
-            c
-        });
+        let config = HighlightConfiguration::new(lang, "macaulay3", M2_HIGHLIGHTS_QUERY, "", "")
+            .ok()
+            .map(|mut c| {
+                c.configure(HIGHLIGHT_NAMES);
+                c
+            });
 
         Self {
             config,
@@ -643,7 +795,7 @@ impl Drop for ReplTerminal {
     }
 }
 
-pub fn run(backend: M2Backend) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(backend: M2Backend) -> Result<(), Box<dyn Error>> {
     let mut app = App::new(backend);
     let mut terminal = ReplTerminal::enter()?;
 
@@ -669,4 +821,79 @@ pub fn run(backend: M2Backend) -> Result<(), Box<dyn std::error::Error>> {
 
     terminal.leave()?;
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::{clean_m2_output, push_output_block, GUTTER_W};
+
+    #[test]
+    fn output_box_lines_are_inset_by_one_gutter() {
+        // The long line exercises wrapping; every rendered box line must reach
+        // the right margin exactly — the box is inset by one gutter on each side,
+        // so each line spans the full width minus that single trailing gutter.
+        let content = ["x + y".to_string(), "z".to_string(), "q".repeat(400)];
+        for width in [40u16, 60, 96, 120] {
+            for ty in [None, Some("PolynomialRing".to_string())] {
+                for is_error in [false, true] {
+                    let mut lines = Vec::new();
+                    push_output_block(&mut lines, &content, &ty, is_error, width);
+                    for line in &lines {
+                        assert_eq!(
+                            line.width() as u16,
+                            width - GUTTER_W,
+                            "width={width} ty={ty:?} is_error={is_error}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn strips_echo_and_prompt_simple_value() {
+        let raw = "\ni1 : 2 + 2\n\no1 = 4\n\ni2 : ";
+        let (val, ty) = clean_m2_output(raw, "2 + 2", false);
+        assert_eq!(val, "4");
+        assert_eq!(ty, None);
+    }
+
+    #[test]
+    fn extracts_type_annotation() {
+        let raw = "\ni1 : parse \"2...2\"\n\no1 = {{Binary, {Token, 2}}}\n\no1 : List\n\ni2 : ";
+        let (val, ty) = clean_m2_output(raw, "parse \"2...2\"", false);
+        assert_eq!(val, "{{Binary, {Token, 2}}}");
+        assert_eq!(ty.as_deref(), Some("List"));
+    }
+
+    #[test]
+    fn preserves_2d_net_alignment() {
+        let raw = "\ni1 : R = QQ[x,y]; x^2 + y\n\n      2\no2 = x  + y\n\no2 : R\n\ni3 : ";
+        let (val, ty) = clean_m2_output(raw, "R = QQ[x,y]; x^2 + y", false);
+        assert_eq!(val, " 2\nx  + y");
+        assert_eq!(ty.as_deref(), Some("R"));
+    }
+
+    #[test]
+    fn multiline_input_echo_fully_stripped() {
+        let raw = "\ni1 : a = 1 +\n     2 + 3\n\no1 = 6\n\ni2 : ";
+        let (val, ty) = clean_m2_output(raw, "a = 1 +\n2 + 3", false);
+        assert_eq!(val, "6");
+        assert_eq!(ty, None);
+    }
+
+    #[test]
+    fn suppressed_assignment_is_empty() {
+        let raw = "\ni1 : z = 7;\n\ni2 : ";
+        let (val, ty) = clean_m2_output(raw, "z = 7;", false);
+        assert_eq!(val, "");
+        assert_eq!(ty, None);
+    }
+
+    #[test]
+    fn error_keeps_message_drops_echo() {
+        let raw = "\ni1 : 1/0\ncurrentString:1:1:(3):[9]: error: division by zero";
+        let (val, ty) = clean_m2_output(raw, "1/0", true);
+        assert_eq!(val, "currentString:1:1:(3):[9]: error: division by zero");
+        assert_eq!(ty, None);
+    }
 }

@@ -1,8 +1,12 @@
 mod m2_backend;
 mod repl;
 
+use std::process::exit;
+
+use m2_backend::M2Backend;
+
 fn main() {
-    match m2_backend::M2Backend::spawn() {
+    match M2Backend::spawn() {
         Ok(backend) => {
             if let Err(e) = repl::run(backend) {
                 eprintln!("Error: {}", e);
@@ -11,7 +15,7 @@ fn main() {
         Err(e) => {
             eprintln!("Failed to start Macaulay2: {}", e);
             eprintln!("Make sure M2 is installed and on your PATH.");
-            std::process::exit(1);
+            exit(1);
         }
     }
 }

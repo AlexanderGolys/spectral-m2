@@ -1,6 +1,9 @@
+use std::error::Error;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+use std::{env, fs, thread};
 
 const CODE_START: &str = "<<<M2_CODE>>>";
 const CODE_END: &str = "<<<M2_END>>>";
@@ -21,19 +24,19 @@ pub struct M2Backend {
 }
 
 impl M2Backend {
-    pub fn spawn() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn spawn() -> Result<Self, Box<dyn Error>> {
         let startup_script = include_str!("m2_startup.m2");
 
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
         drop(listener);
 
-        let tmp_dir = std::env::temp_dir();
-        let port_file = tmp_dir.join("m2sh_port");
-        std::fs::write(&port_file, port.to_string())?;
+        let tmp_dir = env::temp_dir();
+        let port_file = tmp_dir.join("spectral-m2_port");
+        fs::write(&port_file, port.to_string())?;
 
-        let script_path = tmp_dir.join("m2sh_startup.m2");
-        std::fs::write(&script_path, startup_script)?;
+        let script_path = tmp_dir.join("spectral-m2_startup.m2");
+        fs::write(&script_path, startup_script)?;
 
         let mut process = Command::new("M2")
             .arg("--script")
@@ -48,10 +51,10 @@ impl M2Backend {
         Self::wait_for_ready(&stream, &mut process)?;
 
         stream.set_nonblocking(false)?;
-        stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
-        stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
+        stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(10)))?;
 
-        let _ = std::fs::remove_file(&port_file);
+        let _ = fs::remove_file(&port_file);
 
         Ok(Self {
             process,
@@ -61,42 +64,30 @@ impl M2Backend {
         })
     }
 
-    fn connect_to_m2(
-        port: u16,
-        process: &mut Child,
-    ) -> Result<TcpStream, Box<dyn std::error::Error>> {
+    fn connect_to_m2(port: u16, process: &mut Child) -> Result<TcpStream, Box<dyn Error>> {
         let addr = format!("127.0.0.1:{}", port);
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         loop {
-            match process.try_wait()? {
-                Some(status) => {
-                    let mut stderr = String::new();
-                    if let Some(mut err) = process.stderr.take() {
-                        let _ = err.read_to_string(&mut stderr);
-                    }
-                    return Err(format!(
-                        "M2 process exited (status: {})\n{}",
-                        status,
-                        stderr.trim()
-                    )
-                    .into());
+            if let Some(status) = process.try_wait()? {
+                let mut stderr = String::new();
+                if let Some(mut err) = process.stderr.take() {
+                    let _ = err.read_to_string(&mut stderr);
                 }
-                None => {}
+                return Err(
+                    format!("M2 process exited (status: {})\n{}", status, stderr.trim()).into(),
+                );
             }
             if let Ok(stream) = TcpStream::connect(&addr) {
                 return Ok(stream);
             }
-            if start.elapsed() > std::time::Duration::from_secs(30) {
+            if start.elapsed() > Duration::from_secs(30) {
                 return Err("Timed out connecting to M2".into());
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(100));
         }
     }
 
-    fn wait_for_ready(
-        stream: &TcpStream,
-        process: &mut Child,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn wait_for_ready(stream: &TcpStream, process: &mut Child) -> Result<(), Box<dyn Error>> {
         let mut buf = String::new();
         let mut reader = BufReader::new(stream);
         loop {
@@ -107,7 +98,11 @@ impl M2Backend {
                     if let Some(mut err) = process.stderr.take() {
                         let _ = err.read_to_string(&mut stderr);
                     }
-                    return Err(format!("M2 closed before sending ready signal\n{}", stderr.trim()).into());
+                    return Err(format!(
+                        "M2 closed before sending ready signal\n{}",
+                        stderr.trim()
+                    )
+                    .into());
                 }
                 Err(e) => return Err(format!("Error reading from M2: {}", e).into()),
                 _ => {
@@ -119,7 +114,7 @@ impl M2Backend {
         }
     }
 
-    pub fn evaluate(&mut self, code: &str) -> Result<M2Result, Box<dyn std::error::Error>> {
+    pub fn evaluate(&mut self, code: &str) -> Result<M2Result, Box<dyn Error>> {
         self.input_counter += 1;
         self.history.push(code.to_string());
 
