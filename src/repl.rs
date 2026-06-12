@@ -13,29 +13,28 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Terminal;
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
+use std::collections::HashSet;
 use std::error::Error;
 
 use crate::m2_backend::{M2Backend, M2Result};
 
 const USER_BG: Color = Color::Rgb(20, 22, 30);
-/// Tint behind code lines (live input and transcript echoes). Code has no
-/// border, so a background band can't collide with a frame.
 const INPUT_BG: Color = Color::Rgb(26, 28, 38);
 const VALUE_FG: Color = Color::Rgb(214, 217, 224);
 const ERROR_FG: Color = Color::Rgb(240, 150, 150);
 const TYPE_FG: Color = Color::Rgb(196, 167, 110);
-/// Muted, low-contrast frame around output boxes — felt, not shouted.
+const WARN_FG: Color = Color::Rgb(232, 146, 64);
 const BORDER_FG: Color = Color::Rgb(72, 78, 96);
 const ERROR_BORDER_FG: Color = Color::Rgb(128, 78, 78);
+const WARN_BORDER_FG: Color = Color::Rgb(176, 104, 52);
+
 const MAX_INPUT_HEIGHT: u16 = 8;
 const INPUT_PLACEHOLDER: &str = "Type M2 code...";
-/// Width of the left status column carrying the `oN` / prompt marker.
 const GUTTER_W: u16 = 5;
-/// Floor for the output box width on very narrow terminals.
 const MIN_BOX_W: u16 = 8;
 
 const HIGHLIGHT_NAMES: &[&str] = &[
@@ -92,6 +91,9 @@ struct App {
     transcript: Vec<TranscriptEntry>,
     highlighter: SyntaxHighlighter,
     scroll_offset: usize,
+    history: Vec<String>,
+    history_pos: Option<usize>,
+    draft: String,
 }
 
 impl App {
@@ -107,15 +109,25 @@ impl App {
             )],
             highlighter: SyntaxHighlighter::new(),
             scroll_offset: 0,
+            history: Vec::new(),
+            history_pos: None,
+            draft: String::new(),
         }
     }
 
-    fn submit_input(&mut self) -> Option<()> {
+    fn submit_input(&mut self) {
         let code = self.input.trim().to_string();
         if code.is_empty() {
-            return Some(());
+            return;
         }
         let number = self.input_number;
+
+        // Record in history (skip consecutive duplicates), reset navigation.
+        if self.history.last() != Some(&code) {
+            self.history.push(code);
+        }
+        self.history_pos = None;
+        self.draft.clear();
 
         self.transcript.push(TranscriptEntry::Input {
             number,
@@ -145,7 +157,6 @@ impl App {
         self.input.clear();
         self.input_cursor = 0;
         self.scroll_offset = 0;
-        Some(())
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> bool {
@@ -188,10 +199,18 @@ impl App {
                 self.input_cursor = self.input.len();
             }
             (KeyCode::Up, _) => {
-                self.move_cursor_up();
+                if self.cursor_on_first_line() {
+                    self.history_prev();
+                } else {
+                    self.move_cursor_up();
+                }
             }
             (KeyCode::Down, _) => {
-                self.move_cursor_down();
+                if self.cursor_on_last_line() {
+                    self.history_next();
+                } else {
+                    self.move_cursor_down();
+                }
             }
             (KeyCode::PageUp, _) => {
                 self.scroll_offset = self.scroll_offset.saturating_add(5);
@@ -285,6 +304,56 @@ impl App {
         }
     }
 
+    /// True when no newline precedes the cursor — Up should recall history.
+    fn cursor_on_first_line(&self) -> bool {
+        !self.input[..self.input_cursor].contains('\n')
+    }
+
+    /// True when no newline follows the cursor — Down should advance history.
+    fn cursor_on_last_line(&self) -> bool {
+        !self.input[self.input_cursor..].contains('\n')
+    }
+
+    /// Replace the live input and park the cursor at its end.
+    fn load_input(&mut self, text: String) {
+        self.input_cursor = text.len();
+        self.input = text;
+    }
+
+    /// Step to an older history entry, stashing the draft on first recall.
+    fn history_prev(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+        let idx = match self.history_pos {
+            None => {
+                self.draft = self.input.clone();
+                self.history.len() - 1
+            }
+            Some(0) => return,
+            Some(i) => i - 1,
+        };
+        self.history_pos = Some(idx);
+        self.load_input(self.history[idx].clone());
+    }
+
+    /// Step to a newer history entry, restoring the draft past the newest.
+    fn history_next(&mut self) {
+        let idx = match self.history_pos {
+            None => return,
+            Some(i) if i + 1 < self.history.len() => i + 1,
+            Some(_) => {
+                self.history_pos = None;
+                let draft = self.draft.clone();
+                self.draft.clear();
+                self.load_input(draft);
+                return;
+            }
+        };
+        self.history_pos = Some(idx);
+        self.load_input(self.history[idx].clone());
+    }
+
     fn draw(&mut self, frame: &mut ratatui::Frame) {
         let size = frame.area();
         let input_height = self.calculate_input_height();
@@ -298,6 +367,10 @@ impl App {
             ])
             .split(size);
 
+        // Reset every cell first: `Paragraph::style` recolors backgrounds but
+        // leaves stale glyphs from prior frames in place, which show through as
+        // ghost rectangles. Clearing wipes the symbols so the fills are clean.
+        frame.render_widget(Clear, size);
         self.draw_transcript(frame, chunks[0]);
         self.draw_input_area(frame, chunks[1]);
     }
@@ -308,17 +381,36 @@ impl App {
         } else {
             self.input.lines().count().max(1) as u16
         };
-        // +1 for the breathing-room row below the prompt.
-        (lines + 1).clamp(2, MAX_INPUT_HEIGHT + 1)
+        // +2 for the breathing-room rows above and below the prompt.
+        (lines + 2).clamp(3, MAX_INPUT_HEIGHT + 2)
     }
 
     fn draw_transcript(&mut self, frame: &mut ratatui::Frame, area: Rect) {
         let mut lines: Vec<Line<'static>> = Vec::new();
+        // A full-width blank row carrying the code tint, so the margins around an
+        // echoed code block share its background rather than the transcript's.
+        let tint_row = || {
+            Line::from(Span::styled(
+                " ".repeat(area.width as usize),
+                Style::default().bg(INPUT_BG),
+            ))
+        };
 
-        for entry in &self.transcript {
+        for (idx, entry) in self.transcript.iter().enumerate() {
             match entry {
                 TranscriptEntry::Input { number, code } => {
-                    lines.push(Line::default()); // margin above the code
+                    // The marker echoes the result's status: red if the run
+                    // errored, orange if it warned, else cyan.
+                    let marker_color = match self.transcript.get(idx + 1) {
+                        Some(TranscriptEntry::Output { is_error: true, .. }) => ERROR_FG,
+                        Some(TranscriptEntry::Output { result, .. })
+                            if result.lines().any(is_diagnostic) =>
+                        {
+                            WARN_FG
+                        }
+                        _ => Color::Cyan,
+                    };
+                    lines.push(tint_row()); // margin above the code
                     for (i, line) in code.lines().enumerate() {
                         let highlighted = self.highlighter.highlight_m2(line);
                         let marker = if i == 0 {
@@ -329,7 +421,7 @@ impl App {
                         // The code line is a borderless tinted band: gutter + the
                         // highlighted code (re-backed onto the tint) + a fill to
                         // the right edge.
-                        let mut spans = vec![gutter_span(&marker, Color::Cyan, INPUT_BG)];
+                        let mut spans = vec![gutter_span(&marker, marker_color, INPUT_BG)];
                         for mut s in highlight_to_spans(&highlighted) {
                             s.style = s.style.bg(INPUT_BG);
                             spans.push(s);
@@ -343,23 +435,50 @@ impl App {
                         }
                         lines.push(Line::from(spans));
                     }
-                    lines.push(Line::default()); // margin below the code
+                    lines.push(tint_row()); // margin below the code
                 }
                 TranscriptEntry::Output {
                     result,
                     type_info,
                     is_error,
                 } => {
-                    let content: Vec<String> = if result.is_empty() {
+                    let raw: Vec<String> = if result.is_empty() {
                         Vec::new()
                     } else {
                         result.lines().map(|s| s.to_string()).collect()
                     };
-                    // Suppressed output (e.g. `z = 7;`) — nothing to show.
-                    if content.is_empty() && type_info.is_none() && !*is_error {
+
+                    if *is_error {
+                        // The whole payload is the error; shed the location
+                        // prefixes and frame it in the red box.
+                        let content: Vec<String> = raw
+                            .iter()
+                            .map(|l| strip_m2_location(l).to_string())
+                            .collect();
+                        push_output_block(&mut lines, &[], &content, type_info, true, area.width);
                         continue;
                     }
-                    push_output_block(&mut lines, &content, type_info, *is_error, area.width);
+
+                    // Split warnings out of the value; both go in one box, whose
+                    // border turns orange and gains a `Warning` title when a
+                    // warning is present. Messages (keyword dropped) are the
+                    // interior rows, de-duplicated so repeats don't spam.
+                    let (warn_raw, mut value): (Vec<String>, Vec<String>) =
+                        raw.into_iter().partition(|l| is_diagnostic(l));
+                    let mut seen = HashSet::new();
+                    let warnings: Vec<String> = warn_raw
+                        .iter()
+                        .map(|l| diagnostic_message(strip_m2_location(l)).to_string())
+                        .filter(|m| seen.insert(m.clone()))
+                        .collect();
+                    trim_leading_blank(&mut value);
+                    trim_trailing_blank(&mut value);
+
+                    // Suppressed output (e.g. `z = 7;`) — nothing to show.
+                    if value.is_empty() && type_info.is_none() && warnings.is_empty() {
+                        continue;
+                    }
+                    push_output_block(&mut lines, &warnings, &value, type_info, false, area.width);
                 }
                 TranscriptEntry::System(msg) => {
                     lines.push(Line::from(vec![
@@ -388,6 +507,7 @@ impl App {
         // A borderless full-width tinted band; the distinct background separates
         // it from the transcript above.
         let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::default()); // margin above the prompt
 
         let input_lines: Vec<&str> = if self.input.is_empty() {
             vec![""]
@@ -425,7 +545,7 @@ impl App {
 
         frame.set_cursor_position(Position::new(
             area.x + GUTTER_W + cursor_col as u16,
-            area.y + cursor_line as u16,
+            area.y + 1 + cursor_line as u16, // +1 for the top margin row
         ));
     }
 }
@@ -469,6 +589,61 @@ fn io_prefix(s: &str, tag: u8, sep: u8) -> Option<usize> {
 /// A trailing `iN : ` prompt with nothing meaningful after it.
 fn is_trailing_prompt(s: &str) -> bool {
     io_prefix(s, b'i', b':').is_some_and(|p| s[p..].trim().is_empty())
+}
+
+/// An M2 diagnostic line — `<loc>:<l>:<c>:(n):[m]: warning: …` (or `error:`).
+/// Used to lift warnings out of a successful result's value body.
+fn is_diagnostic(s: &str) -> bool {
+    s.contains(": warning:") || s.contains(": error:")
+}
+
+/// Strip M2's cryptic source-location prefix (`currentString:1:6:(3):[8]: `),
+/// keeping only the message (`warning: …` / `error: …`). The prefix is slated
+/// for removal upstream, so we drop it rather than render it. Returns the input
+/// unchanged when no such prefix is present (e.g. an ordinary value line).
+fn strip_m2_location(s: &str) -> &str {
+    match s.find("]: ") {
+        Some(i) if s[..i].contains(":(") && s[..i].contains(":[") => &s[i + 3..],
+        _ => s,
+    }
+}
+
+/// Wrap a string to `width` characters, breaking at the rightmost space that
+/// fits when possible and hard-splitting only words too long to fit. Never
+/// returns an empty vec (an empty input yields one empty line).
+fn wrap_chars(s: &str, width: usize) -> Vec<String> {
+    if width == 0 || s.chars().count() <= width {
+        return vec![s.to_string()];
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        if chars.len() - start <= width {
+            out.push(chars[start..].iter().collect());
+            break;
+        }
+        let hard = start + width;
+        // Prefer the rightmost space inside the window; the space is consumed.
+        let brk = (start..hard).rev().find(|&i| chars[i] == ' ');
+        let (end, next) = match brk {
+            Some(i) if i > start => (i, i + 1),
+            _ => (hard, hard),
+        };
+        out.push(chars[start..end].iter().collect());
+        start = next;
+    }
+    out
+}
+
+/// Drop a diagnostic's leading keyword (`warning: character '.' …` → `character
+/// '.' …`); the keyword becomes the box's border title instead. Returns the
+/// whole string when there's no `keyword: ` lead.
+fn diagnostic_message(s: &str) -> &str {
+    match s.split_once(": ") {
+        Some((_keyword, message)) => message,
+        None => s,
+    }
 }
 
 fn trim_leading_blank(lines: &mut Vec<String>) {
@@ -546,13 +721,20 @@ fn clean_m2_output(raw: &str, code: &str, is_error: bool) -> (String, Option<Str
 /// on the code line above, not here (input and output share the counter).
 fn push_output_block(
     out: &mut Vec<Line<'static>>,
+    warnings: &[String],
     content: &[String],
     type_info: &Option<String>,
     is_error: bool,
     area_width: u16,
 ) {
     let value_fg = if is_error { ERROR_FG } else { VALUE_FG };
-    let border_fg = if is_error { ERROR_BORDER_FG } else { BORDER_FG };
+    let border_fg = if is_error {
+        ERROR_BORDER_FG
+    } else if warnings.is_empty() {
+        BORDER_FG
+    } else {
+        WARN_BORDER_FG
+    };
 
     // The box is inset by one gutter on each side, so its right margin matches
     // the left. `inner` is the dash span between the corner glyphs; `text_w` is
@@ -563,23 +745,26 @@ fn push_output_block(
 
     let border_style = Style::default().fg(border_fg);
     let value_style = Style::default().fg(value_fg);
+    let warn_style = Style::default().fg(WARN_FG);
     let type_style = Style::default().fg(TYPE_FG).add_modifier(Modifier::ITALIC);
     let gutter = || gutter_span("", border_fg, USER_BG);
 
     let type_str = type_info.as_deref().filter(|t| !t.is_empty());
     let type_len = type_str.map(|t| t.chars().count()).unwrap_or(0);
 
-    // Top border: `╭──── Type ─╮`, the type tucked right (dropped if it won't fit).
+    // Top border: `╭─ Warning ────╮` when the result carries warnings, tucked
+    // left; otherwise a plain frame. The type lives on the bottom border.
+    const WARN_TITLE: &str = "Warning";
     let mut top = vec![gutter()];
-    match type_str.filter(|_| type_len + 4 <= inner) {
+    match Some(WARN_TITLE).filter(|t| !warnings.is_empty() && t.len() + 4 <= inner) {
         Some(t) => {
-            let lead = inner - (type_len + 2) - 1;
+            let lead = inner - (t.len() + 2) - 1;
+            top.push(Span::styled("╭─ ".to_string(), border_style));
+            top.push(Span::styled(t.to_string(), warn_style));
             top.push(Span::styled(
-                format!("╭{} ", "─".repeat(lead)),
+                format!(" {}╮", "─".repeat(lead)),
                 border_style,
             ));
-            top.push(Span::styled(t.to_string(), type_style));
-            top.push(Span::styled(" ─╮".to_string(), border_style));
         }
         None => top.push(Span::styled(
             format!("╭{}╮", "─".repeat(inner)),
@@ -588,35 +773,45 @@ fn push_output_block(
     }
     out.push(Line::from(top));
 
-    // Value rows: `│ value… │`, wrapped to the interior width so a long result
-    // is never lost off the right edge.
-    for line in content {
-        let pieces: Vec<String> = if line.is_empty() {
-            vec![String::new()]
-        } else {
-            line.chars()
-                .collect::<Vec<_>>()
-                .chunks(text_w)
-                .map(|c| c.iter().collect())
-                .collect()
-        };
-        for val in pieces {
+    // Rows: warnings (amber) above the value, each `│ text… │`, wrapped to the
+    // interior width so nothing is lost off the right edge. A blank line sets
+    // the value off from any warnings above it.
+    let mut rows: Vec<(&str, Style)> = warnings.iter().map(|w| (w.as_str(), warn_style)).collect();
+    if !warnings.is_empty() && !content.is_empty() {
+        rows.push(("", value_style));
+    }
+    rows.extend(content.iter().map(|c| (c.as_str(), value_style)));
+    for (line, style) in rows {
+        for val in wrap_chars(line, text_w) {
             let pad = text_w - val.chars().count();
             out.push(Line::from(vec![
                 gutter(),
                 Span::styled("│ ".to_string(), border_style),
-                Span::styled(val, value_style),
-                Span::styled(" ".repeat(pad), value_style),
+                Span::styled(val, style),
+                Span::styled(" ".repeat(pad), style),
                 Span::styled(" │".to_string(), border_style),
             ]));
         }
     }
 
-    // Bottom border.
-    out.push(Line::from(vec![
-        gutter(),
-        Span::styled(format!("╰{}╯", "─".repeat(inner)), border_style),
-    ]));
+    // Bottom border: `╰──── Type ─╯`, the type tucked right (dropped if it won't fit).
+    let mut bottom = vec![gutter()];
+    match type_str.filter(|_| type_len + 4 <= inner) {
+        Some(t) => {
+            let lead = inner - (type_len + 2) - 1;
+            bottom.push(Span::styled(
+                format!("╰{} ", "─".repeat(lead)),
+                border_style,
+            ));
+            bottom.push(Span::styled(t.to_string(), type_style));
+            bottom.push(Span::styled(" ─╯".to_string(), border_style));
+        }
+        None => bottom.push(Span::styled(
+            format!("╰{}╯", "─".repeat(inner)),
+            border_style,
+        )),
+    }
+    out.push(Line::from(bottom));
 }
 
 struct SyntaxHighlighter {
@@ -798,7 +993,6 @@ impl Drop for ReplTerminal {
 pub fn run(backend: M2Backend) -> Result<(), Box<dyn Error>> {
     let mut app = App::new(backend);
     let mut terminal = ReplTerminal::enter()?;
-
     loop {
         terminal.terminal.draw(|frame| app.draw(frame))?;
         if !event::poll(Duration::from_millis(80))? {
@@ -818,13 +1012,29 @@ pub fn run(backend: M2Backend) -> Result<(), Box<dyn Error>> {
             _ => {}
         }
     }
-
     terminal.leave()?;
     Ok(())
 }
 #[cfg(test)]
 mod tests {
-    use super::{clean_m2_output, push_output_block, GUTTER_W};
+    use super::{clean_m2_output, push_output_block, strip_m2_location, GUTTER_W};
+
+    #[test]
+    fn strips_m2_location_prefix() {
+        assert_eq!(
+            strip_m2_location("ntString:1:12:(3):[8]: warning: character '.' follows"),
+            "warning: character '.' follows"
+        );
+        assert_eq!(
+            strip_m2_location("currentString:1:6:(3):[8]: error: exponent missing"),
+            "error: exponent missing"
+        );
+        // An ordinary value line (no location prefix) is returned unchanged.
+        assert_eq!(
+            strip_m2_location("{{Binary, {Token, 2}}}"),
+            "{{Binary, {Token, 2}}}"
+        );
+    }
 
     #[test]
     fn output_box_lines_are_inset_by_one_gutter() {
@@ -832,17 +1042,22 @@ mod tests {
         // the right margin exactly — the box is inset by one gutter on each side,
         // so each line spans the full width minus that single trailing gutter.
         let content = ["x + y".to_string(), "z".to_string(), "q".repeat(400)];
+        let warns_none: Vec<String> = Vec::new();
+        let warns_some: Vec<String> = vec!["warning: ".to_string() + &"w".repeat(300)];
         for width in [40u16, 60, 96, 120] {
             for ty in [None, Some("PolynomialRing".to_string())] {
                 for is_error in [false, true] {
-                    let mut lines = Vec::new();
-                    push_output_block(&mut lines, &content, &ty, is_error, width);
-                    for line in &lines {
-                        assert_eq!(
-                            line.width() as u16,
-                            width - GUTTER_W,
-                            "width={width} ty={ty:?} is_error={is_error}"
-                        );
+                    for warnings in [&warns_none, &warns_some] {
+                        let mut lines = Vec::new();
+                        push_output_block(&mut lines, warnings, &content, &ty, is_error, width);
+                        for line in &lines {
+                            assert_eq!(
+                                line.width() as u16,
+                                width - GUTTER_W,
+                                "width={width} ty={ty:?} is_error={is_error} warns={}",
+                                warnings.len()
+                            );
+                        }
                     }
                 }
             }
