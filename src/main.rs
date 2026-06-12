@@ -1,5 +1,10 @@
+mod app;
+mod editor;
+mod highlight;
 mod m2_backend;
-mod repl;
+mod theme;
+mod transcript;
+mod ui;
 
 use std::process::exit;
 
@@ -8,7 +13,7 @@ use m2_backend::M2Backend;
 fn main() {
     match M2Backend::spawn() {
         Ok(backend) => {
-            if let Err(e) = repl::run(backend) {
+            if let Err(e) = app::run(backend) {
                 eprintln!("Error: {}", e);
             }
         }
