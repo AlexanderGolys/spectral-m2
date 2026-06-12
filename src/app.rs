@@ -17,9 +17,11 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::widgets::Clear;
 use ratatui::{Frame, Terminal};
 
+use crate::cells::{parse_cells, CellParse};
 use crate::editor::Editor;
 use crate::highlight::SyntaxHighlighter;
 use crate::m2_backend::{M2Backend, M2Result};
+use crate::session::Session;
 use crate::theme::Theme;
 use crate::transcript::{clean_m2_output, TranscriptEntry};
 use crate::ui;
@@ -30,13 +32,12 @@ struct App {
     theme: Theme,
     transcript: Vec<TranscriptEntry>,
     highlighter: SyntaxHighlighter,
-    input_number: usize,
+    session: Session,
     scroll_offset: usize,
 }
 
 impl App {
     fn new(backend: M2Backend) -> Self {
-        let input_number = backend.next_input_number();
         Self {
             backend,
             editor: Editor::new(),
@@ -45,40 +46,54 @@ impl App {
                 "spectral-m2 — Macaulay2 highlighted REPL".to_string(),
             )],
             highlighter: SyntaxHighlighter::new(),
-            input_number,
+            session: Session::new(),
             scroll_offset: 0,
         }
     }
 
-    fn submit_input(&mut self) {
-        let Some(code) = self.editor.take_submission() else {
+    /// Enter: submit when the buffer is syntactically complete, otherwise keep
+    /// editing on a fresh line.
+    fn on_enter(&mut self) {
+        if self.editor.text().trim().is_empty() {
             return;
-        };
-        let number = self.input_number;
-        self.transcript.push(TranscriptEntry::Input {
-            number,
-            code: code.clone(),
-        });
+        }
+        match parse_cells(self.editor.text()) {
+            CellParse::Incomplete => self.editor.insert_char('\n'),
+            CellParse::Complete(cells) => self.submit_cells(cells),
+        }
+    }
 
-        match self.backend.evaluate(&code) {
-            Ok(M2Result { is_error, output }) => {
-                let (result, type_info) = clean_m2_output(&output, &code, is_error);
-                self.transcript.push(TranscriptEntry::Output {
-                    result,
-                    type_info,
-                    is_error,
-                });
-            }
-            Err(e) => {
-                self.transcript.push(TranscriptEntry::Output {
-                    result: format!("Communication error: {e}"),
-                    type_info: None,
-                    is_error: true,
-                });
+    /// Evaluate each cell in order. An erroring cell is shown but not committed,
+    /// so it consumes no number and the next cell reuses it.
+    fn submit_cells(&mut self, cells: Vec<String>) {
+        self.editor.take_submission(); // record the buffer in history and clear
+        for code in cells {
+            let number = self.session.next_number();
+            self.transcript.push(TranscriptEntry::Input {
+                number: number.0,
+                code: code.clone(),
+            });
+            match self.backend.evaluate(&code) {
+                Ok(M2Result { is_error, output }) => {
+                    let (result, type_info) = clean_m2_output(&output, &code, is_error);
+                    self.transcript.push(TranscriptEntry::Output {
+                        result,
+                        type_info,
+                        is_error,
+                    });
+                    if !is_error {
+                        self.session.commit(code);
+                    }
+                }
+                Err(e) => {
+                    self.transcript.push(TranscriptEntry::Output {
+                        result: format!("Communication error: {e}"),
+                        type_info: None,
+                        is_error: true,
+                    });
+                }
             }
         }
-
-        self.input_number = self.backend.next_input_number();
         self.scroll_offset = 0;
     }
 
@@ -91,7 +106,7 @@ impl App {
             {
                 self.editor.insert_char('\n');
             }
-            (KeyCode::Enter, _) => self.submit_input(),
+            (KeyCode::Enter, _) => self.on_enter(),
             (KeyCode::Char(ch), _) => self.editor.insert_char(ch),
             (KeyCode::Backspace, _) => self.editor.backspace(),
             (KeyCode::Delete, _) => self.editor.delete_forward(),

@@ -1,7 +1,9 @@
 mod app;
+mod cells;
 mod editor;
 mod highlight;
 mod m2_backend;
+mod session;
 mod theme;
 mod transcript;
 mod ui;

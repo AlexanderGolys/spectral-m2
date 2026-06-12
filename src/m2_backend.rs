@@ -19,8 +19,6 @@ pub struct M2Result {
 pub struct M2Backend {
     process: Child,
     stream: TcpStream,
-    input_counter: usize,
-    history: Vec<String>,
 }
 
 impl M2Backend {
@@ -56,12 +54,7 @@ impl M2Backend {
 
         let _ = fs::remove_file(&port_file);
 
-        Ok(Self {
-            process,
-            stream,
-            input_counter: 0,
-            history: Vec::new(),
-        })
+        Ok(Self { process, stream })
     }
 
     fn connect_to_m2(port: u16, process: &mut Child) -> Result<TcpStream, Box<dyn Error>> {
@@ -115,9 +108,6 @@ impl M2Backend {
     }
 
     pub fn evaluate(&mut self, code: &str) -> Result<M2Result, Box<dyn Error>> {
-        self.input_counter += 1;
-        self.history.push(code.to_string());
-
         let msg = format!("{}\n{}\n{}\n", CODE_START, code, CODE_END);
         self.stream.write_all(msg.as_bytes())?;
         self.stream.flush()?;
@@ -156,15 +146,6 @@ impl M2Backend {
         let output = output.trim_end_matches('\n').to_string();
 
         Ok(M2Result { is_error, output })
-    }
-
-    pub fn next_input_number(&self) -> usize {
-        self.input_counter + 1
-    }
-
-    #[allow(dead_code)]
-    pub fn history(&self) -> &[String] {
-        &self.history
     }
 
     #[allow(dead_code)]
