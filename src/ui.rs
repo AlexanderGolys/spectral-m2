@@ -14,6 +14,7 @@ use std::collections::HashSet;
 
 use crate::editor::Editor;
 use crate::highlight::{highlight_to_spans, SyntaxHighlighter};
+use crate::session::Session;
 use crate::theme::Theme;
 use crate::transcript::{
     diagnostic_message, is_diagnostic, strip_m2_location, trim_leading_blank, trim_trailing_blank,
@@ -21,19 +22,25 @@ use crate::transcript::{
 };
 
 const MAX_INPUT_HEIGHT: u16 = 8;
+// TODO: replace this single static placeholder with a random hint drawn from a
+// curated set (REPL-specific tips + Macaulay2 tricks), shown on empty input.
+// Decide the rotation cadence (per launch / per empty buffer, not per frame, to
+// avoid flicker) and where the hint set lives (a new `hints` module).
 const INPUT_PLACEHOLDER: &str = "Type M2 code...";
 const GUTTER_W: u16 = 5;
 const MIN_BOX_W: u16 = 8;
 const WARN_TITLE: &str = "Warning";
+const CODE_PANE_TITLE: &str = "$code";
 
-pub fn calculate_input_height(editor: &Editor) -> u16 {
+pub fn calculate_input_height(editor: &Editor, has_error: bool) -> u16 {
     let lines = if editor.is_empty() {
         1
     } else {
         editor.text().lines().count().max(1) as u16
     };
-    // +2 for the breathing-room rows above and below the prompt.
-    (lines + 2).clamp(3, MAX_INPUT_HEIGHT + 2)
+    // +2 for the breathing-room rows above and below the prompt, +1 for a hint row.
+    let extra = if has_error { 1 } else { 0 };
+    (lines + 2 + extra).clamp(3, MAX_INPUT_HEIGHT + 2 + extra)
 }
 
 /// The left status column: a right-aligned marker (`oN`, prompt glyph, …) padded
@@ -325,6 +332,7 @@ pub fn draw_input_area(
     editor: &Editor,
     highlighter: &mut SyntaxHighlighter,
     theme: &Theme,
+    parse_error: Option<&str>,
 ) {
     let code_bg = theme.ui.code_bg;
     let mut lines: Vec<Line<'static>> = vec![Line::default()]; // margin above the prompt
@@ -349,6 +357,13 @@ pub fn draw_input_area(
         }
         lines.push(Line::from(spans));
     }
+    // A syntax-error hint sits just under the input; cleared on the next edit.
+    if let Some(msg) = parse_error {
+        lines.push(Line::from(vec![
+            gutter_span("", theme.ui.error.patch(code_bg)),
+            Span::styled(msg.to_string(), theme.ui.error.patch(code_bg)),
+        ]));
+    }
     lines.push(Line::default()); // breathing room below the prompt
 
     let paragraph = Paragraph::new(lines).style(code_bg);
@@ -359,4 +374,64 @@ pub fn draw_input_area(
         area.x + GUTTER_W + cursor_col as u16,
         area.y + 1 + cursor_line as u16, // +1 for the top margin row
     ));
+}
+
+/// Draw the `$code` pane: this session's committed cells, each under its `iN`
+/// marker, above the live (not-yet-committed) input. This is a *view* of the
+/// session code — the same committed sequence `Session::committed_text` joins
+/// for the language server — so the `iN` markers double as line-anchors into it.
+pub fn draw_code_pane(
+    frame: &mut Frame,
+    area: Rect,
+    session: &Session,
+    editor: &Editor,
+    highlighter: &mut SyntaxHighlighter,
+    theme: &Theme,
+) {
+    let bg = theme.ui.code_bg;
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(theme.ui.border)
+        .title(Span::styled(
+            format!(" {CODE_PANE_TITLE} "),
+            theme.ui.prompt,
+        ))
+        .style(bg);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for cell in session.cells() {
+        for (i, line) in cell.code.lines().enumerate() {
+            // Only the first source line of a cell carries the `iN` marker.
+            let marker = if i == 0 {
+                format!("i{}", cell.number.0)
+            } else {
+                String::new()
+            };
+            let mut spans = vec![gutter_span(&marker, theme.ui.prompt.patch(bg))];
+            for mut s in highlight_to_spans(&highlighter.highlight_m2(line, theme)) {
+                s.style = s.style.patch(bg);
+                spans.push(s);
+            }
+            lines.push(Line::from(spans));
+        }
+    }
+
+    // The live, not-yet-committed input shown below the committed cells. It has
+    // no number yet — a cell earns its `iN` only when it commits (a successful
+    // run), which is exactly why errors never appear in this pane.
+    let live = editor.text();
+    if !live.trim().is_empty() {
+        // TODO(human): append the live input to `lines` as a dimmed, "pending"
+        // block. Design decisions, all tied to the iN-as-anchor model: do you
+        // prefix it with the number it *would* take on success
+        // (`session.next_number().0`, mirroring the markers above) or leave it
+        // unnumbered? What separates it from the committed cells (a blank
+        // `Line::default()`?), and what dim style reads as "not committed yet"
+        // (e.g. `theme.ui.muted.patch(bg)`)? Build one or more `Line` per source
+        // line of `live` and push them onto `lines`.
+    }
+
+    frame.render_widget(Paragraph::new(lines).style(bg), inner);
 }

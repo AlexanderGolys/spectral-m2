@@ -37,9 +37,16 @@ impl Session {
         number
     }
 
+    /// The committed cells, in evaluation order — the numbered blocks the
+    /// `$code` pane renders (and the same sequence `committed_text` joins).
+    pub fn cells(&self) -> &[Cell] {
+        &self.cells
+    }
+
     /// The committed code as one document — every cell joined by a newline.
     /// This is the source the language server sees, so earlier definitions
-    /// resolve in later cells.
+    /// resolve in later cells. (Not yet wired into the app — the LSP virtual doc.)
+    #[allow(dead_code)]
     pub fn committed_text(&self) -> String {
         self.cells
             .iter()

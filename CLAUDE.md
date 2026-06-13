@@ -12,7 +12,7 @@ The name is a triple play: the **spectrum** of light (the colors), the **spectru
 
 ```bash
 cargo run                    # debug build + launch the REPL (needs M2 on PATH)
-cargo test                   # unit tests (parser logic in src/repl.rs)
+cargo test                   # unit tests (clean_m2_output in src/transcript.rs)
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all
 ./install.sh                 # full pipeline: fmt-check → clippy → test → release build → install to ~/.local/bin/spectral-m2
@@ -22,7 +22,7 @@ cargo fmt --all
 
 `install.sh` is the gated pipeline: `cargo fmt --all --check`, `cargo clippy -- -D warnings`, and `cargo test` all run as hard gates before the release build and install — any failure aborts. Running the binary requires the `M2` executable on `PATH`; it spawns a real Macaulay2 process per session.
 
-Tests live in the `#[cfg(test)] mod tests` block at the bottom of `src/repl.rs` and cover `clean_m2_output` (stripping `capture`'s session scaffolding). Run a single one with `cargo test <name>`, e.g. `cargo test preserves_2d_net_alignment`.
+Tests live in the `#[cfg(test)] mod tests` block at the bottom of `src/transcript.rs` and cover `clean_m2_output` (stripping `capture`'s session scaffolding). Run a single one with `cargo test <name>`, e.g. `cargo test preserves_2d_net_alignment`.
 
 ## Code style
 
@@ -33,7 +33,14 @@ Tests live in the `#[cfg(test)] mod tests` block at the bottom of `src/repl.rs` 
 
 Two cooperating processes connected over a loopback TCP socket:
 
-- **Rust TUI** (`src/main.rs`, `src/repl.rs`) — ratatui/crossterm full-screen app in the alternate screen. Owns input editing, the scrollback transcript, and all coloring.
+- **Rust TUI** — a ratatui/crossterm full-screen app in the alternate screen, owning input editing, the scrollback transcript, and all coloring. `src/repl.rs` was split into focused modules (`src/main.rs` declares them):
+  - `app.rs` — the `App` event loop, `on_enter` cell gating, and `ReplTerminal` (raw-mode / alternate-screen lifecycle).
+  - `editor.rs` — the live input buffer: multi-line editing, cursor math, input history.
+  - `cells.rs` — splits the input buffer into M2 cells and decides whether it is still mid-edit (`parse_cells`). **Completeness detection is unfinished** — see Gotchas.
+  - `session.rs` — `iN` session numbering and commit-on-success bookkeeping (an erroring cell consumes no number).
+  - `transcript.rs` — the `TranscriptEntry` model and `clean_m2_output` (plus the `#[cfg(test)]` tests).
+  - `ui.rs` — all drawing (`draw_transcript`, `draw_input_area`, `push_output_box`).
+  - `highlight.rs` + `theme.rs` — the tree-sitter highlighting pipeline and the colour palette.
 - **Macaulay2 backend** (`src/m2_backend.rs` + `src/m2_startup.m2`) — `M2Backend::spawn()` launches `M2 --script src/m2_startup.m2`. The startup script reads a port from `/tmp/spectral-m2_port`, opens a listener, and runs an eval loop calling `capture(code, UserMode => true)`.
 
 ### The wire protocol (must stay in sync across the Rust/M2 boundary)
@@ -47,19 +54,19 @@ The framing constants are defined **twice** — in `m2_backend.rs` (top) and `m2
 
 `evaluate()` is synchronous and blocking (30s read timeout). Multi-line input is sent as-is; the M2 loop reassembles lines until `<<<M2_END>>>`.
 
-### Highlighting pipeline (`src/repl.rs`)
+### Highlighting pipeline (`src/highlight.rs`, `src/theme.rs`)
 
-- Grammar comes from the `tree-sitter-macaulay2` crate; highlight queries live in `queries/highlights.scm` (compiled in via `include_str!`).
-- `HIGHLIGHT_NAMES` (the capture names the highlighter is configured with) and `highlight_style()` (name → ratatui `Style`) are a matched pair. Adding a capture to the query means adding it to **both** the `HIGHLIGHT_NAMES` array and the `highlight_style()` match, or it renders unstyled.
-- `clean_m2_output()` strips `capture`'s session scaffolding (echoed input, trailing prompt, `oN =`/`oN :` labels) and splits the value body from the trailing `oN : Type`. Covered by the `#[cfg(test)]` tests.
-- Results render in a bordered box (`push_output_box`, `draw_transcript`); the value body is still plain `Color::White` inside the box, while input is fully tree-sitter highlighted. Re-highlighting output bodies is the known area of active work.
+- Grammar comes from the `tree-sitter-macaulay2` crate; highlight queries live in `queries/highlights.scm` (compiled into `highlight.rs` via `include_str!`).
+- `CAPTURE_NAMES` (`theme.rs` — the capture names the highlighter is configured with) and `default_syntax_style()` (`theme.rs` — name → ratatui `Style`, collected into `Theme::syntax` and read back by index via `syntax_style()`) are a matched pair. Adding a capture to the query means adding it to **both** the `CAPTURE_NAMES` array and the `default_syntax_style()` match, or it renders unstyled.
+- `clean_m2_output()` (`transcript.rs`) strips `capture`'s session scaffolding (echoed input, trailing prompt, `oN =`/`oN :` labels) and splits the value body from the trailing `oN : Type`. Covered by the `#[cfg(test)]` tests in `transcript.rs`.
+- Results render in a bordered box (`push_output_box`, `draw_transcript` in `ui.rs`); the value body is still unhighlighted inside the box, while input is fully tree-sitter highlighted. Re-highlighting output bodies is a known area of active work.
 
 ### Input vs. output rendering
 
-`TranscriptEntry` distinguishes `Input` (highlighted via tree-sitter), `Output` (value body + optional type line, error-aware background), and `System` messages. The live input area (`draw_input_area`) re-highlights on every keystroke and manages multi-line cursor math manually.
+`TranscriptEntry` (`transcript.rs`) distinguishes `Input` (highlighted via tree-sitter), `Output` (value body + optional type line, error-aware background), and `System` messages. The live input area (`draw_input_area` in `ui.rs`) re-highlights on every keystroke and manages multi-line cursor math manually.
 
 ## Gotchas
 
-- Terminal state (raw mode, alternate screen, bracketed paste, keyboard enhancement flags) is set up in `ReplTerminal::enter` and torn down in both `leave()` and `Drop` — keep cleanup idempotent so a panic doesn't leave the terminal wedged.
+- Terminal state (raw mode, alternate screen, bracketed paste, keyboard enhancement flags) is set up in `ReplTerminal::enter` (`src/app.rs`) and torn down in both `leave()` and `Drop` — keep cleanup idempotent so a panic doesn't leave the terminal wedged.
 - `/tmp/spectral-m2_port` and `/tmp/spectral-m2_startup.m2` are written at startup; the port file is removed after handshake.
 - The M2 child is killed on `M2Backend::drop`.

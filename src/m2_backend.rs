@@ -5,15 +5,31 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use std::{env, fs, thread};
 
+// Length-prefixed framing -- mirrored in src/m2_startup.m2. A request or reply is
+// a marker line, a header line, a decimal byte count, then exactly that many
+// payload bytes. Length-prefixing keeps the payload opaque, so user code or M2
+// output may contain the marker strings, newlines, multi-line strings/comments --
+// anything -- without breaking the frame.
 const CODE_START: &str = "<<<M2_CODE>>>";
-const CODE_END: &str = "<<<M2_END>>>";
+const CHECK_START: &str = "<<<M2_CHECK>>>";
 const RESULT_START: &str = "<<<M2_RESULT>>>";
-const RESULT_END: &str = "<<<M2_END>>>";
+const VERDICT_START: &str = "<<<M2_VERDICT>>>";
 const READY_SIGNAL: &str = "<<<M2_READY>>>";
 
 pub struct M2Result {
     pub is_error: bool,
     pub output: String,
+}
+
+/// The grammar-oracle verdict for an input buffer, decided by the live M2 process
+/// via a non-executing `parse` (see `parseCheck` in src/m2_startup.m2).
+pub enum ParseVerdict {
+    /// Parsed cleanly -- the buffer is ready to execute.
+    Complete,
+    /// Parsing reached end of input -- the user is still typing.
+    Incomplete,
+    /// A real syntax error at a concrete token; carries the M2 diagnostic line.
+    SyntaxError(String),
 }
 
 pub struct M2Backend {
@@ -107,45 +123,59 @@ impl M2Backend {
         }
     }
 
-    pub fn evaluate(&mut self, code: &str) -> Result<M2Result, Box<dyn Error>> {
-        let msg = format!("{}\n{}\n{}\n", CODE_START, code, CODE_END);
-        self.stream.write_all(msg.as_bytes())?;
+    /// Send a length-prefixed request frame: marker line, byte count, payload bytes.
+    fn send_frame(&mut self, marker: &str, payload: &str) -> Result<(), Box<dyn Error>> {
+        let header = format!("{}\n{}\n", marker, payload.len());
+        self.stream.write_all(header.as_bytes())?;
+        self.stream.write_all(payload.as_bytes())?;
         self.stream.flush()?;
+        Ok(())
+    }
 
+    /// Read a length-prefixed reply frame: the marker, then a header line, then a
+    /// byte count, then exactly that many payload bytes. Returns (header, payload).
+    fn read_frame(&mut self, expected: &str) -> Result<(String, String), Box<dyn Error>> {
         let mut reader = BufReader::new(&self.stream);
-        let mut line = String::new();
 
-        loop {
-            line.clear();
-            let bytes = reader.read_line(&mut line)?;
-            if bytes == 0 {
-                return Err("Connection to M2 closed".into());
-            }
-            if line.trim() == RESULT_START {
-                break;
-            }
+        let mut marker = String::new();
+        if reader.read_line(&mut marker)? == 0 {
+            return Err("Connection to M2 closed".into());
+        }
+        if marker.trim() != expected {
+            return Err(format!("expected {expected}, got {:?}", marker.trim()).into());
         }
 
-        let mut status_line = String::new();
-        reader.read_line(&mut status_line)?;
-        let is_error = status_line.trim() == "error";
+        let mut header = String::new();
+        reader.read_line(&mut header)?;
 
-        let mut output = String::new();
-        loop {
-            line.clear();
-            let bytes = reader.read_line(&mut line)?;
-            if bytes == 0 {
-                break;
-            }
-            if line.trim() == RESULT_END {
-                break;
-            }
-            output.push_str(&line);
-        }
+        let mut count = String::new();
+        reader.read_line(&mut count)?;
+        let n: usize = count.trim().parse()?;
 
-        let output = output.trim_end_matches('\n').to_string();
+        let mut buf = vec![0u8; n];
+        reader.read_exact(&mut buf)?;
 
-        Ok(M2Result { is_error, output })
+        Ok((
+            header.trim().to_string(),
+            String::from_utf8_lossy(&buf).into_owned(),
+        ))
+    }
+
+    /// Evaluate `code` (executes it). Synchronous and blocking (30s read timeout).
+    pub fn evaluate(&mut self, code: &str) -> Result<M2Result, Box<dyn Error>> {
+        self.send_frame(CODE_START, code)?;
+        let (status, output) = self.read_frame(RESULT_START)?;
+        Ok(M2Result {
+            is_error: status == "error",
+            output: output.trim_end_matches('\n').to_string(),
+        })
+    }
+
+    /// Ask the live M2 process to classify `code` without executing it.
+    pub fn check(&mut self, code: &str) -> Result<ParseVerdict, Box<dyn Error>> {
+        self.send_frame(CHECK_START, code)?;
+        let (verdict, msg) = self.read_frame(VERDICT_START)?;
+        parse_verdict(&verdict, msg)
     }
 
     #[allow(dead_code)]
@@ -154,9 +184,84 @@ impl M2Backend {
     }
 }
 
+/// Map an M2 verdict line + message into a [`ParseVerdict`].
+fn parse_verdict(verdict: &str, msg: String) -> Result<ParseVerdict, Box<dyn Error>> {
+    Ok(match verdict {
+        "COMPLETE" => ParseVerdict::Complete,
+        "INCOMPLETE" => ParseVerdict::Incomplete,
+        "ERROR" => ParseVerdict::SyntaxError(msg),
+        other => return Err(format!("unexpected verdict from M2: {other:?}").into()),
+    })
+}
+
 impl Drop for M2Backend {
     fn drop(&mut self) {
         let _ = self.process.kill();
         let _ = self.process.wait();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verdict_maps_known_lines() {
+        assert!(matches!(
+            parse_verdict("COMPLETE", String::new()).unwrap(),
+            ParseVerdict::Complete
+        ));
+        assert!(matches!(
+            parse_verdict("INCOMPLETE", String::new()).unwrap(),
+            ParseVerdict::Incomplete
+        ));
+        match parse_verdict("ERROR", "syntax error: unmatched )".to_string()).unwrap() {
+            ParseVerdict::SyntaxError(m) => assert_eq!(m, "syntax error: unmatched )"),
+            _ => panic!("expected SyntaxError"),
+        }
+    }
+
+    #[test]
+    fn verdict_rejects_garbage() {
+        assert!(parse_verdict("???", String::new()).is_err());
+    }
+
+    // End-to-end over a real M2 process and the length-prefixed protocol.
+    #[test]
+    #[ignore = "spawns a real M2 process; run with `cargo test -- --ignored`"]
+    fn check_and_evaluate_round_trip() {
+        let mut be = M2Backend::spawn().expect("spawn M2");
+
+        assert!(matches!(be.check("1+1").unwrap(), ParseVerdict::Complete));
+        assert!(matches!(
+            be.check("a = 5\nb = 6").unwrap(),
+            ParseVerdict::Complete
+        ));
+        assert!(matches!(be.check("a*").unwrap(), ParseVerdict::Incomplete));
+        assert!(matches!(
+            be.check("if true").unwrap(),
+            ParseVerdict::Incomplete
+        ));
+        assert!(matches!(
+            be.check("symbol").unwrap(),
+            ParseVerdict::Incomplete
+        ));
+        assert!(matches!(
+            be.check(")").unwrap(),
+            ParseVerdict::SyntaxError(_)
+        ));
+
+        // A payload containing a marker line must NOT break framing.
+        assert!(matches!(
+            be.check("s = \"<<<M2_END>>>\nmore\"").unwrap(),
+            ParseVerdict::Complete
+        ));
+
+        let ok = be.evaluate("2 + 3").unwrap();
+        assert!(!ok.is_error, "2+3 errored: {:?}", ok.output);
+        assert!(ok.output.contains('5'), "expected 5 in {:?}", ok.output);
+
+        let bad = be.evaluate("1/0").unwrap();
+        assert!(bad.is_error, "1/0 should error: {:?}", bad.output);
     }
 }

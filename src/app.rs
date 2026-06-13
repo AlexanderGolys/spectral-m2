@@ -17,13 +17,14 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::widgets::Clear;
 use ratatui::{Frame, Terminal};
 
-use crate::cells::{parse_cells, CellParse};
+use crate::cells::{has_syntax_error, split_cells};
+use crate::commands::{parse_command, ReplCommand};
 use crate::editor::Editor;
 use crate::highlight::SyntaxHighlighter;
-use crate::m2_backend::{M2Backend, M2Result};
+use crate::m2_backend::{M2Backend, M2Result, ParseVerdict};
 use crate::session::Session;
 use crate::theme::Theme;
-use crate::transcript::{clean_m2_output, TranscriptEntry};
+use crate::transcript::{clean_m2_output, strip_m2_location, TranscriptEntry};
 use crate::ui;
 
 struct App {
@@ -34,6 +35,10 @@ struct App {
     highlighter: SyntaxHighlighter,
     session: Session,
     scroll_offset: usize,
+    /// A transient syntax-error hint shown under the input; cleared on the next edit.
+    parse_error: Option<String>,
+    /// Whether the `$code` split pane (this session's committed code) is shown.
+    show_code_pane: bool,
 }
 
 impl App {
@@ -48,6 +53,8 @@ impl App {
             highlighter: SyntaxHighlighter::new(),
             session: Session::new(),
             scroll_offset: 0,
+            parse_error: None,
+            show_code_pane: false,
         }
     }
 
@@ -57,9 +64,43 @@ impl App {
         if self.editor.text().trim().is_empty() {
             return;
         }
-        match parse_cells(self.editor.text()) {
-            CellParse::Incomplete => self.editor.insert_char('\n'),
-            CellParse::Complete(cells) => self.submit_cells(cells),
+        let text = self.editor.text().to_string();
+        // A fresh, single-line input whose first character is `$` is a REPL
+        // command, handled here and never sent to M2. Multi-line buffers are
+        // always code (the `\$` escape for code starting with `$` is deferred).
+        if !text.contains('\n') && text.starts_with('$') {
+            self.dispatch_command(&text);
+            return;
+        }
+        match self.backend.check(&text) {
+            // Still mid-construct: keep editing on a fresh line.
+            Ok(ParseVerdict::Incomplete) => self.editor.insert_char('\n'),
+            // A real syntax error: reject the whole buffer, execute nothing.
+            Ok(ParseVerdict::SyntaxError(msg)) => {
+                self.parse_error = Some(strip_m2_location(&msg).to_string());
+            }
+            // `parse` is lenient about a few strict errors (e.g. the empty
+            // statement `;;`); tree-sitter catches those.
+            Ok(ParseVerdict::Complete) if has_syntax_error(&text) => {
+                self.parse_error = Some("syntax error".to_string());
+            }
+            Ok(ParseVerdict::Complete) => self.submit_cells(split_cells(&text)),
+            Err(e) => self.parse_error = Some(format!("Communication error: {e}")),
+        }
+    }
+
+    /// Run a `$`-prefixed REPL command. Recognised commands act on frontend
+    /// state only; an unknown one leaves the buffer intact and shows a hint.
+    fn dispatch_command(&mut self, input: &str) {
+        match parse_command(input) {
+            Some(ReplCommand::ToggleCode) => {
+                self.show_code_pane = !self.show_code_pane;
+                self.editor.take_submission(); // record `$code` in history and clear
+            }
+            Some(ReplCommand::Unknown(name)) => {
+                self.parse_error = Some(format!("unknown command: ${name}"));
+            }
+            None => {} // not reached: the caller already matched the `$` prefix
         }
     }
 
@@ -81,9 +122,10 @@ impl App {
                         type_info,
                         is_error,
                     });
-                    if !is_error {
-                        self.session.commit(code);
+                    if is_error {
+                        break; // stop the batch at the first erroring cell
                     }
+                    self.session.commit(code);
                 }
                 Err(e) => {
                     self.transcript.push(TranscriptEntry::Output {
@@ -91,6 +133,7 @@ impl App {
                         type_info: None,
                         is_error: true,
                     });
+                    break;
                 }
             }
         }
@@ -99,6 +142,13 @@ impl App {
 
     /// Handle a key. Returns `false` to quit.
     fn handle_key(&mut self, key: KeyEvent) -> bool {
+        // Any edit to the buffer dismisses a shown syntax-error hint.
+        if matches!(
+            key.code,
+            KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete | KeyCode::Tab | KeyCode::Enter
+        ) {
+            self.parse_error = None;
+        }
         match (key.code, key.modifiers) {
             (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => return false,
             (KeyCode::Enter, m)
@@ -138,8 +188,25 @@ impl App {
 
     fn draw(&mut self, frame: &mut Frame) {
         let size = frame.area();
-        let input_height = ui::calculate_input_height(&self.editor);
-        let transcript_height = size.height.saturating_sub(input_height);
+
+        // Reset every cell first: stale glyphs from prior frames would otherwise
+        // show through the background fills as ghost rectangles.
+        frame.render_widget(Clear, size);
+
+        // `$code` splits the screen: the shell keeps the left column, the code
+        // pane takes the right. Without it the shell owns the full width.
+        let (shell_area, code_area) = if self.show_code_pane {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(size);
+            (cols[0], Some(cols[1]))
+        } else {
+            (size, None)
+        };
+
+        let input_height = ui::calculate_input_height(&self.editor, self.parse_error.is_some());
+        let transcript_height = shell_area.height.saturating_sub(input_height);
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -147,11 +214,8 @@ impl App {
                 Constraint::Min(transcript_height),
                 Constraint::Length(input_height),
             ])
-            .split(size);
+            .split(shell_area);
 
-        // Reset every cell first: stale glyphs from prior frames would otherwise
-        // show through the background fills as ghost rectangles.
-        frame.render_widget(Clear, size);
         ui::draw_transcript(
             frame,
             chunks[0],
@@ -166,7 +230,19 @@ impl App {
             &self.editor,
             &mut self.highlighter,
             &self.theme,
+            self.parse_error.as_deref(),
         );
+
+        if let Some(area) = code_area {
+            ui::draw_code_pane(
+                frame,
+                area,
+                &self.session,
+                &self.editor,
+                &mut self.highlighter,
+                &self.theme,
+            );
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 mod app;
 mod cells;
+mod commands;
 mod editor;
 mod highlight;
 mod m2_backend;
