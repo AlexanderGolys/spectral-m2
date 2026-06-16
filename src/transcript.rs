@@ -1,11 +1,16 @@
 //! The session transcript model and the parsing that turns raw `capture`
 //! output into clean value/type/diagnostic pieces ready for rendering.
 
+use std::rc::Rc;
+
 /// One rendered unit of session history.
 pub enum TranscriptEntry {
     Input {
         number: usize,
-        code: String,
+        /// The echoed input. Shared as an [`Rc<str>`] with the committed
+        /// [`crate::session::Cell`] for cells that succeed; an errored cell holds
+        /// its own (the editor's retry-draft diverges from it).
+        code: Rc<str>,
     },
     Output {
         result: String,

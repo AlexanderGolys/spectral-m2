@@ -1,6 +1,8 @@
 //! The live input line editor: the text buffer, a char-boundary cursor,
 //! multi-line navigation, and submitted-input history.
 
+use std::mem;
+
 /// The interactive input buffer. `cursor` is a byte offset that is always kept
 /// on a UTF-8 char boundary.
 pub struct Editor {
@@ -156,7 +158,7 @@ impl Editor {
             Some(i) if i + 1 < self.history.len() => i + 1,
             Some(_) => {
                 self.history_pos = None;
-                let draft = std::mem::take(&mut self.draft);
+                let draft = mem::take(&mut self.draft);
                 self.load(draft);
                 return;
             }

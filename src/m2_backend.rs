@@ -1,20 +1,56 @@
 use std::error::Error;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use std::{env, fs, thread};
 
-// Length-prefixed framing -- mirrored in src/m2_startup.m2. A request or reply is
-// a marker line, a header line, a decimal byte count, then exactly that many
-// payload bytes. Length-prefixing keeps the payload opaque, so user code or M2
-// output may contain the marker strings, newlines, multi-line strings/comments --
-// anything -- without breaking the frame.
-const CODE_START: &str = "<<<M2_CODE>>>";
-const CHECK_START: &str = "<<<M2_CHECK>>>";
-const RESULT_START: &str = "<<<M2_RESULT>>>";
-const VERDICT_START: &str = "<<<M2_VERDICT>>>";
+use serde::{Deserialize, Serialize};
+
+// Length-prefixed JSON framing -- mirrored in src/m2_startup.m2. Every frame is a
+// marker line, a decimal byte count line, then exactly that many payload bytes.
+// Length-prefixing keeps the payload opaque, so a JSON document may contain the
+// marker string, newlines, quotes -- anything -- without breaking the frame.
+
+/// The loopback interface the backend listens on and the TUI connects to. The M2
+/// side builds the same address from this host (`serverHost` in src/m2_startup.m2).
+const LOOPBACK_HOST: &str = "127.0.0.1";
+
+/// The marker line that opens every request and reply frame. Mirrored as `M2MSG`
+/// in src/m2_startup.m2.
+const MSG_MARKER: &str = "<<<M2_MSG>>>";
+
+/// The one-time handshake line M2 sends once its listener is up.
 const READY_SIGNAL: &str = "<<<M2_READY>>>";
+
+/// A request to the M2 backend. Serializes to `{"method": ..., "code": ...}`; the
+/// `method` tag drives dispatch in src/m2_startup.m2's `handleMessage`.
+#[derive(Serialize)]
+#[serde(tag = "method", rename_all = "lowercase")]
+enum Request<'a> {
+    /// Execute `code` in the live session and capture its output.
+    Evaluate { code: &'a str },
+    /// Classify `code`'s completeness without executing it.
+    Check { code: &'a str },
+}
+
+/// The reply to a [`Request::Evaluate`]: the captured session output and whether
+/// evaluation raised an error.
+#[derive(Deserialize)]
+struct EvalReply {
+    output: String,
+    error: bool,
+}
+
+/// The reply to a [`Request::Check`]: the completeness verdict and a diagnostic
+/// message (empty unless the verdict is `ERROR`).
+#[derive(Deserialize)]
+struct CheckReply {
+    verdict: String,
+    message: String,
+}
+
 
 pub struct M2Result {
     pub is_error: bool,
@@ -24,11 +60,8 @@ pub struct M2Result {
 /// The grammar-oracle verdict for an input buffer, decided by the live M2 process
 /// via a non-executing `parse` (see `parseCheck` in src/m2_startup.m2).
 pub enum ParseVerdict {
-    /// Parsed cleanly -- the buffer is ready to execute.
     Complete,
-    /// Parsing reached end of input -- the user is still typing.
     Incomplete,
-    /// A real syntax error at a concrete token; carries the M2 diagnostic line.
     SyntaxError(String),
 }
 
@@ -41,20 +74,21 @@ impl M2Backend {
     pub fn spawn() -> Result<Self, Box<dyn Error>> {
         let startup_script = include_str!("m2_startup.m2");
 
-        let listener = TcpListener::bind("127.0.0.1:0")?;
+        // Bind an ephemeral port, then hand it to M2 to re-open as its listener.
+        let listener = TcpListener::bind(format!("{LOOPBACK_HOST}:0"))?;
         let port = listener.local_addr()?.port();
         drop(listener);
 
-        let tmp_dir = env::temp_dir();
-        let port_file = tmp_dir.join("spectral-m2_port");
-        fs::write(&port_file, port.to_string())?;
-
-        let script_path = tmp_dir.join("spectral-m2_startup.m2");
+        let script_path = env::temp_dir().join("spectral-m2_startup.m2");
         fs::write(&script_path, startup_script)?;
 
+        // The port is passed as the script's sole argument (M2 exposes it as
+        // `scriptCommandLine#1`), so the two processes can never disagree on a
+        // shared file path the way a `/tmp` rendezvous file could.
         let mut process = Command::new("M2")
             .arg("--script")
             .arg(script_path.to_str().unwrap())
+            .arg(port.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -68,13 +102,40 @@ impl M2Backend {
         stream.set_read_timeout(Some(Duration::from_secs(30)))?;
         stream.set_write_timeout(Some(Duration::from_secs(10)))?;
 
-        let _ = fs::remove_file(&port_file);
+        let mut backend = Self { process, stream };
+        backend.load_init_file()?;
+        Ok(backend)
+    }
 
-        Ok(Self { process, stream })
+    /// The optional user init file, evaluated once at startup so personal
+    /// definitions are in scope before the first prompt:
+    /// `$XDG_CONFIG_HOME/spectral-m2/init.m2` (falling back to
+    /// `~/.config/spectral-m2/init.m2`). `None` when neither var is set.
+    fn init_file_path() -> Option<PathBuf> {
+        let config_dir = env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+        Some(config_dir.join("spectral-m2").join("init.m2"))
+    }
+
+    /// Evaluate the user init file if one exists. A missing or unreadable file is
+    /// the common case and not an error; only a broken socket propagates. The
+    /// file's own output is discarded -- it runs before the transcript exists.
+    fn load_init_file(&mut self) -> Result<(), Box<dyn Error>> {
+        let Some(path) = Self::init_file_path() else {
+            return Ok(());
+        };
+        let Ok(code) = fs::read_to_string(&path) else {
+            return Ok(());
+        };
+        if !code.trim().is_empty() {
+            self.evaluate(&code)?;
+        }
+        Ok(())
     }
 
     fn connect_to_m2(port: u16, process: &mut Child) -> Result<TcpStream, Box<dyn Error>> {
-        let addr = format!("127.0.0.1:{}", port);
+        let addr = format!("{LOOPBACK_HOST}:{port}");
         let start = Instant::now();
         loop {
             if let Some(status) = process.try_wait()? {
@@ -123,30 +184,27 @@ impl M2Backend {
         }
     }
 
-    /// Send a length-prefixed request frame: marker line, byte count, payload bytes.
-    fn send_frame(&mut self, marker: &str, payload: &str) -> Result<(), Box<dyn Error>> {
-        let header = format!("{}\n{}\n", marker, payload.len());
+    /// Send a length-prefixed frame: marker line, byte count, payload bytes.
+    fn send_frame(&mut self, payload: &str) -> Result<(), Box<dyn Error>> {
+        let header = format!("{MSG_MARKER}\n{}\n", payload.len());
         self.stream.write_all(header.as_bytes())?;
         self.stream.write_all(payload.as_bytes())?;
         self.stream.flush()?;
         Ok(())
     }
 
-    /// Read a length-prefixed reply frame: the marker, then a header line, then a
-    /// byte count, then exactly that many payload bytes. Returns (header, payload).
-    fn read_frame(&mut self, expected: &str) -> Result<(String, String), Box<dyn Error>> {
+    /// Read a length-prefixed frame: the marker line, a byte count line, then
+    /// exactly that many payload bytes. Returns the payload (a JSON document).
+    fn read_frame(&mut self) -> Result<String, Box<dyn Error>> {
         let mut reader = BufReader::new(&self.stream);
 
         let mut marker = String::new();
         if reader.read_line(&mut marker)? == 0 {
             return Err("Connection to M2 closed".into());
         }
-        if marker.trim() != expected {
-            return Err(format!("expected {expected}, got {:?}", marker.trim()).into());
+        if marker.trim() != MSG_MARKER {
+            return Err(format!("expected {MSG_MARKER}, got {:?}", marker.trim()).into());
         }
-
-        let mut header = String::new();
-        reader.read_line(&mut header)?;
 
         let mut count = String::new();
         reader.read_line(&mut count)?;
@@ -155,27 +213,28 @@ impl M2Backend {
         let mut buf = vec![0u8; n];
         reader.read_exact(&mut buf)?;
 
-        Ok((
-            header.trim().to_string(),
-            String::from_utf8_lossy(&buf).into_owned(),
-        ))
+        Ok(String::from_utf8_lossy(&buf).into_owned())
+    }
+
+    /// Round-trip one request through the backend, returning the reply payload.
+    fn request(&mut self, request: &Request) -> Result<String, Box<dyn Error>> {
+        self.send_frame(&serde_json::to_string(request)?)?;
+        self.read_frame()
     }
 
     /// Evaluate `code` (executes it). Synchronous and blocking (30s read timeout).
     pub fn evaluate(&mut self, code: &str) -> Result<M2Result, Box<dyn Error>> {
-        self.send_frame(CODE_START, code)?;
-        let (status, output) = self.read_frame(RESULT_START)?;
+        let reply: EvalReply = serde_json::from_str(&self.request(&Request::Evaluate { code })?)?;
         Ok(M2Result {
-            is_error: status == "error",
-            output: output.trim_end_matches('\n').to_string(),
+            is_error: reply.error,
+            output: reply.output.trim_end_matches('\n').to_string(),
         })
     }
 
     /// Ask the live M2 process to classify `code` without executing it.
     pub fn check(&mut self, code: &str) -> Result<ParseVerdict, Box<dyn Error>> {
-        self.send_frame(CHECK_START, code)?;
-        let (verdict, msg) = self.read_frame(VERDICT_START)?;
-        parse_verdict(&verdict, msg)
+        let reply: CheckReply = serde_json::from_str(&self.request(&Request::Check { code })?)?;
+        parse_verdict(&reply.verdict, reply.message)
     }
 
     #[allow(dead_code)]
@@ -251,9 +310,9 @@ mod tests {
             ParseVerdict::SyntaxError(_)
         ));
 
-        // A payload containing a marker line must NOT break framing.
+        // A payload containing the frame marker must NOT break framing.
         assert!(matches!(
-            be.check("s = \"<<<M2_END>>>\nmore\"").unwrap(),
+            be.check("s = \"<<<M2_MSG>>>\nmore\"").unwrap(),
             ParseVerdict::Complete
         ));
 
@@ -263,5 +322,31 @@ mod tests {
 
         let bad = be.evaluate("1/0").unwrap();
         assert!(bad.is_error, "1/0 should error: {:?}", bad.output);
+    }
+
+    // A user init file is evaluated at spawn, so its definitions are in scope at
+    // the first prompt. Points `XDG_CONFIG_HOME` at a temp config holding an
+    // init.m2 and checks the variable it defines resolves.
+    #[test]
+    #[ignore = "spawns a real M2 process; run with `cargo test -- --ignored`"]
+    fn init_file_is_loaded() {
+        let base = env::temp_dir().join(format!("spectral-m2-test-{}", std::process::id()));
+        let config = base.join("spectral-m2");
+        fs::create_dir_all(&config).expect("create temp config dir");
+        fs::write(config.join("init.m2"), "spectralInitProbe = 1729\n").expect("write init.m2");
+        env::set_var("XDG_CONFIG_HOME", &base);
+
+        let mut be = M2Backend::spawn().expect("spawn M2");
+        let out = be.evaluate("spectralInitProbe").expect("evaluate probe");
+
+        env::remove_var("XDG_CONFIG_HOME");
+        let _ = fs::remove_dir_all(&base);
+
+        assert!(!out.is_error, "probe errored: {:?}", out.output);
+        assert!(
+            out.output.contains("1729"),
+            "expected 1729 in {:?}",
+            out.output
+        );
     }
 }

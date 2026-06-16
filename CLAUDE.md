@@ -6,14 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `spectral-m2` is a terminal REPL for [Macaulay2](https://macaulay2.com) that adds tree-sitter syntax highlighting to a full-screen TUI. It does not reimplement M2 — it drives a real `M2` process and renders its output. `install.sh` also symlinks a short alias `sp2`.
 
-The name is a triple play: the **spectrum** of light (the colors), the **spectrum of a ring** (`Spec`, M2's algebraic-geometry home turf), and **spectral flux** (the author's handle).
 
 ## Commands
 
 ```bash
 cargo run                    # debug build + launch the REPL (needs M2 on PATH)
-cargo test                   # unit tests (clean_m2_output in src/transcript.rs)
-cargo clippy --all-targets -- -D warnings
+cargo test                   # unit tests (parser logic in src/repl.rs)
+cargo clippy --all-targets 
 cargo fmt --all
 ./install.sh                 # full pipeline: fmt-check → clippy → test → release build → install to ~/.local/bin/spectral-m2
 ```
@@ -22,51 +21,45 @@ cargo fmt --all
 
 `install.sh` is the gated pipeline: `cargo fmt --all --check`, `cargo clippy -- -D warnings`, and `cargo test` all run as hard gates before the release build and install — any failure aborts. Running the binary requires the `M2` executable on `PATH`; it spawns a real Macaulay2 process per session.
 
-Tests live in the `#[cfg(test)] mod tests` block at the bottom of `src/transcript.rs` and cover `clean_m2_output` (stripping `capture`'s session scaffolding). Run a single one with `cargo test <name>`, e.g. `cargo test preserves_2d_net_alignment`.
+Tests live in the `#[cfg(test)] mod tests` block at the bottom of `src/repl.rs` and cover `clean_m2_output` (stripping `capture`'s session scaffolding). Run a single one with `cargo test <name>`, e.g. `cargo test preserves_2d_net_alignment`.
 
 ## Code style
 
-- **No long inline path chaining.** Bring names into scope with `use` at the top of the file and refer to them unqualified. Write `Duration::from_secs(30)` (with `use std::time::Duration`), not `std::time::Duration::from_secs(30)`; `fs::write(..)` (with `use std::fs`), not `std::fs::write(..)`. `use` modules for free functions (`use std::fs; fs::write`) and types directly (`use std::time::Duration; Duration::…`). This applies to `std`, `crate::`, and external crates alike.
 - `cargo fmt --all` and `cargo clippy -- -D warnings` are hard gates in `install.sh`; keep both green.
 
 ## Architecture
 
 Two cooperating processes connected over a loopback TCP socket:
 
-- **Rust TUI** — a ratatui/crossterm full-screen app in the alternate screen, owning input editing, the scrollback transcript, and all coloring. `src/repl.rs` was split into focused modules (`src/main.rs` declares them):
-  - `app.rs` — the `App` event loop, `on_enter` cell gating, and `ReplTerminal` (raw-mode / alternate-screen lifecycle).
-  - `editor.rs` — the live input buffer: multi-line editing, cursor math, input history.
-  - `cells.rs` — splits the input buffer into M2 cells and decides whether it is still mid-edit (`parse_cells`). **Completeness detection is unfinished** — see Gotchas.
-  - `session.rs` — `iN` session numbering and commit-on-success bookkeeping (an erroring cell consumes no number).
-  - `transcript.rs` — the `TranscriptEntry` model and `clean_m2_output` (plus the `#[cfg(test)]` tests).
-  - `ui.rs` — all drawing (`draw_transcript`, `draw_input_area`, `push_output_box`).
-  - `highlight.rs` + `theme.rs` — the tree-sitter highlighting pipeline and the colour palette.
-- **Macaulay2 backend** (`src/m2_backend.rs` + `src/m2_startup.m2`) — `M2Backend::spawn()` launches `M2 --script src/m2_startup.m2`. The startup script reads a port from `/tmp/spectral-m2_port`, opens a listener, and runs an eval loop calling `capture(code, UserMode => true)`.
+- **Rust TUI** (`src/main.rs`, `src/repl.rs`) — ratatui/crossterm full-screen app in the alternate screen. Owns input editing, the scrollback transcript, and all coloring.
+- **Macaulay2 backend** (`src/m2_backend.rs` + `src/m2_startup.m2`) — `M2Backend::spawn()` launches `M2 --script <tmp>/spectral-m2_startup.m2 <port>`, passing the port as the script's sole argument (`scriptCommandLine#1`). The startup script opens a listener on that port and runs an eval loop calling `capture(code, UserMode => true)`.
 
 ### The wire protocol (must stay in sync across the Rust/M2 boundary)
 
-The framing constants are defined **twice** — in `m2_backend.rs` (top) and `m2_startup.m2` (header comment + literals). Changing one without the other breaks startup silently. Flow:
+Payloads are **JSON**, carried in **length-prefixed** frames: a marker line (`<<<M2_MSG>>>`), then a decimal byte count line, then exactly that many opaque payload bytes (so the JSON may itself contain the marker string or newlines). The marker string, the request `method` names, and the reply field names are defined on **both** sides — `m2_backend.rs` (the `MSG_MARKER` const + the `Request`/`*Reply` serde types) and `m2_startup.m2` (the `M2MSG` literal + `handleMessage`). Changing one side without the other breaks startup silently. Flow:
 
-1. Rust binds an ephemeral port, writes it to `/tmp/spectral-m2_port`, then spawns M2.
-2. M2 reads the port, opens the listener, sends `<<<M2_READY>>>`.
-3. Per evaluation: Rust sends `<<<M2_CODE>>>\n<code>\n<<<M2_END>>>\n`.
-4. M2 replies `<<<M2_RESULT>>>\n<ok|error>\n<output>\n<<<M2_END>>>\n`.
+1. Rust binds an ephemeral port, drops the listener, then spawns M2 with the port as a script argument.
+2. M2 opens the listener on that port and sends `<<<M2_READY>>>`.
+3. Per request: Rust sends `<<<M2_MSG>>>\n<byte-count>\n{"method":"evaluate"|"check","code":…}`; M2 replies `<<<M2_MSG>>>\n<byte-count>\n<JSON result>`.
+   - `evaluate` → `{"output": <string>, "error": <bool>}`
+   - `check` (non-executing) → `{"verdict": "COMPLETE"|"INCOMPLETE"|"ERROR", "message": <string>}`
 
-`evaluate()` is synchronous and blocking (30s read timeout). Multi-line input is sent as-is; the M2 loop reassembles lines until `<<<M2_END>>>`.
+`evaluate()` and `check()` are synchronous and blocking (30s read timeout). The JSON is escaped/parsed by serde (Rust) and M2's `JSON` package (`toJSON`/`fromJSON`). Method dispatch is **manual** in `m2_startup.m2` — not M2's `JSONRPC` package, whose `handleRequest` error-trapping breaks `parseCheck`'s `try parse` completeness detection. Adding a query (e.g. an ambient `loadedPackages` status) is one new `method` branch in `handleMessage` plus a serde type — the multiplexing payoff of the JSON channel.
 
-### Highlighting pipeline (`src/highlight.rs`, `src/theme.rs`)
+### Highlighting pipeline (`src/repl.rs`)
 
-- Grammar comes from the `tree-sitter-macaulay2` crate; highlight queries live in `queries/highlights.scm` (compiled into `highlight.rs` via `include_str!`).
-- `CAPTURE_NAMES` (`theme.rs` — the capture names the highlighter is configured with) and `default_syntax_style()` (`theme.rs` — name → ratatui `Style`, collected into `Theme::syntax` and read back by index via `syntax_style()`) are a matched pair. Adding a capture to the query means adding it to **both** the `CAPTURE_NAMES` array and the `default_syntax_style()` match, or it renders unstyled.
-- `clean_m2_output()` (`transcript.rs`) strips `capture`'s session scaffolding (echoed input, trailing prompt, `oN =`/`oN :` labels) and splits the value body from the trailing `oN : Type`. Covered by the `#[cfg(test)]` tests in `transcript.rs`.
-- Results render in a bordered box (`push_output_box`, `draw_transcript` in `ui.rs`); the value body is still unhighlighted inside the box, while input is fully tree-sitter highlighted. Re-highlighting output bodies is a known area of active work.
+- Grammar comes from the `tree-sitter-macaulay2` crate; highlight queries live in `queries/highlights.scm` (compiled in via `include_str!`).
+- `HIGHLIGHT_NAMES` (the capture names the highlighter is configured with) and `highlight_style()` (name → ratatui `Style`) are a matched pair. Adding a capture to the query means adding it to **both** the `HIGHLIGHT_NAMES` array and the `highlight_style()` match, or it renders unstyled.
+- `clean_m2_output()` strips `capture`'s session scaffolding (echoed input, trailing prompt, `oN =`/`oN :` labels) and splits the value body from the trailing `oN : Type`. Covered by the `#[cfg(test)]` tests.
+- Results render in a bordered box (`push_output_box`, `draw_transcript`); the value body is still plain `Color::White` inside the box, while input is fully tree-sitter highlighted. Re-highlighting output bodies is the known area of active work.
 
 ### Input vs. output rendering
 
-`TranscriptEntry` (`transcript.rs`) distinguishes `Input` (highlighted via tree-sitter), `Output` (value body + optional type line, error-aware background), and `System` messages. The live input area (`draw_input_area` in `ui.rs`) re-highlights on every keystroke and manages multi-line cursor math manually.
+`TranscriptEntry` distinguishes `Input` (highlighted via tree-sitter), `Output` (value body + optional type line, error-aware background), and `System` messages. The live input area (`draw_input_area`) re-highlights on every keystroke and manages multi-line cursor math manually.
 
 ## Gotchas
 
-- Terminal state (raw mode, alternate screen, bracketed paste, keyboard enhancement flags) is set up in `ReplTerminal::enter` (`src/app.rs`) and torn down in both `leave()` and `Drop` — keep cleanup idempotent so a panic doesn't leave the terminal wedged.
-- `/tmp/spectral-m2_port` and `/tmp/spectral-m2_startup.m2` are written at startup; the port file is removed after handshake.
+- Terminal state (raw mode, alternate screen, bracketed paste, keyboard enhancement flags) is set up in `ReplTerminal::enter` and torn down in both `leave()` and `Drop` — keep cleanup idempotent so a panic doesn't leave the terminal wedged.
+- `<tmp>/spectral-m2_startup.m2` is written at startup (the script M2 runs); the listen port is passed as a script argument, not via a rendezvous file.
+- An optional user init file (`$XDG_CONFIG_HOME/spectral-m2/init.m2`, else `~/.config/spectral-m2/init.m2`) is evaluated once at spawn, before the first prompt; a missing file is a silent no-op.
 - The M2 child is killed on `M2Backend::drop`.

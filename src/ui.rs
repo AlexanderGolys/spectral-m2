@@ -4,7 +4,7 @@
 //! one region.
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{self, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Padding, Paragraph, Widget};
@@ -22,10 +22,6 @@ use crate::transcript::{
 };
 
 const MAX_INPUT_HEIGHT: u16 = 8;
-// TODO: replace this single static placeholder with a random hint drawn from a
-// curated set (REPL-specific tips + Macaulay2 tricks), shown on empty input.
-// Decide the rotation cadence (per launch / per empty buffer, not per frame, to
-// avoid flicker) and where the hint set lives (a new `hints` module).
 const INPUT_PLACEHOLDER: &str = "Type M2 code...";
 const GUTTER_W: u16 = 5;
 const MIN_BOX_W: u16 = 8;
@@ -48,7 +44,6 @@ pub fn calculate_input_height(editor: &Editor, has_error: bool) -> u16 {
 fn gutter_span(label: &str, style: Style) -> Span<'static> {
     let w = GUTTER_W as usize;
     let label_w = label.chars().count();
-    // Right-align the marker, always leaving one trailing space before content.
     let pad = w.saturating_sub(label_w + 1);
     let trailing = w.saturating_sub(pad + label_w);
     let text = format!("{}{}{}", " ".repeat(pad), label, " ".repeat(trailing));
@@ -77,11 +72,15 @@ impl Panel {
             Panel::Output { body, .. } => body.len() as u16 + 2,
         }
     }
+}
 
-    fn render(self, buf: &mut Buffer, y: u16, width: u16) {
+impl Widget for Panel {
+    /// Render into the full-width row `area` (`area.height` must be [`Panel::height`]).
+    /// A `Band` fills the row; an `Output` box insets itself by one [`GUTTER_W`] gutter
+    /// on each side, matching the input bands' code column.
+    fn render(self, area: Rect, buf: &mut Buffer) {
         match self {
             Panel::Band { lines, base } => {
-                let area = Rect::new(0, y, width, lines.len() as u16);
                 Paragraph::new(lines).style(base).render(area, buf);
             }
             Panel::Output {
@@ -90,8 +89,8 @@ impl Panel {
                 bottom,
                 body,
             } => {
-                let box_w = width.saturating_sub(2 * GUTTER_W).max(MIN_BOX_W);
-                let area = Rect::new(GUTTER_W, y, box_w, body.len() as u16 + 2);
+                let box_w = area.width.saturating_sub(2 * GUTTER_W).max(MIN_BOX_W);
+                let box_area = Rect::new(area.x + GUTTER_W, area.y, box_w, area.height);
                 let mut block = Block::bordered()
                     .border_type(BorderType::Rounded)
                     .border_style(border_style)
@@ -102,8 +101,8 @@ impl Panel {
                 if let Some(b) = bottom {
                     block = block.title_bottom(b);
                 }
-                let inner = block.inner(area);
-                block.render(area, buf);
+                let inner = block.inner(box_area);
+                block.render(box_area, buf);
                 Paragraph::new(body).render(inner, buf);
             }
         }
@@ -302,7 +301,7 @@ pub fn draw_transcript(
     let mut y = 0;
     for panel in panels {
         let h = panel.height();
-        panel.render(&mut comp, y, area.width);
+        panel.render(Rect::new(0, y, area.width, h), &mut comp);
         y += h;
     }
 
@@ -370,7 +369,7 @@ pub fn draw_input_area(
     frame.render_widget(paragraph, area);
 
     let (cursor_line, cursor_col) = editor.cursor_line_col();
-    frame.set_cursor_position(ratatui::layout::Position::new(
+    frame.set_cursor_position(Position::new(
         area.x + GUTTER_W + cursor_col as u16,
         area.y + 1 + cursor_line as u16, // +1 for the top margin row
     ));
@@ -423,7 +422,7 @@ pub fn draw_code_pane(
     // run), which is exactly why errors never appear in this pane.
     let live = editor.text();
     if !live.trim().is_empty() {
-        // TODO(human): append the live input to `lines` as a dimmed, "pending"
+        // NOTE (superseded by the block.rs rewrite): append the live input to `lines` as a dimmed, "pending"
         // block. Design decisions, all tied to the iN-as-anchor model: do you
         // prefix it with the number it *would* take on success
         // (`session.next_number().0`, mirroring the markers above) or leave it

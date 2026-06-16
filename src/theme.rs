@@ -6,6 +6,37 @@
 
 use ratatui::style::{Color, Modifier, Style};
 
+/// Named base colours. Every raw RGB triple the theme uses is defined here once
+/// with a semantic name, so the styles below read as intent rather than magic
+/// numbers and near-duplicate shades (the keyword-accent purples, the warm
+/// error/return reds) are visibly related. ANSI colours are already named by
+/// [`Color`] and are used directly at the call site.
+mod palette {
+    use ratatui::style::Color;
+
+    // UI surfaces.
+    pub const SURFACE_BASE: Color = Color::Rgb(20, 22, 30);
+    pub const SURFACE_RAISED: Color = Color::Rgb(26, 28, 38);
+    pub const FG_VALUE: Color = Color::Rgb(214, 217, 224);
+    pub const FG_ERROR: Color = Color::Rgb(240, 150, 150);
+    pub const FG_WARNING: Color = Color::Rgb(232, 146, 64);
+    pub const FG_TYPE: Color = Color::Rgb(196, 167, 110);
+    pub const BORDER_DEFAULT: Color = Color::Rgb(72, 78, 96);
+    pub const BORDER_ERROR: Color = Color::Rgb(128, 78, 78);
+    pub const BORDER_WARNING: Color = Color::Rgb(176, 104, 52);
+
+    // Syntax: the keyword-accent family (purples shading by keyword role).
+    pub const KEYWORD: Color = Color::Rgb(210, 140, 255);
+    pub const KEYWORD_MODIFIER: Color = Color::Rgb(180, 140, 255);
+    pub const KEYWORD_REPEAT: Color = Color::Rgb(200, 140, 255);
+    // Syntax: the exception/return family (warm reds).
+    pub const KEYWORD_EXCEPTION: Color = Color::Rgb(255, 140, 140);
+    pub const KEYWORD_RETURN: Color = Color::Rgb(255, 160, 160);
+    // Syntax: warm highlights.
+    pub const VARIABLE_BUILTIN: Color = Color::Rgb(255, 200, 100);
+    pub const STRING_REGEXP: Color = Color::Rgb(255, 180, 100);
+}
+
 /// The tree-sitter capture names the highlighter is configured with, and the
 /// keys of a theme's syntax palette. Single source of truth: the highlighter is
 /// configured with this slice, and [`Theme::syntax`] is indexed in the same
@@ -84,24 +115,27 @@ impl Default for Theme {
     }
 }
 
+/// The default styles for the non-syntax UI surfaces.
 fn default_ui() -> UiTheme {
     UiTheme {
-        transcript_bg: Style::default().bg(Color::Rgb(20, 22, 30)),
-        code_bg: Style::default().bg(Color::Rgb(26, 28, 38)),
-        value: Style::default().fg(Color::Rgb(214, 217, 224)),
-        error: Style::default().fg(Color::Rgb(240, 150, 150)),
-        warning: Style::default().fg(Color::Rgb(232, 146, 64)),
+        transcript_bg: Style::default().bg(palette::SURFACE_BASE),
+        code_bg: Style::default().bg(palette::SURFACE_RAISED),
+        value: Style::default().fg(palette::FG_VALUE),
+        error: Style::default().fg(palette::FG_ERROR),
+        warning: Style::default().fg(palette::FG_WARNING),
         type_info: Style::default()
-            .fg(Color::Rgb(196, 167, 110))
+            .fg(palette::FG_TYPE)
             .add_modifier(Modifier::ITALIC),
-        border: Style::default().fg(Color::Rgb(72, 78, 96)),
-        error_border: Style::default().fg(Color::Rgb(128, 78, 78)),
-        warning_border: Style::default().fg(Color::Rgb(176, 104, 52)),
+        border: Style::default().fg(palette::BORDER_DEFAULT),
+        error_border: Style::default().fg(palette::BORDER_ERROR),
+        warning_border: Style::default().fg(palette::BORDER_WARNING),
         prompt: Style::default().fg(Color::Cyan),
         muted: Style::default().fg(Color::DarkGray),
     }
 }
 
+/// The default style for the tree-sitter capture named `name` (see
+/// [`CAPTURE_NAMES`]); unmatched captures fall through to the default style.
 fn default_syntax_style(name: &str) -> Style {
     match name {
         "comment" => Style::default().fg(Color::DarkGray),
@@ -109,21 +143,21 @@ fn default_syntax_style(name: &str) -> Style {
         "constructor" => Style::default().fg(Color::LightCyan),
         "function" | "function.builtin" => Style::default().fg(Color::Blue),
         "keyword" | "keyword.conditional" => Style::default()
-            .fg(Color::Rgb(210, 140, 255))
+            .fg(palette::KEYWORD)
             .add_modifier(Modifier::BOLD),
         "keyword.debug" => Style::default().fg(Color::DarkGray),
         "keyword.exception" => Style::default()
-            .fg(Color::Rgb(255, 140, 140))
+            .fg(palette::KEYWORD_EXCEPTION)
             .add_modifier(Modifier::BOLD),
         "keyword.modifier" => Style::default()
-            .fg(Color::Rgb(180, 140, 255))
+            .fg(palette::KEYWORD_MODIFIER)
             .add_modifier(Modifier::BOLD),
         "keyword.operator" => Style::default().fg(Color::LightMagenta),
         "keyword.repeat" => Style::default()
-            .fg(Color::Rgb(200, 140, 255))
+            .fg(palette::KEYWORD_REPEAT)
             .add_modifier(Modifier::BOLD),
         "keyword.return" => Style::default()
-            .fg(Color::Rgb(255, 160, 160))
+            .fg(palette::KEYWORD_RETURN)
             .add_modifier(Modifier::BOLD),
         "number" => Style::default().fg(Color::LightGreen),
         "operator" => Style::default().fg(Color::Gray),
@@ -135,10 +169,10 @@ fn default_syntax_style(name: &str) -> Style {
         "string.special" | "string.special.url" => Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::UNDERLINED),
-        "string.regexp" => Style::default().fg(Color::Rgb(255, 180, 100)),
+        "string.regexp" => Style::default().fg(palette::STRING_REGEXP),
         "type" => Style::default().fg(Color::Yellow),
         "variable" => Style::default().fg(Color::White),
-        "variable.builtin" => Style::default().fg(Color::Rgb(255, 200, 100)),
+        "variable.builtin" => Style::default().fg(palette::VARIABLE_BUILTIN),
         "variable.parameter" => Style::default().fg(Color::LightRed),
         _ => Style::default(),
     }

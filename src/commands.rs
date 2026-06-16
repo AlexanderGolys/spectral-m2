@@ -20,6 +20,7 @@ pub enum ReplCommand {
 /// Parse `input` as a REPL command iff its first character is [`COMMAND_PREFIX`].
 /// Returns `None` for ordinary M2 code. The caller is responsible for only
 /// offering a *fresh, single-line* input (commands are not recognised mid-block).
+/// -- @##todo Add completion and highlights
 pub fn parse_command(input: &str) -> Option<ReplCommand> {
     let rest = input.strip_prefix(COMMAND_PREFIX)?;
     let name = rest.split_whitespace().next().unwrap_or("");
