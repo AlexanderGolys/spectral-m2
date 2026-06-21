@@ -1,94 +1,79 @@
-//! Tree-sitter syntax highlighting for the live input and echoed code. Styles
-//! are resolved through a [`Theme`], so this module names no colours of its own.
+//! The tree-sitter syntax highlighter: the one [`Highlighter`] implementation we
+//! ship. It turns M2 source into a flat, ordered list of leaf [`HighlightSpan`]s
+//! tagged by [`HighlightKind`] — no colours, no styles. Resolution to a concrete
+//! `Style` happens later, at render, through the active theme; this module names
+//! nothing visual.
 
-use ratatui::style::Style;
-use ratatui::text::Span;
-use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
+use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter as TsHighlighter};
 
-use crate::theme::{Theme, CAPTURE_NAMES};
+use crate::block::highlight::{HighlightKind, HighlightSpan, Highlighter};
 
 const M2_HIGHLIGHTS_QUERY: &str = include_str!("../queries/highlights.scm");
 
 pub struct SyntaxHighlighter {
     config: Option<HighlightConfiguration>,
-    highlighter: Highlighter,
+    highlighter: TsHighlighter,
 }
 
 impl SyntaxHighlighter {
     pub fn new() -> Self {
         let lang = tree_sitter_macaulay2::language();
+        // Configure with the capture names in [`HighlightKind::ALL`] order, so the
+        // index tree-sitter reports back is exactly a `HighlightKind` ordinal.
+        let names: Vec<&str> = HighlightKind::ALL
+            .iter()
+            .map(|k| k.capture_name())
+            .collect();
         let config = HighlightConfiguration::new(lang, "macaulay2", M2_HIGHLIGHTS_QUERY, "", "")
             .ok()
             .map(|mut c| {
-                c.configure(CAPTURE_NAMES);
+                c.configure(&names);
                 c
             });
-
         Self {
             config,
-            highlighter: Highlighter::new(),
+            highlighter: TsHighlighter::new(),
         }
     }
+}
 
-    /// Highlight one line, returning `(style, text)` runs. Falls back to a
-    /// single unstyled run when the grammar failed to load or errored.
-    pub fn highlight_m2(&mut self, source: &str, theme: &Theme) -> Vec<(Style, String)> {
+impl Highlighter for SyntaxHighlighter {
+    /// Highlight `source`, returning leaf spans in source order. The grammar
+    /// failing to load, or the highlighter erroring, yields no spans (the text
+    /// renders unstyled) rather than panicking.
+    fn highlight(&mut self, source: &str) -> Vec<HighlightSpan> {
         let Some(config) = self.config.as_ref() else {
-            return vec![(Style::default(), source.to_string())];
+            return Vec::new();
         };
-        match highlight_spans(&mut self.highlighter, config, source, theme) {
-            Ok(spans) => spans,
-            Err(_) => vec![(Style::default(), source.to_string())],
-        }
-    }
-}
+        let Ok(events) = self
+            .highlighter
+            .highlight(config, source.as_bytes(), None, |_| None)
+        else {
+            return Vec::new();
+        };
 
-fn highlight_spans(
-    highlighter: &mut Highlighter,
-    config: &HighlightConfiguration,
-    source: &str,
-    theme: &Theme,
-) -> Result<Vec<(Style, String)>, tree_sitter_highlight::Error> {
-    let mut spans = Vec::new();
-    let mut stack = Vec::new();
-    let events = highlighter.highlight(config, source.as_bytes(), None, |_| None)?;
-    for event in events {
-        match event? {
-            HighlightEvent::Source { start, end } => {
-                let style = stack
-                    .last()
-                    .copied()
-                    .map_or_else(Style::default, |index| theme.syntax_style(index));
-                spans.push((style, source[start..end].to_string()));
-            }
-            HighlightEvent::HighlightStart(tree_sitter_highlight::Highlight(index)) => {
-                stack.push(index);
-            }
-            HighlightEvent::HighlightEnd => {
-                stack.pop();
-            }
-        }
-    }
-    Ok(spans)
-}
-
-/// Flatten `(style, text)` runs into ratatui spans. Any embedded newline is
-/// split out (runs should be single-line in practice, but a multi-line span
-/// would otherwise corrupt the layout).
-pub fn highlight_to_spans(highlighted: &[(Style, String)]) -> Vec<Span<'static>> {
-    highlighted
-        .iter()
-        .flat_map(|(style, text)| {
-            if !text.contains('\n') {
-                return vec![Span::styled(text.clone(), *style)];
-            }
-            let mut result = Vec::new();
-            for piece in text.split('\n') {
-                if !piece.is_empty() {
-                    result.push(Span::styled(piece.to_string(), *style));
+        let mut spans = Vec::new();
+        let mut stack: Vec<usize> = Vec::new();
+        for event in events {
+            match event {
+                Ok(HighlightEvent::HighlightStart(h)) => stack.push(h.0),
+                Ok(HighlightEvent::HighlightEnd) => {
+                    stack.pop();
                 }
+                Ok(HighlightEvent::Source { start, end }) => {
+                    if let Some(kind) = stack
+                        .last()
+                        .and_then(|&i| HighlightKind::from_capture_index(i))
+                    {
+                        spans.push(HighlightSpan {
+                            range: start..end,
+                            kind,
+                        });
+                    }
+                }
+                Err(_) => return spans,
             }
-            result
-        })
-        .collect()
+        }
+        spans
+    }
 }

@@ -17,8 +17,7 @@
 
 (symbol) @variable
 
-(_
-  symbol: (resolved_symbol) @variable)
+(_ symbol: (resolved_symbol) @variable)
 
 ; Operators
 (binary_expression
@@ -149,7 +148,7 @@
 ; Members, options, and properties
 (binary_expression
   operator: ["." ".?" "#" "#?" "_"]
-  right: (symbol) @property)
+  right: [(symbol) (integer_literal)] @property)
 
 (binary_expression
   operator: "_" @property
@@ -164,6 +163,9 @@
 (new_statement
   (from_clause
     "from" @keyword))
+             (binary_expression
+               left: (symbol) @function.call
+               operator: "SPACE")
 
 ; Method installations
 ((binary_expression
@@ -277,13 +279,17 @@
 ((symbol) @boolean
   (#any-of? @boolean "true" "false"))
 
+((symbol) @error
+  (#match? @error "^error$"))
+
+
 
 ((symbol) @variable.builtin
   (#any-of? @variable.builtin
     "allowableThreads" "debugLevel" "defaultPrecision" "engineDebugLevel" "errorDepth" "gbTrace"
     "interpreterDepth" "lineNumber" "loadDepth" "maxAllowableThreads" "maxExponent" "minExponent"
     "numTBBThreads" "printingAccuracy" "printingLeadLimit" "printingPrecision" "printingTimeLimit"
-    "printingTrailLimit" "version" "printWidth" "recursionLimit" "typicalValues"))
+    "printingTrailLimit" "version" "printWidth" "recursionLimit" ))
 
 ; Special strings
 ((string_literal) @string.special.url
@@ -319,7 +325,7 @@
   operator: "SPACE"
   right: (sequence
     (string_literal) @string.regexp
-    (string_literal) @string.special
+    (string_literal) @string.regexp
     (_)))
   (#eq? @function.builtin "replace"))
 
@@ -346,7 +352,7 @@
       (string_literal) @string.special)
   ])
   (#any-of? @function.builtin
-    "loadPackage" "installPackage" "uninstallPackage" "needsPackage" "export" "endPackage"
+    "loadPackage" "installPackage" "uninstallPackage" "needsPackage" "endPackage"
     "newPackage" "importFrom" "exportFrom"))
 
 ((binary_expression

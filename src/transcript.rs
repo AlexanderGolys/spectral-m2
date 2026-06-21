@@ -1,24 +1,7 @@
-//! The session transcript model and the parsing that turns raw `capture`
-//! output into clean value/type/diagnostic pieces ready for rendering.
-
-use std::rc::Rc;
-
-/// One rendered unit of session history.
-pub enum TranscriptEntry {
-    Input {
-        number: usize,
-        /// The echoed input. Shared as an [`Rc<str>`] with the committed
-        /// [`crate::session::Cell`] for cells that succeed; an errored cell holds
-        /// its own (the editor's retry-draft diverges from it).
-        code: Rc<str>,
-    },
-    Output {
-        result: String,
-        type_info: Option<String>,
-        is_error: bool,
-    },
-    System(String),
-}
+//! Parsing that turns raw `capture` output into clean value/type/diagnostic
+//! pieces ready for the typed feed blocks. [`clean_m2_output`] strips the session
+//! scaffolding `capture(.., UserMode => true)` wraps around a result; the smaller
+//! helpers lift warnings out of a value and tidy M2's location-prefixed messages.
 
 /// Match a Macaulay2 session prefix like `i12 = ` or `o3 : `, returning the
 /// byte length of the prefix (tag, digits, space, separator, space) if present.

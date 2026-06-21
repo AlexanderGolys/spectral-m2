@@ -2,9 +2,17 @@
 //! [`ratatui::style::Color`]; every other module receives ready-made [`Style`]
 //! values from a [`Theme`] and never constructs a colour itself. A clippy
 //! `disallowed-types` gate enforces that boundary (see `clippy.toml`).
+//!
+//! Syntax colours are resolved through [`Theme::style`], an *exhaustive* match
+//! over [`HighlightKind`]: a capture the grammar emits cannot be left unstyled
+//! without a compile error, which is precisely the bug the old string-indexed
+//! `CAPTURE_NAMES` table allowed (four emitted captures had no entry and rendered
+//! plain).
 #![allow(clippy::disallowed_types)]
 
 use ratatui::style::{Color, Modifier, Style};
+
+use crate::block::highlight::HighlightKind;
 
 /// Named base colours. Every raw RGB triple the theme uses is defined here once
 /// with a semantic name, so the styles below read as intent rather than magic
@@ -37,41 +45,6 @@ mod palette {
     pub const STRING_REGEXP: Color = Color::Rgb(255, 180, 100);
 }
 
-/// The tree-sitter capture names the highlighter is configured with, and the
-/// keys of a theme's syntax palette. Single source of truth: the highlighter is
-/// configured with this slice, and [`Theme::syntax`] is indexed in the same
-/// order, so a capture's style is `syntax[index]`.
-pub const CAPTURE_NAMES: &[&str] = &[
-    "comment",
-    "constant",
-    "constant.builtin",
-    "constructor",
-    "function",
-    "function.builtin",
-    "keyword",
-    "keyword.conditional",
-    "keyword.debug",
-    "keyword.exception",
-    "keyword.modifier",
-    "keyword.operator",
-    "keyword.repeat",
-    "keyword.return",
-    "number",
-    "operator",
-    "property",
-    "punctuation.bracket",
-    "punctuation.delimiter",
-    "punctuation.special",
-    "string",
-    "string.special",
-    "string.special.url",
-    "string.regexp",
-    "type",
-    "variable",
-    "variable.builtin",
-    "variable.parameter",
-];
-
 /// The styles for every non-syntax surface of the TUI. Background entries
 /// (`transcript_bg`, `code_bg`) carry only a `bg` and are meant to be merged
 /// onto a foreground style with [`Style::patch`].
@@ -89,29 +62,57 @@ pub struct UiTheme {
     pub muted: Style,
 }
 
-/// A full colour scheme: UI surfaces plus the per-capture syntax palette.
+/// A full colour scheme: the non-syntax UI surfaces plus a per-[`HighlightKind`]
+/// syntax palette resolved by [`Theme::style`].
 pub struct Theme {
     pub ui: UiTheme,
-    syntax: Vec<Style>,
 }
 
 impl Theme {
-    /// The style for the capture at `index` into [`CAPTURE_NAMES`]; unstyled
-    /// when the index is out of range.
-    pub fn syntax_style(&self, index: usize) -> Style {
-        self.syntax.get(index).copied().unwrap_or_default()
+    /// The foreground style for a syntax [`HighlightKind`]. Exhaustive by
+    /// construction: a new capture variant forces a new arm here. Returned styles
+    /// are fg + modifiers only, meant to be patched over a surface's background.
+    pub fn style(&self, kind: HighlightKind) -> Style {
+        let fg = |c: Color| Style::default().fg(c);
+        let bold = |c: Color| Style::default().fg(c).add_modifier(Modifier::BOLD);
+        match kind {
+            HighlightKind::Comment => fg(Color::DarkGray),
+            HighlightKind::Error => bold(Color::Red),
+            HighlightKind::Number | HighlightKind::NumberFloat => fg(Color::LightGreen),
+            HighlightKind::Boolean => fg(Color::LightYellow),
+            HighlightKind::String => fg(Color::Green),
+            HighlightKind::StringSpecial | HighlightKind::StringSpecialUrl => {
+                fg(Color::Cyan).add_modifier(Modifier::UNDERLINED)
+            }
+            HighlightKind::StringRegexp => fg(palette::STRING_REGEXP),
+            HighlightKind::CharacterSpecial => fg(Color::LightMagenta),
+            HighlightKind::Variable => fg(Color::White),
+            HighlightKind::VariableBuiltin => fg(palette::VARIABLE_BUILTIN),
+            HighlightKind::VariableParameter => fg(Color::LightRed),
+            HighlightKind::ConstantBuiltin => fg(Color::LightYellow),
+            HighlightKind::Function | HighlightKind::FunctionBuiltin => fg(Color::Blue),
+            HighlightKind::Constructor => fg(Color::LightCyan),
+            HighlightKind::Type => fg(Color::Yellow),
+            HighlightKind::Property => fg(Color::Cyan),
+            HighlightKind::ModuleBuiltin => fg(Color::LightBlue),
+            HighlightKind::Operator => fg(Color::Gray),
+            HighlightKind::Keyword | HighlightKind::KeywordConditional => bold(palette::KEYWORD),
+            HighlightKind::KeywordRepeat => bold(palette::KEYWORD_REPEAT),
+            HighlightKind::KeywordReturn => bold(palette::KEYWORD_RETURN),
+            HighlightKind::KeywordException => bold(palette::KEYWORD_EXCEPTION),
+            HighlightKind::KeywordModifier => bold(palette::KEYWORD_MODIFIER),
+            HighlightKind::KeywordDebug => fg(Color::DarkGray),
+            HighlightKind::KeywordOperator => fg(Color::LightMagenta),
+            HighlightKind::PunctuationBracket | HighlightKind::PunctuationDelimiter => {
+                fg(Color::Gray)
+            }
+        }
     }
 }
 
 impl Default for Theme {
     fn default() -> Self {
-        Theme {
-            ui: default_ui(),
-            syntax: CAPTURE_NAMES
-                .iter()
-                .map(|n| default_syntax_style(n))
-                .collect(),
-        }
+        Theme { ui: default_ui() }
     }
 }
 
@@ -131,49 +132,5 @@ fn default_ui() -> UiTheme {
         warning_border: Style::default().fg(palette::BORDER_WARNING),
         prompt: Style::default().fg(Color::Cyan),
         muted: Style::default().fg(Color::DarkGray),
-    }
-}
-
-/// The default style for the tree-sitter capture named `name` (see
-/// [`CAPTURE_NAMES`]); unmatched captures fall through to the default style.
-fn default_syntax_style(name: &str) -> Style {
-    match name {
-        "comment" => Style::default().fg(Color::DarkGray),
-        "constant" | "constant.builtin" => Style::default().fg(Color::LightYellow),
-        "constructor" => Style::default().fg(Color::LightCyan),
-        "function" | "function.builtin" => Style::default().fg(Color::Blue),
-        "keyword" | "keyword.conditional" => Style::default()
-            .fg(palette::KEYWORD)
-            .add_modifier(Modifier::BOLD),
-        "keyword.debug" => Style::default().fg(Color::DarkGray),
-        "keyword.exception" => Style::default()
-            .fg(palette::KEYWORD_EXCEPTION)
-            .add_modifier(Modifier::BOLD),
-        "keyword.modifier" => Style::default()
-            .fg(palette::KEYWORD_MODIFIER)
-            .add_modifier(Modifier::BOLD),
-        "keyword.operator" => Style::default().fg(Color::LightMagenta),
-        "keyword.repeat" => Style::default()
-            .fg(palette::KEYWORD_REPEAT)
-            .add_modifier(Modifier::BOLD),
-        "keyword.return" => Style::default()
-            .fg(palette::KEYWORD_RETURN)
-            .add_modifier(Modifier::BOLD),
-        "number" => Style::default().fg(Color::LightGreen),
-        "operator" => Style::default().fg(Color::Gray),
-        "property" => Style::default().fg(Color::Cyan),
-        "punctuation.bracket" | "punctuation.delimiter" | "punctuation.special" => {
-            Style::default().fg(Color::Gray)
-        }
-        "string" => Style::default().fg(Color::Green),
-        "string.special" | "string.special.url" => Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::UNDERLINED),
-        "string.regexp" => Style::default().fg(palette::STRING_REGEXP),
-        "type" => Style::default().fg(Color::Yellow),
-        "variable" => Style::default().fg(Color::White),
-        "variable.builtin" => Style::default().fg(palette::VARIABLE_BUILTIN),
-        "variable.parameter" => Style::default().fg(Color::LightRed),
-        _ => Style::default(),
     }
 }

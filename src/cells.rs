@@ -1,9 +1,11 @@
-//! Tree-sitter helpers over the input buffer. Completeness is decided by the live
-//! M2 oracle ([`crate::m2_backend::M2Backend::check`]), NOT here -- tree-sitter's
-//! error recovery does not reliably localize incompleteness. This module is used
-//! only after the oracle has classified the buffer: [`split_cells`] slices a
-//! known-complete buffer into top-level cells, and [`has_syntax_error`] catches
-//! the strict errors `parse` is lenient about (e.g. the empty-statement `;;`).
+//! Tree-sitter cell splitting over a complete buffer. Completeness is decided by the
+//! live M2 oracle ([`crate::m2_backend::M2Backend::check`]), NOT here -- tree-sitter's
+//! error recovery does not reliably localize incompleteness. Used only after the oracle
+//! has classified the buffer: [`split_cells`] returns the byte ranges of the top-level
+//! cells, and [`has_syntax_error`] catches the strict errors `parse` is lenient about
+//! (e.g. the empty-statement `;;`).
+
+use std::ops::Range;
 
 use tree_sitter::Parser;
 
@@ -15,10 +17,11 @@ fn parser() -> Parser {
     parser
 }
 
-/// Split a complete buffer into one source string per top-level `cell` node. Only
-/// valid on a buffer the M2 oracle has confirmed parses cleanly, so the tree never
-/// carries error-recovery artifacts.
-pub fn split_cells(source: &str) -> Vec<String> {
+/// Byte ranges of each top-level `cell` node (the depth-0 `;`-separated units) in a
+/// complete buffer. Ranges index into `source`; the caller slices both the text and the
+/// matching highlight spans from them, so nothing is cloned here. Only valid on a buffer
+/// the M2 oracle has confirmed parses cleanly, so the tree carries no recovery artifacts.
+pub fn split_cells(source: &str) -> Vec<Range<usize>> {
     let mut parser = parser();
     let tree = parser
         .parse(source, None)
@@ -27,14 +30,13 @@ pub fn split_cells(source: &str) -> Vec<String> {
     let mut cursor = root.walk();
     root.named_children(&mut cursor)
         .filter(|n| n.kind() == "cell")
-        .map(|n| source[n.byte_range()].to_string())
+        .map(|n| n.byte_range())
         .collect()
 }
 
-/// Whether tree-sitter finds a syntax error in `source`. Consulted only when the
-/// M2 `parse` oracle reports COMPLETE, to catch the strict errors `parse` waves
-/// through -- notably the empty-statement `;;`, which `parse` accepts but the real
-/// reader rejects -- which tree-sitter captures correctly.
+/// Whether tree-sitter finds a syntax error in `source`. Consulted only when the M2
+/// `parse` oracle reports COMPLETE, to catch the strict errors `parse` waves through --
+/// notably the empty-statement `;;`, which `parse` accepts but the real reader rejects.
 pub fn has_syntax_error(source: &str) -> bool {
     let mut parser = parser();
     let tree = parser
@@ -49,15 +51,17 @@ mod tests {
 
     #[test]
     fn splits_newline_delimited_cells() {
-        assert_eq!(
-            split_cells("a = 5\nb = 6"),
-            vec!["a = 5".to_string(), "b = 6".to_string()]
-        );
+        let source = "a = 5\nb = 6";
+        let cells: Vec<&str> = split_cells(source)
+            .into_iter()
+            .map(|r| &source[r])
+            .collect();
+        assert_eq!(cells, vec!["a = 5", "b = 6"]);
     }
 
     #[test]
-    fn single_cell_is_one_element() {
-        assert_eq!(split_cells("1 + 1"), vec!["1 + 1".to_string()]);
+    fn single_cell_is_one_range() {
+        assert_eq!(split_cells("1 + 1").len(), 1);
     }
 
     #[test]

@@ -1,13 +1,13 @@
 mod app;
+mod block;
 mod cells;
 mod commands;
-mod editor;
 mod highlight;
+mod history;
+mod input;
 mod m2_backend;
-mod session;
 mod theme;
 mod transcript;
-mod ui;
 
 use std::process::exit;
 

@@ -51,7 +51,6 @@ struct CheckReply {
     message: String,
 }
 
-
 pub struct M2Result {
     pub is_error: bool,
     pub output: String,
