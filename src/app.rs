@@ -9,7 +9,8 @@ use std::time::Duration;
 use crossterm::{
     event::{
         self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyModifiers,
-        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -446,6 +447,15 @@ pub fn run(backend: M2Backend) -> Result<(), Box<dyn Error>> {
                 }
             }
             Event::Paste(text) => app.input.field_mut().insert_str(&text),
+            Event::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    app.scroll_offset = app.scroll_offset.saturating_add(SCROLL_STEP)
+                }
+                MouseEventKind::ScrollDown => {
+                    app.scroll_offset = app.scroll_offset.saturating_sub(SCROLL_STEP)
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
