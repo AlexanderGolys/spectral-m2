@@ -54,19 +54,19 @@ struct App {
 }
 
 impl App {
-    fn new(backend: M2Backend) -> Self {
-        Self {
+    fn new(mut backend: M2Backend) -> Result<Self, Box<dyn Error>> {
+        let version = backend.version().unwrap_or_else(|_| "unknown".to_string());
+        let banner = format!("{} (M2 {})", BANNER, version);
+        Ok(Self {
             backend,
             highlighter: SyntaxHighlighter::new(),
             theme: Theme::default(),
-            feed: vec![Box::new(SystemBlock {
-                message: BANNER.to_string(),
-            })],
+            feed: vec![Box::new(SystemBlock { message: banner })],
             input: InputCode::new(),
             next_number: 1,
             scroll_offset: 0,
             parse_error: None,
-        }
+        })
     }
 
     /// Enter: submit when the buffer is syntactically complete, keep editing (insert a
@@ -429,7 +429,7 @@ impl Drop for ReplTerminal {
 }
 
 pub fn run(backend: M2Backend) -> Result<(), Box<dyn Error>> {
-    let mut app = App::new(backend);
+    let mut app = App::new(backend)?;
     let mut terminal = ReplTerminal::enter()?;
     loop {
         terminal.terminal.draw(|frame| app.draw(frame))?;

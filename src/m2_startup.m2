@@ -88,17 +88,20 @@ parseCheck = src -> (
 
 -- Dispatch one JSON request string to its handler, returning a JSON response
 -- string. `evaluate` executes the code (capturing its session output); `check`
--- only classifies completeness. Both reply with a single JSON object.
+-- only classifies completeness; `version` returns the M2 version.
 handleMessage = payload -> (
     req := fromJSON payload;
-    code := req#"code";
     method := req#"method";
     if method === "evaluate" then (
+        code := req#"code";
         (err, out) := capture(code, UserMode => true);
         toJSON hashTable {"output" => out, "error" => err}
     ) else if method === "check" then (
+        code := req#"code";
         (verdict, msg) := parseCheck code;
         toJSON hashTable {"verdict" => verdict, "message" => msg}
+    ) else if method === "version" then (
+        toJSON hashTable {"version" => version#"VERSION"}
     ) else
         toJSON hashTable {"output" => "unknown method: " | method, "error" => true}
 );

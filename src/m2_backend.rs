@@ -33,6 +33,8 @@ enum Request<'a> {
     Evaluate { code: &'a str },
     /// Classify `code`'s completeness without executing it.
     Check { code: &'a str },
+    /// Query the M2 version string.
+    Version,
 }
 
 /// The reply to a [`Request::Evaluate`]: the captured session output and whether
@@ -49,6 +51,12 @@ struct EvalReply {
 struct CheckReply {
     verdict: String,
     message: String,
+}
+
+/// The reply to a [`Request::Version`]: the M2 version string.
+#[derive(Deserialize)]
+struct VersionReply {
+    version: String,
 }
 
 pub struct M2Result {
@@ -234,6 +242,12 @@ impl M2Backend {
     pub fn check(&mut self, code: &str) -> Result<ParseVerdict, Box<dyn Error>> {
         let reply: CheckReply = serde_json::from_str(&self.request(&Request::Check { code })?)?;
         parse_verdict(&reply.verdict, reply.message)
+    }
+
+    /// Query the M2 version string.
+    pub fn version(&mut self) -> Result<String, Box<dyn Error>> {
+        let reply: VersionReply = serde_json::from_str(&self.request(&Request::Version)?)?;
+        Ok(reply.version)
     }
 
     #[allow(dead_code)]
