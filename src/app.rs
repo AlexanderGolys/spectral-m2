@@ -152,10 +152,13 @@ impl App {
             let outputs = self.build_outputs(&success, start);
             let codes: Vec<&str> = success.iter().map(|(c, _)| c.as_str()).collect();
             let spans = self.highlighter.highlight(&codes.join("\n"));
-            let cells = success
+            let cells: Vec<Cell> = success
                 .iter()
                 .map(|(c, _)| Cell { code: c.clone() })
                 .collect();
+            // INVARIANT: Each CodeBlock with start_number N and K cells produces
+            // output blocks (OutputBlock or RuntimeErrorBlock) numbered N..N+K-1.
+            // WarningBlocks don't have numbers and precede their OutputBlock.
             self.feed.push(Box::new(CodeBlock {
                 cells,
                 spans,
