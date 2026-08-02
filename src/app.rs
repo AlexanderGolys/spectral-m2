@@ -32,7 +32,7 @@ use crate::block::{
     SyntaxErrorBlock, SystemBlock, TextContainer, WarningBlock,
 };
 use crate::cells::{has_syntax_error, split_cells};
-use crate::commands::{parse_command, ReplCommand, COMMAND_PREFIX};
+use crate::commands::{parse_command, ReplCommand, COMMAND_PREFIX, HELP_TEXT};
 use crate::highlight::SyntaxHighlighter;
 use crate::input::{InputCode, INPUT_CODE_COL};
 use crate::m2_backend::{M2Backend, M2Result, ParseVerdict};
@@ -42,6 +42,13 @@ use crate::transcript::{clean_m2_output, diagnostic_message, is_diagnostic, stri
 const BANNER: &str = "spectral-m2";
 const MAX_INPUT_LINES: u16 = 8;
 const SCROLL_STEP: usize = 5;
+
+fn welcome_message(m2_version: &str) -> String {
+    format!(
+        "{BANNER} {}\nMacaulay2 {m2_version}",
+        env!("CARGO_PKG_VERSION")
+    )
+}
 
 struct App {
     backend: M2Backend,
@@ -57,7 +64,7 @@ struct App {
 impl App {
     fn new(mut backend: M2Backend) -> Result<Self, Box<dyn Error>> {
         let version = backend.version().unwrap_or_else(|_| "unknown".to_string());
-        let banner = format!("{} (M2 {})", BANNER, version);
+        let banner = welcome_message(&version);
         Ok(Self {
             backend,
             highlighter: SyntaxHighlighter::new(),
@@ -107,19 +114,25 @@ impl App {
     /// Run a `$`-prefixed REPL command. Recognised commands act on frontend state only.
     fn dispatch_command(&mut self, input: &str) {
         match parse_command(input) {
+            Some(ReplCommand::Help) => self.show_command_message(HELP_TEXT),
             Some(ReplCommand::ToggleCode) => {
-                self.input.take_submission();
-                self.feed.push(Box::new(SystemBlock {
-                    message: "the $code pane is temporarily disabled during the restructure"
-                        .to_string(),
-                }));
-                self.scroll_offset = 0;
+                self.show_command_message(
+                    "the $code pane is temporarily disabled during the restructure",
+                );
             }
             Some(ReplCommand::Unknown(name)) => {
                 self.parse_error = Some(format!("unknown command: ${name}"));
             }
             None => {}
         }
+    }
+
+    fn show_command_message(&mut self, message: &str) {
+        self.input.take_submission();
+        self.feed.push(Box::new(SystemBlock {
+            message: message.to_string(),
+        }));
+        self.scroll_offset = 0;
     }
 
     /// Split a complete submission into cells, evaluate them in order, and append the
@@ -461,4 +474,20 @@ pub fn run(backend: M2Backend) -> Result<(), Box<dyn Error>> {
     }
     terminal.leave()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn welcome_lists_application_and_macaulay2_versions_on_separate_lines() {
+        assert_eq!(
+            welcome_message("1.25.11"),
+            format!(
+                "spectral-m2 {}\nMacaulay2 1.25.11",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
+    }
 }

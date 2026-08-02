@@ -44,9 +44,6 @@ pub mod highlight;
 pub mod render;
 pub mod wrap;
 
-/// Title shown on a warning box, also the keyword stripped from its messages.
-const WARN_TITLE: &str = "Warning";
-
 /// The byte ranges of `cells` joined by `'\n'` — the coordinate space a code
 /// band's `spans` index into. Borrowed; nothing is cloned.
 fn cell_strs(cells: &[Cell]) -> Vec<&str> {
@@ -149,9 +146,10 @@ impl Block for OutputBlock {
             format!(" o{} ", self.number),
             theme.ui.muted,
         )));
-        let bottom = self.ty.as_ref().map(|t| {
-            Line::from(Span::styled(format!(" {t} "), theme.ui.type_info)).right_aligned()
-        });
+        let bottom = self
+            .ty
+            .as_ref()
+            .map(|t| Line::from(Span::styled(format!(" {t} "), theme.ui.type_info)).left_aligned());
         boxed(area, buf, theme.ui.border, title, bottom, body);
     }
 }
@@ -178,10 +176,7 @@ impl Block for WarningBlock {
             .into_iter()
             .map(|l| Line::from(Span::styled(l, theme.ui.warning)))
             .collect();
-        let title = Some(Line::from(Span::styled(
-            format!(" {WARN_TITLE} "),
-            theme.ui.warning,
-        )));
+        let title = Some(Line::from(Span::styled(" Warning ", theme.ui.warning)));
         boxed(area, buf, theme.ui.warning_border, title, None, body);
     }
 }
@@ -311,19 +306,39 @@ pub struct SystemBlock {
 
 impl Block for SystemBlock {
     fn height(&self, _width: u16) -> u16 {
-        2
+        self.message.lines().count().max(1) as u16 + 1
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let base = theme.ui.transcript_bg;
         let muted = theme.ui.muted.patch(base);
-        let lines = vec![
-            Line::from(vec![
-                gutter_span("", muted),
-                Span::styled(self.message.clone(), muted),
-            ]),
-            Line::default(),
-        ];
+        let mut lines: Vec<Line<'static>> = self
+            .message
+            .lines()
+            .map(|line| {
+                Line::from(vec![
+                    gutter_span("", muted),
+                    Span::styled(line.to_string(), muted),
+                ])
+            })
+            .collect();
+        if lines.is_empty() {
+            lines.push(Line::from(gutter_span("", muted)));
+        }
+        lines.push(Line::default());
         band(area, buf, lines, base);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_block_height_includes_each_message_line_and_margin() {
+        let block = SystemBlock {
+            message: "commands:\n  $help\n  $code".to_string(),
+        };
+        assert_eq!(block.height(80), 4);
     }
 }

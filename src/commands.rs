@@ -9,8 +9,14 @@
 /// The character that, as the first byte of a fresh input, marks a REPL command.
 pub const COMMAND_PREFIX: char = '$';
 
+/// Text displayed by `$help`.
+pub const HELP_TEXT: &str =
+    "commands:\n  $help  show this help\n  $code  show session code pane (temporarily disabled)";
+
 /// A recognised REPL command, or an unrecognised name to report back.
 pub enum ReplCommand {
+    /// `$help` — show the available frontend commands.
+    Help,
     /// `$code` — toggle the split pane showing this session's committed code.
     ToggleCode,
     /// `$name` with no matching handler; carries the bare name for the message.
@@ -25,6 +31,7 @@ pub fn parse_command(input: &str) -> Option<ReplCommand> {
     let rest = input.strip_prefix(COMMAND_PREFIX)?;
     let name = rest.split_whitespace().next().unwrap_or("");
     Some(match name {
+        "help" => ReplCommand::Help,
         "code" => ReplCommand::ToggleCode,
         other => ReplCommand::Unknown(other.to_string()),
     })
@@ -46,6 +53,13 @@ mod tests {
             parse_command("$code"),
             Some(ReplCommand::ToggleCode)
         ));
+    }
+
+    #[test]
+    fn dollar_help_shows_help() {
+        assert!(matches!(parse_command("$help"), Some(ReplCommand::Help)));
+        assert!(HELP_TEXT.contains("$help"));
+        assert!(HELP_TEXT.contains("$code"));
     }
 
     #[test]

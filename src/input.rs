@@ -160,18 +160,26 @@ impl InputTextField {
     pub fn move_up(&mut self) {
         let starts = self.line_starts();
         let current = self.current_line(&starts);
-        self.cursor = if current > 0 { starts[current - 1] } else { 0 };
+        if current == 0 {
+            return;
+        }
+        let column = self.fragment.text[starts[current]..self.cursor]
+            .chars()
+            .count();
+        self.cursor = self.cursor_at_column(&starts, current - 1, column);
         self.assert_boundary();
     }
 
     pub fn move_down(&mut self) {
         let starts = self.line_starts();
         let current = self.current_line(&starts);
-        self.cursor = if current < starts.len() {
-            starts[current]
-        } else {
-            self.fragment.text.len()
-        };
+        if current + 1 == starts.len() {
+            return;
+        }
+        let column = self.fragment.text[starts[current]..self.cursor]
+            .chars()
+            .count();
+        self.cursor = self.cursor_at_column(&starts, current + 1, column);
         self.assert_boundary();
     }
 
@@ -233,19 +241,33 @@ impl InputTextField {
     }
 
     fn line_starts(&self) -> Vec<usize> {
-        self.fragment
-            .text
-            .char_indices()
-            .filter(|&(_, ch)| ch == '\n')
-            .map(|(i, _)| i + 1)
+        std::iter::once(0)
+            .chain(
+                self.fragment
+                    .text
+                    .char_indices()
+                    .filter(|&(_, ch)| ch == '\n')
+                    .map(|(i, _)| i + 1),
+            )
             .collect()
     }
 
     fn current_line(&self, starts: &[usize]) -> usize {
         starts
             .iter()
-            .position(|&start| start > self.cursor)
-            .unwrap_or(starts.len())
+            .rposition(|&start| start <= self.cursor)
+            .unwrap_or(0)
+    }
+
+    fn cursor_at_column(&self, starts: &[usize], line: usize, column: usize) -> usize {
+        let start = starts[line];
+        let end = starts
+            .get(line + 1)
+            .map_or(self.fragment.text.len(), |next| next - 1);
+        self.fragment.text[start..end]
+            .char_indices()
+            .nth(column)
+            .map_or(end, |(offset, _)| start + offset)
     }
 
     fn assert_boundary(&self) {
@@ -376,6 +398,27 @@ mod tests {
     fn cursor_within_second_line() {
         let mut field = InputTextField::new_in_memory();
         field.insert_str("ab\ncd");
+        assert_eq!(field.cursor_line_col(), (1, 2));
+    }
+
+    #[test]
+    fn up_moves_to_previous_line_at_same_column() {
+        let mut field = InputTextField::new_in_memory();
+        field.insert_str("ab\ncd");
+
+        field.move_up();
+
+        assert_eq!(field.cursor_line_col(), (0, 2));
+    }
+
+    #[test]
+    fn vertical_movement_clamps_to_line_length_and_keeps_utf8_boundaries() {
+        let mut field = InputTextField::new_in_memory();
+        field.insert_str("αβ\nγδεζ");
+
+        field.move_up();
+        assert_eq!(field.cursor_line_col(), (0, 2));
+        field.move_down();
         assert_eq!(field.cursor_line_col(), (1, 2));
     }
 
