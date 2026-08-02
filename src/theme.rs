@@ -14,6 +14,15 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::block::highlight::HighlightKind;
 
+macro_rules! col {
+    ($code:literal) => {
+        Color::from_str($code).unwrap()
+    };
+    ($r:literal, $g:literal, $b:literal) => {
+        Color::Rgb($r, $g, $b)
+    };
+}
+
 /// Named base colours. Every raw RGB triple the theme uses is defined here once
 /// with a semantic name, so the styles below read as intent rather than magic
 /// numbers and near-duplicate shades (the keyword-accent purples, the warm
@@ -23,26 +32,26 @@ mod palette {
     use ratatui::style::Color;
 
     // UI surfaces.
-    pub const SURFACE_BASE: Color = Color::Rgb(20, 22, 30);
-    pub const SURFACE_RAISED: Color = Color::Rgb(26, 28, 38);
-    pub const FG_VALUE: Color = Color::Rgb(214, 217, 224);
-    pub const FG_ERROR: Color = Color::Rgb(240, 150, 150);
-    pub const FG_WARNING: Color = Color::Rgb(232, 146, 64);
-    pub const FG_TYPE: Color = Color::Rgb(196, 167, 110);
-    pub const BORDER_DEFAULT: Color = Color::Rgb(72, 78, 96);
-    pub const BORDER_ERROR: Color = Color::Rgb(128, 78, 78);
-    pub const BORDER_WARNING: Color = Color::Rgb(176, 104, 52);
+    pub const SURFACE_BASE: Color = col!(20, 22, 30);
+    pub const SURFACE_RAISED: Color = col!(26, 28, 38);
+    pub const FG_VALUE: Color = col!(214, 217, 224);
+    pub const FG_ERROR: Color = col!(240, 150, 150);
+    pub const FG_WARNING: Color = col!(232, 146, 64);
+    pub const FG_TYPE: Color = col!(196, 167, 110);
+    pub const BORDER_DEFAULT: Color = col!(72, 78, 96);
+    pub const BORDER_ERROR: Color = col!(128, 78, 78);
+    pub const BORDER_WARNING: Color = col!(176, 104, 52);
 
     // Syntax: the keyword-accent family (purples shading by keyword role).
-    pub const KEYWORD: Color = Color::Rgb(210, 140, 255);
-    pub const KEYWORD_MODIFIER: Color = Color::Rgb(180, 140, 255);
-    pub const KEYWORD_REPEAT: Color = Color::Rgb(200, 140, 255);
+    pub const KEYWORD: Color = col!(210, 140, 255);
+    pub const KEYWORD_MODIFIER: Color = col!(180, 140, 255);
+    pub const KEYWORD_REPEAT: Color = col!(200, 140, 255);
     // Syntax: the exception/return family (warm reds).
-    pub const KEYWORD_EXCEPTION: Color = Color::Rgb(255, 140, 140);
-    pub const KEYWORD_RETURN: Color = Color::Rgb(255, 160, 160);
+    pub const KEYWORD_EXCEPTION: Color = col!(255, 140, 140);
+    pub const KEYWORD_RETURN: Color = col!(255, 160, 160);
     // Syntax: warm highlights.
-    pub const VARIABLE_BUILTIN: Color = Color::Rgb(255, 200, 100);
-    pub const STRING_REGEXP: Color = Color::Rgb(255, 180, 100);
+    pub const VARIABLE_BUILTIN: Color = col!(255, 200, 100);
+    pub const STRING_REGEXP: Color = col!(255, 180, 100);
 }
 
 /// The styles for every non-syntax surface of the TUI. Background entries

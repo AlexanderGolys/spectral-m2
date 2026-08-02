@@ -53,7 +53,6 @@ fn cell_strs(cells: &[Cell]) -> Vec<&str> {
     cells.iter().map(|c| c.code.as_str()).collect()
 }
 
-/// Read access to the source a unit carries — the common supertrait of
 /// [`Highlighted`], which highlights `self.text()`.
 pub trait TextContainer {
     fn text(&self) -> &str;

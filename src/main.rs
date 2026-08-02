@@ -3,6 +3,7 @@ mod block;
 mod cells;
 mod commands;
 mod highlight;
+mod hints;
 mod history;
 mod input;
 mod m2_backend;

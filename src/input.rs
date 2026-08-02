@@ -14,14 +14,12 @@ use ratatui::text::{Line, Span};
 use crate::block::highlight::{HighlightSpan, Highlighter};
 use crate::block::render::{apply_spans, gutter_span, GUTTER_W};
 use crate::block::{Highlighted, TextContainer};
+use crate::hints::{get_hint, get_new_hint};
 use crate::history::History;
 use crate::theme::Theme;
 
 /// The glyph marking the live prompt line.
 const PROMPT_GLYPH: &str = "❯";
-/// Shown in the gutter line while the field is empty.
-const PLACEHOLDER: &str = "Type M2 code...";
-
 pub struct CodeFragment {
     text: String,
 }
@@ -70,6 +68,15 @@ impl InputTextField {
             fragment: CodeFragment::new(),
             cursor: 0,
             history: History::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn new_in_memory() -> Self {
+        InputTextField {
+            fragment: CodeFragment::new(),
+            cursor: 0,
+            history: History::in_memory(),
         }
     }
 
@@ -259,6 +266,7 @@ impl InputTextField {
 pub struct InputCode {
     field: InputTextField,
     spans: Vec<HighlightSpan>,
+    hint: &'static str,
 }
 
 impl InputCode {
@@ -266,6 +274,16 @@ impl InputCode {
         InputCode {
             field: InputTextField::new(),
             spans: Vec::new(),
+            hint: get_hint(),
+        }
+    }
+
+    #[cfg(test)]
+    fn new_in_memory() -> Self {
+        InputCode {
+            field: InputTextField::new_in_memory(),
+            spans: Vec::new(),
+            hint: get_hint(),
         }
     }
 
@@ -286,6 +304,7 @@ impl InputCode {
     pub fn take_submission(&mut self) -> Option<String> {
         let submission = self.field.take_submission()?;
         self.spans.clear();
+        self.hint = get_new_hint(self.hint);
         Some(submission.as_str().to_string())
     }
 }
@@ -302,7 +321,7 @@ impl Highlighted for InputCode {
     }
 
     /// The prompt line(s): a blank top-margin row, then one row per logical line of
-    /// the field carrying the `❯` gutter (first line) and the field's text coloured
+    /// the field carrying the `❯` gutter (last line) and the field's text coloured
     /// from the cached spans. A placeholder fills the gutter line while the field is
     /// empty. The live prompt is not soft-wrapped, so cursor math stays in logical
     /// `(line, column)`. The caller appends any hint row, the bottom margin, and
@@ -320,11 +339,15 @@ impl Highlighted for InputCode {
         let mut lines = vec![Line::default()];
         let mut abs = 0;
         for (i, line) in logical.iter().enumerate() {
-            let marker = if i == 0 { PROMPT_GLYPH } else { "" };
+            let marker = if i + 1 == logical.len() {
+                PROMPT_GLYPH
+            } else {
+                ""
+            };
             let mut spans = vec![gutter_span(marker, prompt)];
             spans.extend(apply_spans(abs, line, &self.spans, base, theme));
             if i == 0 && text.is_empty() {
-                spans.push(Span::styled(PLACEHOLDER.to_string(), theme.ui.muted));
+                spans.push(Span::styled(self.hint, theme.ui.muted));
             }
             lines.push(Line::from(spans));
             abs += line.len() + 1;
@@ -343,7 +366,7 @@ mod tests {
 
     #[test]
     fn cursor_after_trailing_newline_is_on_next_line() {
-        let mut field = InputTextField::new();
+        let mut field = InputTextField::new_in_memory();
         field.insert_str("abc");
         field.insert_char('\n');
         assert_eq!(field.cursor_line_col(), (1, 0));
@@ -351,15 +374,36 @@ mod tests {
 
     #[test]
     fn cursor_within_second_line() {
-        let mut field = InputTextField::new();
+        let mut field = InputTextField::new_in_memory();
         field.insert_str("ab\ncd");
         assert_eq!(field.cursor_line_col(), (1, 2));
     }
 
     #[test]
     fn cursor_on_single_line() {
-        let mut field = InputTextField::new();
+        let mut field = InputTextField::new_in_memory();
         field.insert_str("abc");
         assert_eq!(field.cursor_line_col(), (0, 3));
+    }
+
+    #[test]
+    fn multiline_prompt_glyph_is_on_last_line() {
+        let mut input = InputCode::new_in_memory();
+        input.field_mut().insert_str("first\nsecond\nthird");
+
+        let lines = input.highlighted_lines(80, &Theme::default());
+        assert!(!lines[1].spans[0].content.contains(PROMPT_GLYPH));
+        assert!(!lines[2].spans[0].content.contains(PROMPT_GLYPH));
+        assert!(lines[3].spans[0].content.contains(PROMPT_GLYPH));
+    }
+
+    #[test]
+    fn submission_resamples_placeholder_hint() {
+        let mut input = InputCode::new_in_memory();
+        let initial_hint = input.hint;
+        input.field_mut().insert_str("1 + 1");
+
+        assert_eq!(input.take_submission().as_deref(), Some("1 + 1"));
+        assert_ne!(input.hint, initial_hint);
     }
 }
