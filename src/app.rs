@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use crossterm::{
     event::{
-        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyModifiers,
-        KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
-        PushKeyboardEnhancementFlags,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyEvent, KeyModifiers, KeyboardEnhancementFlags, MouseEventKind,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -39,13 +39,24 @@ use crate::m2_backend::{M2Backend, M2Result, ParseVerdict};
 use crate::theme::Theme;
 use crate::transcript::{clean_m2_output, diagnostic_message, is_diagnostic, strip_m2_location};
 
-const BANNER: &str = "spectral-m2";
 const MAX_INPUT_LINES: u16 = 8;
 const SCROLL_STEP: usize = 5;
 
+fn apply_mouse_scroll(scroll_offset: &mut usize, kind: MouseEventKind) {
+    match kind {
+        MouseEventKind::ScrollUp => {
+            *scroll_offset = scroll_offset.saturating_add(SCROLL_STEP);
+        }
+        MouseEventKind::ScrollDown => {
+            *scroll_offset = scroll_offset.saturating_sub(SCROLL_STEP);
+        }
+        _ => {}
+    }
+}
+
 fn welcome_message(m2_version: &str) -> String {
     format!(
-        "{BANNER} {}\nMacaulay2 {m2_version}",
+        "spectral-m2 {}\nMacaulay2 {m2_version}",
         env!("CARGO_PKG_VERSION")
     )
 }
@@ -80,7 +91,7 @@ impl App {
     /// Enter: submit when the buffer is syntactically complete, keep editing (insert a
     /// newline) when it is incomplete, otherwise surface the syntax error.
     fn on_enter(&mut self) {
-        let text = self.input.text().trim().to_string();
+        let text = self.input.text().to_string();
         if text.is_empty() {
             return;
         }
@@ -119,9 +130,6 @@ impl App {
                 self.show_command_message(
                     "the $code pane is temporarily disabled during the restructure",
                 );
-            }
-            Some(ReplCommand::Unknown(name)) => {
-                self.parse_error = Some(format!("unknown command: ${name}"));
             }
             None => {}
         }
@@ -403,6 +411,7 @@ impl ReplTerminal {
             stdout,
             EnterAlternateScreen,
             EnableBracketedPaste,
+            EnableMouseCapture,
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         )?;
         let backend = CrosstermBackend::new(stdout);
@@ -421,6 +430,7 @@ impl ReplTerminal {
         execute!(
             self.terminal.backend_mut(),
             PopKeyboardEnhancementFlags,
+            DisableMouseCapture,
             DisableBracketedPaste,
             LeaveAlternateScreen
         )?;
@@ -437,6 +447,7 @@ impl Drop for ReplTerminal {
             let _ = execute!(
                 self.terminal.backend_mut(),
                 PopKeyboardEnhancementFlags,
+                DisableMouseCapture,
                 DisableBracketedPaste,
                 LeaveAlternateScreen
             );
@@ -460,15 +471,7 @@ pub fn run(backend: M2Backend) -> Result<(), Box<dyn Error>> {
                 }
             }
             Event::Paste(text) => app.input.field_mut().insert_str(&text),
-            Event::Mouse(mouse) => match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    app.scroll_offset = app.scroll_offset.saturating_add(SCROLL_STEP)
-                }
-                MouseEventKind::ScrollDown => {
-                    app.scroll_offset = app.scroll_offset.saturating_sub(SCROLL_STEP)
-                }
-                _ => {}
-            },
+            Event::Mouse(mouse) => apply_mouse_scroll(&mut app.scroll_offset, mouse.kind),
             _ => {}
         }
     }
@@ -489,5 +492,14 @@ mod tests {
                 env!("CARGO_PKG_VERSION")
             )
         );
+    }
+
+    #[test]
+    fn mouse_wheel_changes_feed_scroll_offset() {
+        let mut offset = 0;
+        apply_mouse_scroll(&mut offset, MouseEventKind::ScrollUp);
+        assert_eq!(offset, SCROLL_STEP);
+        apply_mouse_scroll(&mut offset, MouseEventKind::ScrollDown);
+        assert_eq!(offset, 0);
     }
 }

@@ -14,27 +14,25 @@ pub const HELP_TEXT: &str =
     "commands:\n  $help  show this help\n  $code  show session code pane (temporarily disabled)";
 
 /// A recognised REPL command, or an unrecognised name to report back.
+#[non_exhaustive]
 pub enum ReplCommand {
     /// `$help` — show the available frontend commands.
     Help,
     /// `$code` — toggle the split pane showing this session's committed code.
     ToggleCode,
-    /// `$name` with no matching handler; carries the bare name for the message.
-    Unknown(String),
 }
 
 /// Parse `input` as a REPL command iff its first character is [`COMMAND_PREFIX`].
 /// Returns `None` for ordinary M2 code. The caller is responsible for only
 /// offering a *fresh, single-line* input (commands are not recognised mid-block).
-/// -- @##todo Add completion and highlights
 pub fn parse_command(input: &str) -> Option<ReplCommand> {
     let rest = input.strip_prefix(COMMAND_PREFIX)?;
-    let name = rest.split_whitespace().next().unwrap_or("");
-    Some(match name {
-        "help" => ReplCommand::Help,
-        "code" => ReplCommand::ToggleCode,
-        other => ReplCommand::Unknown(other.to_string()),
-    })
+    let name = rest.split_whitespace().next()?;
+    match name {
+        "help" => Some(ReplCommand::Help),
+        "code" => Some(ReplCommand::ToggleCode),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -60,13 +58,5 @@ mod tests {
         assert!(matches!(parse_command("$help"), Some(ReplCommand::Help)));
         assert!(HELP_TEXT.contains("$help"));
         assert!(HELP_TEXT.contains("$code"));
-    }
-
-    #[test]
-    fn unknown_command_keeps_its_name() {
-        match parse_command("$theme dark") {
-            Some(ReplCommand::Unknown(name)) => assert_eq!(name, "theme"),
-            _ => panic!("expected Unknown"),
-        }
     }
 }
