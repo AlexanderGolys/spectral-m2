@@ -77,3 +77,27 @@ impl Highlighter for SyntaxHighlighter {
         spans
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_query_highlights_current_grammar() {
+        let mut highlighter = SyntaxHighlighter::new();
+        let spans =
+            highlighter.highlight("if x then 1 else 0\nloadPackage \"Foo\"\nf ZZ := x -> x\nf 1");
+
+        assert!(!spans.is_empty());
+        for expected in [
+            HighlightKind::KeywordConditional,
+            HighlightKind::Number,
+            HighlightKind::FunctionCall,
+            HighlightKind::Module,
+            HighlightKind::Label,
+            HighlightKind::TypeParameter,
+        ] {
+            assert!(spans.iter().any(|span| span.kind == expected));
+        }
+    }
+}

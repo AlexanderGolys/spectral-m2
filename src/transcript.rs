@@ -3,6 +3,12 @@
 //! scaffolding `capture(.., UserMode => true)` wraps around a result; the smaller
 //! helpers lift warnings out of a value and tidy M2's location-prefixed messages.
 
+pub struct CapturedOutput {
+    pub value: String,
+    pub type_info: Option<String>,
+    pub warnings: Vec<String>,
+}
+
 /// Match a Macaulay2 session prefix like `i12 = ` or `o3 : `, returning the
 /// byte length of the prefix (tag, digits, space, separator, space) if present.
 fn io_prefix(s: &str, tag: u8, sep: u8) -> Option<usize> {
@@ -29,10 +35,8 @@ fn is_trailing_prompt(s: &str) -> bool {
     io_prefix(s, b'i', b':').is_some_and(|p| s[p..].trim().is_empty())
 }
 
-/// An M2 diagnostic line — `<loc>:<l>:<c>:(n):[m]: warning: …` (or `error:`).
-/// Used to lift warnings out of a successful result's value body.
 pub fn is_diagnostic(s: &str) -> bool {
-    s.contains(": warning:") || s.contains(": error:")
+    s.contains(": warning:") || s.contains(": error:") || s.contains("--backtrace:")
 }
 
 /// Strip M2's cryptic source-location prefix (`currentString:1:6:(3):[8]: `),
@@ -44,34 +48,6 @@ pub fn strip_m2_location(s: &str) -> &str {
         Some(i) if s[..i].contains(":(") && s[..i].contains(":[") => &s[i + 3..],
         _ => s,
     }
-}
-
-/// Wrap a string to `width` characters, breaking at the rightmost space that
-/// fits when possible and hard-splitting only words too long to fit. Never
-/// returns an empty vec (an empty input yields one empty line).
-pub fn wrap_chars(s: &str, width: usize) -> Vec<String> {
-    if width == 0 || s.chars().count() <= width {
-        return vec![s.to_string()];
-    }
-    let chars: Vec<char> = s.chars().collect();
-    let mut out = Vec::new();
-    let mut start = 0;
-    while start < chars.len() {
-        if chars.len() - start <= width {
-            out.push(chars[start..].iter().collect());
-            break;
-        }
-        let hard = start + width;
-        // Prefer the rightmost space inside the window; the space is consumed.
-        let brk = (start..hard).rev().find(|&i| chars[i] == ' ');
-        let (end, next) = match brk {
-            Some(i) if i > start => (i, i + 1),
-            _ => (hard, hard),
-        };
-        out.push(chars[start..end].iter().collect());
-        start = next;
-    }
-    out
 }
 
 /// Drop a diagnostic's leading keyword (`warning: character '.' …` → `character
@@ -99,7 +75,7 @@ pub fn trim_trailing_blank(lines: &mut Vec<String>) {
 /// Strip the session scaffolding that `capture(.., UserMode => true)` wraps
 /// around a result: the echoed input prompt, the trailing next prompt, and the
 /// `oN = ` / `oN : Type` labels. Returns `(value, type)`.
-pub fn clean_m2_output(raw: &str, code: &str, is_error: bool) -> (String, Option<String>) {
+fn clean_m2_output(raw: &str, code: &str, is_error: bool) -> (String, Option<String>) {
     let mut lines: Vec<String> = raw.lines().map(|s| s.to_string()).collect();
 
     trim_leading_blank(&mut lines);
@@ -130,8 +106,11 @@ pub fn clean_m2_output(raw: &str, code: &str, is_error: bool) -> (String, Option
     // Pull off a trailing `oN : Type` annotation.
     let mut type_info = None;
     if !is_error {
-        if let Some(p) = lines.last().and_then(|l| io_prefix(l, b'o', b':')) {
-            type_info = Some(lines.last().unwrap()[p..].trim().to_string());
+        if let Some((line, p)) = lines
+            .last()
+            .and_then(|line| io_prefix(line, b'o', b':').map(|p| (line, p)))
+        {
+            type_info = Some(line[p..].trim().to_string());
             lines.pop();
             trim_trailing_blank(&mut lines);
         }
@@ -151,9 +130,45 @@ pub fn clean_m2_output(raw: &str, code: &str, is_error: bool) -> (String, Option
     (lines.join("\n"), type_info)
 }
 
+pub fn captured_output(raw: &str, code: &str) -> CapturedOutput {
+    let (value, type_info) = clean_m2_output(raw, code, false);
+    let mut warnings = Vec::new();
+    let value_lines: Vec<&str> = value
+        .lines()
+        .filter(|line| {
+            if !is_diagnostic(line) {
+                return true;
+            }
+            let warning = diagnostic_message(strip_m2_location(line)).to_string();
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
+            }
+            false
+        })
+        .collect();
+    let first = value_lines
+        .iter()
+        .position(|line| !line.trim().is_empty())
+        .unwrap_or(value_lines.len());
+    let last = value_lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .map_or(first, |index| index + 1);
+
+    CapturedOutput {
+        value: value_lines[first..last].join("\n"),
+        type_info,
+        warnings,
+    }
+}
+
+pub fn captured_error(raw: &str, code: &str) -> String {
+    clean_m2_output(raw, code, true).0
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{clean_m2_output, strip_m2_location};
+    use super::{captured_output, clean_m2_output, strip_m2_location};
 
     #[test]
     fn strips_m2_location_prefix() {
@@ -218,5 +233,13 @@ mod tests {
         let (val, ty) = clean_m2_output(raw, "1/0", true);
         assert_eq!(val, "currentString:1:1:(3):[9]: error: division by zero");
         assert_eq!(ty, None);
+    }
+
+    #[test]
+    fn extracts_distinct_warnings_from_a_value() {
+        let raw = "currentString:1:1:(3):[8]: warning: first\nvalue\ncurrentString:1:1:(3):[8]: warning: first\ncurrentString:1:1:(3):[8]: warning: second";
+        let output = captured_output(raw, "code");
+        assert_eq!(output.value, "value");
+        assert_eq!(output.warnings, vec!["first", "second"]);
     }
 }

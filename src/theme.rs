@@ -1,119 +1,170 @@
-//! The colour scheme. This is the ONLY module permitted to name
-//! [`ratatui::style::Color`]; every other module receives ready-made [`Style`]
-//! values from a [`Theme`] and never constructs a colour itself. A clippy
-//! `disallowed-types` gate enforces that boundary (see `clippy.toml`).
-//!
-//! Syntax colours are resolved through [`Theme::style`], an *exhaustive* match
-//! over [`HighlightKind`]: a capture the grammar emits cannot be left unstyled
-//! without a compile error, which is precisely the bug the old string-indexed
-//! `CAPTURE_NAMES` table allowed (four emitted captures had no entry and rendered
-//! plain).
+//! Colour-scheme data and its mapping onto editor roles.
 #![allow(clippy::disallowed_types)]
 
 use ratatui::style::{Color, Modifier, Style};
 
 use crate::block::highlight::HighlightKind;
 
-macro_rules! col {
-    ($code:literal) => {
-        Color::from_str($code).unwrap()
-    };
-    ($r:literal, $g:literal, $b:literal) => {
-        Color::Rgb($r, $g, $b)
-    };
+macro_rules! rgb {
+    ($hex:literal) => {{
+        const VALUE: u32 = $hex;
+        Color::Rgb(
+            ((VALUE >> 16) & 0xff) as u8,
+            ((VALUE >> 8) & 0xff) as u8,
+            (VALUE & 0xff) as u8,
+        )
+    }};
 }
 
-/// Named base colours. Every raw RGB triple the theme uses is defined here once
-/// with a semantic name, so the styles below read as intent rather than magic
-/// numbers and near-duplicate shades (the keyword-accent purples, the warm
-/// error/return reds) are visibly related. ANSI colours are already named by
-/// [`Color`] and are used directly at the call site.
-mod palette {
-    use ratatui::style::Color;
-
-    // UI surfaces.
-    pub const SURFACE_BASE: Color = col!(20, 22, 30);
-    pub const SURFACE_RAISED: Color = col!(26, 28, 38);
-    pub const FG_VALUE: Color = col!(214, 217, 224);
-    pub const FG_ERROR: Color = col!(240, 150, 150);
-    pub const FG_WARNING: Color = col!(232, 146, 64);
-    pub const FG_TYPE: Color = col!(196, 167, 110);
-    pub const BORDER_DEFAULT: Color = col!(72, 78, 96);
-    pub const BORDER_ERROR: Color = col!(128, 78, 78);
-    pub const BORDER_WARNING: Color = col!(176, 104, 52);
-
-    // Syntax: the keyword-accent family (purples shading by keyword role).
-    pub const KEYWORD: Color = col!(210, 140, 255);
-    pub const KEYWORD_MODIFIER: Color = col!(180, 140, 255);
-    pub const KEYWORD_REPEAT: Color = col!(200, 140, 255);
-    // Syntax: the exception/return family (warm reds).
-    pub const KEYWORD_EXCEPTION: Color = col!(255, 140, 140);
-    pub const KEYWORD_RETURN: Color = col!(255, 160, 160);
-    // Syntax: warm highlights.
-    pub const VARIABLE_BUILTIN: Color = col!(255, 200, 100);
-    pub const STRING_REGEXP: Color = col!(255, 180, 100);
-}
-
-/// The styles for every non-syntax surface of the TUI. Background entries
-/// (`transcript_bg`, `code_bg`) carry only a `bg` and are meant to be merged
-/// onto a foreground style with [`Style::patch`].
-pub struct UiTheme {
-    pub transcript_bg: Style,
-    pub code_bg: Style,
-    pub value: Style,
-    pub error: Style,
-    pub warning: Style,
-    pub type_info: Style,
-    pub border: Style,
-    pub error_border: Style,
-    pub warning_border: Style,
-    pub prompt: Style,
-    pub muted: Style,
-}
-
-/// A full colour scheme: the non-syntax UI surfaces plus a per-[`HighlightKind`]
-/// syntax palette resolved by [`Theme::style`].
+/// A conventional terminal colour scheme. The names follow the Catppuccin
+/// palette, which makes schemes data rather than collections of pre-baked UI
+/// styles. Editor and syntax roles are derived from these colours below.
+#[expect(
+    dead_code,
+    reason = "a complete colour-scheme palette supports future role mappings and scheme switching"
+)]
 pub struct Theme {
-    pub ui: UiTheme,
+    pub name: &'static str,
+    pub rosewater: Color,
+    pub flamingo: Color,
+    pub pink: Color,
+    pub mauve: Color,
+    pub red: Color,
+    pub maroon: Color,
+    pub peach: Color,
+    pub yellow: Color,
+    pub green: Color,
+    pub teal: Color,
+    pub sky: Color,
+    pub sapphire: Color,
+    pub blue: Color,
+    pub lavender: Color,
+    pub text: Color,
+    pub subtext1: Color,
+    pub subtext0: Color,
+    pub overlay2: Color,
+    pub overlay1: Color,
+    pub overlay0: Color,
+    pub surface2: Color,
+    pub surface1: Color,
+    pub surface0: Color,
+    pub base: Color,
+    pub mantle: Color,
+    pub crust: Color,
 }
 
 impl Theme {
-    /// The foreground style for a syntax [`HighlightKind`]. Exhaustive by
-    /// construction: a new capture variant forces a new arm here. Returned styles
-    /// are fg + modifiers only, meant to be patched over a surface's background.
-    pub fn style(&self, kind: HighlightKind) -> Style {
-        let fg = |c: Color| Style::default().fg(c);
-        let bold = |c: Color| Style::default().fg(c).add_modifier(Modifier::BOLD);
+    /// Catppuccin Mocha, the default spectral-m2 colour scheme.
+    pub fn catppuccin_mocha() -> Self {
+        Self {
+            name: "Catppuccin Mocha",
+            rosewater: rgb!(0xf5e0dc),
+            flamingo: rgb!(0xf2cdcd),
+            pink: rgb!(0xf5c2e7),
+            mauve: rgb!(0xcba6f7),
+            red: rgb!(0xf38ba8),
+            maroon: rgb!(0xeba0ac),
+            peach: rgb!(0xfab387),
+            yellow: rgb!(0xf9e2af),
+            green: rgb!(0xa6e3a1),
+            teal: rgb!(0x94e2d5),
+            sky: rgb!(0x89dceb),
+            sapphire: rgb!(0x74c7ec),
+            blue: rgb!(0x89b4fa),
+            lavender: rgb!(0xb4befe),
+            text: rgb!(0xcdd6f4),
+            subtext1: rgb!(0xbac2de),
+            subtext0: rgb!(0xa6adc8),
+            overlay2: rgb!(0x9399b2),
+            overlay1: rgb!(0x7f849c),
+            overlay0: rgb!(0x6c7086),
+            surface2: rgb!(0x585b70),
+            surface1: rgb!(0x45475a),
+            surface0: rgb!(0x313244),
+            base: rgb!(0x1e1e2e),
+            mantle: rgb!(0x181825),
+            crust: rgb!(0x11111b),
+        }
+    }
+
+    fn foreground(color: Color) -> Style {
+        Style::default().fg(color)
+    }
+
+    pub fn transcript(&self) -> Style {
+        Style::default().bg(self.base)
+    }
+
+    pub fn code(&self) -> Style {
+        Style::default().bg(self.mantle)
+    }
+
+    pub fn value(&self) -> Style {
+        Self::foreground(self.text)
+    }
+
+    pub fn error(&self) -> Style {
+        Self::foreground(self.red)
+    }
+
+    pub fn warning(&self) -> Style {
+        Self::foreground(self.peach)
+    }
+
+    pub fn type_info(&self) -> Style {
+        Self::foreground(self.yellow).add_modifier(Modifier::ITALIC)
+    }
+
+    pub fn border(&self) -> Style {
+        Self::foreground(self.surface2)
+    }
+
+    pub fn error_border(&self) -> Style {
+        Self::foreground(self.maroon)
+    }
+
+    pub fn warning_border(&self) -> Style {
+        Self::foreground(self.peach)
+    }
+
+    pub fn prompt(&self) -> Style {
+        Self::foreground(self.teal)
+    }
+
+    pub fn muted(&self) -> Style {
+        Self::foreground(self.overlay0)
+    }
+
+    /// Resolve a tree-sitter capture against the active colour scheme.
+    pub fn syntax(&self, kind: HighlightKind) -> Style {
+        let fg = Self::foreground;
+        let bold = |color| fg(color).add_modifier(Modifier::BOLD);
         match kind {
-            HighlightKind::Comment => fg(Color::DarkGray),
-            HighlightKind::Error => bold(Color::Red),
-            HighlightKind::Number | HighlightKind::NumberFloat => fg(Color::LightGreen),
-            HighlightKind::Boolean => fg(Color::LightYellow),
-            HighlightKind::String => fg(Color::Green),
-            HighlightKind::StringSpecial | HighlightKind::StringSpecialUrl => {
-                fg(Color::Cyan).add_modifier(Modifier::UNDERLINED)
-            }
-            HighlightKind::StringRegexp => fg(palette::STRING_REGEXP),
-            HighlightKind::CharacterSpecial => fg(Color::LightMagenta),
-            HighlightKind::Variable => fg(Color::White),
-            HighlightKind::VariableBuiltin => fg(palette::VARIABLE_BUILTIN),
-            HighlightKind::VariableParameter => fg(Color::LightRed),
-            HighlightKind::ConstantBuiltin => fg(Color::LightYellow),
-            HighlightKind::Function | HighlightKind::FunctionBuiltin => fg(Color::Blue),
-            HighlightKind::Constructor => fg(Color::LightCyan),
-            HighlightKind::Type => fg(Color::Yellow),
-            HighlightKind::Property => fg(Color::Cyan),
-            HighlightKind::ModuleBuiltin => fg(Color::LightBlue),
-            HighlightKind::Operator => fg(Color::Gray),
-            HighlightKind::Keyword | HighlightKind::KeywordConditional => bold(palette::KEYWORD),
-            HighlightKind::KeywordRepeat => bold(palette::KEYWORD_REPEAT),
-            HighlightKind::KeywordReturn => bold(palette::KEYWORD_RETURN),
-            HighlightKind::KeywordException => bold(palette::KEYWORD_EXCEPTION),
-            HighlightKind::KeywordModifier => bold(palette::KEYWORD_MODIFIER),
-            HighlightKind::KeywordDebug => fg(Color::DarkGray),
-            HighlightKind::KeywordOperator => fg(Color::LightMagenta),
+            HighlightKind::Comment | HighlightKind::KeywordDebug => fg(self.overlay0),
+            HighlightKind::Error => bold(self.red),
+            HighlightKind::Number | HighlightKind::NumberFloat => fg(self.peach),
+            HighlightKind::Boolean | HighlightKind::ConstantBuiltin => fg(self.peach),
+            HighlightKind::String => fg(self.green),
+            HighlightKind::StringSpecialUrl => fg(self.sky).add_modifier(Modifier::UNDERLINED),
+            HighlightKind::CharacterSpecial | HighlightKind::KeywordOperator => fg(self.pink),
+            HighlightKind::Variable => fg(self.text),
+            HighlightKind::VariableBuiltin => fg(self.red),
+            HighlightKind::VariableParameter => fg(self.maroon),
+            HighlightKind::Function
+            | HighlightKind::FunctionCall
+            | HighlightKind::FunctionBuiltin => fg(self.blue),
+            HighlightKind::Label => fg(self.sapphire),
+            HighlightKind::Type | HighlightKind::TypeParameter => fg(self.yellow),
+            HighlightKind::Property => fg(self.teal),
+            HighlightKind::Module | HighlightKind::Namespace => fg(self.lavender),
+            HighlightKind::Operator => fg(self.sky),
+            HighlightKind::Keyword
+            | HighlightKind::KeywordConditional
+            | HighlightKind::KeywordRepeat
+            | HighlightKind::KeywordModifier => bold(self.mauve),
+            HighlightKind::KeywordReturn | HighlightKind::KeywordException => bold(self.red),
             HighlightKind::PunctuationBracket | HighlightKind::PunctuationDelimiter => {
-                fg(Color::Gray)
+                fg(self.overlay2)
             }
         }
     }
@@ -121,25 +172,16 @@ impl Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Theme { ui: default_ui() }
+        Self::catppuccin_mocha()
     }
 }
 
-/// The default styles for the non-syntax UI surfaces.
-fn default_ui() -> UiTheme {
-    UiTheme {
-        transcript_bg: Style::default().bg(palette::SURFACE_BASE),
-        code_bg: Style::default().bg(palette::SURFACE_RAISED),
-        value: Style::default().fg(palette::FG_VALUE),
-        error: Style::default().fg(palette::FG_ERROR),
-        warning: Style::default().fg(palette::FG_WARNING),
-        type_info: Style::default()
-            .fg(palette::FG_TYPE)
-            .add_modifier(Modifier::ITALIC),
-        border: Style::default().fg(palette::BORDER_DEFAULT),
-        error_border: Style::default().fg(palette::BORDER_ERROR),
-        warning_border: Style::default().fg(palette::BORDER_WARNING),
-        prompt: Style::default().fg(Color::Cyan),
-        muted: Style::default().fg(Color::DarkGray),
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_scheme_is_catppuccin_mocha() {
+        assert_eq!(Theme::default().name, "Catppuccin Mocha");
     }
 }

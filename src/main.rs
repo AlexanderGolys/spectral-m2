@@ -1,12 +1,17 @@
 mod app;
 mod block;
-mod cells;
 mod commands;
+mod editor;
+mod errors;
 mod highlight;
 mod hints;
 mod history;
 mod input;
 mod m2_backend;
+mod parse_check;
+mod parser;
+mod session;
+mod terminal;
 mod theme;
 mod transcript;
 

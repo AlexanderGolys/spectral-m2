@@ -25,7 +25,7 @@ impl History {
     }
 
     #[cfg(test)]
-    pub(crate) fn in_memory() -> Self {
+    pub fn in_memory() -> Self {
         Self::from_path(None)
     }
 

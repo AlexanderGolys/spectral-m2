@@ -7,42 +7,41 @@
 
 use std::ops::Range;
 
-use tree_sitter::Parser;
+use tree_sitter::{Parser, Tree};
 
-fn parser() -> Parser {
+use crate::errors::{M2Error, M2Result};
+
+fn parser() -> M2Result<Parser> {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_macaulay2::language())
-        .expect("the compiled-in Macaulay2 grammar always loads");
-    parser
+        .map_err(|error| M2Error::ParserError(format!("could not load M2 grammar: {error}")))?;
+    Ok(parser)
 }
 
-/// Byte ranges of each top-level `cell` node (the depth-0 `;`-separated units) in a
-/// complete buffer. Ranges index into `source`; the caller slices both the text and the
-/// matching highlight spans from them, so nothing is cloned here. Only valid on a buffer
-/// the M2 oracle has confirmed parses cleanly, so the tree carries no recovery artifacts.
-pub fn split_cells(source: &str) -> Vec<Range<usize>> {
-    let mut parser = parser();
-    let tree = parser
+fn parse(source: &str) -> M2Result<Tree> {
+    let mut parser = parser()?;
+    parser
         .parse(source, None)
-        .expect("parsing without a timeout always yields a tree");
+        .ok_or_else(|| M2Error::ParserError("tree-sitter returned no syntax tree".to_string()))
+}
+
+pub fn split_cells(source: &str) -> M2Result<Vec<Range<usize>>> {
+    let tree = parse(source)?;
     let root = tree.root_node();
     let mut cursor = root.walk();
-    root.named_children(&mut cursor)
-        .filter(|n| n.kind() == "cell")
+    Ok(root
+        .named_children(&mut cursor)
         .map(|n| n.byte_range())
-        .collect()
+        .collect())
 }
 
 /// Whether tree-sitter finds a syntax error in `source`. Consulted only when the M2
 /// `parse` oracle reports COMPLETE, to catch the strict errors `parse` waves through --
 /// notably the empty-statement `;;`, which `parse` accepts but the real reader rejects.
-pub fn has_syntax_error(source: &str) -> bool {
-    let mut parser = parser();
-    let tree = parser
-        .parse(source, None)
-        .expect("parsing without a timeout always yields a tree");
-    tree.root_node().has_error()
+pub fn has_syntax_error(source: &str) -> M2Result<bool> {
+    let tree = parse(source)?;
+    Ok(tree.root_node().has_error())
 }
 
 #[cfg(test)]
@@ -53,6 +52,7 @@ mod tests {
     fn splits_newline_delimited_cells() {
         let source = "a = 5\nb = 6";
         let cells: Vec<&str> = split_cells(source)
+            .expect("split valid cells")
             .into_iter()
             .map(|r| &source[r])
             .collect();
@@ -61,11 +61,11 @@ mod tests {
 
     #[test]
     fn single_cell_is_one_range() {
-        assert_eq!(split_cells("1 + 1").len(), 1);
+        assert_eq!(split_cells("1 + 1").expect("split one cell").len(), 1);
     }
 
     #[test]
     fn clean_code_has_no_error() {
-        assert!(!has_syntax_error("a = 5\nb = 6"));
+        assert!(!has_syntax_error("a = 5\nb = 6").expect("parse clean code"));
     }
 }

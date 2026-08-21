@@ -2,8 +2,8 @@
 //! the feed: a full-width *code band* (a gutter column of `iN` markers beside
 //! highlighted, soft-wrapped source) and an inset bordered *box* (results,
 //! warnings, errors). Each block's `render` is a thin call into here, so no block
-//! re-implements drawing — and `height` and `render` agree on row counts because
-//! both measure through [`code_band_height`] / [`crate::block::wrap::wrap_line`].
+//! re-implements drawing. Measurement and rendering consume the same visual-line
+//! ranges produced by the shared layout policies.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -12,12 +12,37 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, BorderType, Padding, Paragraph, Widget};
 
 use crate::block::highlight::HighlightSpan;
-use crate::block::wrap::wrap_line;
+use crate::block::layout::VisualLine;
 use crate::theme::Theme;
+
+/// Runtime rendering inputs shared by every block without owning application state.
+pub struct RenderContext<'a> {
+    width: u16,
+    theme: &'a Theme,
+}
+
+impl<'a> RenderContext<'a> {
+    pub fn new(width: u16, theme: &'a Theme) -> Self {
+        Self { width, theme }
+    }
+
+    pub fn width(&self) -> u16 {
+        self.width
+    }
+
+    pub fn theme(&self) -> &'a Theme {
+        self.theme
+    }
+}
 
 /// Width of the left status column (right-aligned `iN` / prompt marker), in cells.
 pub const GUTTER_W: u16 = 5;
 const MIN_BOX_W: u16 = 8;
+
+pub struct CodeBandStyle {
+    pub marker: Style,
+    pub base: Style,
+}
 
 /// The left status column: a right-aligned marker padded to [`GUTTER_W`], so it
 /// reads like an editor's gutter.
@@ -30,60 +55,40 @@ pub fn gutter_span(label: &str, style: Style) -> Span<'static> {
     Span::styled(text, style.bold())
 }
 
-/// Total rows a code band occupies at `width`, including the blank margin row
-/// above and below the source. The single source of truth both `Block::height`
-/// and [`code_band_lines`] measure through, so they never disagree.
-pub fn code_band_height(cells: &[&str], width: u16) -> u16 {
-    let code_w = width.saturating_sub(GUTTER_W);
-    let rows: usize = cells
-        .iter()
-        .flat_map(|c| c.split('\n'))
-        .map(|line| wrap_line(line, code_w).len())
-        .sum();
-    rows as u16 + 2
-}
-
 /// Build the lines of a code band: a top margin, then each cell's source soft-
 /// wrapped and coloured by `spans`, the first visual row of each cell carrying
-/// its `iN` marker (when `start_number` is set), then a bottom margin. `spans`
-/// index into `cells.join("\n")`.
+/// its `iN` marker (when `start_number` is set), then a bottom margin.
 pub fn code_band_lines(
-    cells: &[&str],
+    text: &str,
+    lines: &[VisualLine],
+    cell_starts: &[usize],
     spans: &[HighlightSpan],
     start_number: Option<u32>,
-    marker_style: Style,
-    base: Style,
+    style: CodeBandStyle,
     theme: &Theme,
-    width: u16,
 ) -> Vec<Line<'static>> {
-    let code_w = width.saturating_sub(GUTTER_W);
-    let mut lines = vec![Line::default()];
-    let mut cell_start = 0; // byte offset of this cell into the joined source
-    for (k, code) in cells.iter().enumerate() {
-        let mut logical_start = cell_start; // byte offset of the current logical line
-        for (li, logical) in code.split('\n').enumerate() {
-            for (ri, row) in wrap_line(logical, code_w).into_iter().enumerate() {
-                let marker = match (li == 0 && ri == 0, start_number) {
-                    (true, Some(s)) => format!("i{}", s + k as u32),
-                    _ => String::new(),
-                };
-                let seg = &logical[row.clone()];
-                let mut spans_out = vec![gutter_span(&marker, marker_style)];
-                spans_out.extend(apply_spans(
-                    logical_start + row.start,
-                    seg,
-                    spans,
-                    base,
-                    theme,
-                ));
-                lines.push(Line::from(spans_out));
-            }
-            logical_start += logical.len() + 1; // +1 for the '\n'
-        }
-        cell_start += code.len() + 1; // +1 for the join '\n' between cells
+    let mut rendered = vec![Line::default()];
+    for line in lines {
+        let cell = cell_starts
+            .iter()
+            .position(|start| *start == line.range.start);
+        let marker = match (cell, start_number) {
+            (Some(index), Some(start)) => format!("i{}", start + index as u32),
+            _ => String::new(),
+        };
+        let segment = &text[line.range.clone()];
+        let mut output = vec![gutter_span(&marker, style.marker)];
+        output.extend(apply_spans(
+            line.range.start,
+            segment,
+            spans,
+            style.base,
+            theme,
+        ));
+        rendered.push(Line::from(output));
     }
-    lines.push(Line::default());
-    lines
+    rendered.push(Line::default());
+    rendered
 }
 
 /// Colour one byte-range slice `seg` (starting at absolute offset `abs_start` in
@@ -114,7 +119,7 @@ pub fn apply_spans(
         }
         out.push(Span::styled(
             seg[st - abs_start..en - abs_start].to_string(),
-            base.patch(theme.style(s.kind)),
+            base.patch(theme.syntax(s.kind)),
         ));
         cur = en;
     }

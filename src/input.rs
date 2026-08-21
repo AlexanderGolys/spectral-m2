@@ -6,20 +6,23 @@
 //! - [`InputCode`] — the field plus the highlight spans for its whole text; the only
 //!   [`Highlighted`] unit. Incomplete input simply stays in the field across Enter
 //!   presses (a newline is inserted), so the buffer is one editable region and its
-//!   highlight is recomputed wholesale on every change. Cell boundaries are decided
-//!   only at submit, by the M2 oracle, never here.
+//!   highlight is recomputed wholesale when its render lines are requested. Cell
+//!   boundaries are derived only at submit, after the M2 completeness check, never here.
+
+use std::iter;
 
 use ratatui::text::{Line, Span};
 
 use crate::block::highlight::{HighlightSpan, Highlighter};
-use crate::block::render::{apply_spans, gutter_span, GUTTER_W};
-use crate::block::{Highlighted, TextContainer};
-use crate::hints::{get_hint, get_new_hint};
+use crate::block::layout::{PreserveLines, TextLayout};
+use crate::block::render::{apply_spans, gutter_span, RenderContext, GUTTER_W};
+use crate::block::Highlighted;
+use crate::hints::get_hint;
 use crate::history::History;
-use crate::theme::Theme;
 
 /// The glyph marking the live prompt line.
 const PROMPT_GLYPH: &str = "❯";
+
 pub struct CodeFragment {
     text: String,
 }
@@ -31,26 +34,12 @@ impl CodeFragment {
         }
     }
 
-    pub fn from_text(text: String) -> Self {
-        CodeFragment { text }
-    }
-
     pub fn as_str(&self) -> &str {
         &self.text
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.text.is_empty()
-    }
-
     pub fn clear(&mut self) {
         self.text.clear();
-    }
-}
-
-impl TextContainer for CodeFragment {
-    fn text(&self) -> &str {
-        &self.text
     }
 }
 
@@ -71,21 +60,8 @@ impl InputTextField {
         }
     }
 
-    #[cfg(test)]
-    fn new_in_memory() -> Self {
-        InputTextField {
-            fragment: CodeFragment::new(),
-            cursor: 0,
-            history: History::in_memory(),
-        }
-    }
-
     pub fn fragment(&self) -> &CodeFragment {
         &self.fragment
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.fragment.is_empty()
     }
 
     pub fn insert_char(&mut self, ch: char) {
@@ -215,7 +191,7 @@ impl InputTextField {
 
     /// Record the trimmed fragment in history and clear the field, handing back the
     /// submitted fragment. `None` when the field is blank.
-    pub fn take_submission(&mut self) -> Option<CodeFragment> {
+    pub fn take_submission(&mut self) -> Option<String> {
         let text = self.fragment.text.trim().to_string();
         if text.is_empty() {
             return None;
@@ -223,7 +199,7 @@ impl InputTextField {
         self.history.record(&text);
         self.fragment.clear();
         self.cursor = 0;
-        Some(CodeFragment::from_text(text))
+        Some(text)
     }
 
     fn load(&mut self, text: String) {
@@ -241,7 +217,7 @@ impl InputTextField {
     }
 
     fn line_starts(&self) -> Vec<usize> {
-        std::iter::once(0)
+        iter::once(0)
             .chain(
                 self.fragment
                     .text
@@ -278,17 +254,27 @@ impl InputTextField {
             self.fragment.text
         );
     }
+
+    #[cfg(test)]
+    fn new_in_memory() -> Self {
+        InputTextField {
+            fragment: CodeFragment::new(),
+            cursor: 0,
+            history: History::in_memory(),
+        }
+    }
 }
 
 /// The live field plus the highlight spans over its whole text — the only
 /// [`Highlighted`] unit. Incomplete input never leaves the field (Enter inserts a
 /// newline and editing continues), so there is one editable region whose spans are
-/// recomputed wholesale on each change; at submit, the display blocks are highlighted
-/// from their own text. The cursor and history live in the field.
+/// recomputed wholesale when rendered; at submit, display blocks are highlighted from
+/// their own text. The cursor and history live in the field.
 pub struct InputCode {
     field: InputTextField,
     spans: Vec<HighlightSpan>,
-    hint: &'static str,
+    hint: String,
+    diagnostic: Option<String>,
 }
 
 impl InputCode {
@@ -297,15 +283,7 @@ impl InputCode {
             field: InputTextField::new(),
             spans: Vec::new(),
             hint: get_hint(),
-        }
-    }
-
-    #[cfg(test)]
-    fn new_in_memory() -> Self {
-        InputCode {
-            field: InputTextField::new_in_memory(),
-            spans: Vec::new(),
-            hint: get_hint(),
+            diagnostic: None,
         }
     }
 
@@ -317,62 +295,86 @@ impl InputCode {
         &mut self.field
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.field.is_empty()
-    }
-
     /// Take the trimmed buffer as a submission (recording it in history and clearing
     /// the field), or `None` when blank. The caller validates and runs it.
     pub fn take_submission(&mut self) -> Option<String> {
         let submission = self.field.take_submission()?;
         self.spans.clear();
-        self.hint = get_new_hint(self.hint);
-        Some(submission.as_str().to_string())
+        self.hint = get_hint();
+        self.diagnostic = None;
+        Some(submission)
+    }
+
+    pub fn diagnostic(&self) -> Option<&str> {
+        self.diagnostic.as_deref()
+    }
+
+    pub fn set_diagnostic(&mut self, diagnostic: String) {
+        self.diagnostic = Some(diagnostic);
+    }
+
+    pub fn clear_diagnostic(&mut self) {
+        self.diagnostic = None;
+    }
+
+    #[cfg(test)]
+    fn new_in_memory() -> Self {
+        InputCode {
+            field: InputTextField::new_in_memory(),
+            spans: Vec::new(),
+            hint: get_hint(),
+            diagnostic: None,
+        }
     }
 }
 
-impl TextContainer for InputCode {
+impl InputCode {
+    pub fn text(&self) -> &str {
+        self.field.fragment().as_str()
+    }
+}
+
+impl TextLayout for InputCode {
+    type Wrapping = PreserveLines;
+
     fn text(&self) -> &str {
         self.field.fragment().as_str()
     }
 }
 
 impl Highlighted for InputCode {
-    fn rehighlight(&mut self, hl: &mut dyn Highlighter) {
-        self.spans = hl.highlight(self.text());
-    }
-
-    /// The prompt line(s): a blank top-margin row, then one row per logical line of
-    /// the field carrying the `❯` gutter (last line) and the field's text coloured
-    /// from the cached spans. A placeholder fills the gutter line while the field is
-    /// empty. The live prompt is not soft-wrapped, so cursor math stays in logical
-    /// `(line, column)`. The caller appends any hint row, the bottom margin, and
-    /// places the terminal cursor.
-    fn highlighted_lines(&self, _width: u16, theme: &Theme) -> Vec<Line<'_>> {
-        let base = theme.ui.code_bg;
-        let prompt = theme.ui.prompt.patch(base);
+    fn highlighted_lines<'a>(
+        &'a mut self,
+        context: &RenderContext<'_>,
+        highlighter: &mut dyn Highlighter,
+    ) -> Vec<Line<'a>> {
+        self.spans = highlighter.highlight(&self.field.fragment().text);
+        let theme = context.theme();
+        let base = theme.code();
+        let prompt = theme.prompt().patch(base);
         let text = self.text();
-        let logical: Vec<&str> = if text.is_empty() {
-            vec![""]
-        } else {
-            text.split('\n').collect()
-        };
+        let visual_lines = self.lines(context.width().saturating_sub(GUTTER_W));
 
         let mut lines = vec![Line::default()];
-        let mut abs = 0;
-        for (i, line) in logical.iter().enumerate() {
-            let marker = if i + 1 == logical.len() {
+        for (index, visual_line) in visual_lines.iter().enumerate() {
+            let marker = if index + 1 == visual_lines.len() {
                 PROMPT_GLYPH
             } else {
                 ""
             };
             let mut spans = vec![gutter_span(marker, prompt)];
-            spans.extend(apply_spans(abs, line, &self.spans, base, theme));
-            if i == 0 && text.is_empty() {
-                spans.push(Span::styled(self.hint, theme.ui.muted));
+            let line = &text[visual_line.range.clone()];
+            spans.extend(apply_spans(
+                visual_line.range.start,
+                line,
+                &self.spans,
+                base,
+                theme,
+            ));
+            if index == 0 && text.is_empty() {
+                spans.push(Span::styled(&self.hint, theme.muted()));
             }
             lines.push(Line::from(spans));
-            abs += line.len() + 1;
         }
         lines
     }
@@ -433,20 +435,13 @@ mod tests {
     fn multiline_prompt_glyph_is_on_last_line() {
         let mut input = InputCode::new_in_memory();
         input.field_mut().insert_str("first\nsecond\nthird");
+        let theme = crate::theme::Theme::default();
+        let context = RenderContext::new(8, &theme);
+        let mut highlighter = crate::highlight::SyntaxHighlighter::new();
 
-        let lines = input.highlighted_lines(80, &Theme::default());
+        let lines = input.highlighted_lines(&context, &mut highlighter);
         assert!(!lines[1].spans[0].content.contains(PROMPT_GLYPH));
         assert!(!lines[2].spans[0].content.contains(PROMPT_GLYPH));
         assert!(lines[3].spans[0].content.contains(PROMPT_GLYPH));
-    }
-
-    #[test]
-    fn submission_resamples_placeholder_hint() {
-        let mut input = InputCode::new_in_memory();
-        let initial_hint = input.hint;
-        input.field_mut().insert_str("1 + 1");
-
-        assert_eq!(input.take_submission().as_deref(), Some("1 + 1"));
-        assert_ne!(input.hint, initial_hint);
     }
 }
