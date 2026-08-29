@@ -1,23 +1,15 @@
+//! A syntax-highlighted terminal interface for an interactive Macaulay2 session.
+
 mod app;
-mod block;
-mod commands;
-mod editor;
+mod backend;
+mod code;
 mod errors;
-mod highlight;
-mod hints;
-mod history;
 mod input;
-mod m2_backend;
-mod parse_check;
-mod parser;
-mod session;
-mod terminal;
-mod theme;
-mod transcript;
+mod ui;
 
 use std::process::exit;
 
-use m2_backend::M2Backend;
+use backend::M2Backend;
 
 fn main() {
     match M2Backend::spawn() {

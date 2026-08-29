@@ -1,0 +1,20 @@
+[book]
+title = "Spectral M2"
+description = "The highlighted Macaulay2 shell"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "../target/mdbook"
+
+[preprocessor.tsitter]
+after = ["links"]
+
+[preprocessor.tsitter.languages.macaulay2]
+library = "../target/docs-parser/release/libspectral_m2_docs_parser.so"
+symbol = "tree_sitter_macaulay2_docs"
+highlights = "queries/macaulay2/highlights.scm"
+aliases = ["m2", "macaulay2"]
+
+[output.html]
+additional-css = ["theme/treesitter.css"]

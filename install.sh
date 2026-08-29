@@ -2,9 +2,6 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-BIN_DIR="${HOME}/.local/bin"
-BIN_NAME="spectral-m2"
-ALIAS_NAME="sp2"
 
 echo "=== spectral-m2 installer ==="
 
@@ -31,14 +28,9 @@ cargo clippy --all-targets -- -D warnings
 echo "running tests..."
 cargo test
 
-echo "building (release)..."
-cargo build --release
+echo "installing through Cargo..."
+cargo install --path "$REPO_DIR" --locked --force
 
-mkdir -p "$BIN_DIR"
-install -m 755 target/release/spectral-m2 "$BIN_DIR/$BIN_NAME"
-# short alias for convenience: `sp2` -> spectral-m2
-ln -sf "$BIN_NAME" "$BIN_DIR/$ALIAS_NAME"
-
-echo "installed: $BIN_DIR/$BIN_NAME (alias: $ALIAS_NAME)"
+echo "installed: spectral-m2"
 echo ""
-echo "Run 'spectral-m2' (or 'sp2') to start the Macaulay2 highlighted REPL."
+echo "Run 'spectral-m2' to start the Macaulay2 highlighted REPL."
