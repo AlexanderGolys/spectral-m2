@@ -4,7 +4,7 @@ Spectral supports two panes and up to two independent workspaces.
 
 ## Open a second pane
 
-Choose `new`, `code`, `output`, or `syntax tree` in the command picker with `Ctrl+Enter`:
+Choose `new`, `code`, `output`, or `syntax tree` in the command picker with `Alt+V`:
 
 - `new` starts another Macaulay2 process with its own state, transcript, draft, history, and committed syntax trees;
 - the three previews remain linked to the focused workspace's committed cells but have their own view and scroll position.

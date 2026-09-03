@@ -31,7 +31,12 @@ impl ReplTerminal {
             EnterAlternateScreen,
             EnableBracketedPaste,
             EnableMouseCapture,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+            // Disambiguation deliberately leaves Enter as legacy 0x0d; all-keys
+            // reporting is what preserves Shift for Shift+Enter.
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+            )
         )?;
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;

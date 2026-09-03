@@ -1561,10 +1561,11 @@ dependencies = [
 
 [[package]]
 name = "these-macros-should-be-illegal"
-version = "0.4.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96334abf6c60a97d08da3b2140d5a2b1e13200891d037b07f760b1a40b2fb342"
+checksum = "7342201a1f40821438ee4f0bda627d5ea96f5529a0eccc79858bbfc7427984be"
 dependencies = [
+ "heck",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

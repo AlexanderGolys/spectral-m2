@@ -24,8 +24,8 @@ The installed families are Catppuccin, Tokyo Night, Gruvbox, Gruvbox Material, E
 
 ## Highlight debug view
 
-Press `Ctrl+D` or run `/debug` to open the one-column inspector at the lower right. It lists all active UI and Macaulay2 highlight groups, followed by the current variant's native palette names and colors. Scroll it with arrow or page keys. `Esc` closes it; `Ctrl+D` toggles it from any shell, preview, or picker.
+Press `Ctrl+D` or run `/debug` to open the one-column inspector at the lower right. It lists all active UI and Macaulay2 highlight groups, followed by the current variant's native palette names and colors. Opening it submits a real three-cell value/muted/null probe through the active Macaulay2 session and leaves that post in the feed. Scroll the inspector with arrow or page keys. `Esc` closes only the inspector; `Ctrl+D` toggles it from any shell, preview, or picker.
 
 ## Keymaps
 
-Run `/keymaps` to inspect bindings. The current editor exposes modified-key rebinding for `clear input` and `copy selection`; selecting one and pressing a new modified key updates both the dispatcher and displayed shortcut hints. A replacement cannot steal a fixed binding.
+Run `/keymaps` to inspect and edit every command shortcut plus `clear input` and `copy selection`. Selecting one and pressing a new modified key updates both dispatch and displayed hints. Movement, submission, and other form-editing keys remain fixed.

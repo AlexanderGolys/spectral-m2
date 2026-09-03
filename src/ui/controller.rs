@@ -1,12 +1,10 @@
-//! The interactive editor: submitted feed, live input and history, navigation,
+//! Interactive editor: submitted feed, live input and history, navigation,
 //! scrolling, and rendering.
 
-mod commands;
+pub mod commands;
+mod icons;
 mod picker;
-mod settings;
-
-pub use commands::{submitted_command, SubmittedCommand};
-pub use settings::Groups;
+pub mod settings;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
@@ -15,30 +13,31 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, Clear, Paragraph, Widget};
 use ratatui::Frame;
 use std::ops::Range;
-use std::time::Instant;
+use these_macros_should_be_illegal::discriminated_str;
 
 use self::commands::Command;
-use self::picker::{
-    finish_spans, value_spans, Line as PickerLine, LineContext, Picker, PickerItem, PickerItems,
-    PickerStatus, TextComponent,
-};
-use self::settings::{Action, Appearance, Keymap, SettingField, Settings, StatusLinePosition};
-use super::block::render::{gutter_span, gutter_width, prompt_gutter_width, RenderContext};
+use self::picker::{Line as PickerLine, LineContext, Picker, PickerItem, PickerItems};
+use self::settings::keymap::{Action, Keymap};
+use self::settings::theme::groups::{Groups, HLGroup};
+use self::settings::theme::Appearance;
+use self::settings::{SettingField, Settings, StatusLinePosition};
+use super::block::render::{Prompt, RenderContext};
 use super::block::{
     Block, BlockKind, Cell, CodeBlock, ErrorMessageBlock, SyntaxTreeBlock, TextBlock,
 };
-use super::statusline::{StatusLine, StatusLineEvent};
-use crate::app::CommittedCell;
+use super::config::UI;
+use super::element::{Element, HLSpan, StyleElement, Text, TextSpan};
+use super::statusline::{StatusLine, StatusLineContext, StatusLineEvent};
+use super::DEBUG_POST;
+use crate::app::session::CommittedCell;
 use crate::code::highlight::Highlighter;
 use crate::input::InputCode;
-
-/// The smallest input pane worth drawing: one code row between its two margins.
-const MIN_INPUT_HEIGHT: u16 = 3;
 
 /// Control flow requested by one editor key event.
 pub enum EditorAction {
     Continue,
     Submit,
+    Post(&'static str),
     Restart,
     Quit,
     /// Put the current selection on the system clipboard.
@@ -65,31 +64,44 @@ pub enum OpenTarget {
     Split,
 }
 
+impl OpenTarget {
+    fn from_key(key: KeyEvent, can_split: bool) -> Option<Self> {
+        if key.code == KeyCode::Char('v')
+            && key.modifiers.contains(KeyModifiers::ALT)
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+            && can_split
+        {
+            Some(Self::Split)
+        } else if key.code == KeyCode::Enter
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            Some(Self::Current)
+        } else {
+            None
+        }
+    }
+}
+
 /// The projection selected inside the output preview.
+#[discriminated_str(label)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum OutputMode {
+enum OutputMode {
     #[default]
-    Evaluation,
-    Values,
-    Everything,
+    Evaluation = "evaluation output",
+    Values = "values and types",
+    Everything = "everything except input",
 }
 
 impl OutputMode {
-    pub fn cycle(self, delta: i8) -> Self {
+    fn cycle(self, delta: i8) -> Self {
         match (self, delta > 0) {
             (Self::Evaluation, true) | (Self::Everything, false) => Self::Values,
             (Self::Values, true) => Self::Everything,
             (Self::Values, false) => Self::Evaluation,
             (Self::Everything, true) => Self::Evaluation,
             (Self::Evaluation, false) => Self::Everything,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Evaluation => "evaluation output",
-            Self::Values => "values and types",
-            Self::Everything => "everything except input",
         }
     }
 }
@@ -130,27 +142,25 @@ pub enum EditorUpdate {
         message: String,
         range: Option<Range<usize>>,
     },
-    Commit(Vec<Box<dyn Block>>),
+    Message(Box<dyn Block>),
     Pending {
         id: u64,
-        cells: Vec<(String, Vec<crate::code::highlight::HLSpan>)>,
+        cells: Vec<(String, Vec<HLSpan>)>,
     },
     CellSucceeded {
         id: u64,
         index: usize,
-        number: u32,
         outputs: Vec<Box<dyn Block>>,
     },
     CellFailed {
         id: u64,
         index: usize,
-        number: u32,
         message: String,
     },
 }
 
 /// A state change requested by a picker or one of its lines.
-enum EditorEvent {
+pub enum EditorEvent {
     EditCommand(KeyEvent),
     ResumeTyping(char),
     FinishCommand,
@@ -202,6 +212,29 @@ struct ScreenCell {
     selectable: bool,
 }
 
+/// Projection of selection exclusions from an offscreen composition into its viewport.
+trait SelectionExclusions {
+    fn project(&mut self, exclusions: impl IntoIterator<Item = Rect>, area: Rect, top: usize);
+}
+
+impl SelectionExclusions for Vec<Rect> {
+    fn project(&mut self, exclusions: impl IntoIterator<Item = Rect>, area: Rect, top: usize) {
+        let bottom = top + usize::from(area.height);
+        self.extend(exclusions.into_iter().filter_map(|excluded| {
+            let start = usize::from(excluded.y).max(top);
+            let end = usize::from(excluded.bottom()).min(bottom);
+            (start < end).then(|| {
+                Rect::new(
+                    area.x + excluded.x,
+                    area.y + (start - top) as u16,
+                    excluded.width.min(area.width.saturating_sub(excluded.x)),
+                    (end - start) as u16,
+                )
+            })
+        }));
+    }
+}
+
 /// Region in which the current mouse selection began.
 #[derive(Clone, Copy)]
 enum MouseSelection {
@@ -231,14 +264,11 @@ struct SettingItem {
     settings: Settings,
 }
 
-impl TextComponent for SettingItem {
-    fn spans(&self, context: &LineContext<'_>) -> Vec<Span<'static>> {
-        value_spans(
-            self.field.label(),
-            &self.field.value(&self.settings),
-            false,
-            context,
-        )
+impl Text for SettingItem {
+    type Context = LineContext;
+
+    fn spans(&self, context: &LineContext) -> Vec<Span<'static>> {
+        context.value(self.field.label(), &self.field.value(&self.settings), false)
     }
 }
 
@@ -259,14 +289,11 @@ struct StyleItem {
     appearance: Appearance,
 }
 
-impl TextComponent for StyleItem {
-    fn spans(&self, context: &LineContext<'_>) -> Vec<Span<'static>> {
-        value_spans(
-            "style",
-            &self.appearance.colorscheme_label(),
-            false,
-            context,
-        )
+impl Text for StyleItem {
+    type Context = LineContext;
+
+    fn spans(&self, context: &LineContext) -> Vec<Span<'static>> {
+        context.value("style", &self.appearance.colorscheme_label(), false)
     }
 }
 
@@ -279,23 +306,22 @@ impl PickerItem for StyleItem {
 /// A single-span picker line that restores every setting on Enter.
 struct RestoreDefaultsItem;
 
-impl TextComponent for RestoreDefaultsItem {
-    fn spans(&self, context: &LineContext<'_>) -> Vec<Span<'static>> {
-        finish_spans(
-            vec![Span::styled(
-                if context.selected {
-                    " > restore default"
-                } else {
-                    "   restore default"
-                },
-                if context.selected {
-                    context.groups.prompt()
-                } else {
-                    context.groups.muted()
-                },
-            )],
-            context,
-        )
+impl Text for RestoreDefaultsItem {
+    type Context = LineContext;
+
+    fn spans(&self, context: &LineContext) -> Vec<Span<'static>> {
+        context.finish(vec![Span::styled(
+            if context.selected {
+                " > restore default"
+            } else {
+                "   restore default"
+            },
+            if context.selected {
+                context.groups.prompt()
+            } else {
+                context.groups.muted()
+            },
+        )])
     }
 }
 
@@ -311,9 +337,11 @@ struct KeymapItem {
     key: String,
 }
 
-impl TextComponent for KeymapItem {
-    fn spans(&self, context: &LineContext<'_>) -> Vec<Span<'static>> {
-        value_spans(self.action.description(), &self.key, false, context)
+impl Text for KeymapItem {
+    type Context = LineContext;
+
+    fn spans(&self, context: &LineContext) -> Vec<Span<'static>> {
+        context.value(self.action.description(), &self.key, false)
     }
 }
 
@@ -365,9 +393,11 @@ impl AppearanceItem {
     }
 }
 
-impl TextComponent for AppearanceItem {
-    fn spans(&self, context: &LineContext<'_>) -> Vec<Span<'static>> {
-        value_spans(self.label(), &self.value(), false, context)
+impl Text for AppearanceItem {
+    type Context = LineContext;
+
+    fn spans(&self, context: &LineContext) -> Vec<Span<'static>> {
+        context.value(self.label(), &self.value(), false)
     }
 }
 
@@ -409,7 +439,7 @@ picker_item!(AppearanceItem, |item: &AppearanceItem| Some(
 ));
 
 /// Keyboard behavior attached to an otherwise presentation-only picker.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum PickerMode {
     FilteredCommands,
     Commands,
@@ -426,7 +456,7 @@ struct PickerController {
 
 /// Presentation settings shared by every workspace.
 #[derive(Clone)]
-pub(crate) struct EditorConfig {
+pub struct EditorConfig {
     settings: Settings,
     keymap: Keymap,
     appearance: Appearance,
@@ -457,7 +487,6 @@ pub struct Editor {
     screen: Vec<Vec<ScreenCell>>,
     screen_area: Rect,
     selection_exclusions: Vec<Rect>,
-    animation_started: Instant,
     split: bool,
     previewing: bool,
     focused: bool,
@@ -489,7 +518,6 @@ impl Editor {
             screen: Vec::new(),
             screen_area: Rect::ZERO,
             selection_exclusions: Vec::new(),
-            animation_started: Instant::now(),
             split: false,
             previewing: false,
             focused: true,
@@ -509,7 +537,7 @@ impl Editor {
         self.input.text()
     }
 
-    pub(crate) fn config(&self) -> EditorConfig {
+    pub fn config(&self) -> EditorConfig {
         EditorConfig {
             settings: self.settings,
             keymap: self.keymap.clone(),
@@ -517,14 +545,14 @@ impl Editor {
         }
     }
 
-    pub(crate) fn set_config(&mut self, config: &EditorConfig) {
+    pub fn set_config(&mut self, config: &EditorConfig) {
         self.settings = config.settings;
         self.keymap.clone_from(&config.keymap);
         self.apply_appearance(config.appearance);
         self.refresh_status_line();
     }
 
-    pub(crate) fn append_error(&mut self, message: impl Into<String>) {
+    pub fn append_error(&mut self, message: impl Into<String>) {
         self.feed
             .push(Box::new(ErrorMessageBlock::new(message.into())));
         self.scroll_offset = 0;
@@ -544,23 +572,22 @@ impl Editor {
         if self.picker_open() {
             return self.handle_picker_key(key);
         }
-        if self.handle_debug_key(key) {
-            return EditorAction::Continue;
+        if let Some(action) = self.handle_debug_key(key) {
+            return action;
         }
-        match self.keymap.action(key) {
-            Some(Action::Quit) => EditorAction::Quit,
+        let action = self.keymap.action(key);
+        match action {
             Some(Action::CopySelection) => self
                 .selected_screen_text()
                 .map_or(EditorAction::Continue, EditorAction::Copy),
             Some(Action::OpenCommands) => {
-                self.open_commands();
+                self.toggle_picker(PickerMode::Commands, Self::open_commands);
                 EditorAction::Continue
             }
-            Some(Action::OpenSettings) => {
-                self.open_settings();
-                EditorAction::Continue
-            }
-            _ => EditorAction::Continue,
+            Some(action) => commands::shortcut(action).map_or(EditorAction::Continue, |command| {
+                command.run(self, OpenTarget::Current)
+            }),
+            None => EditorAction::Continue,
         }
     }
 
@@ -574,22 +601,16 @@ impl Editor {
             EditorUpdate::SyntaxDiagnostic { message, range } => {
                 self.input.set_diagnostic(message, range);
             }
-            EditorUpdate::Commit(blocks) => {
-                self.input.accept_submission();
-                self.feed.extend(blocks);
+            EditorUpdate::Message(block) => {
+                self.feed.push(block);
                 self.scroll_offset = 0;
             }
             EditorUpdate::Pending { id, cells } => {
                 self.input.accept_submission();
-                self.feed
-                    .push(Box::new(super::block::SubmissionBlock::new(id, cells)));
-                self.scroll_offset = 0;
+                self.push_submission(id, cells);
             }
             EditorUpdate::CellSucceeded {
-                id,
-                index,
-                number,
-                outputs,
+                id, index, outputs, ..
             } => {
                 self.input.clear_diagnostic();
                 if let Some(submission) = self.feed.iter_mut().find_map(|block| {
@@ -597,15 +618,12 @@ impl Editor {
                         .submission_mut()
                         .filter(|submission| submission.id() == id)
                 }) {
-                    submission.succeed(index, number, outputs);
+                    submission.succeed(index, outputs);
                     self.scroll_offset = 0;
                 }
             }
             EditorUpdate::CellFailed {
-                id,
-                index,
-                number,
-                message,
+                id, index, message, ..
             } => {
                 self.input.clear_diagnostic();
                 if let Some(submission) = self.feed.iter_mut().find_map(|block| {
@@ -613,13 +631,29 @@ impl Editor {
                         .submission_mut()
                         .filter(|submission| submission.id() == id)
                 }) {
-                    submission.fail(index, number, message);
+                    submission.fail(index, message);
                     self.scroll_offset = 0;
                 }
             }
         }
         self.refresh_status_line();
         true
+    }
+
+    pub fn post(&mut self, update: EditorUpdate) -> bool {
+        if let EditorUpdate::Pending { id, cells } = update {
+            self.push_submission(id, cells);
+            self.refresh_status_line();
+            true
+        } else {
+            self.apply(update)
+        }
+    }
+
+    fn push_submission(&mut self, id: u64, cells: Vec<(String, Vec<HLSpan>)>) {
+        self.feed
+            .push(Box::new(super::block::SubmissionBlock::new(id, cells)));
+        self.scroll_offset = 0;
     }
 
     pub fn paste(&mut self, text: &str) {
@@ -813,8 +847,8 @@ impl Editor {
         if !self.pickers.is_empty() {
             return self.handle_picker_key(key);
         }
-        if self.handle_debug_key(key) {
-            return EditorAction::Continue;
+        if let Some(action) = self.handle_debug_key(key) {
+            return action;
         }
 
         let Some(action) = self.keymap.action(key) else {
@@ -837,6 +871,9 @@ impl Editor {
         };
         if action != Action::CopySelection {
             self.screen_selection = None;
+        }
+        if let Some(command) = commands::shortcut(action) {
+            return command.run(self, OpenTarget::Current);
         }
 
         if matches!(
@@ -875,7 +912,6 @@ impl Editor {
 
         let field = self.input.field_mut();
         match action {
-            Action::Quit => return EditorAction::Quit,
             // Submitting is not an edit, so it must not consume a live selection:
             // an incomplete buffer comes back as `ContinueSubmission`, whose
             // inserted newline would otherwise delete the selected text.
@@ -903,9 +939,19 @@ impl Editor {
             Action::ClearInput => unreachable!("clear input is handled before borrowing the field"),
             Action::ScrollFeedUp => self.scroll_offset = self.scroll_offset.saturating_add(1),
             Action::ScrollFeedDown => self.scroll_offset = self.scroll_offset.saturating_sub(1),
-            Action::OpenCommands => self.open_commands(),
-            Action::OpenSettings => self.open_settings(),
+            Action::OpenCommands => self.toggle_picker(PickerMode::Commands, Self::open_commands),
             Action::ToggleHighlightDebug => unreachable!("debug toggles before input handling"),
+            Action::Quit
+            | Action::OpenSettings
+            | Action::OpenStyle
+            | Action::OpenKeymaps
+            | Action::ClearFeed
+            | Action::OpenCode
+            | Action::NewWorkspace
+            | Action::OpenOutput
+            | Action::OpenSyntaxTree
+            | Action::Restart
+            | Action::ClosePane => unreachable!("commands run before input handling"),
         }
         self.refresh_status_line();
         EditorAction::Continue
@@ -918,6 +964,24 @@ impl Editor {
             picker: commands::picker(&commands, &self.keymap, self.split),
         }];
         self.refresh_status_line();
+    }
+
+    fn toggle_picker(&mut self, mode: PickerMode, open: impl FnOnce(&mut Self)) {
+        if !self.close_if_open(mode) {
+            open(self);
+        }
+    }
+
+    fn close_if_open(&mut self, mode: PickerMode) -> bool {
+        let open = self
+            .pickers
+            .iter()
+            .any(|controller| controller.mode == mode);
+        if open {
+            self.pickers.clear();
+            self.refresh_status_line();
+        }
+        open
     }
 
     fn open_filtered_commands(&mut self) {
@@ -987,27 +1051,15 @@ impl Editor {
     }
 
     fn settings_picker(&self) -> Picker {
-        Picker::new(
-            "settings",
-            self.shell_items(),
-            PickerStatus::new("settings ", "↑↓ select · ←→ adjust · enter open · esc back"),
-        )
+        Picker::new("settings", self.shell_items())
     }
 
     fn style_picker(&self) -> Picker {
-        Picker::new(
-            "style",
-            Self::appearance_items(self.appearance),
-            PickerStatus::new("style ", "↑↓ select · ←→ cycle · esc back"),
-        )
+        Picker::new("style", Self::appearance_items(self.appearance))
     }
 
     fn keymaps_picker(&self) -> Picker {
-        Picker::new(
-            "keymaps",
-            self.keymap_items(),
-            PickerStatus::new("keymaps ", "↑↓ select · press a modified key · esc back"),
-        )
+        Picker::new("keymaps", self.keymap_items())
     }
 
     fn shell_items(&self) -> PickerItems {
@@ -1054,11 +1106,32 @@ impl Editor {
     }
 
     fn handle_picker_key(&mut self, key: KeyEvent) -> EditorAction {
-        if self.handle_debug_key(key) {
+        let remapping = matches!(
+            self.pickers.last().map(|controller| controller.mode),
+            Some(PickerMode::Keymaps)
+        );
+        if remapping && self.keymap.action(key) == Some(Action::OpenKeymaps) {
+            self.close_if_open(PickerMode::Keymaps);
             return EditorAction::Continue;
         }
-        if self.keymap.action(key) == Some(Action::Quit) {
-            return EditorAction::Quit;
+        if !remapping {
+            if let Some(action) = self.handle_debug_key(key) {
+                return action;
+            }
+        }
+        if !remapping {
+            match self.keymap.action(key) {
+                Some(Action::OpenCommands) => {
+                    self.toggle_picker(PickerMode::Commands, Self::open_commands);
+                    return EditorAction::Continue;
+                }
+                Some(action) => {
+                    if let Some(command) = commands::shortcut(action) {
+                        return command.run(self, OpenTarget::Current);
+                    }
+                }
+                None => {}
+            }
         }
         let controller = self.pickers.last_mut().unwrap();
         let mut events = Vec::new();
@@ -1142,6 +1215,9 @@ impl Editor {
     }
 
     fn open_settings_from_commands(&mut self) {
+        if self.close_if_open(PickerMode::Settings) {
+            return;
+        }
         if matches!(
             self.pickers.last().map(|controller| controller.mode),
             Some(PickerMode::FilteredCommands)
@@ -1156,6 +1232,9 @@ impl Editor {
     }
 
     fn open_style_from_commands(&mut self) {
+        if self.close_if_open(PickerMode::Style) {
+            return;
+        }
         if matches!(
             self.pickers.last().map(|controller| controller.mode),
             Some(PickerMode::FilteredCommands)
@@ -1166,6 +1245,9 @@ impl Editor {
     }
 
     fn open_keymaps_from_commands(&mut self) {
+        if self.close_if_open(PickerMode::Keymaps) {
+            return;
+        }
         if matches!(
             self.pickers.last().map(|controller| controller.mode),
             Some(PickerMode::FilteredCommands)
@@ -1175,15 +1257,6 @@ impl Editor {
         self.pickers.push(PickerController {
             mode: PickerMode::Keymaps,
             picker: self.keymaps_picker(),
-        });
-        self.refresh_status_line();
-    }
-
-    fn open_settings(&mut self) {
-        self.pickers.clear();
-        self.pickers.push(PickerController {
-            mode: PickerMode::Settings,
-            picker: self.settings_picker(),
         });
         self.refresh_status_line();
     }
@@ -1267,14 +1340,12 @@ impl Editor {
         self.groups = appearance.groups();
     }
 
-    fn handle_debug_key(&mut self, key: KeyEvent) -> bool {
+    fn handle_debug_key(&mut self, key: KeyEvent) -> Option<EditorAction> {
         if self.keymap.action(key) == Some(Action::ToggleHighlightDebug) {
-            self.toggle_highlight_debug();
-            return true;
+            return Some(self.toggle_highlight_debug());
         }
         if self.highlight_debug && key.code == KeyCode::Esc {
-            self.highlight_debug = false;
-            return true;
+            return Some(self.toggle_highlight_debug());
         }
         if self.highlight_debug {
             match key.code {
@@ -1290,16 +1361,46 @@ impl Editor {
                 KeyCode::PageDown => {
                     self.highlight_debug_scroll = self.highlight_debug_scroll.saturating_add(10)
                 }
-                _ => return false,
+                _ => return None,
             }
-            return true;
+            return Some(EditorAction::Continue);
         }
-        false
+        None
     }
 
-    fn toggle_highlight_debug(&mut self) {
+    fn toggle_highlight_debug(&mut self) -> EditorAction {
         self.highlight_debug = !self.highlight_debug;
         self.highlight_debug_scroll = 0;
+        self.scroll_offset = 0;
+        if self.highlight_debug {
+            EditorAction::Post(DEBUG_POST)
+        } else {
+            EditorAction::Continue
+        }
+    }
+
+    fn highlight_debug_entries(&self) -> Vec<(String, ratatui::style::Style)> {
+        let heading = self
+            .groups
+            .prompt()
+            .add_modifier(ratatui::style::Modifier::BOLD);
+        let mut entries = vec![("palette".into(), heading)];
+        entries.extend(
+            self.appearance
+                .variant()
+                .palette()
+                .colors()
+                .into_iter()
+                .map(|(name, color)| (name.into(), ratatui::style::Style::new().fg(color))),
+        );
+        entries.push(("highlight groups".into(), heading));
+        entries.extend(
+            self.groups
+                .highlight_groups()
+                .into_iter()
+                .map(|(name, style)| (name.into(), style)),
+        );
+        entries
     }
 
     fn draw_highlight_debug(&mut self, frame: &mut Frame) {
@@ -1307,26 +1408,7 @@ impl Editor {
         if !self.highlight_debug || available.width < 4 || available.height < 3 {
             return;
         }
-        let mut entries = vec![("palette".to_string(), self.groups.prompt().bold())];
-        entries.extend(
-            self.appearance
-                .variant()
-                .native_colors()
-                .iter()
-                .map(|color| {
-                    (
-                        color.name.to_string(),
-                        ratatui::style::Style::new().fg(color.color),
-                    )
-                }),
-        );
-        entries.push(("highlight groups".to_string(), self.groups.prompt().bold()));
-        entries.extend(
-            self.groups
-                .highlight_groups()
-                .into_iter()
-                .map(|(name, style)| (name.to_string(), style)),
-        );
+        let entries = self.highlight_debug_entries();
         let title = format!(
             " {} {} · debug ",
             self.appearance.scheme().label(),
@@ -1377,6 +1459,9 @@ impl Editor {
     }
 
     fn refresh_status_line(&mut self) {
+        if !self.pickers.is_empty() {
+            return;
+        }
         let commands_key = self
             .keymap
             .key_for(Action::OpenCommands)
@@ -1385,24 +1470,24 @@ impl Editor {
             .keymap
             .key_for(Action::OpenSettings)
             .unwrap_or_default();
-        let event = match self.pickers.last() {
-            None if self.input.text().is_empty() => StatusLineEvent::Show {
+        let event = if self.input.text().is_empty() {
+            StatusLineEvent::Show {
                 alignment: Alignment::Right,
                 spans: vec![
-                    Span::styled(format!("{commands_key} "), self.groups.prompt()),
-                    Span::styled("commands · ", self.groups.muted()),
-                    Span::styled(format!("{settings_key} "), self.groups.prompt()),
-                    Span::styled("settings", self.groups.muted()),
+                    TextSpan::new(format!("{commands_key} "), HLGroup::KeymapHint),
+                    TextSpan::new("commands · ", HLGroup::Muted),
+                    TextSpan::new(format!("{settings_key} "), HLGroup::KeymapHint),
+                    TextSpan::new("settings", HLGroup::Muted),
                 ],
-            },
-            None => StatusLineEvent::Show {
+            }
+        } else {
+            StatusLineEvent::Show {
                 alignment: Alignment::Right,
                 spans: vec![
-                    Span::styled(format!("{settings_key} "), self.groups.prompt()),
-                    Span::styled("settings", self.groups.muted()),
+                    TextSpan::new(format!("{settings_key} "), HLGroup::KeymapHint),
+                    TextSpan::new("settings", HLGroup::Muted),
                 ],
-            },
-            Some(controller) => controller.picker.status_event(&self.groups),
+            }
         };
         self.status_line.handle(event);
     }
@@ -1412,23 +1497,23 @@ impl Editor {
         frame: &mut Frame,
         area: Rect,
         highlighter: &mut dyn Highlighter,
-        next_input_number: u32,
         in_debugger: bool,
     ) {
         self.selection_exclusions.clear();
         let theme = self.groups;
-        let feed_gutter = gutter_width(next_input_number);
-        let input_gutter = prompt_gutter_width();
+        let input_prefix = UI.prompt_width();
         frame.render_widget(Clear, area);
 
         let editor_area = area;
 
-        let input_height = self.input_height(editor_area.width, input_gutter, editor_area.height);
-        let status_height = u16::from(self.settings.statusline != StatusLinePosition::Off);
+        let input_height = self.input_height(editor_area.width, input_prefix, editor_area.height);
+        let status_height = u16::from(
+            self.pickers.is_empty() && self.settings.statusline != StatusLinePosition::Off,
+        );
         let picker_height = self
             .pickers
             .last()
-            .map_or(0, |controller| controller.picker.height());
+            .map_or(0, |controller| controller.picker.height(&theme));
         // A long list must never squeeze the input out of the frame: the cursor
         // would then be placed outside it.
         let picker_height = picker_height.min(
@@ -1464,34 +1549,43 @@ impl Editor {
             } else {
                 (sections[2], sections[3])
             };
-        let animation_frame = (self.animation_started.elapsed().as_millis() / 80) as usize;
-        let context = RenderContext::new(editor_area.width, feed_gutter, &theme)
-            .debugging(in_debugger)
-            .animation_frame(animation_frame);
-        let input_context =
-            RenderContext::new(editor_area.width, input_gutter, &theme).debugging(in_debugger);
+        let context = RenderContext::new(editor_area.width, 0, &theme);
+        let input_context = RenderContext::new(editor_area.width, input_prefix, &theme);
 
         self.feed_area = sections[0];
         self.draw_feed(frame, sections[0], &context);
         if let Some(controller) = self.pickers.last() {
-            controller
-                .picker
-                .render(sections[1], frame.buffer_mut(), &theme);
+            controller.picker.render_styled(
+                &theme,
+                sections[1],
+                frame.buffer_mut(),
+                theme.picker(),
+            );
             self.selection_exclusions.push(sections[1]);
         }
         self.input_area = input_area;
         self.selection_exclusions.push(input_area);
-        self.draw_input(frame, input_area, &input_context, highlighter, self.focused);
+        self.draw_input(
+            frame,
+            input_area,
+            &input_context,
+            highlighter,
+            self.focused,
+            in_debugger,
+        );
         TuiBlock::default()
             .style(theme.transcript())
             .render(status_area, frame.buffer_mut());
         self.status_line.render(
+            &StatusLineContext {
+                idle_left: self
+                    .macaulay_version
+                    .clone()
+                    .map(|version| TextSpan::new(version, HLGroup::Muted)),
+                ..StatusLineContext::new(theme)
+            },
             status_area,
             frame.buffer_mut(),
-            self.macaulay_version
-                .clone()
-                .map(|version| Span::styled(version, theme.muted())),
-            None,
         );
         if status_height > 0 {
             self.selection_exclusions.push(status_area);
@@ -1524,7 +1618,7 @@ impl Editor {
         let picker_height = self
             .pickers
             .last()
-            .map_or(0, |controller| controller.picker.height())
+            .map_or(0, |controller| controller.picker.height(&theme))
             .min(area.height.saturating_sub(1));
         let sections = Layout::vertical([
             Constraint::Min(0),
@@ -1532,9 +1626,7 @@ impl Editor {
             Constraint::Length(area.height.min(1)),
         ])
         .split(area);
-        let gutter = gutter_width(committed.last().map_or(1, |cell| cell.number));
-        let context = RenderContext::new(sections[0].width, gutter, &theme)
-            .animation_frame((self.animation_started.elapsed().as_millis() / 80) as usize);
+        let context = RenderContext::new(sections[0].width, 0, &theme);
         self.feed_area = sections[0];
 
         match view {
@@ -1542,11 +1634,7 @@ impl Editor {
             ViewKind::Code => {
                 let code = (!committed.is_empty()).then(|| {
                     CodeBlock::new(committed.iter().map(|cell| {
-                        Cell::input(
-                            cell.code.clone(),
-                            cell.number,
-                            highlighter.highlight(&cell.code),
-                        )
+                        Cell::resolved(cell.code.clone(), highlighter.highlight(&cell.code))
                     }))
                 });
                 let blocks: Vec<&dyn Block> = code
@@ -1559,6 +1647,7 @@ impl Editor {
                     &context,
                     &blocks,
                     &mut viewport.scroll,
+                    &mut self.selection_exclusions,
                     "no committed code",
                 );
             }
@@ -1568,7 +1657,6 @@ impl Editor {
                     .map(|cell| {
                         Box::new(SyntaxTreeBlock::new(
                             cell.code.clone(),
-                            cell.number,
                             highlighter.highlight(&cell.code),
                             cell.tree.clone(),
                         )) as Box<dyn Block>
@@ -1581,6 +1669,7 @@ impl Editor {
                     &context,
                     &blocks,
                     &mut viewport.scroll,
+                    &mut self.selection_exclusions,
                     "no committed syntax trees",
                 );
             }
@@ -1610,6 +1699,7 @@ impl Editor {
                     &context,
                     &blocks,
                     &mut viewport.scroll,
+                    &mut self.selection_exclusions,
                     "no matching output",
                 );
             }
@@ -1620,17 +1710,26 @@ impl Editor {
             .style(theme.transcript())
             .render(sections[2], frame.buffer_mut());
         let center = (view == ViewKind::SyntaxTree).then(|| {
-            Line::from(Span::styled(
+            vec![TextSpan::new(
                 "Syntax Tree Preview Mode",
-                theme.preview_mode(),
-            ))
+                HLGroup::Documentation,
+            )]
         });
         if let Some(controller) = self.pickers.last() {
-            controller
-                .picker
-                .render(sections[1], frame.buffer_mut(), &theme);
-            self.status_line
-                .render(sections[2], frame.buffer_mut(), None, center);
+            controller.picker.render_styled(
+                &theme,
+                sections[1],
+                frame.buffer_mut(),
+                theme.picker(),
+            );
+            self.status_line.render(
+                &StatusLineContext {
+                    center,
+                    ..StatusLineContext::new(theme)
+                },
+                sections[2],
+                frame.buffer_mut(),
+            );
         } else {
             let title = match view {
                 ViewKind::Shell => unreachable!(),
@@ -1642,34 +1741,34 @@ impl Editor {
             let mut right = Vec::new();
             if view == ViewKind::Output {
                 right.extend([
-                    Span::styled("←", theme.prompt()),
-                    Span::styled(format!(" {} ", viewport.output.label()), theme.muted()),
-                    Span::styled("→", theme.prompt()),
-                    Span::styled(" · ", theme.muted()),
+                    TextSpan::new("←", HLGroup::KeymapHint),
+                    TextSpan::new(format!(" {} ", viewport.output.label()), HLGroup::Muted),
+                    TextSpan::new("→", HLGroup::KeymapHint),
+                    TextSpan::new(" · ", HLGroup::Muted),
                 ]);
             }
             right.extend([
-                Span::styled("ctrl+q ", theme.prompt()),
-                Span::styled(format!("{action} view"), theme.muted()),
+                TextSpan::new("ctrl+q ", HLGroup::KeymapHint),
+                TextSpan::new(format!("{action} view"), HLGroup::Muted),
             ]);
-            self.status_line.render_parts(
-                sections[2],
-                frame.buffer_mut(),
-                title
-                    .map(|title| {
-                        Span::styled(
+            StatusLine::default().render(
+                &StatusLineContext {
+                    idle_left: title.map(|title| {
+                        TextSpan::new(
                             title,
                             if self.focused {
-                                theme.value()
+                                HLGroup::Value
                             } else {
-                                theme.muted()
+                                HLGroup::Muted
                             },
                         )
-                    })
-                    .into_iter()
-                    .collect(),
-                center,
-                right,
+                    }),
+                    center,
+                    right,
+                    ..StatusLineContext::new(theme)
+                },
+                sections[2],
+                frame.buffer_mut(),
             );
         }
         self.draw_highlight_debug(frame);
@@ -1746,14 +1845,14 @@ impl Editor {
     /// The input pane's height: enough for the wrapped source and its margins,
     /// but never more than the configured share of the editor, past which the
     /// input scrolls internally rather than crowding out the feed.
-    fn input_height(&self, width: u16, gutter: u16, editor_height: u16) -> u16 {
-        let rows = self.input.visual_rows(width.saturating_sub(gutter)) as u16;
+    fn input_height(&self, width: u16, prefix: u16, editor_height: u16) -> u16 {
+        let rows = self.input.visual_rows(width.saturating_sub(prefix)) as u16;
         let chrome = 2 + u16::from(self.input.diagnostic().is_some());
         let cap = editor_height
             .saturating_mul(u16::from(self.settings.max_input_height_percent))
             .saturating_div(100)
-            .max(MIN_INPUT_HEIGHT);
-        rows.saturating_add(chrome).clamp(MIN_INPUT_HEIGHT, cap)
+            .max(UI.min_input_height);
+        rows.saturating_add(chrome).clamp(UI.min_input_height, cap)
     }
 
     /// The first visual row to draw, chosen so the cursor keeps `input_scrolloff`
@@ -1771,7 +1870,7 @@ impl Editor {
         self.input_scroll.clamp(lowest, highest).min(last_start)
     }
 
-    fn draw_feed(&mut self, frame: &mut Frame, area: Rect, context: &RenderContext<'_>) -> bool {
+    fn draw_feed(&mut self, frame: &mut Frame, area: Rect, context: &RenderContext) -> bool {
         if area.width == 0 || area.height == 0 {
             self.feed_top = 0;
             return false;
@@ -1823,20 +1922,8 @@ impl Editor {
                 }
             }
         }
-        let visible_bottom = top + usize::from(area.height);
         self.selection_exclusions
-            .extend(feed_exclusions.into_iter().filter_map(|excluded| {
-                let source_start = usize::from(excluded.y).max(top);
-                let source_end = usize::from(excluded.bottom()).min(visible_bottom);
-                (source_start < source_end).then(|| {
-                    Rect::new(
-                        area.x + excluded.x,
-                        area.y + (source_start - top) as u16,
-                        excluded.width.min(area.width.saturating_sub(excluded.x)),
-                        (source_end - source_start) as u16,
-                    )
-                })
-            }));
+            .project(feed_exclusions, area, top);
         total < area.height
     }
 
@@ -1844,14 +1931,17 @@ impl Editor {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        context: &RenderContext<'_>,
+        context: &RenderContext,
         highlighter: &mut dyn Highlighter,
         focused: bool,
+        debugging: bool,
     ) {
         let diagnostic = self.input.diagnostic().map(str::to_string);
         let code = context.groups().code();
-        let text_width = area.width.saturating_sub(context.gutter());
-        let mut rows = self.input.highlighted_lines(context, highlighter);
+        let text_width = area.width.saturating_sub(context.prefix());
+        let mut rows = self
+            .input
+            .highlighted_lines(context, highlighter, debugging);
         if self
             .input
             .text()
@@ -1871,16 +1961,16 @@ impl Editor {
         let (cursor_row, cursor_column) = self.input.visual_cursor(text_width);
         self.input_scroll = self.input_scroll(cursor_row, rows.len(), viewport);
         self.input_text_area = Rect::new(
-            area.x + context.gutter(),
+            area.x + context.prefix(),
             area.y + 1,
             text_width,
             viewport as u16,
         );
 
-        let mut lines = if context.is_debugging() {
+        let mut lines = if debugging {
             let warning = context.groups().warning().bold().patch(code);
             vec![Line::from(vec![
-                gutter_span("", context.gutter(), warning),
+                Prompt::new("", warning).spans(&())[0].clone(),
                 Span::styled("DEBUGGER", warning),
             ])]
         } else {
@@ -1890,7 +1980,7 @@ impl Editor {
         if let Some(message) = diagnostic {
             let error = context.groups().error().patch(code);
             lines.push(Line::from(vec![
-                gutter_span("", context.gutter(), error),
+                Prompt::new("", error).spans(&())[0].clone(),
                 Span::styled(message, error),
             ]));
         }
@@ -1899,7 +1989,7 @@ impl Editor {
 
         if focused {
             frame.set_cursor_position(Position::new(
-                area.x + context.gutter() + cursor_column as u16,
+                area.x + context.prefix() + cursor_column as u16,
                 area.y + 1 + (cursor_row - self.input_scroll) as u16,
             ));
         }
@@ -1909,9 +1999,10 @@ impl Editor {
 fn render_preview_blocks(
     frame: &mut Frame,
     area: Rect,
-    context: &RenderContext<'_>,
+    context: &RenderContext,
     blocks: &[&dyn Block],
     scroll: &mut usize,
+    selection_exclusions: &mut Vec<Rect>,
     empty: &str,
 ) {
     if area.width == 0 || area.height == 0 {
@@ -1933,12 +2024,11 @@ fn render_preview_blocks(
         .style(context.groups().transcript())
         .render(*composition.area(), &mut composition);
     let mut y = 0;
+    let mut exclusions = Vec::new();
     for (block, height) in blocks.iter().zip(heights) {
-        block.render(
-            context,
-            Rect::new(0, y, area.width, height),
-            &mut composition,
-        );
+        let block_area = Rect::new(0, y, area.width, height);
+        block.render(context, block_area, &mut composition);
+        block.selection_exclusions(context, block_area, &mut exclusions);
         y += height;
     }
     let max_scroll = usize::from(total.saturating_sub(area.height));
@@ -1956,6 +2046,7 @@ fn render_preview_blocks(
             }
         }
     }
+    selection_exclusions.project(exclusions, area, *scroll);
 }
 
 fn ordered_screen_positions(
@@ -2007,47 +2098,13 @@ fn mark_selectable_segment(
     else {
         return;
     };
-    let content_start =
-        marker_content_start(symbols, segment_start, segment_end).unwrap_or_else(|| {
-            symbols[segment_start..=last_content]
-                .iter()
-                .position(|symbol| !symbol.trim().is_empty())
-                .map_or(segment_start, |index| segment_start + index)
-        });
+    let content_start = symbols[segment_start..=last_content]
+        .iter()
+        .position(|symbol| !symbol.trim().is_empty())
+        .map_or(segment_start, |index| segment_start + index);
     if content_start <= last_content {
         selectable[content_start..=last_content].fill(true);
     }
-}
-
-fn marker_content_start(
-    symbols: &[String],
-    segment_start: usize,
-    segment_end: usize,
-) -> Option<usize> {
-    let marker_start = segment_start + 2;
-    let marker = symbols.get(marker_start)?.as_str();
-    if !matches!(marker, "i" | "o") {
-        return None;
-    }
-    let mut cursor = marker_start + 1;
-    let digits_start = cursor;
-    while cursor < segment_end
-        && symbols[cursor]
-            .chars()
-            .all(|character| character.is_ascii_digit())
-    {
-        cursor += 1;
-    }
-    if cursor == digits_start {
-        return None;
-    }
-    for _ in 0..2 {
-        if cursor >= segment_end || !symbols[cursor].trim().is_empty() {
-            return None;
-        }
-        cursor += 1;
-    }
-    Some(cursor)
 }
 
 fn is_box_drawing(symbol: &str) -> bool {
@@ -2066,6 +2123,7 @@ fn is_border_title(symbols: &[String], start: usize, end: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::block::CellState;
     use m2_syn::PrettyNode;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -2073,19 +2131,21 @@ mod tests {
     struct EmptyHighlighter;
 
     impl Highlighter for EmptyHighlighter {
-        fn highlight(&mut self, _source: &str) -> Vec<crate::code::highlight::HLSpan> {
+        fn highlight(&mut self, _source: &str) -> Vec<HLSpan> {
             Vec::new()
         }
     }
 
     struct OccupiedFeed;
 
-    impl Block for OccupiedFeed {
-        fn height(&self, _context: &RenderContext<'_>) -> u16 {
+    impl Element for OccupiedFeed {
+        type Context = RenderContext;
+
+        fn height(&self, _context: &RenderContext) -> u16 {
             7
         }
 
-        fn render(&self, _context: &RenderContext<'_>, area: Rect, buf: &mut Buffer) {
+        fn render(&self, _context: &RenderContext, area: Rect, buf: &mut Buffer) {
             Paragraph::new("feed").render(
                 Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
                 buf,
@@ -2093,12 +2153,14 @@ mod tests {
         }
     }
 
+    impl Block for OccupiedFeed {}
+
     fn rendered_buffer(editor: &mut Editor, width: u16, height: u16) -> Buffer {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         let mut highlighter = EmptyHighlighter;
         terminal
-            .draw(|frame| editor.draw(frame, frame.area(), &mut highlighter, 1, false))
+            .draw(|frame| editor.draw(frame, frame.area(), &mut highlighter, false))
             .expect("draw editor");
         terminal.backend().buffer().clone()
     }
@@ -2215,10 +2277,16 @@ mod tests {
         let mut editor = Editor::new("hello".to_string());
         let rows = rendered_editor(&mut editor, 40, 10);
         let row = rows.iter().position(|row| row.contains("hello")).unwrap() as u16;
+        let start = rows[row as usize].find("hello").unwrap() as u16;
 
-        editor.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 6, row));
-        editor.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 10, row));
-        let copied = editor.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 10, row));
+        editor.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), start, row));
+        editor.handle_mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            start + 4,
+            row,
+        ));
+        let copied =
+            editor.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), start + 4, row));
         let EditorAction::Copy(text) = copied else {
             panic!("mouse release did not copy the screen selection");
         };
@@ -2226,13 +2294,28 @@ mod tests {
     }
 
     #[test]
-    fn mouse_selection_skips_output_markers_and_types() {
+    fn restart_completion_preserves_the_unsent_draft() {
         let mut editor = Editor::new(String::new());
-        editor.feed = vec![Box::new(crate::ui::block::OutputBlock {
-            number: Some(1),
-            text: "value".to_string(),
-            ty: Some("ZZ".to_string()),
-        })];
+        editor.paste("draft");
+
+        assert!(matches!(
+            editor.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT)),
+            EditorAction::Restart
+        ));
+        editor.apply(EditorUpdate::Message(Box::new(TextBlock::system(
+            "restarted",
+        ))));
+
+        assert_eq!(editor.input.text(), "draft");
+    }
+
+    #[test]
+    fn mouse_selection_skips_output_types() {
+        let mut editor = Editor::new(String::new());
+        editor.feed = vec![Box::new(crate::ui::block::OutputBlock::value(
+            "value".to_string(),
+            Some("ZZ".to_string()),
+        ))];
         let rows = rendered_editor(&mut editor, 40, 10);
         let row = rows.iter().position(|row| row.contains("value")).unwrap() as u16;
 
@@ -2270,11 +2353,12 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n"),
         );
-        rendered_editor(&mut editor, 40, 10);
+        let rows = rendered_editor(&mut editor, 40, 10);
         let original_top = editor.feed_top;
-        editor.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 6, 1));
-        editor.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 10, 1));
-        editor.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 10, 1));
+        let start = rows[1].find("line").unwrap() as u16;
+        editor.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), start, 1));
+        editor.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), start + 4, 1));
+        editor.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), start + 4, 1));
         let selected_row = editor.screen_selection.as_ref().unwrap().anchor.row;
 
         editor.handle_mouse(wheel(MouseEventKind::ScrollUp, 0));
@@ -2293,12 +2377,14 @@ mod tests {
     }
 
     #[test]
-    fn selectable_cells_exclude_markers_and_box_drawing() {
-        let symbols: Vec<String> = "  o12  value │"
+    fn selectable_cells_exclude_ui_regions_and_box_drawing() {
+        let symbols: Vec<String> = "  UI value │"
             .chars()
             .map(|character| character.to_string())
             .collect();
-        let mask = selectable_columns(&symbols, &vec![true; symbols.len()]);
+        let mut allowed = vec![true; symbols.len()];
+        allowed[2..4].fill(false);
+        let mask = selectable_columns(&symbols, &allowed);
         let selected: String = symbols
             .iter()
             .zip(mask.iter())
@@ -2359,7 +2445,7 @@ mod tests {
         editor.settings.max_input_height_percent = 40;
         assert!(editor.keymap.rebind(Action::ClearInput, rebound));
         editor.apply_appearance(editor.appearance.cycle_colorscheme(1));
-        editor.open_settings();
+        editor.open_settings_from_commands();
 
         press(&mut editor, KeyCode::Down, KeyModifiers::NONE);
         press(&mut editor, KeyCode::Down, KeyModifiers::NONE);
@@ -2416,7 +2502,7 @@ mod tests {
             width: 80,
             value_column: 40,
             selected: false,
-            groups: &groups,
+            groups,
         })
         .into_iter()
         .map(|span| span.content)
@@ -2516,29 +2602,34 @@ mod tests {
     }
 
     #[test]
-    fn keymap_picker_only_remaps_explicit_commands() {
+    fn keymap_picker_remaps_every_exposed_command() {
         let mut editor = Editor::new(String::new());
         let labels: Vec<_> = editor
             .keymap_items()
             .iter()
             .map(|row| item_text(row.as_ref()))
             .collect();
-        assert!(labels[0].contains("clear input text"));
-        assert!(labels[1].contains("copy the selection"));
+        for action in Action::REMAPPABLE {
+            assert!(
+                labels
+                    .iter()
+                    .any(|label| label.contains(action.description())),
+                "missing {}",
+                action.description()
+            );
+        }
 
         open_keymaps(&mut editor);
 
         assert_eq!(
-            editor.pickers.last().unwrap().picker.height(),
+            editor.pickers.last().unwrap().picker.height(&editor.groups),
             Action::REMAPPABLE.len() as u16 + 2
         );
         press(&mut editor, KeyCode::Char('x'), KeyModifiers::CONTROL);
         press(&mut editor, KeyCode::Esc, KeyModifiers::NONE);
         press(&mut editor, KeyCode::Esc, KeyModifiers::NONE);
-        editor.input.field_mut().insert_str("something");
-
         press(&mut editor, KeyCode::Char('x'), KeyModifiers::CONTROL);
-        assert!(editor.input.text().is_empty());
+        assert_eq!(picker_title(&editor), Some("commands"));
     }
 
     // Quitting must not require dismissing a picker first.
@@ -2555,7 +2646,7 @@ mod tests {
     fn typing_closes_settings_and_style_and_reaches_the_input() {
         let mut editor = Editor::new(String::new());
         editor.input.field_mut().insert_char('x');
-        editor.open_settings();
+        editor.open_settings_from_commands();
         press(&mut editor, KeyCode::Char('y'), KeyModifiers::NONE);
         assert!(editor.pickers.is_empty());
         assert_eq!(editor.input.text(), "xy");
@@ -2584,7 +2675,7 @@ mod tests {
         let picker = &editor.pickers.last().unwrap().picker;
         assert_eq!(picker.title(), "commands");
         assert_eq!(picker.len(), 1);
-        assert_eq!(picker.height(), 3);
+        assert_eq!(picker.height(&Groups::default()), UI.picker_min_rows + 2);
         assert_eq!(editor.input.text(), "/set");
 
         press(&mut editor, KeyCode::Enter, KeyModifiers::NONE);
@@ -2613,6 +2704,47 @@ mod tests {
         press(&mut editor, KeyCode::Esc, KeyModifiers::NONE);
         assert!(editor.pickers.is_empty());
         assert_eq!(editor.input.text(), "abc");
+    }
+
+    #[test]
+    fn opener_shortcuts_toggle_and_switch_pickers() {
+        let mut editor = Editor::new(String::new());
+        let commands = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL);
+        let settings = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL);
+
+        editor.handle_key(commands);
+        assert_eq!(picker_title(&editor), Some("commands"));
+        editor.handle_key(commands);
+        assert!(editor.pickers.is_empty());
+
+        editor.handle_key(settings);
+        assert_eq!(picker_title(&editor), Some("settings"));
+        editor.handle_key(commands);
+        assert_eq!(picker_title(&editor), Some("commands"));
+        editor.handle_key(commands);
+        assert!(editor.pickers.is_empty());
+
+        editor.handle_key(settings);
+        editor.handle_key(settings);
+        assert!(editor.pickers.is_empty());
+    }
+
+    #[test]
+    fn command_keymaps_run_callbacks_and_toggle_their_pickers() {
+        let mut editor = Editor::new(String::new());
+
+        let action = editor.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT));
+        assert!(matches!(
+            action,
+            EditorAction::Open(ViewKind::Code, OpenTarget::Current)
+        ));
+
+        for (key, title) in [('s', "style"), ('k', "keymaps")] {
+            press(&mut editor, KeyCode::Char(key), KeyModifiers::ALT);
+            assert_eq!(picker_title(&editor), Some(title));
+            press(&mut editor, KeyCode::Char(key), KeyModifiers::ALT);
+            assert!(editor.pickers.is_empty());
+        }
     }
 
     #[test]
@@ -2670,19 +2802,28 @@ mod tests {
     }
 
     #[test]
-    fn debug_command_opens_the_overlay_and_enters_history() {
+    fn debug_command_posts_through_the_session_and_enters_history() {
         let mut editor = Editor::new(String::new());
         editor.input = InputCode::new_in_memory();
+        let ordinary = editor.feed.len();
 
         for character in "/de".chars() {
             press(&mut editor, KeyCode::Char(character), KeyModifiers::NONE);
         }
-        press(&mut editor, KeyCode::Enter, KeyModifiers::NONE);
+        let action = editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(editor.highlight_debug);
         assert!(editor.pickers.is_empty());
+        assert!(matches!(action, EditorAction::Post(DEBUG_POST)));
+
+        editor.post(EditorUpdate::Pending {
+            id: 7,
+            cells: [(DEBUG_POST.to_string(), Vec::new())].into(),
+        });
+        assert_eq!(editor.feed.len(), ordinary + 1);
 
         press(&mut editor, KeyCode::Esc, KeyModifiers::NONE);
         assert!(!editor.highlight_debug);
+        assert_eq!(editor.feed.len(), ordinary + 1);
         press(&mut editor, KeyCode::Up, KeyModifiers::NONE);
         assert_eq!(editor.input.text(), "/debug");
     }
@@ -2718,7 +2859,7 @@ mod tests {
     }
 
     #[test]
-    fn command_shortcuts_are_aligned_at_the_right_edge() {
+    fn command_shortcuts_stay_aligned_beside_their_labels() {
         let mut editor = Editor::new(String::new());
         press(&mut editor, KeyCode::Char('/'), KeyModifiers::NONE);
 
@@ -2734,7 +2875,9 @@ mod tests {
 
         assert!(!settings.contains("configure spectral-m2"));
         assert!(!quit.contains("leave spectral-m2"));
-        assert_eq!(settings.find("ctrl+o"), quit.find("ctrl+c"));
+        let column = settings.find("ctrl+o").unwrap();
+        assert_eq!(Some(column), quit.find("ctrl+c"));
+        assert!(column < 30, "shortcut drifted across the row: {settings}");
     }
 
     #[test]
@@ -2758,7 +2901,7 @@ mod tests {
     #[test]
     fn settings_has_no_tabs_and_style_has_its_own_title() {
         let mut editor = Editor::new(String::new());
-        editor.open_settings();
+        editor.open_settings_from_commands();
 
         let rows = rendered_editor(&mut editor, 70, 12);
         let screen = rows.join("\n");
@@ -2827,37 +2970,49 @@ mod tests {
     }
 
     #[test]
-    fn highlight_debug_lists_ui_and_code_groups_at_the_lower_right() {
+    fn highlight_debug_lists_every_native_color_and_highlight_group() {
         let mut editor = Editor::new(String::new());
         press(&mut editor, KeyCode::Char('d'), KeyModifiers::CONTROL);
 
         let rows = rendered_editor(&mut editor, 120, 120);
         let screen = rows.join("\n");
         let title_row = rows.iter().position(|row| row.contains("debug")).unwrap();
+        assert!(screen.contains("palette"));
         assert!(screen.contains("bg_dim"));
-        assert!(screen.contains("ui.transcript"));
-        assert!(screen.contains("m2.PunctuationDelimiter"));
+        assert!(screen.contains("statusline3"));
+        assert!(screen.contains("highlight groups"));
+        assert!(screen.contains("BgCode"));
+        assert!(screen.contains("Normal"));
+        assert!(screen.contains("Delimiter"));
+        let entries = editor.highlight_debug_entries();
+        assert_eq!(
+            entries.len(),
+            editor.appearance.variant().palette().colors().len()
+                + editor.groups.highlight_groups().len()
+                + 2
+        );
+        for (name, color) in editor.appearance.variant().palette().colors() {
+            let (_, style) = entries
+                .iter()
+                .find(|(entry, _)| entry == name)
+                .unwrap_or_else(|| panic!("native color {name} did not reach the TUI"));
+            assert_eq!(style.fg, Some(color), "{name}");
+        }
         assert!(title_row > 0);
         assert!(rows[title_row].ends_with('┐'));
         assert_eq!(
-            rows.iter().find_map(|row| row.find("bg_dim")).unwrap(),
-            rows.iter()
-                .find_map(|row| row.find("ui.transcript"))
-                .unwrap(),
+            rows.iter().find_map(|row| row.find("BgCode")).unwrap(),
+            rows.iter().find_map(|row| row.find("Normal")).unwrap(),
         );
         assert_eq!(
-            rows.iter()
-                .find_map(|row| row.find("ui.transcript"))
-                .unwrap(),
-            rows.iter()
-                .find_map(|row| row.find("m2.PunctuationDelimiter"))
-                .unwrap()
+            rows.iter().find_map(|row| row.find("Normal")).unwrap(),
+            rows.iter().find_map(|row| row.find("Delimiter")).unwrap()
         );
 
         press(&mut editor, KeyCode::Esc, KeyModifiers::NONE);
         assert!(!rendered_editor(&mut editor, 120, 120)
             .join("\n")
-            .contains("ui.transcript"));
+            .contains("Normal"));
     }
 
     #[test]
@@ -2868,7 +3023,7 @@ mod tests {
         let mut highlighter = EmptyHighlighter;
 
         terminal
-            .draw(|frame| editor.draw(frame, frame.area(), &mut highlighter, 1, false))
+            .draw(|frame| editor.draw(frame, frame.area(), &mut highlighter, false))
             .expect("draw editor");
 
         let margin = &terminal.backend().buffer()[(0, editor.input_area.y)];
@@ -2928,34 +3083,28 @@ mod tests {
     }
 
     #[test]
-    fn statusline_keymaps_use_accent_only_for_keys() {
+    fn pickers_hide_the_statusline_tutorial() {
         let mut editor = Editor::new(String::new());
-        editor.open_settings();
+        editor.open_settings_from_commands();
         let backend = TestBackend::new(70, 12);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut highlighter = EmptyHighlighter;
         terminal
-            .draw(|frame| editor.draw(frame, frame.area(), &mut highlighter, 1, false))
+            .draw(|frame| editor.draw(frame, frame.area(), &mut highlighter, false))
             .unwrap();
-        let buffer = terminal.backend().buffer();
-        let y = buffer.area().bottom() - 1;
-        let row: String = (0..buffer.area().width)
-            .map(|x| buffer[(x, y)].symbol())
-            .collect();
-        let column = |text| {
-            let byte = row.find(text).unwrap_or_else(|| panic!("{row:?}"));
-            row[..byte].chars().count() as u16
-        };
-        let key = column("enter");
-        let description = column("open");
-
-        assert_eq!(buffer[(key, y)].fg, editor.groups.prompt().fg.unwrap());
-        assert_eq!(
-            buffer[(description, y)].fg,
-            editor.groups.muted().fg.unwrap()
-        );
-        assert!(row.starts_with("  "));
-        assert!(row.ends_with("  "));
+        let screen =
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .fold(String::new(), |mut screen, cell| {
+                    screen.push_str(cell.symbol());
+                    screen
+                });
+        assert!(!screen.contains("select"));
+        assert!(!screen.contains("enter open"));
+        assert!(!screen.contains("esc back"));
     }
 
     #[test]
@@ -3008,6 +3157,7 @@ mod tests {
         editor.input.field_mut().insert_str("UNCOMMITTED_DRAFT");
         let committed = [CommittedCell {
             number: 3,
+            state: CellState::Value,
             code: "committedCode = 1".to_string(),
             tree: PrettyNode::syntax("CommittedTree", None),
         }];
@@ -3030,6 +3180,7 @@ mod tests {
         let mut editor = Editor::new(String::new());
         let committed = [CommittedCell {
             number: 1,
+            state: CellState::Value,
             code: "x".to_string(),
             tree: PrettyNode::syntax("Symbol", None),
         }];
@@ -3073,6 +3224,7 @@ mod tests {
         let committed: Vec<_> = (1..=8)
             .map(|number| CommittedCell {
                 number,
+                state: CellState::Value,
                 code: format!("CELL_{number}"),
                 tree: PrettyNode::syntax(format!("TREE_{number}"), None),
             })
@@ -3091,6 +3243,7 @@ mod tests {
     fn syntax_preview_selects_code_and_tree_text() {
         let committed = [CommittedCell {
             number: 3,
+            state: CellState::Value,
             code: "CODE_TEXT".to_string(),
             tree: PrettyNode::syntax("TREE_TEXT", None),
         }];
@@ -3118,20 +3271,63 @@ mod tests {
     }
 
     #[test]
+    fn preview_selection_copies_code_and_output_without_chrome() {
+        let select = |editor: &mut Editor, row| {
+            editor.handle_preview_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0, row));
+            editor.handle_preview_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 69, row));
+            let EditorAction::Copy(text) =
+                editor.handle_preview_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 69, row))
+            else {
+                panic!("preview selection was not copied");
+            };
+            text
+        };
+        let committed = [CommittedCell {
+            number: 12,
+            state: CellState::Value,
+            code: "CODE_TEXT".to_string(),
+            tree: PrettyNode::syntax("tree", None),
+        }];
+        let mut editor = Editor::new(String::new());
+        let rows = rendered_preview(
+            &mut editor,
+            &committed,
+            ViewKind::Code,
+            &mut Viewport::default(),
+        );
+        let row = rows
+            .iter()
+            .position(|line| line.contains("CODE_TEXT"))
+            .unwrap() as u16;
+        assert_eq!(select(&mut editor, row), "CODE_TEXT");
+
+        editor.feed = vec![Box::new(crate::ui::block::OutputBlock::value(
+            "VALUE_TEXT".to_string(),
+            None,
+        ))];
+        let mut viewport = Viewport::default();
+        viewport.cycle_output(-1);
+        let rows = rendered_preview(&mut editor, &[], ViewKind::Output, &mut viewport);
+        let row = rows
+            .iter()
+            .position(|line| line.contains("VALUE_TEXT"))
+            .unwrap() as u16;
+        assert_eq!(select(&mut editor, row), "VALUE_TEXT");
+    }
+
+    #[test]
     fn output_preview_cycles_the_three_structured_filters() {
         use crate::ui::block::{OutputBlock, SubmissionBlock};
 
         let mut submission = SubmissionBlock::new(0, [("x".to_string(), Vec::new())]);
         submission.succeed(
             0,
-            1,
             vec![
                 Box::new(TextBlock::printed("PRINTED_ONLY")),
-                Box::new(OutputBlock {
-                    number: Some(1),
-                    text: "VALUE_ONLY".to_string(),
-                    ty: Some("TYPE_ONLY".to_string()),
-                }),
+                Box::new(OutputBlock::value(
+                    "VALUE_ONLY".to_string(),
+                    Some("TYPE_ONLY".to_string()),
+                )),
             ],
         );
         let mut editor = Editor::new(String::new());

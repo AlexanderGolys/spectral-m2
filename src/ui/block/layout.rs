@@ -5,17 +5,27 @@ use std::ops::Range;
 
 /// A strategy for projecting one logical line into byte ranges for visual rows.
 pub trait WrapPolicy {
-    fn wrap_logical_line(line: &str, width: u16) -> Vec<VisualLine>;
+    fn wrap_logical_line(&self, line: &str, width: u16, offset: usize) -> Vec<VisualLine>;
+
+    fn wrap(&self, text: &str, width: u16) -> Vec<VisualLine> {
+        let mut lines = Vec::new();
+        let mut offset = 0;
+        for logical in text.split('\n') {
+            lines.extend(self.wrap_logical_line(logical, width, offset));
+            offset += logical.len() + 1;
+        }
+        lines
+    }
 }
 
 /// Text that can be projected into visual rows by an associated wrapping policy.
 pub trait TextLayout {
-    type Wrapping: WrapPolicy;
+    type Wrapping: Default + WrapPolicy;
 
     fn text(&self) -> &str;
 
     fn lines(&self, width: u16) -> Vec<VisualLine> {
-        wrap::<Self::Wrapping>(self.text(), width)
+        Self::Wrapping::default().wrap(self.text(), width)
     }
 }
 
@@ -25,10 +35,17 @@ pub struct VisualLine {
     pub hard_continuation: bool,
 }
 
-/// Corresponding byte ranges in the source and wrapped text.
+impl VisualLine {
+    fn shifted(mut self, offset: usize) -> Self {
+        self.range = offset + self.range.start..offset + self.range.end;
+        self
+    }
+}
+
+/// Source range and continuation state behind one wrapped row.
 struct Projection {
     source: Range<usize>,
-    wrapped: Range<usize>,
+    hard_continuation: bool,
 }
 
 /// Contiguous display text produced by wrapping, together with enough mapping
@@ -36,43 +53,33 @@ struct Projection {
 pub struct WrappedText {
     text: String,
     projections: Vec<Projection>,
-    hard_continuations: Vec<usize>,
 }
 
 impl WrappedText {
     /// Wrap ordinary text using word-like boundaries.
     pub fn word(source: &str, width: u16) -> Self {
-        Self::from_lines(source, wrap::<WordWrap>(source, width))
+        Self::from_lines(source, WordWrap.wrap(source, width))
     }
 
-    /// Wrap code at whitespace and syntax-token boundaries.
-    pub fn code(source: &str, width: u16, token_ends: &[usize]) -> Self {
-        Self::from_lines(source, wrap_at_tokens(source, width, token_ends))
+    /// Wrap code at whitespace and parsed span boundaries.
+    pub fn code(source: &str, width: u16, spans: &[Range<usize>]) -> Self {
+        Self::from_lines(source, SpanWrap(spans).wrap(source, width))
     }
 
     fn from_lines(source: &str, lines: Vec<VisualLine>) -> Self {
         let mut text = String::new();
         let mut projections = Vec::with_capacity(lines.len());
-        let mut hard_continuations = Vec::new();
         for (index, line) in lines.into_iter().enumerate() {
             if index > 0 {
                 text.push('\n');
             }
-            let start = text.len();
-            if line.hard_continuation {
-                hard_continuations.push(start);
-            }
             text.push_str(&source[line.range.clone()]);
             projections.push(Projection {
                 source: line.range,
-                wrapped: start..text.len(),
+                hard_continuation: line.hard_continuation,
             });
         }
-        Self {
-            text,
-            projections,
-            hard_continuations,
-        }
+        Self { text, projections }
     }
 
     /// Return the complete wrapped text, with visual rows separated by newlines.
@@ -85,40 +92,29 @@ impl WrappedText {
         self.text.matches('\n').count() as u16 + 1
     }
 
-    /// Return wrapped byte offsets whose rows continue a hard-split token.
-    pub fn hard_continuations(&self) -> impl Iterator<Item = usize> + '_ {
-        self.hard_continuations.iter().copied()
-    }
-
-    /// Relocate one source byte range, splitting it when wrapping split its text.
-    pub fn relocate(&self, range: &Range<usize>) -> Vec<Range<usize>> {
+    /// Return the source byte range behind each visual row.
+    pub fn source_lines(&self) -> impl Iterator<Item = (&Range<usize>, bool)> {
         self.projections
             .iter()
-            .filter_map(|projection| {
-                let start = range.start.max(projection.source.start);
-                let end = range.end.min(projection.source.end);
-                (start < end).then(|| {
-                    projection.wrapped.start + start - projection.source.start
-                        ..projection.wrapped.start + end - projection.source.start
-                })
-            })
-            .collect()
+            .map(|projection| (&projection.source, projection.hard_continuation))
     }
 }
 
 /// Break logical lines at exactly the available width, mid-token if necessary.
 /// Code has no reliable word boundaries to break on and the caller needs the
 /// cursor to map onto a predictable column, so every row but the last is full.
+#[derive(Default)]
 pub struct HardWrap;
 
 impl WrapPolicy for HardWrap {
-    fn wrap_logical_line(line: &str, width: u16) -> Vec<VisualLine> {
+    fn wrap_logical_line(&self, line: &str, width: u16, offset: usize) -> Vec<VisualLine> {
         let width = width as usize;
         if width == 0 || line.is_empty() {
             return iter::once(VisualLine {
                 range: 0..line.len(),
                 hard_continuation: false,
             })
+            .map(|line| line.shifted(offset))
             .collect();
         }
         let mut rows = Vec::new();
@@ -150,21 +146,23 @@ impl WrapPolicy for HardWrap {
                 hard_continuation: true,
             });
         }
-        rows
+        rows.into_iter().map(|line| line.shifted(offset)).collect()
     }
 }
 
 /// Soft-wrap logical lines at word-like boundaries.
-pub struct WordWrap;
+#[derive(Default)]
+struct WordWrap;
 
 impl WrapPolicy for WordWrap {
-    fn wrap_logical_line(line: &str, width: u16) -> Vec<VisualLine> {
+    fn wrap_logical_line(&self, line: &str, width: u16, offset: usize) -> Vec<VisualLine> {
         let width = width as usize;
         if width == 0 || line.is_empty() {
             return iter::once(VisualLine {
                 range: 0..line.len(),
                 hard_continuation: false,
             })
+            .map(|line| line.shifted(offset))
             .collect();
         }
 
@@ -204,36 +202,22 @@ impl WrapPolicy for WordWrap {
             start = next;
             hard_continuation = hard_break;
         }
-        rows
+        rows.into_iter().map(|line| line.shifted(offset)).collect()
     }
 }
 
-/// Project a source string into visual rows with the selected policy.
-pub fn wrap<Policy: WrapPolicy>(text: &str, width: u16) -> Vec<VisualLine> {
-    let mut lines = Vec::new();
-    let mut logical_start = 0;
-    for logical in text.split('\n') {
-        lines.extend(
-            Policy::wrap_logical_line(logical, width)
-                .into_iter()
-                .map(|line| VisualLine {
-                    range: logical_start + line.range.start..logical_start + line.range.end,
-                    hard_continuation: line.hard_continuation,
-                }),
-        );
-        logical_start += logical.len() + 1;
-    }
-    lines
-}
+/// Parsed-span wrapping that never guesses syntax boundaries.
+struct SpanWrap<'a>(pub &'a [Range<usize>]);
 
-/// Wrap code at whitespace or highlighted token boundaries, falling back to a
-/// character boundary when one token is wider than the available row.
-pub fn wrap_at_tokens(text: &str, width: u16, token_ends: &[usize]) -> Vec<VisualLine> {
-    let width = width as usize;
-    let mut lines = Vec::new();
-    let mut logical_start = 0;
-
-    for logical in text.split('\n') {
+impl WrapPolicy for SpanWrap<'_> {
+    fn wrap_logical_line(
+        &self,
+        logical: &str,
+        width: u16,
+        logical_start: usize,
+    ) -> Vec<VisualLine> {
+        let width = width as usize;
+        let mut lines = Vec::new();
         let characters: Vec<(usize, char)> = logical.char_indices().collect();
         let byte_at = |index: usize| {
             characters
@@ -248,8 +232,7 @@ pub fn wrap_at_tokens(text: &str, width: u16, token_ends: &[usize]) -> Vec<Visua
                 range: logical_start..logical_start + logical.len(),
                 hard_continuation: false,
             });
-            logical_start += logical.len() + 1;
-            continue;
+            return lines;
         }
 
         while characters.len() - start > width {
@@ -269,10 +252,12 @@ pub fn wrap_at_tokens(text: &str, width: u16, token_ends: &[usize]) -> Vec<Visua
 
             let start_byte = logical_start + byte_at(start);
             let limit_byte = logical_start + byte_at(limit);
-            if let Some(&end) = token_ends
+            if let Some(end) = self
+                .0
                 .iter()
                 .rev()
-                .find(|&&end| start_byte < end && end <= limit_byte)
+                .map(|span| span.end)
+                .find(|&end| start_byte < end && end <= limit_byte)
             {
                 lines.push(VisualLine {
                     range: start_byte..end,
@@ -295,10 +280,8 @@ pub fn wrap_at_tokens(text: &str, width: u16, token_ends: &[usize]) -> Vec<Visua
             range: logical_start + byte_at(start)..logical_start + logical.len(),
             hard_continuation,
         });
-        logical_start += logical.len() + 1;
+        lines
     }
-
-    lines
 }
 
 fn is_word_character(character: char) -> bool {
@@ -311,12 +294,12 @@ mod tests {
 
     #[test]
     fn token_wrapping_prefers_whitespace_then_token_boundaries() {
-        let whitespace = wrap_at_tokens("aa bbbb", 4, &[2, 7]);
+        let whitespace = SpanWrap(&[0..2, 3..7]).wrap("aa bbbb", 4);
         assert_eq!(whitespace[0].range, 0..2);
         assert_eq!(whitespace[1].range, 3..7);
         assert!(!whitespace[1].hard_continuation);
 
-        let tokens = wrap_at_tokens("abc+def", 5, &[3, 4, 7]);
+        let tokens = SpanWrap(&[0..3, 3..4, 4..7]).wrap("abc+def", 5);
         assert_eq!(tokens[0].range, 0..4);
         assert_eq!(tokens[1].range, 4..7);
         assert!(!tokens[1].hard_continuation);
@@ -324,7 +307,8 @@ mod tests {
 
     #[test]
     fn a_single_long_token_marks_its_continuation() {
-        let lines = wrap_at_tokens("abcdefgh", 4, &[8]);
+        let span = 0..8;
+        let lines = SpanWrap(std::slice::from_ref(&span)).wrap("abcdefgh", 4);
         assert_eq!(lines[0].range, 0..4);
         assert!(!lines[0].hard_continuation);
         assert_eq!(lines[1].range, 4..8);
@@ -336,6 +320,12 @@ mod tests {
         let wrapped = WrappedText::word("abcdefgh", 4);
 
         assert_eq!(wrapped.text(), "abcd\nefgh");
-        assert_eq!(wrapped.hard_continuations().collect::<Vec<_>>(), [5]);
+        assert_eq!(
+            wrapped
+                .source_lines()
+                .filter_map(|(range, hard)| hard.then_some(range.start))
+                .collect::<Vec<_>>(),
+            [4]
+        );
     }
 }

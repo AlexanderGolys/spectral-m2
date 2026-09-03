@@ -1,13 +1,10 @@
-//! User-adjustable presentation settings and their controls.
+//! User-adjustable presentation settings.
 //!
 //! Values the user is expected to tune live here rather than as constants, so a
 //! settings picker has one place to read and write and the defaults stay visible.
 
-mod keymap;
-mod theme;
-
-pub use keymap::{Action, Keymap};
-pub use theme::{Appearance, Groups};
+pub mod keymap;
+pub mod theme;
 
 /// Presentation choices shared by the editor and its renderers.
 #[derive(Clone, Copy, Debug)]

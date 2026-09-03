@@ -1,9 +1,8 @@
-//! The live input model.
+//! Live input model.
 //!
 //! - [`InputTextField`] — raw code, a char-boundary cursor, and submission history.
 //! - [`InputCode`] — the field and its transient presentation state.
 
-mod hints;
 mod history;
 
 use std::iter;
@@ -12,11 +11,11 @@ use std::ops::Range;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use self::hints::get_hint;
 use self::history::{History, HistoryBuffer};
 use crate::code::highlight::Highlighter;
-use crate::ui::block::layout::{wrap, HardWrap, TextLayout};
-use crate::ui::block::render::{apply_spans, gutter_span, RenderContext};
+use crate::ui::block::layout::{HardWrap, TextLayout, WrapPolicy};
+use crate::ui::block::render::{Highlights, Prompt, RenderContext};
+use crate::ui::element::{SpanText, Text};
 
 /// The glyph marking the live prompt line.
 const PROMPT_GLYPH: &str = "❯";
@@ -41,18 +40,18 @@ impl InputTextField {
         }
     }
 
-    fn text(&self) -> &str {
+    pub fn text(&self) -> &str {
         &self.text
     }
 
     /// The cursor's byte offset into the source.
-    pub fn cursor(&self) -> usize {
+    fn cursor(&self) -> usize {
         self.cursor
     }
 
     /// The selected byte range, ordered, when a selection is active and not
     /// empty.
-    pub fn selection(&self) -> Option<Range<usize>> {
+    fn selection(&self) -> Option<Range<usize>> {
         let anchor = self.anchor?;
         let (start, end) = (anchor.min(self.cursor), anchor.max(self.cursor));
         (start < end).then_some(start..end)
@@ -145,7 +144,7 @@ impl InputTextField {
         self.cursor += s.len();
     }
 
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
         self.anchor = None;
@@ -235,7 +234,7 @@ impl InputTextField {
     }
 
     #[cfg(test)]
-    pub fn cursor_line_col(&self) -> (usize, usize) {
+    fn cursor_line_col(&self) -> (usize, usize) {
         // `str::lines()` drops a trailing newline, so a cursor sitting just past one
         // would report the previous row. Count newlines directly, and take the column
         // from the text after the last one (the whole prefix when there is none).
@@ -338,7 +337,6 @@ impl InputTextField {
 /// The live source field and its transient presentation state.
 pub struct InputCode {
     field: InputTextField,
-    hint: &'static str,
     diagnostic: Option<String>,
     diagnostic_range: Option<Range<usize>>,
 }
@@ -347,7 +345,6 @@ impl InputCode {
     pub fn new() -> Self {
         Self {
             field: InputTextField::new(),
-            hint: get_hint(),
             diagnostic: None,
             diagnostic_range: None,
         }
@@ -363,7 +360,6 @@ impl InputCode {
 
     pub fn accept_submission(&mut self) {
         self.field.accept_submission();
-        self.hint = get_hint();
         self.diagnostic = None;
         self.diagnostic_range = None;
     }
@@ -388,10 +384,9 @@ impl InputCode {
     }
 
     #[cfg(test)]
-    pub(crate) fn new_in_memory() -> Self {
+    pub fn new_in_memory() -> Self {
         Self {
             field: InputTextField::new_in_memory(),
-            hint: get_hint(),
             diagnostic: None,
             diagnostic_range: None,
         }
@@ -405,8 +400,9 @@ impl InputCode {
     /// Render the live source with fresh syntax highlighting.
     pub fn highlighted_lines(
         &self,
-        context: &RenderContext<'_>,
+        context: &RenderContext,
         highlighter: &mut dyn Highlighter,
+        debugging: bool,
     ) -> Vec<Line<'static>> {
         let highlights = highlighter.highlight(self.text());
         let selection = self.field.selection();
@@ -414,13 +410,14 @@ impl InputCode {
         let base = theme.code();
         // In the debugger the prompt changes colour, so a nested M2 interpreter is
         // never mistaken for the ordinary one.
-        let prompt = if context.is_debugging() {
+        let prompt = if debugging {
             theme.warning().patch(base)
         } else {
             theme.prompt().patch(base)
         };
         let text = self.text();
-        let visual_lines = self.lines(context.width().saturating_sub(context.gutter()));
+        let painted = highlights.paint(0, text, base, theme);
+        let visual_lines = self.lines(context.width().saturating_sub(context.prefix()));
 
         let mut lines = Vec::new();
         for (index, visual_line) in visual_lines.iter().enumerate() {
@@ -429,29 +426,20 @@ impl InputCode {
             } else {
                 ""
             };
-            let mut spans = vec![gutter_span(marker, context.gutter(), prompt)];
-            let line = &text[visual_line.range.clone()];
-            let mut painted = apply_spans(visual_line.range.start, line, &highlights, base, theme);
+            let mut spans = Prompt::new(marker, prompt).spans(&());
+            let mut line = painted.slice(&visual_line.range);
             if let Some(diagnostic) = self.diagnostic_range.as_ref() {
-                painted = apply_selection(
-                    painted,
+                line = apply_selection(
+                    line,
                     visual_line.range.start,
                     diagnostic,
                     theme.diagnostic(),
                 );
             }
             if let Some(selection) = selection.as_ref() {
-                painted = apply_selection(
-                    painted,
-                    visual_line.range.start,
-                    selection,
-                    theme.selection(),
-                );
+                line = apply_selection(line, visual_line.range.start, selection, theme.selection());
             }
-            spans.extend(painted);
-            if index == 0 && text.is_empty() {
-                spans.push(Span::styled(format!(" {}", self.hint), theme.muted()));
-            }
+            spans.extend(line);
             lines.push(Line::from(spans));
         }
         lines
@@ -512,7 +500,7 @@ impl InputCode {
     pub fn visual_cursor(&self, width: u16) -> (usize, usize) {
         let text = self.text();
         let cursor = self.field.cursor();
-        let rows = wrap::<HardWrap>(text, width);
+        let rows = HardWrap.wrap(text, width);
         let row = rows
             .iter()
             .rposition(|row| row.range.start <= cursor)
@@ -527,7 +515,7 @@ impl InputCode {
     }
 
     pub fn cursor_at_visual(&self, width: u16, row: usize, column: usize) -> usize {
-        let rows = wrap::<HardWrap>(self.text(), width);
+        let rows = HardWrap.wrap(self.text(), width);
         let line = &rows[row.min(rows.len().saturating_sub(1))];
         self.text()[line.range.clone()]
             .char_indices()
@@ -540,8 +528,8 @@ impl InputCode {
 mod tests {
     use super::*;
     use crate::code::highlight::SyntaxHighlighter;
-    use crate::ui::block::render::{gutter_width, prompt_gutter_width};
-    use crate::ui::Groups;
+    use crate::ui::config::UI;
+    use crate::ui::controller::settings::theme::groups::Groups;
     use ratatui::style::Modifier;
 
     #[test]
@@ -671,10 +659,10 @@ mod tests {
         let mut input = InputCode::new_in_memory();
         input.field_mut().insert_str("first\nsecond\nthird");
         let theme = Groups::default();
-        let context = RenderContext::new(40, gutter_width(9), &theme);
+        let context = RenderContext::new(40, UI.prompt_width(), &theme);
         let mut highlighter = SyntaxHighlighter::new();
 
-        let lines = input.highlighted_lines(&context, &mut highlighter);
+        let lines = input.highlighted_lines(&context, &mut highlighter, false);
         assert_eq!(lines.len(), 3);
         assert!(!lines[0].spans[0].content.contains(PROMPT_GLYPH));
         assert!(!lines[1].spans[0].content.contains(PROMPT_GLYPH));
@@ -682,23 +670,19 @@ mod tests {
     }
 
     #[test]
-    fn empty_input_leaves_two_cells_after_the_prompt_and_one_before_the_hint() {
+    fn empty_input_contains_only_the_prompt() {
         let input = InputCode::new_in_memory();
         let theme = Groups::default();
-        let context = RenderContext::new(40, prompt_gutter_width(), &theme);
+        let context = RenderContext::new(40, UI.prompt_width(), &theme);
         let mut highlighter = SyntaxHighlighter::new();
 
-        let rendered: String = input.highlighted_lines(&context, &mut highlighter)[0]
+        let rendered: String = input.highlighted_lines(&context, &mut highlighter, false)[0]
             .spans
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
 
-        assert!(rendered.starts_with("  ❯   "));
-        let hint_column = rendered[..rendered.find(input.hint).expect("hint")]
-            .chars()
-            .count();
-        assert_eq!(hint_column, 6);
+        assert_eq!(rendered, "  ❯  ");
     }
 
     #[test]
@@ -706,7 +690,7 @@ mod tests {
         struct EmptyHighlighter;
 
         impl Highlighter for EmptyHighlighter {
-            fn highlight(&mut self, _source: &str) -> Vec<crate::code::highlight::HLSpan> {
+            fn highlight(&mut self, _source: &str) -> Vec<crate::ui::element::HLSpan> {
                 Vec::new()
             }
         }
@@ -715,8 +699,8 @@ mod tests {
         input.field_mut().insert_str("abc");
         input.set_diagnostic("bad b".to_string(), Some(1..2));
         let theme = Groups::default();
-        let context = RenderContext::new(40, prompt_gutter_width(), &theme);
-        let lines = input.highlighted_lines(&context, &mut EmptyHighlighter);
+        let context = RenderContext::new(40, UI.prompt_width(), &theme);
+        let lines = input.highlighted_lines(&context, &mut EmptyHighlighter, false);
         let text = &lines[0].spans[1..];
 
         assert_eq!(text[0].content, "a");

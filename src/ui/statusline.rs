@@ -2,23 +2,24 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
-const MARGIN: u16 = 2;
+use super::config::UI;
+use super::controller::settings::theme::groups::Groups;
+use super::element::{Element, Text, TextSpan};
 
 /// A request to replace or clear the status line.
 pub enum StatusLineEvent {
     Show {
         alignment: Alignment,
-        spans: Vec<Span<'static>>,
+        spans: Vec<TextSpan>,
     },
 }
 
 /// One aligned status message supplied by a UI controller.
 struct StatusMessage {
     alignment: Alignment,
-    spans: Vec<Span<'static>>,
+    spans: Vec<TextSpan>,
 }
 
 /// The current status message and its left, centered, and right composition.
@@ -27,70 +28,69 @@ pub struct StatusLine {
     message: Option<StatusMessage>,
 }
 
+/// Content supplied while the status line is rendered.
+pub struct StatusLineContext {
+    pub groups: Groups,
+    pub idle_left: Option<TextSpan>,
+    pub center: Option<Vec<TextSpan>>,
+    pub right: Vec<TextSpan>,
+}
+
+impl StatusLineContext {
+    pub fn new(groups: Groups) -> Self {
+        Self {
+            groups,
+            idle_left: None,
+            center: None,
+            right: Vec::new(),
+        }
+    }
+}
+
 impl StatusLine {
     pub fn handle(&mut self, event: StatusLineEvent) {
         self.message = match event {
             StatusLineEvent::Show { alignment, spans } => Some(StatusMessage { alignment, spans }),
         };
     }
+}
 
-    pub fn render(
-        &self,
-        area: Rect,
-        buf: &mut Buffer,
-        idle_left: Option<Span<'static>>,
-        center: Option<Line<'static>>,
-    ) {
-        let Some(message) = &self.message else {
-            self.render_parts(
-                area,
-                buf,
-                idle_left.into_iter().collect(),
-                center,
-                Vec::new(),
-            );
-            return;
+impl Element for StatusLine {
+    type Context = StatusLineContext;
+
+    fn render(&self, context: &StatusLineContext, area: Rect, buf: &mut Buffer) {
+        let (left, center, right) = match &self.message {
+            None => (
+                context.idle_left.clone().into_iter().collect(),
+                context.center.clone(),
+                context.right.clone(),
+            ),
+            Some(message) => match message.alignment {
+                Alignment::Left => (message.spans.clone(), context.center.clone(), Vec::new()),
+                Alignment::Center => (
+                    context.idle_left.clone().into_iter().collect(),
+                    Some(message.spans.clone()),
+                    Vec::new(),
+                ),
+                Alignment::Right => (
+                    context.idle_left.clone().into_iter().collect(),
+                    context.center.clone(),
+                    message.spans.clone(),
+                ),
+            },
         };
-        match message.alignment {
-            Alignment::Left => {
-                self.render_parts(area, buf, message.spans.clone(), center, Vec::new())
-            }
-            Alignment::Center => self.render_parts(
-                area,
-                buf,
-                idle_left.into_iter().collect(),
-                Some(Line::from(message.spans.clone())),
-                Vec::new(),
-            ),
-            Alignment::Right => self.render_parts(
-                area,
-                buf,
-                idle_left.into_iter().collect(),
-                center,
-                message.spans.clone(),
-            ),
-        }
-    }
-
-    pub fn render_parts(
-        &self,
-        area: Rect,
-        buf: &mut Buffer,
-        left: Vec<Span<'static>>,
-        center: Option<Line<'static>>,
-        right: Vec<Span<'static>>,
-    ) {
         let area = Rect::new(
-            area.x.saturating_add(MARGIN),
+            area.x.saturating_add(UI.statusline_margin),
             area.y,
-            area.width.saturating_sub(2 * MARGIN),
+            area.width.saturating_sub(2 * UI.statusline_margin),
             area.height,
         );
         if area.width == 0 {
             return;
         }
-        let left = Line::from(left);
-        let right = Line::from(right);
+        let left = left.line(&context.groups);
+        let center = center.map(|spans| spans.line(&context.groups));
+        let right = right.line(&context.groups);
         let width = usize::from(area.width);
         let center_range = center.as_ref().map(|line| {
             let start = width.saturating_sub(line.width()) / 2;

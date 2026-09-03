@@ -42,7 +42,7 @@ Run the current checkout without installing it:
 cargo run --release
 ```
 
-Type `/` for the filtered command picker, `Ctrl+/` for all commands, or `Ctrl+O` for settings. Splittable commands accept `Ctrl+Enter` to open in a second pane.
+Type `/` for the filtered command picker, `Ctrl+/` for all commands, or `Ctrl+O` for settings. On a splittable command, `Alt+V` opens an alternative pane without replacing that command's own keymap.
 
 ## Documentation
 

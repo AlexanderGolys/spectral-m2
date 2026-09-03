@@ -6,7 +6,7 @@ Previews contain committed cells only. They update from the workspace they refer
 
 ## Code
 
-`/code` combines committed input into one syntax-highlighted view while preserving each `iN` cell number. Pending and rejected input is not included.
+`/code` combines committed input into one syntax-highlighted view. Pending and rejected input is not included.
 
 ```m2
 R = ZZ/101[x, y, z]
@@ -26,7 +26,7 @@ The active projection is shown in the status line. Previewing does not change or
 
 ## Syntax tree
 
-`/syntax tree` renders the `m2-syn` pretty tree for every committed cell and opens at the newest tree. Each section has a centered `iN` separator, highlighted source, and its structural tree.
+`/syntax tree` renders the `m2-syn` pretty tree for every committed cell and opens at the newest tree. Each section has a centered cell-number separator, highlighted source, and its structural tree.
 
 The presentation keeps semantic structure compact:
 

@@ -15,11 +15,11 @@ f = x -> (
     x^2 + 1)
 ```
 
-Use `Shift+Enter` or `Alt+Enter` when you want a newline regardless of completeness.
+Use `Shift+Space`, `Shift+Enter`, or `Alt+Enter` when you want a newline regardless of completeness.
 
 ## Pending and completed cells
 
-Submitted code moves into the feed immediately. The cell being evaluated has a spinner; later cells in the same submission are shown as queued. As Macaulay2 answers, Spectral replaces those markers in place with `iN` numbers and appends printed text, values, types, warnings, or errors.
+Submitted code moves into the feed immediately. As Macaulay2 answers, Spectral appends printed text, values, types, warnings, or errors; consecutive values share one border. Cell numbers remain session metadata but are not displayed until cells become focusable.
 
 Only one submission can evaluate in a workspace at a time. Trying to submit another while it is busy produces an input diagnostic and does not disturb the running evaluation.
 

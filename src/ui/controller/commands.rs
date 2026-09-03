@@ -1,12 +1,11 @@
 //! Commands exposed by the `/` picker and process-ending input handled locally.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 
-use super::picker::{
-    value_spans, Line, LineContext, Picker, PickerItem, PickerStatus, TextComponent,
-};
-use super::settings::{Action, Keymap};
+use super::picker::{Line, LineContext, Picker, PickerItem};
+use super::settings::keymap::{Action, Keymap};
 use super::{Editor, EditorAction, EditorEvent, OpenTarget, ViewKind};
+use crate::ui::element::Text;
 
 /// A bare input that must be handled without sending it through the M2 socket.
 pub enum SubmittedCommand {
@@ -32,7 +31,7 @@ type CommandCallback = fn(&mut Editor, OpenTarget) -> EditorAction;
 #[derive(Clone, Copy)]
 pub struct Command {
     label: &'static str,
-    shortcut: Option<Action>,
+    shortcut: Action,
     splittable: bool,
     callback: CommandCallback,
 }
@@ -40,7 +39,7 @@ pub struct Command {
 impl Command {
     const fn new(
         label: &'static str,
-        shortcut: Option<Action>,
+        shortcut: Action,
         splittable: bool,
         callback: CommandCallback,
     ) -> Self {
@@ -61,16 +60,17 @@ impl Command {
     }
 
     fn item(self, keymap: &Keymap, split: bool) -> Box<dyn PickerItem> {
+        let can_split = self.splittable && !split;
+        let mut hint = keymap
+            .key_for(self.shortcut)
+            .unwrap_or_else(|| "unbound".to_string());
+        if can_split {
+            hint.push_str(" · alt+v alternative view");
+        }
         Box::new(CommandItem {
             command: self,
-            hint: if self.splittable && !split {
-                "ctrl+enter open in split view".to_string()
-            } else {
-                self.shortcut
-                    .and_then(|action| keymap.key_for(action))
-                    .unwrap_or_default()
-            },
-            can_split: self.splittable && !split,
+            hint,
+            can_split,
         })
     }
 
@@ -90,44 +90,49 @@ struct CommandItem {
     can_split: bool,
 }
 
-impl TextComponent for CommandItem {
-    fn spans(&self, context: &LineContext<'_>) -> Vec<ratatui::text::Span<'static>> {
-        value_spans(self.command.label, &self.hint, true, context)
+impl Text for CommandItem {
+    type Context = LineContext;
+
+    fn spans(&self, context: &LineContext) -> Vec<ratatui::text::Span<'static>> {
+        context.value(self.command.label, &self.hint, false)
     }
 }
 
-impl Line for CommandItem {}
+impl Line for CommandItem {
+    fn alignment_width(&self) -> Option<usize> {
+        Some(self.command.label.len())
+    }
+}
 
 impl PickerItem for CommandItem {
     fn handle_key(&mut self, key: KeyEvent) -> Option<EditorEvent> {
-        if key.code != KeyCode::Enter {
-            return None;
-        }
-        let target = if key.modifiers.contains(KeyModifiers::CONTROL) && self.can_split {
-            OpenTarget::Split
-        } else if key.modifiers.contains(KeyModifiers::CONTROL) {
-            return None;
-        } else {
-            OpenTarget::Current
-        };
+        let target = OpenTarget::from_key(key, self.can_split)?;
         Some(EditorEvent::RunCommand(self.command, target))
     }
 }
 
 const COMMANDS: [Command; 11] = [
-    Command::new("settings", Some(Action::OpenSettings), false, open_settings),
-    Command::new("style", None, false, style),
-    Command::new("keymaps", None, false, open_keymaps),
-    Command::new("clear", None, false, clear),
-    Command::new("code", None, true, code),
-    Command::new("new", None, true, new),
-    Command::new("output", None, true, output),
-    Command::new("syntax tree", None, true, syntax_tree),
-    Command::new("restart", None, false, restart),
-    Command::new("quit", Some(Action::Quit), false, quit),
-    Command::new("debug", Some(Action::ToggleHighlightDebug), false, debug),
+    Command::new("settings", Action::OpenSettings, false, open_settings),
+    Command::new("style", Action::OpenStyle, false, style),
+    Command::new("keymaps", Action::OpenKeymaps, false, open_keymaps),
+    Command::new("clear", Action::ClearFeed, false, clear),
+    Command::new("code", Action::OpenCode, true, code),
+    Command::new("new", Action::NewWorkspace, true, new),
+    Command::new("output", Action::OpenOutput, true, output),
+    Command::new("syntax tree", Action::OpenSyntaxTree, true, syntax_tree),
+    Command::new("restart", Action::Restart, false, restart),
+    Command::new("quit", Action::Quit, false, quit),
+    Command::new("debug", Action::ToggleHighlightDebug, false, debug),
 ];
-const CLOSE: Command = Command::new("close focused window", None, false, close);
+const CLOSE: Command = Command::new("close focused window", Action::ClosePane, false, close);
+
+pub fn shortcut(action: Action) -> Option<Command> {
+    COMMANDS
+        .iter()
+        .chain([&CLOSE])
+        .find(|command| command.shortcut == action)
+        .copied()
+}
 
 pub fn matching(query: &str, split: bool) -> Vec<Command> {
     let query = query.to_lowercase();
@@ -147,12 +152,7 @@ pub fn exact(input: &str, split: bool) -> Option<Command> {
         .find(|command| command.label == label.trim())
 }
 
-fn picker_with_status(
-    commands: &[Command],
-    keymap: &Keymap,
-    split: bool,
-    status: PickerStatus,
-) -> Picker {
+fn command_picker(commands: &[Command], keymap: &Keymap, split: bool) -> Picker {
     Picker::new(
         "commands",
         commands
@@ -160,26 +160,15 @@ fn picker_with_status(
             .copied()
             .map(|command| command.item(keymap, split))
             .collect(),
-        status,
     )
 }
 
 pub fn filtered_picker(commands: &[Command], keymap: &Keymap, split: bool) -> Picker {
-    picker_with_status(
-        commands,
-        keymap,
-        split,
-        PickerStatus::new("/ ", "type to filter · ↑↓ select · enter run · esc close"),
-    )
+    command_picker(commands, keymap, split)
 }
 
 pub fn picker(commands: &[Command], keymap: &Keymap, split: bool) -> Picker {
-    picker_with_status(
-        commands,
-        keymap,
-        split,
-        PickerStatus::new("commands ", "↑↓ select · enter run · esc close"),
-    )
+    command_picker(commands, keymap, split)
 }
 
 fn open_settings(editor: &mut Editor, _: OpenTarget) -> EditorAction {
@@ -204,8 +193,7 @@ fn clear(editor: &mut Editor, _: OpenTarget) -> EditorAction {
 
 fn debug(editor: &mut Editor, _: OpenTarget) -> EditorAction {
     editor.finish_command();
-    editor.toggle_highlight_debug();
-    EditorAction::Continue
+    editor.toggle_highlight_debug()
 }
 
 fn open(editor: &mut Editor, target: OpenTarget, view: ViewKind) -> EditorAction {
@@ -248,6 +236,8 @@ fn quit(editor: &mut Editor, _: OpenTarget) -> EditorAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::controller::settings::theme::groups::Groups;
+    use crossterm::event::{KeyCode, KeyModifiers};
 
     #[test]
     fn bare_process_commands_are_intercepted() {
@@ -289,21 +279,53 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_enter_requests_a_split_only_for_splittable_unsplit_items() {
+    fn every_command_has_a_resolvable_keymap() {
+        let keymap = Keymap::default();
+
+        for command in matching("", true) {
+            let action = command.shortcut;
+            assert!(keymap.key_for(action).is_some(), "{}", command.label);
+            assert_eq!(shortcut(action).unwrap().label, command.label);
+        }
+    }
+
+    #[test]
+    fn command_metadata_stays_beside_its_label() {
+        let item = matching("code", false)[0].item(&Keymap::default(), false);
+        let text = item
+            .spans(&LineContext {
+                width: 200,
+                value_column: 12,
+                selected: false,
+                groups: Groups::default(),
+            })
+            .into_iter()
+            .map(|span| span.content)
+            .collect::<String>();
+
+        assert_eq!(text.find("alt+c"), Some(15));
+        assert!(text.contains("alt+c · alt+v alternative view"));
+    }
+
+    #[test]
+    fn alt_v_requests_an_alternative_view_only_for_splittable_unsplit_items() {
         let keymap = Keymap::default();
         let code = matching("code", false)[0];
         let mut item = code.item(&keymap, false);
         assert!(matches!(
-            item.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)),
+            item.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT)),
             Some(EditorEvent::RunCommand(_, OpenTarget::Split))
         ));
 
         let mut item = code.item(&keymap, true);
         assert!(item
-            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL))
+            .handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT))
             .is_none());
         let settings = matching("settings", false)[0];
         let mut item = settings.item(&keymap, false);
+        assert!(item
+            .handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT))
+            .is_none());
         assert!(item
             .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL))
             .is_none());

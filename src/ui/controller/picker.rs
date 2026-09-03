@@ -6,30 +6,65 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line as TuiLine, Span};
 use ratatui::widgets::{Block as TuiBlock, BorderType, Borders, Paragraph, Widget};
 
-use super::settings::Groups;
+use super::settings::theme::groups::Groups;
 use super::EditorEvent;
-use crate::ui::statusline::StatusLineEvent;
-
-const TAB_WIDTH: usize = 4;
-
-/// Text that generates styled spans within local rendering coordinates.
-pub trait TextComponent {
-    fn spans(&self, context: &LineContext<'_>) -> Vec<Span<'static>>;
-}
+use crate::ui::config::UI;
+use crate::ui::element::{Element, Text};
 
 /// A single unwrapped text component.
-pub trait Line: TextComponent {
+pub trait Line: Text<Context = LineContext> {
     fn alignment_width(&self) -> Option<usize> {
         None
     }
 }
 
 /// Local layout and selection state supplied while a picker line renders.
-pub struct LineContext<'a> {
+pub struct LineContext {
     pub width: usize,
     pub value_column: usize,
     pub selected: bool,
-    pub groups: &'a Groups,
+    pub groups: Groups,
+}
+
+impl LineContext {
+    /// Finish spans with the selected or ordinary full-row background.
+    pub fn finish(&self, mut spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+        let used = spans.iter().map(Span::width).sum::<usize>();
+        spans.push(Span::raw(" ".repeat(self.width.saturating_sub(used))));
+        let background = self.groups.picker();
+        for span in &mut spans {
+            span.style = background.patch(span.style);
+            if self.selected {
+                span.style = span.style.patch(self.groups.picker_selected());
+            }
+        }
+        spans
+    }
+
+    /// Generate the shared label/value presentation for one picker row.
+    pub fn value(&self, label: &str, value: &str, trailing: bool) -> Vec<Span<'static>> {
+        let marker = if self.selected { " > " } else { "   " };
+        let label = format!("{marker}{label}");
+        let gap = if trailing {
+            self.width
+                .saturating_sub(label.chars().count() + value.chars().count())
+        } else {
+            self.value_column
+                .saturating_sub(label.chars().count() - marker.len())
+        };
+        self.finish(vec![
+            Span::styled(
+                label,
+                if self.selected {
+                    self.groups.prompt()
+                } else {
+                    self.groups.muted()
+                },
+            ),
+            Span::raw(" ".repeat(gap)),
+            Span::styled(value.to_string(), self.groups.value()),
+        ])
+    }
 }
 
 /// A line that owns its behavior and may request an editor state change.
@@ -40,110 +75,19 @@ pub trait PickerItem: Line {
 /// Heterogeneous picker rows in display order.
 pub type PickerItems = Vec<Box<dyn PickerItem>>;
 
-/// Finish an item's spans with its selected or ordinary full-row background.
-pub fn finish_spans(
-    mut spans: Vec<Span<'static>>,
-    context: &LineContext<'_>,
-) -> Vec<Span<'static>> {
-    let used = spans.iter().map(Span::width).sum::<usize>();
-    spans.push(Span::raw(" ".repeat(context.width.saturating_sub(used))));
-    let background = if context.selected {
-        context.groups.picker_selected()
-    } else {
-        context.groups.picker()
-    };
-    for span in &mut spans {
-        span.style = background.patch(span.style);
-    }
-    spans
-}
-
-/// Generate the shared label/value presentation used by ordinary setting rows.
-pub fn value_spans(
-    label: &str,
-    value: &str,
-    trailing: bool,
-    context: &LineContext<'_>,
-) -> Vec<Span<'static>> {
-    let marker = if context.selected { " > " } else { "   " };
-    let label = format!("{marker}{label}");
-    let gap = if trailing {
-        context
-            .width
-            .saturating_sub(label.chars().count() + value.chars().count())
-    } else {
-        context
-            .value_column
-            .saturating_sub(label.chars().count() - marker.len())
-    };
-    finish_spans(
-        vec![
-            Span::styled(
-                label,
-                if context.selected {
-                    context.groups.prompt()
-                } else {
-                    context.groups.muted()
-                },
-            ),
-            Span::raw(" ".repeat(gap)),
-            Span::styled(value.to_string(), context.groups.value()),
-        ],
-        context,
-    )
-}
-
-/// Status text associated with a picker.
-pub struct PickerStatus {
-    label: &'static str,
-    message: &'static str,
-}
-
-impl PickerStatus {
-    pub const fn new(label: &'static str, message: &'static str) -> Self {
-        Self { label, message }
-    }
-
-    fn event(&self, groups: &Groups) -> StatusLineEvent {
-        fn keymap_spans(text: &'static str, groups: &Groups) -> Vec<ratatui::text::Span<'static>> {
-            text.split_inclusive(' ')
-                .map(|part| {
-                    let style =
-                        if matches!(part.trim(), "/" | "↑↓" | "←→" | "enter" | "esc" | "tab")
-                        {
-                            groups.prompt()
-                        } else {
-                            groups.muted()
-                        };
-                    ratatui::text::Span::styled(part, style)
-                })
-                .collect()
-        }
-
-        let mut spans = keymap_spans(self.label, groups);
-        spans.extend(keymap_spans(self.message, groups));
-        StatusLineEvent::Show {
-            alignment: Alignment::Left,
-            spans,
-        }
-    }
-}
-
 /// Presentation and selection state for a list of picker items.
 pub struct Picker {
     title: &'static str,
     items: PickerItems,
     selected: usize,
-    status: PickerStatus,
 }
 
 impl Picker {
-    pub fn new(title: &'static str, items: PickerItems, status: PickerStatus) -> Self {
+    pub fn new(title: &'static str, items: PickerItems) -> Self {
         let mut picker = Self {
             title,
             items,
             selected: 0,
-            status,
         };
         picker.select(0);
         picker
@@ -189,48 +133,56 @@ impl Picker {
         }
     }
 
-    pub fn status_event(&self, groups: &Groups) -> StatusLineEvent {
-        self.status.event(groups)
-    }
-
-    pub fn height(&self) -> u16 {
-        self.items.len() as u16 + 2
-    }
-
-    fn text(&self, width: usize, groups: &Groups) -> Vec<TuiLine<'static>> {
+    fn text(&self, width: usize, height: usize, groups: &Groups) -> Vec<TuiLine<'static>> {
         let label_width = self
             .items
             .iter()
             .filter_map(|item| item.alignment_width())
             .max()
             .unwrap_or_default();
-        let value_column = label_width / TAB_WIDTH * TAB_WIDTH + TAB_WIDTH;
+        let value_column =
+            label_width / UI.picker_tab_width * UI.picker_tab_width + UI.picker_tab_width;
+        let start = self
+            .selected
+            .saturating_sub(height / 2)
+            .min(self.items.len().saturating_sub(height));
         self.items
             .iter()
             .enumerate()
+            .skip(start)
+            .take(height)
             .map(|(index, item)| {
                 TuiLine::from(item.spans(&LineContext {
                     width,
                     value_column,
                     selected: index == self.selected,
-                    groups,
+                    groups: *groups,
                 }))
             })
             .collect()
     }
+}
 
-    pub fn render(&self, area: Rect, buf: &mut Buffer, groups: &Groups) {
+impl Element for Picker {
+    type Context = Groups;
+
+    fn height(&self, _groups: &Groups) -> u16 {
+        (self.items.len() as u16).max(UI.picker_min_rows) + 2
+    }
+
+    fn render(&self, groups: &Groups, area: Rect, buf: &mut Buffer) {
         let title = TuiLine::from(Span::styled(format!(" {} ", self.title), groups.prompt()));
         let block = TuiBlock::default()
+            .style(groups.picker())
             .borders(Borders::TOP | Borders::BOTTOM)
             .border_type(BorderType::Rounded)
             .border_style(groups.border())
-            .style(groups.picker())
             .title(title)
             .title_alignment(Alignment::Center);
         let inner = block.inner(area);
         block.render(area, buf);
-        Paragraph::new(self.text(usize::from(inner.width), groups)).render(inner, buf);
+        Paragraph::new(self.text(usize::from(inner.width), usize::from(inner.height), groups))
+            .render(inner, buf);
     }
 }
 
@@ -246,9 +198,11 @@ mod tests {
         trailing: bool,
     }
 
-    impl TextComponent for TestItem {
-        fn spans(&self, context: &LineContext<'_>) -> Vec<Span<'static>> {
-            value_spans(self.label, self.value, self.trailing, context)
+    impl Text for TestItem {
+        type Context = LineContext;
+
+        fn spans(&self, context: &LineContext) -> Vec<Span<'static>> {
+            context.value(self.label, self.value, self.trailing)
         }
     }
 
@@ -277,12 +231,17 @@ mod tests {
     }
 
     fn picker(items: PickerItems) -> Picker {
-        Picker::new("test", items, PickerStatus::new("test ", "help"))
+        Picker::new("test", items)
     }
 
     fn rendered(picker: &Picker, width: u16) -> Buffer {
-        let mut buffer = Buffer::empty(Rect::new(0, 0, width, picker.height()));
-        picker.render(*buffer.area(), &mut buffer, &Groups::default());
+        let groups = Groups::default();
+        rendered_in(picker, width, picker.height(&groups), &groups)
+    }
+
+    fn rendered_in(picker: &Picker, width: u16, height: u16, groups: &Groups) -> Buffer {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, width, height));
+        picker.render(groups, *buffer.area(), &mut buffer);
         buffer
     }
 
@@ -304,6 +263,20 @@ mod tests {
         assert_eq!(picker.selected(), 1);
         picker.move_selection(1);
         assert_eq!(picker.selected(), 0);
+    }
+
+    #[test]
+    fn constrained_picker_scrolls_to_its_selected_row() {
+        let mut picker = picker(vec![
+            item("one", ""),
+            item("two", ""),
+            item("three", ""),
+            item("four", ""),
+        ]);
+        picker.select(3);
+
+        let buffer = rendered_in(&picker, 32, 4, &Groups::default());
+        assert!(row(&buffer, 2).contains("> four"));
     }
 
     #[test]
@@ -343,7 +316,9 @@ mod tests {
         assert_eq!(buffer[(0, 1)].symbol(), " ");
         assert_eq!(buffer[(1, 1)].symbol(), ">");
         assert_eq!(buffer[(16, 1)].bg, groups.picker_selected().bg.unwrap());
+        assert_eq!(buffer[(16, 1)].fg, groups.picker_selected().fg.unwrap());
         assert_eq!(buffer[(16, 2)].bg, groups.picker().bg.unwrap());
         assert_ne!(groups.picker().bg, groups.code().bg);
+        assert_eq!(buffer.area().height, UI.picker_min_rows + 2);
     }
 }

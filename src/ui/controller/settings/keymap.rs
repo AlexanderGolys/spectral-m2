@@ -5,70 +5,69 @@
 //! the bindings picker. Nothing reads a raw [`KeyCode`] outside this module.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use these_macros_should_be_illegal::discriminated_str;
 
-/// A command the editor can perform. Actions are what keys mean, so rebinding is
-/// a change to the table rather than to the dispatcher.
+use crate::ui::controller::{icons::Icon, OpenTarget};
+/// A finite keymap target. Real commands keep their callbacks and properties in
+/// [`Command`](crate::ui::controller::commands::Command); input actions stay here.
+#[discriminated_str(description)]
+#[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Action {
-    Quit,
-    Submit,
-    InsertNewline,
-    ScrollFeedUp,
-    ScrollFeedDown,
-    OpenCommands,
-    OpenSettings,
-    ToggleHighlightDebug,
-    MoveLeft,
-    MoveRight,
-    MoveUp,
-    MoveDown,
-    MoveLineStart,
-    MoveLineEnd,
-    SelectLeft,
-    SelectRight,
-    SelectLineStart,
-    SelectLineEnd,
-    CopySelection,
-    ClearInput,
-    DeleteBack,
-    DeleteForward,
-    InsertTab,
+    Quit = "quit spectral-m2",
+    Submit = "evaluate the input",
+    InsertNewline = "insert a line break",
+    ScrollFeedUp = "scroll the feed up",
+    ScrollFeedDown = "scroll the feed down",
+    OpenCommands = "open commands",
+    OpenSettings = "open settings",
+    OpenStyle = "open style",
+    OpenKeymaps = "open keymaps",
+    ClearFeed = "clear the feed",
+    OpenCode = "open code",
+    NewWorkspace = "open a new workspace",
+    OpenOutput = "open output",
+    OpenSyntaxTree = "open syntax tree",
+    Restart = "restart Macaulay2",
+    ClosePane = "close the focused pane",
+    ToggleHighlightDebug = "toggle highlight groups",
+    MoveLeft = "move left",
+    MoveRight = "move right",
+    MoveUp = "move up, or recall older input",
+    MoveDown = "move down, or recall newer input",
+    MoveLineStart = "move to line start",
+    MoveLineEnd = "move to line end",
+    SelectLeft = "extend selection left",
+    SelectRight = "extend selection right",
+    SelectLineStart = "extend selection to line start",
+    SelectLineEnd = "extend selection to line end",
+    CopySelection = "copy the selection",
+    ClearInput = "clear input text",
+    DeleteBack = "delete before the cursor",
+    DeleteForward = "delete under the cursor",
+    InsertTab = "insert a tab",
 }
 
 impl Action {
-    /// What this action does, for the bindings picker.
-    pub const fn description(&self) -> &'static str {
-        use Action::*;
-        match self {
-            Quit => "quit spectral-m2",
-            Submit => "evaluate the input",
-            InsertNewline => "insert a line break",
-            ScrollFeedUp => "scroll the feed up",
-            ScrollFeedDown => "scroll the feed down",
-            OpenCommands => "open commands",
-            OpenSettings => "open settings",
-            ToggleHighlightDebug => "toggle highlight groups",
-            MoveLeft => "move left",
-            MoveRight => "move right",
-            MoveUp => "move up, or recall older input",
-            MoveDown => "move down, or recall newer input",
-            MoveLineStart => "move to line start",
-            MoveLineEnd => "move to line end",
-            SelectLeft => "extend selection left",
-            SelectRight => "extend selection right",
-            SelectLineStart => "extend selection to line start",
-            SelectLineEnd => "extend selection to line end",
-            CopySelection => "copy the selection",
-            ClearInput => "clear input text",
-            DeleteBack => "delete before the cursor",
-            DeleteForward => "delete under the cursor",
-            InsertTab => "insert a tab",
-        }
-    }
+    pub const REMAPPABLE: &'static [Self] = &[
+        Self::OpenCommands,
+        Self::OpenSettings,
+        Self::OpenStyle,
+        Self::OpenKeymaps,
+        Self::ClearFeed,
+        Self::OpenCode,
+        Self::NewWorkspace,
+        Self::OpenOutput,
+        Self::OpenSyntaxTree,
+        Self::Restart,
+        Self::ClosePane,
+        Self::Quit,
+        Self::ToggleHighlightDebug,
+        Self::ClearInput,
+        Self::CopySelection,
+    ];
 
-    pub const REMAPPABLE: [Self; 2] = [Self::ClearInput, Self::CopySelection];
-
-    pub fn is_remappable(self) -> bool {
+    fn is_remappable(self) -> bool {
         Self::REMAPPABLE.contains(&self)
     }
 }
@@ -82,7 +81,7 @@ pub struct Binding {
 }
 
 impl Binding {
-    fn new(code: KeyCode, modifiers: KeyModifiers, action: Action) -> Self {
+    pub fn new(code: KeyCode, modifiers: KeyModifiers, action: Action) -> Self {
         Self {
             code,
             modifiers,
@@ -104,33 +103,41 @@ impl Binding {
             parts.push("shift".to_string());
         }
         parts.push(match self.code {
-            Char(' ') => "space".to_string(),
-            Char(character) => character.to_string(),
-            Enter => "enter".to_string(),
-            Tab => "tab".to_string(),
-            Backspace => "backspace".to_string(),
-            Delete => "delete".to_string(),
-            Left => "left".to_string(),
-            Right => "right".to_string(),
-            Up => "up".to_string(),
-            Down => "down".to_string(),
-            Home => "home".to_string(),
-            End => "end".to_string(),
-            PageUp => "page up".to_string(),
-            PageDown => "page down".to_string(),
-            Esc => "esc".to_string(),
+            Char(' ') => Icon::Space.symbol().into(),
+            Char(character) => character.into(),
+            Enter => Icon::Enter.symbol().into(),
+            Tab => Icon::Tab.symbol().into(),
+            Backspace => Icon::Backspace.symbol().into(),
+            Delete => "del".into(),
+            Left => Icon::Left.symbol().into(),
+            Right => Icon::Right.symbol().into(),
+            Up => Icon::Up.symbol().into(),
+            Down => Icon::Down.symbol().into(),
+            Home => "home".into(),
+            End => "end".into(),
+            PageUp => "pgup".into(),
+            PageDown => "pgdn".into(),
+            Esc => "esc".into(),
             other => format!("{other:?}").to_lowercase(),
         });
         parts.join("+")
     }
 
-    /// Does this binding claim `key`? Shift is ignored for printable characters,
-    /// since the terminal already reports the shifted character itself.
+    /// Does this binding claim `key`? Shift is ignored for printable characters
+    /// other than space, since the terminal reports the shifted character itself.
     fn matches(&self, key: KeyEvent) -> bool {
-        if self.code != key.code {
+        if self.code != key.code
+            && !(self.modifiers.contains(KeyModifiers::CONTROL)
+                && matches!(
+                    (self.code, key.code),
+                    (KeyCode::Char('/'), KeyCode::Char('7'))
+                ))
+        {
             return false;
         }
-        let mask = if matches!(self.code, KeyCode::Char(_)) && !self.modifiers.is_empty() {
+        let mask = if matches!(self.code, KeyCode::Char(character) if character != ' ')
+            && !self.modifiers.is_empty()
+        {
             KeyModifiers::CONTROL | KeyModifiers::ALT
         } else {
             KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT
@@ -165,6 +172,7 @@ impl Keymap {
 
     pub fn rebind(&mut self, action: Action, key: KeyEvent) -> bool {
         if !action.is_remappable()
+            || OpenTarget::from_key(key, true) == Some(OpenTarget::Split)
             || matches!(key.code, KeyCode::Char(_))
                 && !key
                     .modifiers
@@ -236,9 +244,19 @@ impl Default for Keymap {
                 binding!(Ctrl - 'c', Quit),
                 binding!(Ctrl - '/', OpenCommands),
                 binding!(Ctrl - 'o', OpenSettings),
+                binding!(Alt - 's', OpenStyle),
+                binding!(Alt - 'k', OpenKeymaps),
+                binding!(Alt - 'l', ClearFeed),
+                binding!(Alt - 'c', OpenCode),
+                binding!(Alt - 'n', NewWorkspace),
+                binding!(Alt - 'o', OpenOutput),
+                binding!(Alt - 't', OpenSyntaxTree),
+                binding!(Alt - 'r', Restart),
+                binding!(Alt - 'w', ClosePane),
                 binding!(Ctrl - 'd', ToggleHighlightDebug),
                 binding!(Ctrl - 'y', CopySelection),
                 binding!(Ctrl - 'l', ClearInput),
+                binding!(Shift - ' ', InsertNewline),
                 binding!(Shift - Enter, InsertNewline),
                 binding!(Alt - Enter, InsertNewline),
                 binding!(Enter, Submit),
@@ -276,6 +294,19 @@ mod tests {
         assert!(keymap.action(shifted) == Some(Action::InsertNewline));
     }
 
+    #[test]
+    fn shift_space_inserts_newline_without_claiming_plain_space() {
+        let keymap = Keymap::default();
+
+        assert!(
+            keymap.action(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::SHIFT))
+                == Some(Action::InsertNewline)
+        );
+        assert!(keymap
+            .action(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
+            .is_none());
+    }
+
     // The terminal reports a shifted letter as the letter itself, so a binding on
     // a character must not demand the shift state match.
     #[test]
@@ -290,6 +321,14 @@ mod tests {
     }
 
     #[test]
+    fn control_slash_accepts_legacy_terminal_encoding() {
+        let keymap = Keymap::default();
+        let legacy = KeyEvent::new(KeyCode::Char('7'), KeyModifiers::CONTROL);
+
+        assert!(keymap.action(legacy) == Some(Action::OpenCommands));
+    }
+
+    #[test]
     fn keys_are_labelled_for_display() {
         let keymap = Keymap::default();
         assert_eq!(
@@ -301,10 +340,13 @@ mod tests {
             Some("ctrl+/")
         );
         assert_eq!(
-            keymap.key_for(Action::InsertNewline).as_deref(),
-            Some("shift+enter")
+            keymap.key_for(Action::InsertNewline),
+            Some(format!("shift+{}", Icon::Space.symbol()))
         );
-        assert_eq!(keymap.key_for(Action::MoveLeft).as_deref(), Some("left"));
+        assert_eq!(
+            keymap.key_for(Action::MoveLeft),
+            Some(Icon::Left.symbol().into())
+        );
     }
 
     #[test]
@@ -330,5 +372,14 @@ mod tests {
 
         assert!(!keymap.rebind(Action::ClearInput, letter));
         assert!(keymap.action(letter).is_none());
+    }
+
+    #[test]
+    fn alternative_view_cannot_be_claimed_by_a_remapping() {
+        let mut keymap = Keymap::default();
+        let alternative = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT);
+
+        assert!(!keymap.rebind(Action::ClearInput, alternative));
+        assert!(keymap.action(alternative).is_none());
     }
 }

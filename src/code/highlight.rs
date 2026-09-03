@@ -2,6 +2,8 @@
 
 use std::ops::{Add, Range};
 
+use crate::ui::controller::settings::theme::groups::HLGroup;
+use crate::ui::element::HLSpan;
 use m2_syn::nodes::visit::{self, Visit};
 use m2_syn::nodes::{
     AdjacentExpr, BinaryExpr, Cell, Collection, Component, EscapeSequence, Expr, ExprPack,
@@ -14,88 +16,13 @@ use m2_syn::{
     LexErrorKind, LiteralKind, Span, Spanned, TokenStream, TokenTree, Trivia,
 };
 
-macro_rules! macaulay_highlights {
-    ($($kind:ident),+ $(,)?) => {
-        /// A Macaulay2 syntax role produced by m2-syn.
-        #[repr(usize)]
-        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        pub enum MacaulayHighlight {
-            $($kind),+
-        }
-
-        impl MacaulayHighlight {
-            pub const ALL: &'static [Self] = &[$(Self::$kind),+];
-            pub const COUNT: usize = Self::ALL.len();
-
-            pub const fn from_index(index: usize) -> Option<Self> {
-                $(if index == Self::$kind as usize {
-                    return Some(Self::$kind);
-                })+
-                None
-            }
-
-            pub const fn index(self) -> usize {
-                self as usize
-            }
-
-            pub const fn group_name(self) -> &'static str {
-                match self {
-                    $(Self::$kind => concat!("m2.", stringify!($kind))),+
-                }
-            }
-        }
-    };
-}
-
-macaulay_highlights! {
-    Comment,
-    Error,
-    Int,
-    Float,
-    Boolean,
-    String,
-    StringUrl,
-    CharacterSpecial,
-    Variable,
-    VariableBuiltin,
-    Parameter,
-    Constant,
-    Function,
-    FunctionCall,
-    CompiledFunction,
-    Macro,
-    Label,
-    Type,
-    TypeParameter,
-    Property,
-    Package,
-    Namespace,
-    Operator,
-    Keyword,
-    KeywordConditional,
-    KeywordRepeat,
-    KeywordReturn,
-    KeywordException,
-    KeywordModifier,
-    KeywordDebug,
-    KeywordOperator,
-    PunctuationBracket,
-    PunctuationDelimiter,
-}
-
-/// A semantic highlight attached to a byte range of its source.
-pub struct HLSpan {
-    pub range: Range<usize>,
-    pub kind: MacaulayHighlight,
-}
-
 impl Add<u32> for HLSpan {
     type Output = Self;
 
     fn add(self, offset: u32) -> Self::Output {
         let offset = offset as usize;
         Self {
-            range: self.range.start + offset..self.range.end + offset,
+            content: self.content.start + offset..self.content.end + offset,
             kind: self.kind,
         }
     }
@@ -108,7 +35,7 @@ pub trait Highlighter {
 
 /// A bytewise paint layer that resolves nested syntax roles by priority.
 struct Painter {
-    bytes: Vec<Option<(u8, MacaulayHighlight)>>,
+    bytes: Vec<Option<(u8, HLGroup)>>,
 }
 
 impl Painter {
@@ -118,7 +45,7 @@ impl Painter {
         }
     }
 
-    fn range(&mut self, range: Range<usize>, kind: MacaulayHighlight, priority: u8) {
+    fn range(&mut self, range: Range<usize>, kind: HLGroup, priority: u8) {
         let end = range.end.min(self.bytes.len());
         for byte in self.bytes[range.start.min(end)..end].iter_mut() {
             if byte.is_none_or(|(current, _)| priority >= current) {
@@ -127,25 +54,25 @@ impl Painter {
         }
     }
 
-    fn span(&mut self, span: &Span, kind: MacaulayHighlight, priority: u8) {
+    fn span(&mut self, span: &Span, kind: HLGroup, priority: u8) {
         if let Some((start, end)) = span.bounds() {
             self.range(start..end, kind, priority);
         }
     }
 
-    fn syntax<T: Spanned + ?Sized>(&mut self, node: &T, kind: MacaulayHighlight, priority: u8) {
+    fn syntax<T: Spanned + ?Sized>(&mut self, node: &T, kind: HLGroup, priority: u8) {
         self.span(&node.span(), kind, priority);
     }
 
     fn comments(&mut self, comments: &CommentTrivia) {
         for comment in comments.outer().iter().chain(comments.inner()) {
-            self.syntax(comment, MacaulayHighlight::Comment, 0);
+            self.syntax(comment, HLGroup::Comment, 0);
         }
     }
 
     fn trivia(&mut self, trivia: &[Trivia]) {
         for comment in trivia {
-            self.syntax(comment, MacaulayHighlight::Comment, 0);
+            self.syntax(comment, HLGroup::Comment, 0);
         }
     }
 
@@ -154,30 +81,26 @@ impl Painter {
             self.trivia(token.leading_trivia().as_slice());
             match token {
                 TokenTree::Group(group) => {
-                    self.span(
-                        &group.delimiter().opening_span(),
-                        MacaulayHighlight::PunctuationBracket,
-                        0,
-                    );
+                    self.span(&group.delimiter().opening_span(), HLGroup::Punctuation, 0);
                     if let Some(close) = group.delimiter().closing_span() {
-                        self.span(&close, MacaulayHighlight::PunctuationBracket, 0);
+                        self.span(&close, HLGroup::Punctuation, 0);
                     }
                     self.tokens(group.stream());
                 }
                 TokenTree::Literal(literal) => self.syntax(
                     literal,
                     match literal.kind {
-                        LiteralKind::Integer => MacaulayHighlight::Int,
-                        LiteralKind::Float => MacaulayHighlight::Float,
-                        LiteralKind::String | LiteralKind::RawString => MacaulayHighlight::String,
+                        LiteralKind::Integer => HLGroup::Number,
+                        LiteralKind::Float => HLGroup::Number,
+                        LiteralKind::String | LiteralKind::RawString => HLGroup::String,
                     },
                     0,
                 ),
                 TokenTree::Punct(punctuation) => self.syntax(
                     punctuation,
                     match punctuation.text() {
-                        "," | ";" => MacaulayHighlight::PunctuationDelimiter,
-                        _ => MacaulayHighlight::Operator,
+                        "," | ";" => HLGroup::Delimiter,
+                        _ => HLGroup::Operator,
                     },
                     0,
                 ),
@@ -206,10 +129,10 @@ impl Painter {
     fn lex_error(&mut self, error: &LexError) {
         let kind = match error.kind() {
             LexErrorKind::UnterminatedString | LexErrorKind::UnterminatedRawString => {
-                MacaulayHighlight::String
+                HLGroup::String
             }
-            LexErrorKind::UnterminatedBlockComment => MacaulayHighlight::Comment,
-            _ => MacaulayHighlight::Error,
+            LexErrorKind::UnterminatedBlockComment => HLGroup::Comment,
+            _ => HLGroup::Error,
         };
         self.syntax(error, kind, 1);
     }
@@ -230,41 +153,32 @@ impl Painter {
             {
                 end += 1;
             }
-            spans.push(HLSpan {
-                range: start..end,
-                kind,
-            });
+            spans.push(HLSpan::new(start..end, kind));
             start = end;
         }
         spans
     }
 }
 
-fn word_kind(word: &str) -> MacaulayHighlight {
+fn word_kind(word: &str) -> HLGroup {
     let keyword = word.strip_prefix("Core$").unwrap_or(word);
     match keyword {
-        "if" | "else" | "then" | "when" | "list" | "do" => MacaulayHighlight::KeywordConditional,
-        "for" | "while" | "in" | "from" | "to" => MacaulayHighlight::KeywordRepeat,
-        "return" | "break" | "continue" => MacaulayHighlight::KeywordReturn,
-        "try" | "catch" | "throw" | "trap" | "except" | "shield" => {
-            MacaulayHighlight::KeywordException
-        }
-        "global" | "local" | "symbol" | "threadVariable" | "threadLocal" => {
-            MacaulayHighlight::KeywordModifier
-        }
+        "if" | "else" | "then" | "when" | "list" | "do" => HLGroup::Keyword,
+        "for" | "while" | "in" | "from" | "to" => HLGroup::Keyword,
+        "return" | "break" | "continue" => HLGroup::Keyword,
+        "try" | "catch" | "throw" | "trap" | "except" | "shield" => HLGroup::Keyword,
+        "global" | "local" | "symbol" | "threadVariable" | "threadLocal" => HLGroup::Keyword,
         "time" | "timing" | "elapsedTime" | "elapsedTiming" | "profile" | "TEST" | "breakpoint"
-        | "finish" | "step" => MacaulayHighlight::KeywordDebug,
-        "and" | "or" | "xor" | "not" | "SPACE" => MacaulayHighlight::KeywordOperator,
-        "new" | "of" => MacaulayHighlight::Keyword,
-        "true" | "false" => MacaulayHighlight::Boolean,
+        | "finish" | "step" => HLGroup::Keyword,
+        "and" | "or" | "xor" | "not" | "SPACE" => HLGroup::Operator,
+        "new" | "of" => HLGroup::Keyword,
+        "true" | "false" => HLGroup::Boolean,
         "CatalanConstant" | "EulerConstant" | "ii" | "pi" | "null" | "infinity" => {
-            MacaulayHighlight::Constant
+            HLGroup::Constant
         }
-        "error" | "stderr" => MacaulayHighlight::Error,
-        word if output_symbol(word) || BUILTIN_VARIABLES.contains(&word) => {
-            MacaulayHighlight::VariableBuiltin
-        }
-        _ => MacaulayHighlight::Variable,
+        "error" | "stderr" => HLGroup::Error,
+        word if output_symbol(word) || BUILTIN_VARIABLES.contains(&word) => HLGroup::AlgVariable,
+        _ => HLGroup::Variable,
     }
 }
 
@@ -360,38 +274,32 @@ struct SemanticPainter<'a> {
 }
 
 impl SemanticPainter<'_> {
-    fn paint<T: Spanned + ?Sized>(&mut self, node: &T, kind: MacaulayHighlight) {
+    fn paint<T: Spanned + ?Sized>(&mut self, node: &T, kind: HLGroup) {
         self.painter.syntax(node, kind, 1);
     }
 
-    fn paint_argument(&mut self, expr: &Expr, kind: MacaulayHighlight) {
+    fn paint_argument(&mut self, expr: &Expr, kind: HLGroup) {
         self.paint(argument(expr), kind);
     }
 
     fn operator_signature(&mut self, operator: &OperatorExpr) {
         match operator {
             OperatorExpr::AdjacentExpr(node) => {
-                self.paint(node.left_operand.as_ref(), MacaulayHighlight::TypeParameter);
-                self.paint(
-                    node.right_operand.as_ref(),
-                    MacaulayHighlight::TypeParameter,
-                );
+                self.paint(node.left_operand.as_ref(), HLGroup::Type);
+                self.paint(node.right_operand.as_ref(), HLGroup::Type);
             }
             OperatorExpr::BinaryExpr(node) => {
-                self.paint(node.left_operand.as_ref(), MacaulayHighlight::TypeParameter);
-                self.paint(&node.operator, MacaulayHighlight::Label);
-                self.paint(
-                    node.right_operand.as_ref(),
-                    MacaulayHighlight::TypeParameter,
-                );
+                self.paint(node.left_operand.as_ref(), HLGroup::Type);
+                self.paint(&node.operator, HLGroup::Installation);
+                self.paint(node.right_operand.as_ref(), HLGroup::Type);
             }
             OperatorExpr::PrefixExpr(node) => {
-                self.paint(&node.operator, MacaulayHighlight::Label);
-                self.paint(node.operand.as_ref(), MacaulayHighlight::TypeParameter);
+                self.paint(&node.operator, HLGroup::Installation);
+                self.paint(node.operand.as_ref(), HLGroup::Type);
             }
             OperatorExpr::PostfixExpr(node) => {
-                self.paint(node.operand.as_ref(), MacaulayHighlight::TypeParameter);
-                self.paint(&node.operator, MacaulayHighlight::Label);
+                self.paint(node.operand.as_ref(), HLGroup::Type);
+                self.paint(&node.operator, HLGroup::Installation);
             }
         }
     }
@@ -411,10 +319,10 @@ impl SemanticPainter<'_> {
                 Component::Empty(_) => None,
             });
         if let Some(Expr::QuoteExpression(quoted)) = arguments.next() {
-            self.paint(&quoted.symbol, MacaulayHighlight::Label);
+            self.paint(&quoted.symbol, HLGroup::Installation);
         }
         for domain in arguments.take(2) {
-            self.paint(domain, MacaulayHighlight::TypeParameter);
+            self.paint(domain, HLGroup::Type);
         }
     }
 }
@@ -431,38 +339,38 @@ impl<'ast> Visit<'ast> for SemanticPainter<'_> {
     }
 
     fn visit_escape_sequence(&mut self, node: &'ast EscapeSequence) {
-        self.paint(node, MacaulayHighlight::CharacterSpecial);
+        self.paint(node, HLGroup::Quote);
     }
 
     fn visit_string_literal(&mut self, node: &'ast StringLiteral) {
         if node.span().text().is_some_and(is_url) {
-            self.paint(node, MacaulayHighlight::StringUrl);
+            self.paint(node, HLGroup::Documentation);
         }
         visit::visit_string_literal(self, node);
     }
 
     fn visit_variadic(&mut self, node: &'ast Variadic) {
-        self.paint(&node.0, MacaulayHighlight::Parameter);
+        self.paint(&node.0, HLGroup::Parameter);
     }
 
     fn visit_fixed_arity(&mut self, node: &'ast FixedArity) {
         if let Some(parameters) = node.0.contents.as_ref() {
             for parameter in parameters.iter() {
-                self.paint(parameter, MacaulayHighlight::Parameter);
+                self.paint(parameter, HLGroup::Parameter);
             }
         }
     }
 
     fn visit_global_binding(&mut self, node: &'ast GlobalBinding) {
         if is_lambda(&node.value) {
-            self.paint(&node.variable, MacaulayHighlight::Function);
+            self.paint(&node.variable, HLGroup::Function);
         }
         visit::visit_global_binding(self, node);
     }
 
     fn visit_local_binding(&mut self, node: &'ast LocalBinding) {
         if is_lambda(&node.value) {
-            self.paint(&node.variable, MacaulayHighlight::Function);
+            self.paint(&node.variable, HLGroup::Function);
         }
         visit::visit_local_binding(self, node);
     }
@@ -472,42 +380,42 @@ impl<'ast> Visit<'ast> for SemanticPainter<'_> {
         if matches!(operator, "." | ".?" | "#" | "#?" | "_")
             && (symbol(&node.right_operand).is_some() || is_number(&node.right_operand))
         {
-            self.paint(node.right_operand.as_ref(), MacaulayHighlight::Property);
+            self.paint(node.right_operand.as_ref(), HLGroup::Property);
         }
         if operator == "_" {
             if let Some(function) = symbol(&node.left_operand) {
                 if matches!(function.text(), "importFrom" | "exportFrom") {
-                    self.paint(function, MacaulayHighlight::Function);
-                    self.paint(node.right_operand.as_ref(), MacaulayHighlight::Package);
+                    self.paint(function, HLGroup::Function);
+                    self.paint(node.right_operand.as_ref(), HLGroup::Package);
                 }
             }
         }
         if operator == "_" && is_number(&node.left_operand) && symbol(&node.right_operand).is_some()
         {
-            self.painter.syntax(node, MacaulayHighlight::Int, 2);
+            self.painter.syntax(node, HLGroup::Number, 2);
         }
         visit::visit_binary_expr(self, node);
     }
 
     fn visit_adjacent_expr(&mut self, node: &'ast AdjacentExpr) {
         if let Some(function) = symbol(&node.left_operand) {
-            self.paint(function, MacaulayHighlight::FunctionCall);
+            self.paint(function, HLGroup::Function);
             match function.text() {
                 "loadPackage" | "installPackage" | "uninstallPackage" | "needsPackage"
                 | "endPackage" | "newPackage" => {
-                    self.paint(function, MacaulayHighlight::Function);
-                    self.paint_argument(&node.right_operand, MacaulayHighlight::Package);
+                    self.paint(function, HLGroup::Function);
+                    self.paint_argument(&node.right_operand, HLGroup::Package);
                 }
                 "load" => {
-                    self.paint(function, MacaulayHighlight::Function);
-                    self.paint_argument(&node.right_operand, MacaulayHighlight::Namespace);
+                    self.paint(function, HLGroup::Function);
+                    self.paint_argument(&node.right_operand, HLGroup::Namespace);
                 }
                 "splitWWW" | "getWWW" | "urlEncode" => {
-                    self.paint(function, MacaulayHighlight::CompiledFunction);
-                    self.paint_argument(&node.right_operand, MacaulayHighlight::StringUrl);
+                    self.paint(function, HLGroup::CompiledFunction);
+                    self.paint_argument(&node.right_operand, HLGroup::Documentation);
                 }
                 "installAssignmentMethod" => {
-                    self.paint(function, MacaulayHighlight::CompiledFunction);
+                    self.paint(function, HLGroup::CompiledFunction);
                     self.assignment_method(&node.right_operand);
                 }
                 _ => {}
@@ -517,12 +425,12 @@ impl<'ast> Visit<'ast> for SemanticPainter<'_> {
     }
 
     fn visit_new_statement(&mut self, node: &'ast NewStatement) {
-        self.paint(node.class.as_ref(), MacaulayHighlight::Type);
+        self.paint(node.class.as_ref(), HLGroup::Type);
         if let Some(parent) = node.parent_class.as_ref() {
-            self.paint(parent.parent.as_ref(), MacaulayHighlight::Type);
+            self.paint(parent.parent.as_ref(), HLGroup::Type);
         }
         if let Some(instance) = node.instance.as_ref() {
-            self.paint(&instance.from_token, MacaulayHighlight::Keyword);
+            self.paint(&instance.from_token, HLGroup::Keyword);
         }
         visit::visit_new_statement(self, node);
     }
@@ -532,34 +440,31 @@ impl<'ast> Visit<'ast> for SemanticPainter<'_> {
             self.paint(
                 method,
                 if method_name(method) {
-                    MacaulayHighlight::Label
+                    HLGroup::Installation
                 } else {
-                    MacaulayHighlight::TypeParameter
+                    HLGroup::Type
                 },
             );
         }
-        self.paint(node.signature.as_ref(), MacaulayHighlight::TypeParameter);
-        self.paint(&node.assign_op, MacaulayHighlight::KeywordOperator);
+        self.paint(node.signature.as_ref(), HLGroup::Type);
+        self.paint(&node.assign_op, HLGroup::Operator);
         visit::visit_method_installation(self, node);
     }
 
     fn visit_operator_installation(&mut self, node: &'ast OperatorInstallation) {
         self.operator_signature(&node.domain_expr);
-        self.paint(&node.assign_op, MacaulayHighlight::KeywordOperator);
+        self.paint(&node.assign_op, HLGroup::Operator);
         visit::visit_operator_installation(self, node);
     }
 
     fn visit_new_installation(&mut self, node: &'ast NewInstallation) {
-        self.paint(&node.operator, MacaulayHighlight::KeywordOperator);
+        self.paint(&node.operator, HLGroup::Operator);
         visit::visit_new_installation(self, node);
     }
 
     fn visit_type_annotation(&mut self, node: &'ast TypeAnnotation) {
-        self.paint(
-            node.typical_value.as_ref(),
-            MacaulayHighlight::TypeParameter,
-        );
-        self.paint(&node.operator, MacaulayHighlight::KeywordOperator);
+        self.paint(node.typical_value.as_ref(), HLGroup::Type);
+        self.paint(&node.operator, HLGroup::Operator);
         visit::visit_type_annotation(self, node);
     }
 }
@@ -595,31 +500,27 @@ impl Highlighter for SyntaxHighlighter {
 mod tests {
     use super::*;
 
-    fn kind_at(source: &str, needle: &str) -> Option<MacaulayHighlight> {
+    fn kind_at(source: &str, needle: &str) -> Option<HLGroup> {
         let offset = source.find(needle)?;
         SyntaxHighlighter::new()
             .highlight(source)
             .into_iter()
-            .find(|span| span.range.contains(&offset))
+            .find(|span| span.content.contains(&offset))
             .map(|span| span.kind)
     }
 
     #[test]
     fn m2_syn_highlights_lexical_and_typed_roles() {
         for (source, needle, expected) in [
-            (
-                "if x then 1 else 0",
-                "if",
-                MacaulayHighlight::KeywordConditional,
-            ),
-            ("1 + 2", "1", MacaulayHighlight::Int),
-            ("f 1", "f", MacaulayHighlight::FunctionCall),
-            ("loadPackage \"Foo\"", "\"Foo\"", MacaulayHighlight::Package),
-            ("f ZZ := x -> x", "f", MacaulayHighlight::Label),
-            ("f ZZ := x -> x", "ZZ", MacaulayHighlight::TypeParameter),
-            ("g = x -> x", "g", MacaulayHighlight::Function),
-            ("g = x -> x", "x ->", MacaulayHighlight::Parameter),
-            ("x.foo", "foo", MacaulayHighlight::Property),
+            ("if x then 1 else 0", "if", HLGroup::Keyword),
+            ("1 + 2", "1", HLGroup::Number),
+            ("f 1", "f", HLGroup::Function),
+            ("loadPackage \"Foo\"", "\"Foo\"", HLGroup::Package),
+            ("f ZZ := x -> x", "f", HLGroup::Installation),
+            ("f ZZ := x -> x", "ZZ", HLGroup::Type),
+            ("g = x -> x", "g", HLGroup::Function),
+            ("g = x -> x", "x ->", HLGroup::Parameter),
+            ("x.foo", "foo", HLGroup::Property),
         ] {
             assert_eq!(kind_at(source, needle), Some(expected), "{source:?}");
         }
@@ -630,12 +531,8 @@ mod tests {
         let mut highlighter = SyntaxHighlighter::new();
         let spans = highlighter.highlight("if x then \"unfinished");
 
-        assert!(spans
-            .iter()
-            .any(|span| span.kind == MacaulayHighlight::KeywordConditional));
-        assert!(spans
-            .iter()
-            .any(|span| span.kind == MacaulayHighlight::String));
+        assert!(spans.iter().any(|span| span.kind == HLGroup::Keyword));
+        assert!(spans.iter().any(|span| span.kind == HLGroup::String));
     }
 
     #[test]
@@ -645,11 +542,11 @@ mod tests {
         let spans = highlighter.highlight(source);
 
         for pair in spans.windows(2) {
-            assert!(pair[0].range.end <= pair[1].range.start);
+            assert!(pair[0].content.end <= pair[1].content.start);
         }
         for span in spans {
-            assert!(source.is_char_boundary(span.range.start));
-            assert!(source.is_char_boundary(span.range.end));
+            assert!(source.is_char_boundary(span.content.start));
+            assert!(source.is_char_boundary(span.content.end));
         }
     }
 }

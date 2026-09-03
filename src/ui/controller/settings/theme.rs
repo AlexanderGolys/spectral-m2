@@ -6,23 +6,21 @@ use std::sync::LazyLock;
 use ratatui::style::Style;
 use serde::de::DeserializeOwned;
 
-mod groups;
-pub mod palette;
+pub mod groups;
+mod palette;
 
-pub use groups::Groups;
-use palette::StylePalette;
-pub use palette::{
-    Catppuccin, Everforest, Gruvbox, GruvboxMaterial, Kanagawa, NamedColor, PaletteData, RosePine,
-    TokyoNight,
+use self::groups::Groups;
+use self::palette::{
+    Catppuccin, Everforest, Gruvbox, GruvboxMaterial, Kanagawa, Palette, RosePine, TokyoNight,
 };
 
 /// Builds highlight groups from a source palette.
-type GroupsFactory = fn(&PaletteData) -> Groups;
+type GroupsFactory = fn(&Palette) -> Groups;
 
 /// One palette leaf exposed by the flat appearance picker.
 pub struct Variant {
     name: &'static str,
-    palette: &'static dyn StylePalette,
+    palette: &'static Palette,
     groups: GroupsFactory,
 }
 
@@ -50,15 +48,11 @@ impl ColorVariant {
         }
     }
 
-    pub fn palette(&self) -> &'static PaletteData {
-        self.variant().palette.data()
+    pub fn palette(&self) -> &'static Palette {
+        self.variant().palette
     }
 
-    pub fn native_colors(&self) -> Vec<NamedColor> {
-        self.variant().palette.native_colors()
-    }
-
-    pub fn groups(&self) -> Groups {
+    fn groups(&self) -> Groups {
         (self.variant().groups)(self.palette())
     }
 }
@@ -106,8 +100,8 @@ fn embedded<T: DeserializeOwned>(source: &str) -> T {
 macro_rules! embedded {
     ($name:ident: $ty:ty = $file:literal) => {
         /// A complete embedded source palette collection.
-        pub static $name: LazyLock<$ty> =
-            LazyLock::new(|| embedded(include_str!(concat!("schemes/", $file))));
+        static $name: LazyLock<$ty> =
+            LazyLock::new(|| embedded(include_str!(concat!("theme/schemes/", $file))));
     };
 }
 
@@ -137,7 +131,7 @@ macro_rules! variants {
 }
 
 /// Installed schemes in picker order.
-pub static SCHEMES: LazyLock<Vec<Scheme>> = LazyLock::new(|| {
+static SCHEMES: LazyLock<Vec<Scheme>> = LazyLock::new(|| {
     vec![
         Scheme::new(
             "catppuccin",
@@ -150,22 +144,22 @@ pub static SCHEMES: LazyLock<Vec<Scheme>> = LazyLock::new(|| {
         ),
         Scheme::new(
             "tokyo night",
-            variants!(groups::tokyo_night_groups;
-                Dark "night" => &TOKYO_NIGHT.dark.night,
-                Dark "storm" => &TOKYO_NIGHT.dark.storm,
-                Dark "moon" => &TOKYO_NIGHT.dark.moon,
-                Light "day" => &TOKYO_NIGHT.light.day,
+            variants!(
+                Dark "night" => (&TOKYO_NIGHT.dark.night) with groups::tokyo_night_groups,
+                Dark "storm" => (&TOKYO_NIGHT.dark.storm) with groups::tokyo_night_groups,
+                Dark "moon" => (&TOKYO_NIGHT.dark.moon) with groups::tokyo_night_groups,
+                Light "day" => (&TOKYO_NIGHT.light.day) with groups::tokyo_day_groups,
             ),
         ),
         Scheme::new(
             "gruvbox",
-            variants!(groups::gruvbox_groups;
-                Dark "hard" => &GRUVBOX.dark.hard,
-                Dark "medium" => &GRUVBOX.dark.medium,
-                Dark "soft" => &GRUVBOX.dark.soft,
-                Light "hard" => &GRUVBOX.light.hard,
-                Light "medium" => &GRUVBOX.light.medium,
-                Light "soft" => &GRUVBOX.light.soft,
+            variants!(
+                Dark "hard" => (&GRUVBOX.dark.hard) with groups::gruvbox_dark_hard_groups,
+                Dark "medium" => (&GRUVBOX.dark.medium) with groups::gruvbox_dark_medium_groups,
+                Dark "soft" => (&GRUVBOX.dark.soft) with groups::gruvbox_dark_soft_groups,
+                Light "hard" => (&GRUVBOX.light.hard) with groups::gruvbox_light_hard_groups,
+                Light "medium" => (&GRUVBOX.light.medium) with groups::gruvbox_light_medium_groups,
+                Light "soft" => (&GRUVBOX.light.soft) with groups::gruvbox_light_soft_groups,
             ),
         ),
         Scheme::new(
@@ -211,20 +205,20 @@ pub static SCHEMES: LazyLock<Vec<Scheme>> = LazyLock::new(|| {
 
 /// Position of a scheme in [`SCHEMES`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub struct SchemeIndex(usize);
+struct SchemeIndex(usize);
 
 impl SchemeIndex {
-    pub const fn get(self) -> usize {
+    const fn get(self) -> usize {
         self.0
     }
 }
 
 /// Position of a colour variant within its scheme.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub struct VariantIndex(usize);
+struct VariantIndex(usize);
 
 impl VariantIndex {
-    pub const fn get(self) -> usize {
+    const fn get(self) -> usize {
         self.0
     }
 }
@@ -232,8 +226,8 @@ impl VariantIndex {
 /// A selected scheme variant and its terminal-background treatment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Appearance {
-    pub scheme: SchemeIndex,
-    pub variant: VariantIndex,
+    scheme: SchemeIndex,
+    variant: VariantIndex,
     pub transparent_background: bool,
 }
 
@@ -359,8 +353,8 @@ impl Appearance {
 
 #[cfg(test)]
 mod tests {
+    use super::groups::HLGroup;
     use super::*;
-    use crate::code::highlight::MacaulayHighlight;
 
     #[test]
     fn every_configured_variant_paints_every_syntax_role() {
@@ -370,6 +364,7 @@ mod tests {
                 assert!(groups.transcript().bg.is_some());
                 assert!(groups.code().bg.is_some());
                 assert!(groups.picker().bg.is_some());
+                assert!(groups.picker_selected().fg.is_some());
                 assert!(groups.picker_selected().bg.is_some());
                 assert!(groups.value().fg.is_some());
                 assert!(groups.error().fg.is_some());
@@ -384,11 +379,6 @@ mod tests {
                 assert!(groups.selection().bg.is_some());
                 assert!(groups.muted().fg.is_some());
                 assert!(groups.printed().fg.is_some());
-                for index in 0..MacaulayHighlight::COUNT {
-                    let highlight = MacaulayHighlight::from_index(index)
-                        .expect("Macaulay highlight indices are contiguous");
-                    assert!(groups.macaulay(highlight).fg.is_some());
-                }
             }
         }
     }
@@ -484,8 +474,8 @@ mod tests {
         assert_eq!(transparent.canvas(groups.transcript()).bg, None);
         assert_eq!(opaque.canvas(groups.transcript()), groups.transcript());
         assert_eq!(
-            transparent.groups().macaulay(MacaulayHighlight::String),
-            groups.macaulay(MacaulayHighlight::String)
+            transparent.groups().style(HLGroup::String),
+            groups.style(HLGroup::String)
         );
     }
 
@@ -497,59 +487,74 @@ mod tests {
         assert_eq!(appearance.scheme().label(), "everforest");
         assert_eq!(appearance.variant().label(), "medium");
         assert!(appearance.variant().brightness() == Brightness::Dark);
-        assert_eq!(palette.bg[1], ratatui::style::Color::Rgb(0x2d, 0x35, 0x3b));
-        assert_eq!(palette.fg[0], ratatui::style::Color::Rgb(0xd3, 0xc6, 0xaa));
+        assert_eq!(
+            palette[palette::EverforestColor::bg0],
+            ratatui::style::Color::Rgb(0x2d, 0x35, 0x3b)
+        );
+        assert_eq!(
+            palette[palette::EverforestColor::fg],
+            ratatui::style::Color::Rgb(0xd3, 0xc6, 0xaa)
+        );
     }
 
     #[test]
-    fn named_palette_trees_keep_every_family_addressable() {
+    fn palette_trees_use_finite_native_color_names() {
         assert_eq!(
-            GRUVBOX.dark.soft.red[1],
+            GRUVBOX.dark.soft[palette::GruvboxColor::bright_red],
             ratatui::style::Color::Rgb(0xfb, 0x49, 0x34)
         );
         assert_eq!(
-            CATPPUCCIN.light.latte.purple[0],
+            CATPPUCCIN.light.latte[palette::CatppuccinColor::mauve],
             ratatui::style::Color::Rgb(0x88, 0x39, 0xef)
         );
-        for palette in SCHEMES
-            .iter()
-            .flat_map(Scheme::variants)
-            .map(ColorVariant::palette)
-        {
-            assert!([
-                &palette.red,
-                &palette.green,
-                &palette.yellow,
-                &palette.blue,
-                &palette.purple,
-                &palette.aqua,
-                &palette.orange,
-                &palette.gray,
-                &palette.bg,
-                &palette.fg,
-            ]
-            .into_iter()
-            .all(|family| !family.is_empty()));
-        }
     }
 
     #[test]
-    fn source_palettes_are_typed_and_keep_native_names() {
+    fn source_palettes_keep_native_names() {
         assert_eq!(
-            EVERFOREST.dark.medium.native.bg_dim,
+            EVERFOREST.dark.medium[palette::EverforestColor::bg_dim],
             ratatui::style::Color::Rgb(0x23, 0x2a, 0x2e)
         );
         assert_eq!(
-            CATPPUCCIN.dark.mocha.native.rosewater,
+            CATPPUCCIN.dark.mocha[palette::CatppuccinColor::rosewater],
             ratatui::style::Color::Rgb(0xf5, 0xe0, 0xdc)
         );
         assert_eq!(
-            KANAGAWA.dark.wave.native.lotusWhite5,
+            KANAGAWA.dark.wave[palette::KanagawaColor::lotusWhite5],
             ratatui::style::Color::Rgb(0xe4, 0xd7, 0x94)
         );
-        assert!(SCHEMES
-            .iter()
-            .flat_map(Scheme::variants)
-            .all(|variant| !variant.native_colors().is_empty()));
+    }
+
+    #[test]
+    fn every_palette_defines_its_finite_color_enum() {
+        macro_rules! complete {
+            ($color:ty; $($palette:expr),+ $(,)?) => {
+                for palette in [$($palette),+] {
+                    assert_eq!(palette.color_count(), <$color>::ALL.len());
+                    assert!(<$color>::ALL.iter().all(|&color| palette.defines(color)));
+                }
+            };
+        }
+
+        complete!(palette::CatppuccinColor;
+            &CATPPUCCIN.dark.mocha, &CATPPUCCIN.dark.macchiato,
+            &CATPPUCCIN.dark.frappe, &CATPPUCCIN.light.latte);
+        complete!(palette::TokyoNightColor;
+            &TOKYO_NIGHT.dark.night, &TOKYO_NIGHT.dark.storm,
+            &TOKYO_NIGHT.dark.moon, &TOKYO_NIGHT.light.day);
+        complete!(palette::GruvboxColor;
+            &GRUVBOX.dark.soft, &GRUVBOX.dark.medium, &GRUVBOX.dark.hard,
+            &GRUVBOX.light.soft, &GRUVBOX.light.medium, &GRUVBOX.light.hard);
+        complete!(palette::GruvboxMaterialColor;
+            &GRUVBOX_MATERIAL.dark.material, &GRUVBOX_MATERIAL.dark.mix,
+            &GRUVBOX_MATERIAL.dark.original, &GRUVBOX_MATERIAL.light.material,
+            &GRUVBOX_MATERIAL.light.mix, &GRUVBOX_MATERIAL.light.original);
+        complete!(palette::EverforestColor;
+            &EVERFOREST.dark.soft, &EVERFOREST.dark.medium, &EVERFOREST.dark.hard,
+            &EVERFOREST.light.soft, &EVERFOREST.light.medium, &EVERFOREST.light.hard);
+        complete!(palette::RosePineColor;
+            &ROSE_PINE.dark.main, &ROSE_PINE.dark.moon, &ROSE_PINE.light.dawn);
+        complete!(palette::KanagawaColor;
+            &KANAGAWA.dark.wave, &KANAGAWA.dark.dragon, &KANAGAWA.light.lotus);
     }
 }

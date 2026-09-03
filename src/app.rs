@@ -1,6 +1,6 @@
-//! Application-wide workspaces, panes, and the terminal event loop.
+//! Application workspaces, panes, and the terminal event loop.
 
-mod session;
+pub mod session;
 
 use std::io;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -15,12 +15,12 @@ use crossterm::execute;
 use ratatui::layout::{Position, Rect};
 use ratatui::Frame;
 
-pub(crate) use self::session::CommittedCell;
 use self::session::Session;
 use crate::backend::M2Backend;
 use crate::code::highlight::SyntaxHighlighter;
 use crate::errors::Result;
-use crate::ui::{Editor, EditorAction, EditorConfig, OpenTarget, ReplTerminal, ViewKind, Viewport};
+use crate::ui::controller::{Editor, EditorAction, EditorConfig, OpenTarget, ViewKind, Viewport};
+use crate::ui::terminal::ReplTerminal;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(80);
 const MIN_PANE_WIDTH: u16 = 40;
@@ -275,6 +275,11 @@ impl App {
                     .submit(workspace.editor.submission(), &mut workspace.highlighter);
                 workspace.editor.apply(update)
             }
+            EditorAction::Post(source) => {
+                let workspace = self.workspaces[workspace].as_mut().unwrap();
+                let update = workspace.session.submit(source, &mut workspace.highlighter);
+                workspace.editor.post(update)
+            }
             EditorAction::Restart => {
                 let workspace = self.workspaces[workspace].as_mut().unwrap();
                 workspace.editor.apply(workspace.session.restart())
@@ -306,8 +311,13 @@ impl App {
     fn open_view(&mut self, view: ViewKind, target: OpenTarget) {
         match target {
             OpenTarget::Current => {
-                self.panes[self.active].view = view;
-                self.panes[self.active].viewport = Viewport::for_view(view);
+                let pane = &mut self.panes[self.active];
+                pane.view = if pane.view == view {
+                    ViewKind::Shell
+                } else {
+                    view
+                };
+                pane.viewport = Viewport::for_view(pane.view);
             }
             OpenTarget::Split if self.panes.len() == 1 => {
                 let workspace = self.panes[self.active].workspace;
@@ -510,7 +520,6 @@ impl App {
                     frame,
                     area,
                     &mut workspace.highlighter,
-                    workspace.session.next_input_number(),
                     workspace.session.in_debugger(),
                 ),
                 view => workspace.editor.draw_preview(

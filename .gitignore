@@ -1,6 +1,7 @@
-/target
-/src/target
+target/
 .claude/
 AGENTS.md
 CLAUDE.md
 TODO.md
+install.sh
+

@@ -4,22 +4,22 @@ Type `/` into an empty input to open the filtered command picker. Continue typin
 
 Commands are handled by Spectral rather than sent to Macaulay2.
 
-| Command | Effect |
-| --- | --- |
-| `/settings` | Open shell settings. |
-| `/style` | Open the separate colorscheme picker. |
-| `/keymaps` | Show and edit the remappable bindings. |
-| `/clear` | Clear the focused workspace's feed. |
-| `/code` | Preview all committed input cells. |
-| `/output` | Preview structured output without input cells. |
-| `/syntax tree` | Preview the `m2-syn` tree of committed cells. |
-| `/new` | Start a fresh, independent M2 workspace. |
-| `/restart` | Restart the focused workspace's M2 process and reset its state. |
-| `/debug` | Toggle the highlight-group and native-palette inspector. |
-| `/quit` | Leave Spectral. |
-| `/close focused window` | Close the focused pane; shown only while split. |
+| Command | Key | Effect |
+| --- | --- | --- |
+| `/settings` | `Ctrl+O` | Open shell settings. |
+| `/style` | `Alt+S` | Open the separate colorscheme picker. |
+| `/keymaps` | `Alt+K` | Show and edit the remappable bindings. |
+| `/clear` | `Alt+L` | Clear the focused workspace's feed. |
+| `/code` | `Alt+C` | Preview all committed input cells. |
+| `/output` | `Alt+O` | Preview structured output without input cells. |
+| `/syntax tree` | `Alt+T` | Preview the `m2-syn` tree of committed cells. |
+| `/new` | `Alt+N` | Start a fresh, independent M2 workspace. |
+| `/restart` | `Alt+R` | Restart the focused workspace's M2 process and reset its state. |
+| `/debug` | `Ctrl+D` | Toggle the highlight inspector; opening it posts a live value/muted/null probe. |
+| `/quit` | `Ctrl+C` | Leave Spectral. |
+| `/close focused window` | `Alt+W` | Close the focused pane; shown only while split. |
 
-The `new`, `code`, `output`, and `syntax tree` rows also accept `Ctrl+Enter` when only one pane is open. That opens the result in a second pane instead of replacing the focused one.
+`Alt+V` is not a command keymap. On a selected `new`, `code`, `output`, or `syntax tree` row, it opens that command in an alternative pane instead of replacing the focused one. The command's own keymap remains visible beside it.
 
 Exact commands submitted from input are opened locally, including commands recalled from history. The bare inputs `exit`, `quit`, and `restart` are also intercepted locally, with an optional trailing semicolon.
 

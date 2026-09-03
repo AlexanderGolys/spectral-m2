@@ -33,7 +33,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 thiserror = "2.0.18"
 toml = "1.1.4"
-these-macros-should-be-illegal = "0.4.0"
+these-macros-should-be-illegal = "0.7.0"
 
 [lints.rust]
 missing_docs = "deny"

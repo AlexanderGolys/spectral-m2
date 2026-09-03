@@ -5,17 +5,21 @@ use std::thread;
 
 use m2_syn::PrettyNode;
 
-use crate::backend::{captured_error, captured_output, M2Backend, M2Response};
+use crate::backend::transcript::{captured_error, captured_output};
+use crate::backend::{M2Backend, M2Response};
 use crate::code::highlight::Highlighter;
 use crate::code::parser::{self, ParseVerdict};
 use crate::errors::Result;
-use crate::ui::block::{Block, OutputBlock, TextBlock, TypeLineBlock, WarningBlock};
-use crate::ui::{submitted_command, EditorUpdate, SubmittedCommand};
+use crate::ui::block::{Block, CellState, OutputBlock, TextBlock, WarningBlock};
+use crate::ui::controller::commands::{submitted_command, SubmittedCommand};
+use crate::ui::controller::EditorUpdate;
 
 /// One successfully evaluated input cell retained by its workspace.
 #[derive(Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub struct CommittedCell {
     pub number: u32,
+    pub state: CellState,
     pub code: String,
     pub tree: PrettyNode,
 }
@@ -91,6 +95,7 @@ impl Session {
         Ok(self.version.clone())
     }
 
+    #[cfg(test)]
     pub fn next_input_number(&self) -> u32 {
         self.next_input_number
     }
@@ -208,8 +213,14 @@ impl Session {
             Ok(response) if !response.is_error => {
                 self.in_debugger = response.depth > 1;
                 self.next_input_number = number + 1;
+                let state = match (response.has_value, response.value.is_some()) {
+                    (true, true) => CellState::Value,
+                    (true, false) => CellState::Muted,
+                    _ => CellState::Null,
+                };
                 self.committed.push(CommittedCell {
                     number,
+                    state,
                     code: cell.code.clone(),
                     tree: cell.tree,
                 });
@@ -223,8 +234,7 @@ impl Session {
                 EditorUpdate::CellSucceeded {
                     id,
                     index,
-                    number,
-                    outputs: response_blocks(&response, &cell.code, number),
+                    outputs: response_blocks(&response, &cell.code),
                 }
             }
             Ok(response) => {
@@ -233,7 +243,6 @@ impl Session {
                 EditorUpdate::CellFailed {
                     id,
                     index,
-                    number,
                     message: captured_error(&response.transcript, &cell.code),
                 }
             }
@@ -242,7 +251,6 @@ impl Session {
                 EditorUpdate::CellFailed {
                     id,
                     index,
-                    number,
                     message: format!("Communication error: {message}"),
                 }
             }
@@ -257,9 +265,9 @@ impl Session {
                 self.in_debugger = false;
                 self.next_input_number = 1;
                 self.committed.clear();
-                EditorUpdate::Commit(vec![Box::new(TextBlock::system(
+                EditorUpdate::Message(Box::new(TextBlock::system(
                     "Macaulay2 restarted -- the session is empty and numbering begins again",
-                ))])
+                )))
             }
             Err(error) => EditorUpdate::Diagnostic(format!("could not restart M2: {error}")),
         }
@@ -322,7 +330,7 @@ fn worker(mut backend: M2Backend, requests: Receiver<WorkerRequest>, events: Sen
     }
 }
 
-fn response_blocks(response: &M2Response, code: &str, number: u32) -> Vec<Box<dyn Block>> {
+fn response_blocks(response: &M2Response, code: &str) -> Vec<Box<dyn Block>> {
     let output = captured_output(
         &response.transcript,
         code,
@@ -338,16 +346,12 @@ fn response_blocks(response: &M2Response, code: &str, number: u32) -> Vec<Box<dy
         blocks.push(Box::new(TextBlock::printed(output.printed)));
     }
     match (output.value, response.has_value) {
-        (Some(value), bound) => blocks.push(Box::new(OutputBlock {
-            number: bound.then_some(number),
-            text: value.text,
-            ty: value.type_info,
-        })),
+        (Some(value), _) => blocks.push(Box::new(OutputBlock::value(value.text, value.type_info))),
         (None, true) => blocks.extend(
             response
                 .type_info
                 .clone()
-                .map(|ty| Box::new(TypeLineBlock { number, ty }) as Box<dyn Block>),
+                .map(|ty| Box::new(OutputBlock::muted(ty)) as Box<dyn Block>),
         ),
         (None, false) => {}
     }
@@ -399,6 +403,29 @@ mod tests {
                 .map(|cell| cell.code.as_str())
                 .collect::<Vec<_>>(),
             ["1 + 1", "2 + 2"]
+        );
+    }
+
+    #[test]
+    fn debug_post_runs_as_value_muted_and_null_cells() {
+        let backend = M2Backend::spawn().expect("spawn M2");
+        let mut session = Session::new(backend);
+        let mut highlighter = SyntaxHighlighter::new();
+
+        assert!(matches!(
+            session.submit(crate::ui::DEBUG_POST, &mut highlighter),
+            EditorUpdate::Pending { .. }
+        ));
+        updates_until_idle(&mut session);
+        let states = session
+            .committed()
+            .iter()
+            .map(|cell| cell.state)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            states,
+            [CellState::Value, CellState::Muted, CellState::Null]
         );
     }
 

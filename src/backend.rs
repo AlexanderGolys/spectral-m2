@@ -1,8 +1,6 @@
 //! Macaulay2 process management, protocol types, and transcript decoding.
 
-mod transcript;
-
-pub use transcript::{captured_error, captured_output, strip_m2_location};
+pub mod transcript;
 
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
@@ -58,7 +56,7 @@ impl M2Backend {
     }
 
     fn spawn_with_init_file(init_file: Option<PathBuf>) -> Result<Self> {
-        let startup_script = include_str!("m2_startup.m2");
+        let startup_script = include_str!("backend/m2_startup.m2");
 
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         let port = listener.local_addr()?.port();
@@ -237,7 +235,7 @@ mod tests {
         // The spoofed marker stays printed text: the reported value is the
         // statement's actual result, which for `print` is null.
         assert_eq!(spoofed.value.as_deref(), Some("null"));
-        let spoofed_output = crate::backend::captured_output(
+        let spoofed_output = crate::backend::transcript::captured_output(
             &spoofed.transcript,
             spoofed_code,
             spoofed.value.as_deref(),
@@ -313,7 +311,7 @@ mod tests {
             failed.transcript
         );
 
-        let message = crate::backend::captured_error(&failed.transcript, "1/0");
+        let message = crate::backend::transcript::captured_error(&failed.transcript, "1/0");
         assert!(
             message.contains("division by zero"),
             "diagnostic lost while cleaning: {message:?}"
