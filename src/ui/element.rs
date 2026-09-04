@@ -39,6 +39,16 @@ pub trait Element: Send {
     }
 }
 
+/// An element renderedh over a styled rectangular surface.
+pub trait StyleElement: Element {
+    fn render_styled(&self, context: &Self::Context, area: Rect, buf: &mut Buffer, style: Style) {
+        buf.set_style(area, style);
+        self.render(context, area, buf);
+    }
+}
+
+impl<T: Element + ?Sized> StyleElement for T {}
+
 /// A UI element represented by one line of styled text.
 pub trait Text: Send {
     type Context: ?Sized;
@@ -103,4 +113,3 @@ impl SpanText for [Span<'static>] {
             .collect()
     }
 }
-

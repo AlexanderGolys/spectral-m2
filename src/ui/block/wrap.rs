@@ -3,6 +3,18 @@
 use std::iter;
 use std::ops::Range;
 
+/// A visual row represented as a byte range into its source text.
+pub struct VisualLine {
+    pub range: Range<usize>,
+    pub hard_continuation: bool,
+}
+
+impl VisualLine {
+    fn shifted(mut self, offset: usize) -> Self {
+        self.range = offset + self.range.start..offset + self.range.end;
+        self
+    }
+}
 /// A strategy for projecting one logical line into byte ranges for visual rows.
 pub trait WrapPolicy {
     fn wrap_logical_line(&self, line: &str, width: u16, offset: usize) -> Vec<VisualLine>;
@@ -26,19 +38,6 @@ pub trait TextLayout {
 
     fn lines(&self, width: u16) -> Vec<VisualLine> {
         Self::Wrapping::default().wrap(self.text(), width)
-    }
-}
-
-/// A visual row represented as a byte range into its source text.
-pub struct VisualLine {
-    pub range: Range<usize>,
-    pub hard_continuation: bool,
-}
-
-impl VisualLine {
-    fn shifted(mut self, offset: usize) -> Self {
-        self.range = offset + self.range.start..offset + self.range.end;
-        self
     }
 }
 

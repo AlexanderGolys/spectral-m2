@@ -8,22 +8,120 @@ mod history;
 use std::iter;
 use std::ops::Range;
 
+use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Widget};
+use these_macros_should_be_illegal::discriminated_str;
 
 use self::history::{History, HistoryBuffer};
 use crate::code::highlight::Highlighter;
-use crate::ui::block::layout::{HardWrap, TextLayout, WrapPolicy};
 use crate::ui::block::render::{Highlights, Prompt, RenderContext};
-use crate::ui::element::{SpanText, Text};
+use crate::ui::block::wrap::{HardWrap, TextLayout, WrapPolicy};
+use crate::ui::config::UI;
+use crate::ui::element::{HLSpan, SpanText, Text};
+use crate::ui::key::KeyEvent;
 
 /// The glyph marking the live prompt line.
 const PROMPT_GLYPH: &str = "❯";
+
+/// A text-editing operation owned and interpreted by the input field.
+#[discriminated_str(description)]
+#[non_exhaustive]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum InputAction {
+    InsertNewline = "insert a line break",
+    InsertTab = "insert a tab",
+    DeleteBack = "delete before the cursor",
+    DeleteForward = "delete under the cursor",
+
+    MoveLeft = "move left",
+    MoveRight = "move right",
+    MoveUp = "move up, or recall older input",
+    MoveDown = "move down, or recall newer input",
+    MoveLineStart = "move to line start",
+    MoveLineEnd = "move to line end",
+
+    SelectLeft = "extend selection left",
+    SelectRight = "extend selection right",
+    SelectLineStart = "extend selection to line start",
+    SelectLineEnd = "extend selection to line end",
+
+    Clear = "clear input text",
+}
+
+/// User-adjustable layout policy owned by the input component.
+#[derive(Clone, Copy, Debug)]
+pub struct InputSettings {
+    /// Maximum editor-height percentage occupied by the input.
+    pub max_height_percent: u8,
+    /// Context rows retained around the cursor.
+    pub scrolloff: u8,
+}
+
+impl Default for InputSettings {
+    fn default() -> Self {
+        Self {
+            max_height_percent: 75,
+            scrolloff: 2,
+        }
+    }
+}
+
+/// One input setting exposed through the settings picker.
+#[derive(Clone, Copy)]
+pub enum InputSetting {
+    /// Maximum input height.
+    MaxHeight,
+    /// Cursor context rows.
+    Scrolloff,
+}
+
+impl InputSetting {
+    /// Picker label for this setting.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::MaxHeight => "max input height",
+            Self::Scrolloff => "scrolloff",
+        }
+    }
+
+    /// Current picker value for this setting.
+    pub fn value(self, settings: InputSettings) -> String {
+        match self {
+            Self::MaxHeight => format!("{}%", settings.max_height_percent),
+            Self::Scrolloff => format!("{} rows", settings.scrolloff),
+        }
+    }
+
+    /// Adjust this setting by one picker step.
+    pub fn adjust(self, settings: &mut InputSettings, delta: i8) {
+        let field = match self {
+            Self::MaxHeight => &mut settings.max_height_percent,
+            Self::Scrolloff => &mut settings.scrolloff,
+        };
+        let step = delta.unsigned_abs()
+            * if matches!(self, Self::MaxHeight) {
+                5
+            } else {
+                1
+            };
+        *field = if delta > 0 {
+            field.saturating_add(step)
+        } else {
+            field.saturating_sub(step)
+        };
+        settings.max_height_percent = settings.max_height_percent.min(100);
+    }
+}
 
 /// Editable source, its byte-offset cursor, and submission history.
 pub struct InputTextField {
     text: String,
     cursor: usize,
+    revision: u64,
     /// Where a selection started, if one is active. The cursor is its other end,
     /// so extending a selection is just moving the cursor.
     anchor: Option<usize>,
@@ -35,6 +133,7 @@ impl InputTextField {
         Self {
             text: String::new(),
             cursor: 0,
+            revision: 0,
             anchor: None,
             history: History::new(),
         }
@@ -129,6 +228,7 @@ impl InputTextField {
         self.text.replace_range(range.clone(), "");
         self.cursor = range.start;
         self.clear_selection();
+        self.changed();
         true
     }
 
@@ -136,18 +236,21 @@ impl InputTextField {
         self.delete_selection();
         self.text.insert(self.cursor, ch);
         self.cursor += ch.len_utf8();
+        self.changed();
     }
 
     pub fn insert_str(&mut self, s: &str) {
         self.delete_selection();
         self.text.insert_str(self.cursor, s);
         self.cursor += s.len();
+        self.changed();
     }
 
     fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
         self.anchor = None;
+        self.changed();
     }
 
     pub fn backspace(&mut self) {
@@ -160,6 +263,7 @@ impl InputTextField {
         let prev = self.previous_boundary();
         self.text.replace_range(prev..self.cursor, "");
         self.cursor = prev;
+        self.changed();
     }
 
     pub fn delete_forward(&mut self) {
@@ -171,6 +275,7 @@ impl InputTextField {
         }
         let next = self.next_boundary(self.cursor);
         self.text.replace_range(self.cursor..next, "");
+        self.changed();
     }
 
     pub fn move_left(&mut self) {
@@ -263,6 +368,7 @@ impl InputTextField {
         self.cursor = text.len();
         self.text = text;
         self.clear_selection();
+        self.changed();
     }
 
     fn accept_submission(&mut self) {
@@ -277,6 +383,11 @@ impl InputTextField {
             self.cursor = self.text.len();
         }
         self.clear_selection();
+        self.changed();
+    }
+
+    fn changed(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 
     fn previous_boundary(&self) -> usize {
@@ -328,6 +439,7 @@ impl InputTextField {
         Self {
             text: String::new(),
             cursor: 0,
+            revision: 0,
             anchor: None,
             history: History::in_memory(),
         }
@@ -337,16 +449,44 @@ impl InputTextField {
 /// The live source field and its transient presentation state.
 pub struct InputCode {
     field: InputTextField,
+    settings: InputSettings,
     diagnostic: Option<String>,
     diagnostic_range: Option<Range<usize>>,
+    selecting: bool,
+    highlighted_revision: u64,
+    highlights: Vec<HLSpan>,
+    area: Rect,
+    text_area: Rect,
+    scroll: usize,
+}
+
+/// Transient presentation inputs supplied by the containing editor.
+pub struct InputContext<'a> {
+    /// Width, prefix, and resolved highlight groups.
+    pub render: &'a RenderContext,
+    /// Parser-backed semantic highlighter.
+    pub highlighter: &'a mut dyn Highlighter,
+    /// Whether the source currently names a command.
+    pub command: bool,
+    /// Whether the backend is inside the debugger.
+    pub debugging: bool,
+    /// Whether this input is the focused UI element.
+    pub focused: bool,
 }
 
 impl InputCode {
     pub fn new() -> Self {
         Self {
             field: InputTextField::new(),
+            settings: InputSettings::default(),
             diagnostic: None,
             diagnostic_range: None,
+            selecting: false,
+            highlighted_revision: u64::MAX,
+            highlights: Vec::new(),
+            area: Rect::ZERO,
+            text_area: Rect::ZERO,
+            scroll: 0,
         }
     }
 
@@ -358,14 +498,25 @@ impl InputCode {
         &mut self.field
     }
 
+    /// Return the component's adjustable layout policy.
+    pub const fn settings(&self) -> InputSettings {
+        self.settings
+    }
+
+    /// Replace the component's adjustable layout policy.
+    pub fn set_settings(&mut self, settings: InputSettings) {
+        self.settings = settings;
+    }
+
+    /// Adjust one component-owned setting.
+    pub fn adjust(&mut self, setting: InputSetting, delta: i8) {
+        setting.adjust(&mut self.settings, delta);
+    }
+
     pub fn accept_submission(&mut self) {
         self.field.accept_submission();
         self.diagnostic = None;
         self.diagnostic_range = None;
-    }
-
-    pub fn diagnostic(&self) -> Option<&str> {
-        self.diagnostic.as_deref()
     }
 
     pub fn set_diagnostic(&mut self, diagnostic: String, range: Option<Range<usize>>) {
@@ -383,12 +534,132 @@ impl InputCode {
         self.clear_diagnostic();
     }
 
+    /// Apply one input-owned editing operation.
+    pub fn edit(&mut self, action: InputAction) {
+        use InputAction::*;
+        if matches!(
+            action,
+            InsertNewline | InsertTab | DeleteBack | DeleteForward | Clear
+        ) {
+            self.clear_diagnostic();
+        }
+        if action == Clear {
+            return self.clear();
+        }
+        let field = &mut self.field;
+        match action {
+            InsertNewline => field.insert_char('\n'),
+            InsertTab => field.insert_char('\t'),
+            DeleteBack => field.backspace(),
+            DeleteForward => field.delete_forward(),
+            MoveLeft => field.move_left(),
+            MoveRight => field.move_right(),
+            MoveLineStart => field.move_home(),
+            MoveLineEnd => field.move_end(),
+            MoveUp if field.cursor_on_first_line() => field.history_prev(),
+            MoveUp => field.move_up(),
+            MoveDown if field.cursor_on_last_line() => field.history_next(),
+            MoveDown => field.move_down(),
+            SelectLeft => field.select_left(),
+            SelectRight => field.select_right(),
+            SelectLineStart => field.select_home(),
+            SelectLineEnd => field.select_end(),
+            Clear => unreachable!(),
+        }
+    }
+
+    /// Interpret one unbound terminal key as editor input.
+    pub fn handle_key(&mut self, key: KeyEvent) -> Option<char> {
+        use InputAction::*;
+        let action = match key.code {
+            KeyCode::Char('l') if key.ctrl() => Some(Clear),
+            KeyCode::Char(' ') if key.shift() => Some(InsertNewline),
+            KeyCode::Enter if key.shift() || key.alt() => Some(InsertNewline),
+            KeyCode::Tab => Some(InsertTab),
+            KeyCode::Backspace => Some(DeleteBack),
+            KeyCode::Delete => Some(DeleteForward),
+            KeyCode::Left if key.shift() => Some(SelectLeft),
+            KeyCode::Right if key.shift() => Some(SelectRight),
+            KeyCode::Home if key.shift() => Some(SelectLineStart),
+            KeyCode::End if key.shift() => Some(SelectLineEnd),
+            KeyCode::Left => Some(MoveLeft),
+            KeyCode::Right => Some(MoveRight),
+            KeyCode::Up => Some(MoveUp),
+            KeyCode::Down => Some(MoveDown),
+            KeyCode::Home => Some(MoveLineStart),
+            KeyCode::End => Some(MoveLineEnd),
+            KeyCode::Char(character) if key.is_text() => {
+                self.clear_diagnostic();
+                self.field.insert_char(character);
+                return Some(character);
+            }
+            _ => None,
+        };
+        if let Some(action) = action {
+            self.edit(action);
+        }
+        None
+    }
+
+    /// Insert pasted source as one input-owned edit.
+    pub fn insert(&mut self, text: &str) {
+        self.clear_diagnostic();
+        self.field.insert_str(text);
+    }
+
+    /// Return whether a pointer event lies over the last rendered input pane.
+    pub fn contains(&self, event: MouseEvent) -> bool {
+        self.area.contains(Position::new(event.column, event.row))
+    }
+
+    /// Handle mouse selection in the last rendered text rectangle.
+    pub fn handle_mouse(&mut self, event: MouseEvent) -> (bool, Option<String>) {
+        let (area, scroll) = (self.text_area, self.scroll);
+        if area.is_empty() {
+            self.selecting = false;
+            return (false, None);
+        }
+        let point = Position::new(event.column, event.row);
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) if area.contains(point) => {
+                self.selecting = true;
+                self.field
+                    .start_selection(self.cursor_at_mouse(event, area, scroll));
+            }
+            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+                if self.selecting =>
+            {
+                self.field
+                    .continue_selection(self.cursor_at_mouse(event, area, scroll));
+                if matches!(event.kind, MouseEventKind::Up(_)) {
+                    self.selecting = false;
+                    return (true, self.field.selected_text().map(str::to_string));
+                }
+            }
+            _ => return (false, None),
+        }
+        (true, None)
+    }
+
+    fn cursor_at_mouse(&self, event: MouseEvent, area: Rect, scroll: usize) -> usize {
+        let row = event.row.saturating_sub(area.y).min(area.height - 1);
+        let column = event.column.saturating_sub(area.x).min(area.width) as usize;
+        self.cursor_at_visual(area.width, scroll + row as usize, column)
+    }
+
     #[cfg(test)]
     pub fn new_in_memory() -> Self {
         Self {
             field: InputTextField::new_in_memory(),
+            settings: InputSettings::default(),
             diagnostic: None,
             diagnostic_range: None,
+            selecting: false,
+            highlighted_revision: u64::MAX,
+            highlights: Vec::new(),
+            area: Rect::ZERO,
+            text_area: Rect::ZERO,
+            scroll: 0,
         }
     }
 
@@ -399,12 +670,15 @@ impl InputCode {
 
     /// Render the live source with fresh syntax highlighting.
     pub fn highlighted_lines(
-        &self,
+        &mut self,
         context: &RenderContext,
         highlighter: &mut dyn Highlighter,
         debugging: bool,
     ) -> Vec<Line<'static>> {
-        let highlights = highlighter.highlight(self.text());
+        if self.highlighted_revision != self.field.revision {
+            self.highlights = highlighter.highlight(self.field.text());
+            self.highlighted_revision = self.field.revision;
+        }
         let selection = self.field.selection();
         let theme = context.groups();
         let base = theme.code();
@@ -416,7 +690,7 @@ impl InputCode {
             theme.prompt().patch(base)
         };
         let text = self.text();
-        let painted = highlights.paint(0, text, base, theme);
+        let painted = self.highlights.paint(0, text, base, theme);
         let visual_lines = self.lines(context.width().saturating_sub(context.prefix()));
 
         let mut lines = Vec::new();
@@ -443,6 +717,119 @@ impl InputCode {
             lines.push(Line::from(spans));
         }
         lines
+    }
+
+    /// Height needed by the input within its configured share of the editor.
+    pub fn height(&self, width: u16, prefix: u16, editor_height: u16) -> u16 {
+        let rows = self.visual_rows(width.saturating_sub(prefix)) as u16;
+        let chrome = 2 + u16::from(self.diagnostic.is_some());
+        let cap = editor_height
+            .saturating_mul(self.settings.max_height_percent.into())
+            .saturating_div(100)
+            .max(UI.min_input_height);
+        rows.saturating_add(chrome).clamp(UI.min_input_height, cap)
+    }
+
+    /// Render the input locally and return its terminal cursor when focused.
+    pub fn render(
+        &mut self,
+        context: InputContext<'_>,
+        area: Rect,
+        buffer: &mut Buffer,
+    ) -> Option<Position> {
+        self.area = area;
+        let diagnostic = self.diagnostic.clone();
+        let groups = context.render.groups();
+        let code = groups.code();
+        let text_width = area.width.saturating_sub(context.render.prefix());
+        let mut rows =
+            self.highlighted_lines(context.render, context.highlighter, context.debugging);
+        if context.command {
+            for span in rows
+                .iter_mut()
+                .flat_map(|line| line.spans.iter_mut().skip(1))
+            {
+                span.style = span.style.patch(groups.prompt());
+            }
+        }
+
+        let viewport = area
+            .height
+            .saturating_sub(2 + u16::from(diagnostic.is_some()))
+            .max(1) as usize;
+        let (cursor_row, cursor_column) = self.visual_cursor(text_width);
+        self.scroll = self.scroll_start(cursor_row, rows.len(), viewport);
+        self.text_area = Rect::new(
+            area.x + context.render.prefix(),
+            area.y + 1,
+            text_width,
+            viewport as u16,
+        );
+
+        let mut lines = if context.debugging {
+            let warning = groups.warning().bold().patch(code);
+            vec![Line::from(vec![
+                Prompt::new("", warning).spans(&())[0].clone(),
+                Span::styled("DEBUGGER", warning),
+            ])]
+        } else {
+            vec![Line::default()]
+        };
+        lines.extend(rows.into_iter().skip(self.scroll).take(viewport));
+        if let Some(message) = diagnostic {
+            let error = groups.error().patch(code);
+            lines.push(Line::from(vec![
+                Prompt::new("", error).spans(&())[0].clone(),
+                Span::styled(message, error),
+            ]));
+        }
+        lines.push(Line::default());
+        Paragraph::new(lines).style(code).render(area, buffer);
+        context.focused.then(|| {
+            Position::new(
+                area.x + context.render.prefix() + cursor_column as u16,
+                area.y + 1 + (cursor_row - self.scroll) as u16,
+            )
+        })
+    }
+
+    /// Forget the pane rectangle while another view is displayed.
+    pub fn hide(&mut self) {
+        self.area = Rect::ZERO;
+        self.text_area = Rect::ZERO;
+    }
+
+    /// Return the input pane's last rendered rectangle.
+    #[cfg(test)]
+    pub fn area(&self) -> Rect {
+        self.area
+    }
+
+    /// Return the editable text's last rendered rectangle.
+    #[cfg(test)]
+    pub fn text_area(&self) -> Rect {
+        self.text_area
+    }
+
+    /// Supply layout rectangles without rendering in mouse-routing tests.
+    #[cfg(test)]
+    pub fn set_test_area(&mut self, area: Rect, text_area: Rect) {
+        self.area = area;
+        self.text_area = text_area;
+    }
+
+    fn scroll_start(&self, cursor: usize, rows: usize, viewport: usize) -> usize {
+        let last = rows.saturating_sub(viewport);
+        let scrolloff = usize::from(self.settings.scrolloff);
+        if viewport <= 2 * scrolloff + 1 {
+            return cursor.saturating_sub(viewport / 2).min(last);
+        }
+        self.scroll
+            .clamp(
+                (cursor + scrolloff + 1).saturating_sub(viewport),
+                cursor.saturating_sub(scrolloff),
+            )
+            .min(last)
     }
 }
 
@@ -530,7 +917,23 @@ mod tests {
     use crate::code::highlight::SyntaxHighlighter;
     use crate::ui::config::UI;
     use crate::ui::controller::settings::theme::groups::Groups;
+    use crate::ui::key::KeyMod::{Alt, Shift};
     use ratatui::style::Modifier;
+
+    #[test]
+    fn editor_owns_modified_newlines_and_tabs() {
+        let mut input = InputCode::new_in_memory();
+        for key in [
+            KeyCode::Char(' ') + Shift,
+            KeyCode::Enter + Shift,
+            KeyCode::Enter + Alt,
+            KeyCode::Tab.into(),
+        ] {
+            input.handle_key(key);
+        }
+
+        assert_eq!(input.text(), "\n\n\n\t");
+    }
 
     #[test]
     fn shifted_movement_selects_and_typing_replaces_it() {
@@ -671,7 +1074,7 @@ mod tests {
 
     #[test]
     fn empty_input_contains_only_the_prompt() {
-        let input = InputCode::new_in_memory();
+        let mut input = InputCode::new_in_memory();
         let theme = Groups::default();
         let context = RenderContext::new(40, UI.prompt_width(), &theme);
         let mut highlighter = SyntaxHighlighter::new();
@@ -683,6 +1086,32 @@ mod tests {
             .collect();
 
         assert_eq!(rendered, "  ❯  ");
+    }
+
+    #[test]
+    fn unchanged_input_reuses_its_semantic_highlights() {
+        /// A highlighter recording how often parsing is requested.
+        struct CountingHighlighter(usize);
+
+        impl Highlighter for CountingHighlighter {
+            fn highlight(&mut self, _source: &str) -> Vec<HLSpan> {
+                self.0 += 1;
+                Vec::new()
+            }
+        }
+
+        let mut input = InputCode::new_in_memory();
+        let theme = Groups::default();
+        let context = RenderContext::new(40, UI.prompt_width(), &theme);
+        let mut highlighter = CountingHighlighter(0);
+
+        input.highlighted_lines(&context, &mut highlighter, false);
+        input.highlighted_lines(&context, &mut highlighter, false);
+        assert_eq!(highlighter.0, 1);
+
+        input.field_mut().insert_char('x');
+        input.highlighted_lines(&context, &mut highlighter, false);
+        assert_eq!(highlighter.0, 2);
     }
 
     #[test]

@@ -2,10 +2,12 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
+use ratatui::style::Modifier;
+use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget};
 
 use super::config::UI;
-use super::controller::settings::theme::groups::Groups;
+use super::controller::settings::theme::groups::{Groups, HLGroup};
 use super::element::{Element, Text, TextSpan};
 
 /// A request to replace or clear the status line.
@@ -53,6 +55,24 @@ impl StatusLine {
             StatusLineEvent::Show { alignment, spans } => Some(StatusMessage { alignment, spans }),
         };
     }
+
+    fn line(spans: &[TextSpan], groups: &Groups, group: HLGroup) -> Line<'static> {
+        let mut line = spans.line(groups);
+        for (source, span) in spans.iter().zip(&mut line.spans) {
+            if !matches!(
+                source.kind,
+                HLGroup::KeymapHint
+                    | HLGroup::Muted
+                    | HLGroup::StatuslineError
+                    | HLGroup::StatuslineWarning
+            ) {
+                span.style = groups.style(group);
+            }
+            span.style = span.style.remove_modifier(Modifier::UNDERLINED);
+            span.style.underline_color = None;
+        }
+        line
+    }
 }
 
 impl Element for StatusLine {
@@ -88,9 +108,9 @@ impl Element for StatusLine {
         if area.width == 0 {
             return;
         }
-        let left = left.line(&context.groups);
-        let center = center.map(|spans| spans.line(&context.groups));
-        let right = right.line(&context.groups);
+        let left = Self::line(&left, &context.groups, HLGroup::Statusline1);
+        let center = center.map(|spans| Self::line(&spans, &context.groups, HLGroup::Statusline2));
+        let right = Self::line(&right, &context.groups, HLGroup::Statusline3);
         let width = usize::from(area.width);
         let center_range = center.as_ref().map(|line| {
             let start = width.saturating_sub(line.width()) / 2;
@@ -120,5 +140,45 @@ impl Element for StatusLine {
                 .alignment(Alignment::Center)
                 .render(area, buf);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::controller::settings::theme::groups::HLGroup;
+
+    #[test]
+    fn rendered_text_never_keeps_an_underline() {
+        let groups = Groups::default();
+        let context = StatusLineContext {
+            center: Some(vec![TextSpan::new("status", HLGroup::Documentation)]),
+            ..StatusLineContext::new(groups)
+        };
+        let area = Rect::new(0, 0, 20, 1);
+        let mut buffer = Buffer::empty(area);
+
+        StatusLine::default().render(&context, area, &mut buffer);
+
+        let cell = &buffer[(7, 0)];
+        assert_eq!(cell.fg, groups.style(HLGroup::Statusline2).fg.unwrap());
+        assert!(!cell.modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(cell.underline_color, ratatui::style::Color::Reset);
+    }
+
+    #[test]
+    fn key_hints_keep_their_accent_while_labels_stay_muted() {
+        let groups = Groups::default();
+        let line = StatusLine::line(
+            &[
+                TextSpan::new("ctrl+/ ", HLGroup::KeymapHint),
+                TextSpan::new("commands", HLGroup::Muted),
+            ],
+            &groups,
+            HLGroup::Statusline3,
+        );
+
+        assert_eq!(line.spans[0].style.fg, groups.style(HLGroup::KeymapHint).fg);
+        assert_eq!(line.spans[1].style.fg, groups.style(HLGroup::Muted).fg);
     }
 }

@@ -1,8 +1,1027 @@
-[dark.wave]
-native = { autumnGreen = "#76946a", autumnRed = "#c34043", autumnYellow = "#dca561", boatYellow1 = "#938056", boatYellow2 = "#c0a36e", carpYellow = "#e6c384", crystalBlue = "#7e9cd8", dragonAqua = "#8ea4a2", dragonAsh = "#737c73", dragonBlack0 = "#0d0c0c", dragonBlack1 = "#12120f", dragonBlack2 = "#1d1c19", dragonBlack3 = "#181616", dragonBlack4 = "#282727", dragonBlack5 = "#393836", dragonBlack6 = "#625e5a", dragonBlue = "#658594", dragonBlue2 = "#8ba4b0", dragonGray = "#a6a69c", dragonGray2 = "#9e9b93", dragonGray3 = "#7a8382", dragonGreen = "#87a987", dragonGreen2 = "#8a9a7b", dragonOrange = "#b6927b", dragonOrange2 = "#b98d7b", dragonPink = "#a292a3", dragonRed = "#c4746e", dragonTeal = "#949fb5", dragonViolet = "#8992a7", dragonWhite = "#c5c9c5", dragonYellow = "#c4b28a", fujiGray = "#727169", fujiWhite = "#dcd7ba", katanaGray = "#717c7c", lightBlue = "#a3d4d5", lotusAqua = "#597b75", lotusAqua2 = "#5e857a", lotusBlue1 = "#c7d7e0", lotusBlue2 = "#b5cbd2", lotusBlue3 = "#9fb5c9", lotusBlue4 = "#4d699b", lotusBlue5 = "#5d57a3", lotusCyan = "#d7e3d8", lotusGray = "#dcd7ba", lotusGray2 = "#716e61", lotusGray3 = "#8a8980", lotusGreen = "#6f894e", lotusGreen2 = "#6e915f", lotusGreen3 = "#b7d0ae", lotusInk1 = "#545464", lotusInk2 = "#43436c", lotusOrange = "#cc6d00", lotusOrange2 = "#e98a00", lotusPink = "#b35b79", lotusRed = "#c84053", lotusRed2 = "#d7474b", lotusRed3 = "#e82424", lotusRed4 = "#d9a594", lotusTeal1 = "#4e8ca2", lotusTeal2 = "#6693bf", lotusTeal3 = "#5a7785", lotusViolet1 = "#a09cac", lotusViolet2 = "#766b90", lotusViolet3 = "#c9cbd1", lotusViolet4 = "#624c83", lotusWhite0 = "#d5cea3", lotusWhite1 = "#dcd5ac", lotusWhite2 = "#e5ddb0", lotusWhite3 = "#f2ecbc", lotusWhite4 = "#e7dba0", lotusWhite5 = "#e4d794", lotusYellow = "#77713f", lotusYellow2 = "#836f4a", lotusYellow3 = "#de9800", lotusYellow4 = "#f9d791", oldWhite = "#c8c093", oniViolet = "#957fb8", oniViolet2 = "#b8b4d0", peachRed = "#ff5d62", roninYellow = "#ff9e3b", sakuraPink = "#d27e99", samuraiRed = "#e82424", springBlue = "#7fb4ca", springGreen = "#98bb6c", springViolet1 = "#938aa9", springViolet2 = "#9cabca", sumiInk0 = "#16161d", sumiInk1 = "#181820", sumiInk2 = "#1a1a22", sumiInk3 = "#1f1f28", sumiInk4 = "#2a2a37", sumiInk5 = "#363646", sumiInk6 = "#54546d", surimiOrange = "#ffa066", waveAqua1 = "#6a9589", waveAqua2 = "#7aa89f", waveBlue1 = "#223249", waveBlue2 = "#2d4f67", waveRed = "#e46876", winterBlue = "#252535", winterGreen = "#2b3328", winterRed = "#43242b", winterYellow = "#49443c" }
+name = "kanagawa"
 
-[dark.dragon]
-native = { autumnGreen = "#76946a", autumnRed = "#c34043", autumnYellow = "#dca561", boatYellow1 = "#938056", boatYellow2 = "#c0a36e", carpYellow = "#e6c384", crystalBlue = "#7e9cd8", dragonAqua = "#8ea4a2", dragonAsh = "#737c73", dragonBlack0 = "#0d0c0c", dragonBlack1 = "#12120f", dragonBlack2 = "#1d1c19", dragonBlack3 = "#181616", dragonBlack4 = "#282727", dragonBlack5 = "#393836", dragonBlack6 = "#625e5a", dragonBlue = "#658594", dragonBlue2 = "#8ba4b0", dragonGray = "#a6a69c", dragonGray2 = "#9e9b93", dragonGray3 = "#7a8382", dragonGreen = "#87a987", dragonGreen2 = "#8a9a7b", dragonOrange = "#b6927b", dragonOrange2 = "#b98d7b", dragonPink = "#a292a3", dragonRed = "#c4746e", dragonTeal = "#949fb5", dragonViolet = "#8992a7", dragonWhite = "#c5c9c5", dragonYellow = "#c4b28a", fujiGray = "#727169", fujiWhite = "#dcd7ba", katanaGray = "#717c7c", lightBlue = "#a3d4d5", lotusAqua = "#597b75", lotusAqua2 = "#5e857a", lotusBlue1 = "#c7d7e0", lotusBlue2 = "#b5cbd2", lotusBlue3 = "#9fb5c9", lotusBlue4 = "#4d699b", lotusBlue5 = "#5d57a3", lotusCyan = "#d7e3d8", lotusGray = "#dcd7ba", lotusGray2 = "#716e61", lotusGray3 = "#8a8980", lotusGreen = "#6f894e", lotusGreen2 = "#6e915f", lotusGreen3 = "#b7d0ae", lotusInk1 = "#545464", lotusInk2 = "#43436c", lotusOrange = "#cc6d00", lotusOrange2 = "#e98a00", lotusPink = "#b35b79", lotusRed = "#c84053", lotusRed2 = "#d7474b", lotusRed3 = "#e82424", lotusRed4 = "#d9a594", lotusTeal1 = "#4e8ca2", lotusTeal2 = "#6693bf", lotusTeal3 = "#5a7785", lotusViolet1 = "#a09cac", lotusViolet2 = "#766b90", lotusViolet3 = "#c9cbd1", lotusViolet4 = "#624c83", lotusWhite0 = "#d5cea3", lotusWhite1 = "#dcd5ac", lotusWhite2 = "#e5ddb0", lotusWhite3 = "#f2ecbc", lotusWhite4 = "#e7dba0", lotusWhite5 = "#e4d794", lotusYellow = "#77713f", lotusYellow2 = "#836f4a", lotusYellow3 = "#de9800", lotusYellow4 = "#f9d791", oldWhite = "#c8c093", oniViolet = "#957fb8", oniViolet2 = "#b8b4d0", peachRed = "#ff5d62", roninYellow = "#ff9e3b", sakuraPink = "#d27e99", samuraiRed = "#e82424", springBlue = "#7fb4ca", springGreen = "#98bb6c", springViolet1 = "#938aa9", springViolet2 = "#9cabca", sumiInk0 = "#16161d", sumiInk1 = "#181820", sumiInk2 = "#1a1a22", sumiInk3 = "#1f1f28", sumiInk4 = "#2a2a37", sumiInk5 = "#363646", sumiInk6 = "#54546d", surimiOrange = "#ffa066", waveAqua1 = "#6a9589", waveAqua2 = "#7aa89f", waveBlue1 = "#223249", waveBlue2 = "#2d4f67", waveRed = "#e46876", winterBlue = "#252535", winterGreen = "#2b3328", winterRed = "#43242b", winterYellow = "#49443c" }
+[variants]
+dark = ["wave", "dragon"]
+light = ["lotus"]
 
-[light.lotus]
-native = { autumnGreen = "#76946a", autumnRed = "#c34043", autumnYellow = "#dca561", boatYellow1 = "#938056", boatYellow2 = "#c0a36e", carpYellow = "#e6c384", crystalBlue = "#7e9cd8", dragonAqua = "#8ea4a2", dragonAsh = "#737c73", dragonBlack0 = "#0d0c0c", dragonBlack1 = "#12120f", dragonBlack2 = "#1d1c19", dragonBlack3 = "#181616", dragonBlack4 = "#282727", dragonBlack5 = "#393836", dragonBlack6 = "#625e5a", dragonBlue = "#658594", dragonBlue2 = "#8ba4b0", dragonGray = "#a6a69c", dragonGray2 = "#9e9b93", dragonGray3 = "#7a8382", dragonGreen = "#87a987", dragonGreen2 = "#8a9a7b", dragonOrange = "#b6927b", dragonOrange2 = "#b98d7b", dragonPink = "#a292a3", dragonRed = "#c4746e", dragonTeal = "#949fb5", dragonViolet = "#8992a7", dragonWhite = "#c5c9c5", dragonYellow = "#c4b28a", fujiGray = "#727169", fujiWhite = "#dcd7ba", katanaGray = "#717c7c", lightBlue = "#a3d4d5", lotusAqua = "#597b75", lotusAqua2 = "#5e857a", lotusBlue1 = "#c7d7e0", lotusBlue2 = "#b5cbd2", lotusBlue3 = "#9fb5c9", lotusBlue4 = "#4d699b", lotusBlue5 = "#5d57a3", lotusCyan = "#d7e3d8", lotusGray = "#dcd7ba", lotusGray2 = "#716e61", lotusGray3 = "#8a8980", lotusGreen = "#6f894e", lotusGreen2 = "#6e915f", lotusGreen3 = "#b7d0ae", lotusInk1 = "#545464", lotusInk2 = "#43436c", lotusOrange = "#cc6d00", lotusOrange2 = "#e98a00", lotusPink = "#b35b79", lotusRed = "#c84053", lotusRed2 = "#d7474b", lotusRed3 = "#e82424", lotusRed4 = "#d9a594", lotusTeal1 = "#4e8ca2", lotusTeal2 = "#6693bf", lotusTeal3 = "#5a7785", lotusViolet1 = "#a09cac", lotusViolet2 = "#766b90", lotusViolet3 = "#c9cbd1", lotusViolet4 = "#624c83", lotusWhite0 = "#d5cea3", lotusWhite1 = "#dcd5ac", lotusWhite2 = "#e5ddb0", lotusWhite3 = "#f2ecbc", lotusWhite4 = "#e7dba0", lotusWhite5 = "#e4d794", lotusYellow = "#77713f", lotusYellow2 = "#836f4a", lotusYellow3 = "#de9800", lotusYellow4 = "#f9d791", oldWhite = "#c8c093", oniViolet = "#957fb8", oniViolet2 = "#b8b4d0", peachRed = "#ff5d62", roninYellow = "#ff9e3b", sakuraPink = "#d27e99", samuraiRed = "#e82424", springBlue = "#7fb4ca", springGreen = "#98bb6c", springViolet1 = "#938aa9", springViolet2 = "#9cabca", sumiInk0 = "#16161d", sumiInk1 = "#181820", sumiInk2 = "#1a1a22", sumiInk3 = "#1f1f28", sumiInk4 = "#2a2a37", sumiInk5 = "#363646", sumiInk6 = "#54546d", surimiOrange = "#ffa066", waveAqua1 = "#6a9589", waveAqua2 = "#7aa89f", waveBlue1 = "#223249", waveBlue2 = "#2d4f67", waveRed = "#e46876", winterBlue = "#252535", winterGreen = "#2b3328", winterRed = "#43242b", winterYellow = "#49443c" }
+[colors.autumnGreen.dark]
+wave = "#76946a"
+dragon = "#76946a"
+
+[colors.autumnGreen.light]
+lotus = "#76946a"
+
+[colors.autumnRed.dark]
+wave = "#c34043"
+dragon = "#c34043"
+
+[colors.autumnRed.light]
+lotus = "#c34043"
+
+[colors.autumnYellow.dark]
+wave = "#dca561"
+dragon = "#dca561"
+
+[colors.autumnYellow.light]
+lotus = "#dca561"
+
+[colors.background.dark]
+wave = "#1f1f28"
+dragon = "#181616"
+
+[colors.background.light]
+lotus = "#f2ecbc"
+
+[colors.background_dim.dark]
+wave = "#181820"
+dragon = "#12120f"
+
+[colors.background_dim.light]
+lotus = "#dcd5ac"
+
+[colors.boatYellow1.dark]
+wave = "#938056"
+dragon = "#938056"
+
+[colors.boatYellow1.light]
+lotus = "#938056"
+
+[colors.boatYellow2.dark]
+wave = "#c0a36e"
+dragon = "#c0a36e"
+
+[colors.boatYellow2.light]
+lotus = "#c0a36e"
+
+[colors.boolean.dark]
+wave = "#ffa066"
+dragon = "#b6927b"
+
+[colors.boolean.light]
+lotus = "#cc6d00"
+
+[colors.border.dark]
+wave = "#1a1a22"
+dragon = "#1d1c19"
+
+[colors.border.light]
+lotus = "#e5ddb0"
+
+[colors.builtin.dark]
+wave = "#e46876"
+dragon = "#c4746e"
+
+[colors.builtin.light]
+lotus = "#d7474b"
+
+[colors.carpYellow.dark]
+wave = "#e6c384"
+dragon = "#e6c384"
+
+[colors.carpYellow.light]
+lotus = "#e6c384"
+
+[colors.comment.dark]
+wave = "#727169"
+dragon = "#a6a69c"
+
+[colors.comment.light]
+lotus = "#8a8980"
+
+[colors.crystalBlue.dark]
+wave = "#7e9cd8"
+dragon = "#7e9cd8"
+
+[colors.crystalBlue.light]
+lotus = "#7e9cd8"
+
+[colors.dragonAqua.dark]
+wave = "#8ea4a2"
+dragon = "#8ea4a2"
+
+[colors.dragonAqua.light]
+lotus = "#8ea4a2"
+
+[colors.dragonAsh.dark]
+wave = "#737c73"
+dragon = "#737c73"
+
+[colors.dragonAsh.light]
+lotus = "#737c73"
+
+[colors.dragonBlack0.dark]
+wave = "#0d0c0c"
+dragon = "#0d0c0c"
+
+[colors.dragonBlack0.light]
+lotus = "#0d0c0c"
+
+[colors.dragonBlack1.dark]
+wave = "#12120f"
+dragon = "#12120f"
+
+[colors.dragonBlack1.light]
+lotus = "#12120f"
+
+[colors.dragonBlack2.dark]
+wave = "#1d1c19"
+dragon = "#1d1c19"
+
+[colors.dragonBlack2.light]
+lotus = "#1d1c19"
+
+[colors.dragonBlack3.dark]
+wave = "#181616"
+dragon = "#181616"
+
+[colors.dragonBlack3.light]
+lotus = "#181616"
+
+[colors.dragonBlack4.dark]
+wave = "#282727"
+dragon = "#282727"
+
+[colors.dragonBlack4.light]
+lotus = "#282727"
+
+[colors.dragonBlack5.dark]
+wave = "#393836"
+dragon = "#393836"
+
+[colors.dragonBlack5.light]
+lotus = "#393836"
+
+[colors.dragonBlack6.dark]
+wave = "#625e5a"
+dragon = "#625e5a"
+
+[colors.dragonBlack6.light]
+lotus = "#625e5a"
+
+[colors.dragonBlue.dark]
+wave = "#658594"
+dragon = "#658594"
+
+[colors.dragonBlue.light]
+lotus = "#658594"
+
+[colors.dragonBlue2.dark]
+wave = "#8ba4b0"
+dragon = "#8ba4b0"
+
+[colors.dragonBlue2.light]
+lotus = "#8ba4b0"
+
+[colors.dragonGray.dark]
+wave = "#a6a69c"
+dragon = "#a6a69c"
+
+[colors.dragonGray.light]
+lotus = "#a6a69c"
+
+[colors.dragonGray2.dark]
+wave = "#9e9b93"
+dragon = "#9e9b93"
+
+[colors.dragonGray2.light]
+lotus = "#9e9b93"
+
+[colors.dragonGray3.dark]
+wave = "#7a8382"
+dragon = "#7a8382"
+
+[colors.dragonGray3.light]
+lotus = "#7a8382"
+
+[colors.dragonGreen.dark]
+wave = "#87a987"
+dragon = "#87a987"
+
+[colors.dragonGreen.light]
+lotus = "#87a987"
+
+[colors.dragonGreen2.dark]
+wave = "#8a9a7b"
+dragon = "#8a9a7b"
+
+[colors.dragonGreen2.light]
+lotus = "#8a9a7b"
+
+[colors.dragonOrange.dark]
+wave = "#b6927b"
+dragon = "#b6927b"
+
+[colors.dragonOrange.light]
+lotus = "#b6927b"
+
+[colors.dragonOrange2.dark]
+wave = "#b98d7b"
+dragon = "#b98d7b"
+
+[colors.dragonOrange2.light]
+lotus = "#b98d7b"
+
+[colors.dragonPink.dark]
+wave = "#a292a3"
+dragon = "#a292a3"
+
+[colors.dragonPink.light]
+lotus = "#a292a3"
+
+[colors.dragonRed.dark]
+wave = "#c4746e"
+dragon = "#c4746e"
+
+[colors.dragonRed.light]
+lotus = "#c4746e"
+
+[colors.dragonTeal.dark]
+wave = "#949fb5"
+dragon = "#949fb5"
+
+[colors.dragonTeal.light]
+lotus = "#949fb5"
+
+[colors.dragonViolet.dark]
+wave = "#8992a7"
+dragon = "#8992a7"
+
+[colors.dragonViolet.light]
+lotus = "#8992a7"
+
+[colors.dragonWhite.dark]
+wave = "#c5c9c5"
+dragon = "#c5c9c5"
+
+[colors.dragonWhite.light]
+lotus = "#c5c9c5"
+
+[colors.dragonYellow.dark]
+wave = "#c4b28a"
+dragon = "#c4b28a"
+
+[colors.dragonYellow.light]
+lotus = "#c4b28a"
+
+[colors.error.dark]
+wave = "#e82424"
+dragon = "#e82424"
+
+[colors.error.light]
+lotus = "#c84053"
+
+[colors.error_bg.dark]
+wave = "#43242b"
+dragon = "#43242b"
+
+[colors.error_bg.light]
+lotus = "#d9a594"
+
+[colors.fujiGray.dark]
+wave = "#727169"
+dragon = "#727169"
+
+[colors.fujiGray.light]
+lotus = "#727169"
+
+[colors.fujiWhite.dark]
+wave = "#dcd7ba"
+dragon = "#dcd7ba"
+
+[colors.fujiWhite.light]
+lotus = "#dcd7ba"
+
+[colors.function.dark]
+wave = "#7e9cd8"
+dragon = "#658594"
+
+[colors.function.light]
+lotus = "#4d699b"
+
+[colors.katanaGray.dark]
+wave = "#717c7c"
+dragon = "#717c7c"
+
+[colors.katanaGray.light]
+lotus = "#717c7c"
+
+[colors.label.dark]
+wave = "#957fb8"
+dragon = "#8992a7"
+
+[colors.label.light]
+lotus = "#a09cac"
+
+[colors.lightBlue.dark]
+wave = "#a3d4d5"
+dragon = "#a3d4d5"
+
+[colors.lightBlue.light]
+lotus = "#a3d4d5"
+
+[colors.lotusAqua.dark]
+wave = "#597b75"
+dragon = "#597b75"
+
+[colors.lotusAqua.light]
+lotus = "#597b75"
+
+[colors.lotusAqua2.dark]
+wave = "#5e857a"
+dragon = "#5e857a"
+
+[colors.lotusAqua2.light]
+lotus = "#5e857a"
+
+[colors.lotusBlue1.dark]
+wave = "#c7d7e0"
+dragon = "#c7d7e0"
+
+[colors.lotusBlue1.light]
+lotus = "#c7d7e0"
+
+[colors.lotusBlue2.dark]
+wave = "#b5cbd2"
+dragon = "#b5cbd2"
+
+[colors.lotusBlue2.light]
+lotus = "#b5cbd2"
+
+[colors.lotusBlue3.dark]
+wave = "#9fb5c9"
+dragon = "#9fb5c9"
+
+[colors.lotusBlue3.light]
+lotus = "#9fb5c9"
+
+[colors.lotusBlue4.dark]
+wave = "#4d699b"
+dragon = "#4d699b"
+
+[colors.lotusBlue4.light]
+lotus = "#4d699b"
+
+[colors.lotusBlue5.dark]
+wave = "#5d57a3"
+dragon = "#5d57a3"
+
+[colors.lotusBlue5.light]
+lotus = "#5d57a3"
+
+[colors.lotusCyan.dark]
+wave = "#d7e3d8"
+dragon = "#d7e3d8"
+
+[colors.lotusCyan.light]
+lotus = "#d7e3d8"
+
+[colors.lotusGray.dark]
+wave = "#dcd7ba"
+dragon = "#dcd7ba"
+
+[colors.lotusGray.light]
+lotus = "#dcd7ba"
+
+[colors.lotusGray2.dark]
+wave = "#716e61"
+dragon = "#716e61"
+
+[colors.lotusGray2.light]
+lotus = "#716e61"
+
+[colors.lotusGray3.dark]
+wave = "#8a8980"
+dragon = "#8a8980"
+
+[colors.lotusGray3.light]
+lotus = "#8a8980"
+
+[colors.lotusGreen.dark]
+wave = "#6f894e"
+dragon = "#6f894e"
+
+[colors.lotusGreen.light]
+lotus = "#6f894e"
+
+[colors.lotusGreen2.dark]
+wave = "#6e915f"
+dragon = "#6e915f"
+
+[colors.lotusGreen2.light]
+lotus = "#6e915f"
+
+[colors.lotusGreen3.dark]
+wave = "#b7d0ae"
+dragon = "#b7d0ae"
+
+[colors.lotusGreen3.light]
+lotus = "#b7d0ae"
+
+[colors.lotusInk1.dark]
+wave = "#545464"
+dragon = "#545464"
+
+[colors.lotusInk1.light]
+lotus = "#545464"
+
+[colors.lotusInk2.dark]
+wave = "#43436c"
+dragon = "#43436c"
+
+[colors.lotusInk2.light]
+lotus = "#43436c"
+
+[colors.lotusOrange.dark]
+wave = "#cc6d00"
+dragon = "#cc6d00"
+
+[colors.lotusOrange.light]
+lotus = "#cc6d00"
+
+[colors.lotusOrange2.dark]
+wave = "#e98a00"
+dragon = "#e98a00"
+
+[colors.lotusOrange2.light]
+lotus = "#e98a00"
+
+[colors.lotusPink.dark]
+wave = "#b35b79"
+dragon = "#b35b79"
+
+[colors.lotusPink.light]
+lotus = "#b35b79"
+
+[colors.lotusRed.dark]
+wave = "#c84053"
+dragon = "#c84053"
+
+[colors.lotusRed.light]
+lotus = "#c84053"
+
+[colors.lotusRed2.dark]
+wave = "#d7474b"
+dragon = "#d7474b"
+
+[colors.lotusRed2.light]
+lotus = "#d7474b"
+
+[colors.lotusRed3.dark]
+wave = "#e82424"
+dragon = "#e82424"
+
+[colors.lotusRed3.light]
+lotus = "#e82424"
+
+[colors.lotusRed4.dark]
+wave = "#d9a594"
+dragon = "#d9a594"
+
+[colors.lotusRed4.light]
+lotus = "#d9a594"
+
+[colors.lotusTeal1.dark]
+wave = "#4e8ca2"
+dragon = "#4e8ca2"
+
+[colors.lotusTeal1.light]
+lotus = "#4e8ca2"
+
+[colors.lotusTeal2.dark]
+wave = "#6693bf"
+dragon = "#6693bf"
+
+[colors.lotusTeal2.light]
+lotus = "#6693bf"
+
+[colors.lotusTeal3.dark]
+wave = "#5a7785"
+dragon = "#5a7785"
+
+[colors.lotusTeal3.light]
+lotus = "#5a7785"
+
+[colors.lotusViolet1.dark]
+wave = "#a09cac"
+dragon = "#a09cac"
+
+[colors.lotusViolet1.light]
+lotus = "#a09cac"
+
+[colors.lotusViolet2.dark]
+wave = "#766b90"
+dragon = "#766b90"
+
+[colors.lotusViolet2.light]
+lotus = "#766b90"
+
+[colors.lotusViolet3.dark]
+wave = "#c9cbd1"
+dragon = "#c9cbd1"
+
+[colors.lotusViolet3.light]
+lotus = "#c9cbd1"
+
+[colors.lotusViolet4.dark]
+wave = "#624c83"
+dragon = "#624c83"
+
+[colors.lotusViolet4.light]
+lotus = "#624c83"
+
+[colors.lotusWhite0.dark]
+wave = "#d5cea3"
+dragon = "#d5cea3"
+
+[colors.lotusWhite0.light]
+lotus = "#d5cea3"
+
+[colors.lotusWhite1.dark]
+wave = "#dcd5ac"
+dragon = "#dcd5ac"
+
+[colors.lotusWhite1.light]
+lotus = "#dcd5ac"
+
+[colors.lotusWhite2.dark]
+wave = "#e5ddb0"
+dragon = "#e5ddb0"
+
+[colors.lotusWhite2.light]
+lotus = "#e5ddb0"
+
+[colors.lotusWhite3.dark]
+wave = "#f2ecbc"
+dragon = "#f2ecbc"
+
+[colors.lotusWhite3.light]
+lotus = "#f2ecbc"
+
+[colors.lotusWhite4.dark]
+wave = "#e7dba0"
+dragon = "#e7dba0"
+
+[colors.lotusWhite4.light]
+lotus = "#e7dba0"
+
+[colors.lotusWhite5.dark]
+wave = "#e4d794"
+dragon = "#e4d794"
+
+[colors.lotusWhite5.light]
+lotus = "#e4d794"
+
+[colors.lotusYellow.dark]
+wave = "#77713f"
+dragon = "#77713f"
+
+[colors.lotusYellow.light]
+lotus = "#77713f"
+
+[colors.lotusYellow2.dark]
+wave = "#836f4a"
+dragon = "#836f4a"
+
+[colors.lotusYellow2.light]
+lotus = "#836f4a"
+
+[colors.lotusYellow3.dark]
+wave = "#de9800"
+dragon = "#de9800"
+
+[colors.lotusYellow3.light]
+lotus = "#de9800"
+
+[colors.lotusYellow4.dark]
+wave = "#f9d791"
+dragon = "#f9d791"
+
+[colors.lotusYellow4.light]
+lotus = "#f9d791"
+
+[colors.number.dark]
+wave = "#d27e99"
+dragon = "#a292a3"
+
+[colors.number.light]
+lotus = "#c9cbd1"
+
+[colors.oldWhite.dark]
+wave = "#c8c093"
+dragon = "#c8c093"
+
+[colors.oldWhite.light]
+lotus = "#c8c093"
+
+[colors.oniViolet.dark]
+wave = "#957fb8"
+dragon = "#957fb8"
+
+[colors.oniViolet.light]
+lotus = "#957fb8"
+
+[colors.oniViolet2.dark]
+wave = "#b8b4d0"
+dragon = "#b8b4d0"
+
+[colors.oniViolet2.light]
+lotus = "#b8b4d0"
+
+[colors.operator.dark]
+wave = "#c0a36e"
+dragon = "#c4746e"
+
+[colors.operator.light]
+lotus = "#836f4a"
+
+[colors.parameter.dark]
+wave = "#b8b4d0"
+dragon = "#8992a7"
+
+[colors.parameter.light]
+lotus = "#b5cbd2"
+
+[colors.peachRed.dark]
+wave = "#ff5d62"
+dragon = "#ff5d62"
+
+[colors.peachRed.light]
+lotus = "#ff5d62"
+
+[colors.property.dark]
+wave = "#e6c384"
+dragon = "#c4b28a"
+
+[colors.property.light]
+lotus = "#77713f"
+
+[colors.punctuation.dark]
+wave = "#9cabca"
+dragon = "#8992a7"
+
+[colors.punctuation.light]
+lotus = "#6693bf"
+
+[colors.return.dark]
+wave = "#ff5d62"
+dragon = "#c4746e"
+
+[colors.return.light]
+lotus = "#d7474b"
+
+[colors.roninYellow.dark]
+wave = "#ff9e3b"
+dragon = "#ff9e3b"
+
+[colors.roninYellow.light]
+lotus = "#ff9e3b"
+
+[colors.sakuraPink.dark]
+wave = "#d27e99"
+dragon = "#d27e99"
+
+[colors.sakuraPink.light]
+lotus = "#d27e99"
+
+[colors.samuraiRed.dark]
+wave = "#e82424"
+dragon = "#e82424"
+
+[colors.samuraiRed.light]
+lotus = "#e82424"
+
+[colors.selection.dark]
+wave = "#223249"
+dragon = "#625e5a"
+
+[colors.selection.light]
+lotus = "#e7dba0"
+
+[colors.springBlue.dark]
+wave = "#7fb4ca"
+dragon = "#7fb4ca"
+
+[colors.springBlue.light]
+lotus = "#7fb4ca"
+
+[colors.springGreen.dark]
+wave = "#98bb6c"
+dragon = "#98bb6c"
+
+[colors.springGreen.light]
+lotus = "#98bb6c"
+
+[colors.springViolet1.dark]
+wave = "#938aa9"
+dragon = "#938aa9"
+
+[colors.springViolet1.light]
+lotus = "#938aa9"
+
+[colors.springViolet2.dark]
+wave = "#9cabca"
+dragon = "#9cabca"
+
+[colors.springViolet2.light]
+lotus = "#9cabca"
+
+[colors.string.dark]
+wave = "#98bb6c"
+dragon = "#8a9a7b"
+
+[colors.string.light]
+lotus = "#6f894e"
+
+[colors.sumiInk0.dark]
+wave = "#16161d"
+dragon = "#16161d"
+
+[colors.sumiInk0.light]
+lotus = "#16161d"
+
+[colors.sumiInk1.dark]
+wave = "#181820"
+dragon = "#181820"
+
+[colors.sumiInk1.light]
+lotus = "#181820"
+
+[colors.sumiInk2.dark]
+wave = "#1a1a22"
+dragon = "#1a1a22"
+
+[colors.sumiInk2.light]
+lotus = "#1a1a22"
+
+[colors.sumiInk3.dark]
+wave = "#1f1f28"
+dragon = "#1f1f28"
+
+[colors.sumiInk3.light]
+lotus = "#1f1f28"
+
+[colors.sumiInk4.dark]
+wave = "#2a2a37"
+dragon = "#2a2a37"
+
+[colors.sumiInk4.light]
+lotus = "#2a2a37"
+
+[colors.sumiInk5.dark]
+wave = "#363646"
+dragon = "#363646"
+
+[colors.sumiInk5.light]
+lotus = "#363646"
+
+[colors.sumiInk6.dark]
+wave = "#54546d"
+dragon = "#54546d"
+
+[colors.sumiInk6.light]
+lotus = "#54546d"
+
+[colors.surimiOrange.dark]
+wave = "#ffa066"
+dragon = "#ffa066"
+
+[colors.surimiOrange.light]
+lotus = "#ffa066"
+
+[colors.text.dark]
+wave = "#dcd7ba"
+dragon = "#c5c9c5"
+
+[colors.text.light]
+lotus = "#545464"
+
+[colors.type.dark]
+wave = "#7aa89f"
+dragon = "#8ea4a2"
+
+[colors.type.light]
+lotus = "#597b75"
+
+[colors.url.dark]
+wave = "#7fb4ca"
+dragon = "#8ba4b0"
+
+[colors.url.light]
+lotus = "#5a7785"
+
+[colors.warning.dark]
+wave = "#ff9e3b"
+dragon = "#c4b28a"
+
+[colors.warning.light]
+lotus = "#e98a00"
+
+[colors.warning_bg.dark]
+wave = "#49443c"
+dragon = "#49443c"
+
+[colors.warning_bg.light]
+lotus = "#f9d791"
+
+[colors.waveAqua1.dark]
+wave = "#6a9589"
+dragon = "#6a9589"
+
+[colors.waveAqua1.light]
+lotus = "#6a9589"
+
+[colors.waveAqua2.dark]
+wave = "#7aa89f"
+dragon = "#7aa89f"
+
+[colors.waveAqua2.light]
+lotus = "#7aa89f"
+
+[colors.waveBlue1.dark]
+wave = "#223249"
+dragon = "#223249"
+
+[colors.waveBlue1.light]
+lotus = "#223249"
+
+[colors.waveBlue2.dark]
+wave = "#2d4f67"
+dragon = "#2d4f67"
+
+[colors.waveBlue2.light]
+lotus = "#2d4f67"
+
+[colors.waveRed.dark]
+wave = "#e46876"
+dragon = "#e46876"
+
+[colors.waveRed.light]
+lotus = "#e46876"
+
+[colors.winterBlue.dark]
+wave = "#252535"
+dragon = "#252535"
+
+[colors.winterBlue.light]
+lotus = "#252535"
+
+[colors.winterGreen.dark]
+wave = "#2b3328"
+dragon = "#2b3328"
+
+[colors.winterGreen.light]
+lotus = "#2b3328"
+
+[colors.winterRed.dark]
+wave = "#43242b"
+dragon = "#43242b"
+
+[colors.winterRed.light]
+lotus = "#43242b"
+
+[colors.winterYellow.dark]
+wave = "#49443c"
+dragon = "#49443c"
+
+[colors.winterYellow.light]
+lotus = "#49443c"
+
+[groups]
+
+Comment = { fg = "comment", italic = true }
+Constant = { fg = "boolean" }
+String = { fg = "string" }
+Character = { fg = "string" }
+Number = { fg = "number" }
+Boolean = { fg = "boolean", bold = true }
+Float = { fg = "number" }
+Identifier = { fg = "text" }
+Function = { fg = "function" }
+Statement = { fg = "label", italic = true }
+Conditional = { fg = "label", italic = true }
+Repeat = { fg = "label", italic = true }
+Label = { fg = "label", bold = true }
+Operator = { fg = "operator" }
+Keyword = { fg = "label", italic = true }
+Exception = { fg = "label", italic = true }
+PreProc = { fg = "function" }
+Include = { fg = "function" }
+Define = { fg = "function" }
+Macro = { fg = "function" }
+PreCondit = { fg = "function" }
+Type = { fg = "type" }
+StorageClass = { fg = "label", italic = true }
+Structure = { fg = "type" }
+Typedef = { fg = "type" }
+Special = { fg = "boolean" }
+SpecialChar = { fg = "string" }
+Tag = { fg = "url", sp = "url", underline = true }
+Delimiter = { fg = "operator" }
+SpecialComment = { fg = "comment", italic = true }
+Debug = { fg = "label", italic = true }
+Underlined = { fg = "url", sp = "url", underline = true }
+Ignore = { fg = "comment" }
+Error = { fg = "error", sp = "error" }
+Todo = { fg = "warning", sp = "warning", bold = true }
+Added = { fg = "function" }
+Changed = { fg = "url", sp = "url" }
+Removed = { fg = "error", sp = "error" }
+
+Warning = { fg = "warning", sp = "warning" }
+Info = { fg = "url", sp = "url" }
+Hint = { fg = "property" }
+DiagnosticError = { sp = "error", underline = true }
+DiagnosticWarning = { sp = "warning", underline = true }
+DiagnosticInfo = { sp = "url", underline = true }
+DiagnosticHint = { sp = "property", underline = true }
+
+Installation = { fg = "label", bold = true }
+Property = { fg = "property" }
+Namespace = { fg = "type" }
+Package = { fg = "type" }
+CompiledFunction = { fg = "function", bold = true }
+Symbol = { fg = "boolean" }
+Variable = { fg = "text" }
+AlgVariable = { fg = "builtin", italic = true }
+Parameter = { fg = "parameter" }
+Regex = { fg = "url", sp = "url", underline = true }
+Punctuation = { fg = "punctuation" }
+Quote = { fg = "string" }
+Documentation = { fg = "url", sp = "url", underline = true }
+
+LspTypeClass = { fg = "type" }
+LspTypeComment = { fg = "comment", italic = true }
+LspTypeDecorator = { fg = "function" }
+LspTypeEnum = { fg = "type" }
+LspTypeEnumMember = { fg = "boolean" }
+LspTypeEvent = { fg = "boolean" }
+LspTypeFunction = { fg = "function" }
+LspTypeInterface = { fg = "type" }
+LspTypeKeyword = { fg = "label", italic = true }
+LspTypeMacro = { fg = "function" }
+LspTypeMethod = { fg = "function" }
+LspTypeModifier = { fg = "label", italic = true }
+LspTypeNamespace = { fg = "type" }
+LspTypeNumber = { fg = "number" }
+LspTypeOperator = { fg = "operator" }
+LspTypeParameter = { fg = "parameter" }
+LspTypeProperty = { fg = "property" }
+LspTypeRegexp = { fg = "url", sp = "url", underline = true }
+LspTypeString = { fg = "string" }
+LspTypeStruct = { fg = "type" }
+LspTypeType = { fg = "type" }
+LspTypeTypeParameter = { fg = "type" }
+LspTypeVariable = { fg = "text" }
+
+LspModAbstract = { italic = true }
+LspModAsync = { italic = true }
+LspModDeclaration = { bold = true }
+LspModDefaultLibrary = { italic = true }
+LspModDefinition = { bold = true }
+LspModDeprecated = { crossed_out = true }
+LspModDocumentation = { italic = true }
+LspModModification = { underline = true }
+LspModReadonly = { italic = true }
+LspModStatic = { underline = true }
+
+Visual = { bg = "selection" }
+Value = { fg = "text" }
+Muted = { fg = "comment" }
+Printed = { fg = "string", bg = "border" }
+ShellCommand = { fg = "property" }
+ShellMessage = { fg = "comment" }
+ShellError = { fg = "error", sp = "error" }
+HintText = { fg = "comment" }
+Normal = { bg = "background" }
+CodeBlock = { bg = "background_dim" }
+Separator = { fg = "background" }
+ValueBorder = { fg = "border", sp = "border" }
+OutputNumber = { fg = "function" }
+ErrorBorder = { fg = "error", sp = "error" }
+WarningBorder = { fg = "warning", sp = "warning" }
+InfoBorder = { fg = "url", sp = "url" }
+Statusline1 = { fg = "function" }
+Statusline2 = { fg = "warning", sp = "warning" }
+Statusline3 = { fg = "return" }
+StatuslineBorder = { fg = "border", sp = "border" }
+StatuslineBg = { bg = "background_dim" }
+StatuslineError = { fg = "error", sp = "error" }
+StatuslineWarning = { fg = "warning", sp = "warning" }
+KeymapHint = { fg = "property" }
+PickerText = { fg = "text" }
+Picker = { bg = "winterGreen" }
+PickerSelected = { fg = "background", bg = "string" }
+PickerBorder = { fg = "border", sp = "border" }
+
+Accent1 = { fg = "samuraiRed" }
+Accent2 = { fg = "surimiOrange" }
+Accent3 = { fg = "roninYellow" }
+Accent4 = { fg = "springGreen" }
+Accent5 = { fg = "waveAqua1" }
+Accent6 = { fg = "crystalBlue" }
+Accent7 = { fg = "oniViolet" }
+
+BgColor1 = { bg = "background_dim" }
+BgColor2 = { bg = "background" }
+BgColor3 = { bg = "sumiInk4" }
+BgColor4 = { bg = "sumiInk5" }

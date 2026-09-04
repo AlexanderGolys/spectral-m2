@@ -13,6 +13,13 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, BorderType, Padding, Paragraph, Widget};
 
+/// Horizontal placement of a bordered feed element.
+#[derive(Clone, Copy)]
+enum BorderPlacement {
+    Gutter,
+    MiddleThird,
+}
+
 /// Runtime rendering inputs shared by every block without owning application state.
 pub struct RenderContext {
     width: u16,
@@ -123,48 +130,124 @@ impl Highlights for [HLSpan] {
     }
 }
 
+/// Geometry shared by result, warning, and error borders.
+#[derive(Clone, Copy)]
+pub struct BorderLayout {
+    prefix: u16,
+    inset: u16,
+    placement: BorderPlacement,
+}
+
+impl BorderLayout {
+    /// Align a border and its body to a possible `oN` marker.
+    pub const fn numbered(number: u32) -> Self {
+        let digits = if number == 0 {
+            1
+        } else {
+            number.ilog10() as u16 + 1
+        };
+        Self {
+            prefix: UI.cell_margin + digits + UI.cell_gap,
+            inset: UI.cell_margin + digits,
+            placement: BorderPlacement::Gutter,
+        }
+    }
+
+    /// Cross only the penultimate digit of a multi-digit `oN` marker.
+    pub const fn output(number: u32) -> Self {
+        let mut layout = Self::numbered(number);
+        layout.inset -= if number >= 10 { 1 } else { 0 };
+        layout
+    }
+
+    /// Align an unnumbered border with an ordinary one-digit result.
+    pub const fn plain() -> Self {
+        Self::numbered(1)
+    }
+
+    /// Place a box between one-third and two-thirds of its available width.
+    pub const fn middle_third() -> Self {
+        Self {
+            prefix: 0,
+            inset: 0,
+            placement: BorderPlacement::MiddleThird,
+        }
+    }
+
+    /// Width reserved before bordered content.
+    pub const fn prefix(self) -> u16 {
+        self.prefix
+    }
+
+    /// Draw the line separating a feed marker from its content.
+    pub fn render_separator(self, area: Rect, style: Style, buf: &mut Buffer) {
+        if matches!(self.placement, BorderPlacement::MiddleThird) {
+            return;
+        }
+        let x = area.x + self.inset;
+        for y in area.y..area.bottom() {
+            buf[(x, y)].set_symbol("▏").set_style(style);
+        }
+    }
+}
+
 impl Bordered {
-    fn area(area: Rect) -> Rect {
+    fn area(area: Rect, layout: BorderLayout) -> Rect {
+        if matches!(layout.placement, BorderPlacement::MiddleThird) {
+            let left = area.width / 3;
+            let right = area.width.saturating_mul(2) / 3;
+            return Rect::new(
+                area.x + left,
+                area.y,
+                (right - left + 1).min(area.width - left),
+                area.height,
+            );
+        }
         let width = area
             .width
-            .saturating_sub(UI.border_margin + UI.right_margin)
+            .saturating_sub(layout.inset + UI.right_margin)
             .max(UI.min_box_width);
-        Rect::new(area.x + UI.border_margin, area.y, width, area.height)
+        Rect::new(area.x + layout.inset, area.y, width, area.height)
     }
 
-    pub fn inner(area: Rect) -> Rect {
+    pub fn inner(area: Rect, layout: BorderLayout) -> Rect {
         TuiBlock::bordered()
-            .padding(Padding::new(UI.box_left_padding(), 1, 0, 0))
-            .inner(Self::area(area))
+            .padding(Padding::new(
+                layout.prefix.saturating_sub(layout.inset + 1),
+                1,
+                0,
+                0,
+            ))
+            .inner(Self::area(area, layout))
     }
 
-    pub fn text_width(context: &RenderContext) -> u16 {
-        Self::inner(Rect::new(0, 0, context.width(), 0)).width
+    pub fn text_width(context: &RenderContext, layout: BorderLayout) -> u16 {
+        Self::inner(Rect::new(0, 0, context.width(), 0), layout).width
     }
 }
 
 /// Styled text decorated by the shared rounded feed border.
 pub struct Bordered {
+    layout: BorderLayout,
     surface: Style,
     border_style: Style,
     title: Option<Line<'static>>,
-    bottom: Option<Line<'static>>,
     body: Vec<Line<'static>>,
 }
 
 impl Bordered {
     pub fn new(
+        layout: BorderLayout,
         surface: Style,
         border_style: Style,
         title: Option<Line<'static>>,
-        bottom: Option<Line<'static>>,
         body: Vec<Line<'static>>,
     ) -> Self {
         Self {
+            layout,
             surface,
             border_style,
             title,
-            bottom,
             body,
         }
     }
@@ -178,16 +261,18 @@ impl Element for Bordered {
             .style(self.surface)
             .border_type(BorderType::Rounded)
             .border_style(self.border_style)
-            .padding(Padding::new(UI.box_left_padding(), 1, 0, 0));
+            .padding(Padding::new(
+                self.layout.prefix.saturating_sub(self.layout.inset + 1),
+                1,
+                0,
+                0,
+            ));
         if let Some(title) = &self.title {
             block = block.title(title.clone());
         }
-        if let Some(bottom) = &self.bottom {
-            block = block.title_bottom(bottom.clone());
-        }
-        block.render(Self::area(area), buf);
+        block.render(Self::area(area, self.layout), buf);
         Paragraph::new(self.body.clone())
             .style(self.surface)
-            .render(Self::inner(area), buf);
+            .render(Self::inner(area, self.layout), buf);
     }
 }

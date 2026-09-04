@@ -8,9 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use crossterm::clipboard::CopyToClipboard;
-use crossterm::event::{
-    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-};
+use crossterm::event::{Event, KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use crossterm::execute;
 use ratatui::layout::{Position, Rect};
 use ratatui::Frame;
@@ -19,18 +17,16 @@ use self::session::Session;
 use crate::backend::M2Backend;
 use crate::code::highlight::SyntaxHighlighter;
 use crate::errors::Result;
-use crate::ui::controller::{Editor, EditorAction, EditorConfig, OpenTarget, ViewKind, Viewport};
+use crate::ui::action::Action;
+use crate::ui::controller::{
+    CommittedCells, Editor, EditorConfig, OpenTarget, Reaction, ViewKind, Viewport,
+};
+use crate::ui::key::{KeyEvent, Keyboard};
 use crate::ui::terminal::ReplTerminal;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(80);
 const MIN_PANE_WIDTH: u16 = 40;
 const MIN_SPLIT_WIDTH: u16 = MIN_PANE_WIDTH * 2 + 1;
-
-fn leaves_preview(key: KeyEvent, view: ViewKind) -> bool {
-    key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('q' | 'c'))
-        && view != ViewKind::Shell
-}
 
 /// One independent M2 process, transcript, draft, history, and syntax state.
 struct Workspace {
@@ -43,7 +39,7 @@ impl Workspace {
     fn new(backend: M2Backend, config: Option<&EditorConfig>) -> Self {
         let session = Session::new(backend);
         let version = session.version().unwrap_or_else(|_| "unknown".to_string());
-        let mut editor = Editor::new(welcome_message(&version)).with_macaulay_version(version);
+        let mut editor = Editor::new(welcome_message(&version));
         if let Some(config) = config {
             editor.set_config(config);
         }
@@ -72,6 +68,34 @@ impl Pane {
             viewport: Viewport::for_view(view),
         }
     }
+
+    /// Consume a command owned by the current preview, or return it unchanged.
+    fn handle_action(&mut self, action: Action) -> Option<Action> {
+        if self.view == ViewKind::Shell {
+            return Some(action);
+        }
+        match action {
+            Action::ScrollFeedUp => self.viewport.scroll = self.viewport.scroll.saturating_sub(10),
+            Action::ScrollFeedDown => self.viewport.scroll += 10,
+            _ => return Some(action),
+        }
+        None
+    }
+
+    /// Interpret unbound navigation as private input for the current preview.
+    fn handle_key(&mut self, key: KeyEvent) -> bool {
+        if self.view == ViewKind::Shell {
+            return false;
+        }
+        match key.code {
+            KeyCode::Left if self.view == ViewKind::Output => self.viewport.cycle_output(-1),
+            KeyCode::Right if self.view == ViewKind::Output => self.viewport.cycle_output(1),
+            KeyCode::Up => self.viewport.scroll = self.viewport.scroll.saturating_sub(1),
+            KeyCode::Down => self.viewport.scroll += 1,
+            _ => return false,
+        }
+        true
+    }
 }
 
 /// An M2 process being prepared before its source pane is changed.
@@ -92,6 +116,7 @@ struct App {
     divider: Option<Rect>,
     dragging_divider: bool,
     pending_new: Option<PendingNew>,
+    keyboard: Keyboard,
 }
 
 impl App {
@@ -106,12 +131,18 @@ impl App {
             divider: None,
             dragging_divider: false,
             pending_new: None,
+            keyboard: Keyboard::default(),
         }
     }
 
     fn handle_event(&mut self, event: Event) -> bool {
         match event {
-            Event::Key(key) => self.handle_key(key),
+            Event::Key(key) => {
+                let Some(key) = self.keyboard.event(key) else {
+                    return true;
+                };
+                self.handle_key(key)
+            }
             Event::Paste(text) => {
                 if self.panes[self.active].view == ViewKind::Shell {
                     self.active_workspace_mut().editor.paste(&text);
@@ -124,32 +155,6 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> bool {
-        if leaves_preview(key, self.panes[self.active].view) {
-            self.leave_preview();
-            return true;
-        }
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            match key.code {
-                KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                    self.resize_split(-1);
-                    return true;
-                }
-                KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                    self.resize_split(1);
-                    return true;
-                }
-                KeyCode::Left => {
-                    self.focus(0);
-                    return true;
-                }
-                KeyCode::Right => {
-                    self.focus(1);
-                    return true;
-                }
-                _ => {}
-            }
-        }
-
         let pane = self.active;
         let workspace = self.panes[pane].workspace;
         let split = self.panes.len() == 2;
@@ -159,42 +164,22 @@ impl App {
             .unwrap()
             .editor
             .set_context(split, previewing, true);
-        if previewing
-            && !self.workspaces[workspace]
-                .as_ref()
-                .unwrap()
-                .editor
-                .picker_open()
+        if let Some(action) = self.workspaces[workspace]
+            .as_ref()
+            .unwrap()
+            .editor
+            .resolve_action(key)
         {
-            match key.code {
-                KeyCode::Left if self.panes[pane].view == ViewKind::Output => {
-                    self.panes[pane].viewport.cycle_output(-1);
-                    return true;
-                }
-                KeyCode::Right if self.panes[pane].view == ViewKind::Output => {
-                    self.panes[pane].viewport.cycle_output(1);
-                    return true;
-                }
-                KeyCode::Up => {
-                    self.panes[pane].viewport.scroll =
-                        self.panes[pane].viewport.scroll.saturating_sub(1);
-                    return true;
-                }
-                KeyCode::Down => {
-                    self.panes[pane].viewport.scroll += 1;
-                    return true;
-                }
-                KeyCode::PageUp => {
-                    self.panes[pane].viewport.scroll =
-                        self.panes[pane].viewport.scroll.saturating_sub(10);
-                    return true;
-                }
-                KeyCode::PageDown => {
-                    self.panes[pane].viewport.scroll += 10;
-                    return true;
-                }
-                _ => {}
-            }
+            return self.handle_action(workspace, action);
+        }
+        if !self.workspaces[workspace]
+            .as_ref()
+            .unwrap()
+            .editor
+            .picker_open()
+            && self.panes[pane].handle_key(key)
+        {
+            return true;
         }
         let action = if previewing {
             self.workspaces[workspace]
@@ -207,9 +192,38 @@ impl App {
                 .as_mut()
                 .unwrap()
                 .editor
-                .handle_key(key)
+                .handle_input(key)
         };
-        self.handle_editor_action(workspace, action)
+        self.handle_reaction(workspace, action)
+    }
+
+    fn handle_action(&mut self, workspace: usize, action: Action) -> bool {
+        match action {
+            Action::FocusPaneLeft => return self.focus(0),
+            Action::FocusPaneRight => return self.focus(1),
+            Action::ResizePaneLeft => {
+                self.resize_split(-1);
+                return true;
+            }
+            Action::ResizePaneRight => {
+                self.resize_split(1);
+                return true;
+            }
+            Action::Quit if self.panes[self.active].view != ViewKind::Shell => {
+                self.leave_preview();
+                return true;
+            }
+            _ => {}
+        }
+        let Some(action) = self.panes[self.active].handle_action(action) else {
+            return true;
+        };
+        let action = self.workspaces[workspace]
+            .as_mut()
+            .unwrap()
+            .editor
+            .handle_action(action);
+        self.handle_reaction(workspace, action)
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) -> bool {
@@ -252,7 +266,7 @@ impl App {
                         .unwrap()
                         .editor
                         .handle_preview_mouse(mouse);
-                    return self.handle_editor_action(workspace, action);
+                    return self.handle_reaction(workspace, action);
                 }
             }
             return true;
@@ -262,45 +276,45 @@ impl App {
             .unwrap()
             .editor
             .handle_mouse(mouse);
-        self.handle_editor_action(workspace, action)
+        self.handle_reaction(workspace, action)
     }
 
-    fn handle_editor_action(&mut self, workspace: usize, action: EditorAction) -> bool {
-        let keep_running = match action {
-            EditorAction::Continue => true,
-            EditorAction::Submit => {
+    fn handle_reaction(&mut self, workspace: usize, reaction: Reaction) -> bool {
+        let keep_running = match reaction {
+            Reaction::Continue => true,
+            Reaction::Submit => {
                 let workspace = self.workspaces[workspace].as_mut().unwrap();
                 let update = workspace
                     .session
                     .submit(workspace.editor.submission(), &mut workspace.highlighter);
                 workspace.editor.apply(update)
             }
-            EditorAction::Post(source) => {
+            Reaction::Post(source) => {
                 let workspace = self.workspaces[workspace].as_mut().unwrap();
                 let update = workspace.session.submit(source, &mut workspace.highlighter);
                 workspace.editor.post(update)
             }
-            EditorAction::Restart => {
+            Reaction::Restart => {
                 let workspace = self.workspaces[workspace].as_mut().unwrap();
                 workspace.editor.apply(workspace.session.restart())
             }
-            EditorAction::Copy(text) => {
+            Reaction::Copy(text) => {
                 let _ = execute!(io::stdout(), CopyToClipboard::to_clipboard_from(text));
                 true
             }
-            EditorAction::Open(view, target) => {
+            Reaction::Open(view, target) => {
                 self.open_view(view, target);
                 true
             }
-            EditorAction::New(target) => {
+            Reaction::New(target) => {
                 self.spawn_workspace(target);
                 true
             }
-            EditorAction::ClosePane => {
+            Reaction::ClosePane => {
                 self.close_pane();
                 true
             }
-            EditorAction::Quit => false,
+            Reaction::Quit => false,
         };
         if keep_running && self.workspaces[workspace].is_some() {
             self.sync_config(workspace);
@@ -349,7 +363,7 @@ impl App {
         });
     }
 
-    fn poll_new_workspace(&mut self) {
+    fn poll_new_workspace(&mut self) -> bool {
         let result = match self
             .pending_new
             .as_ref()
@@ -359,11 +373,11 @@ impl App {
             Some(Err(TryRecvError::Disconnected)) => {
                 Err("workspace startup task stopped".to_string())
             }
-            Some(Err(TryRecvError::Empty)) | None => return,
+            Some(Err(TryRecvError::Empty)) | None => return false,
         };
         let pending = self.pending_new.take().unwrap();
         let Some(pane) = self.panes.iter().position(|pane| pane.id == pending.pane) else {
-            return;
+            return true;
         };
         match result {
             Ok(backend) => self.install_workspace(pane, pending.target, backend),
@@ -373,6 +387,7 @@ impl App {
                 .editor
                 .append_error(format!("could not open workspace: {error}")),
         }
+        true
     }
 
     fn install_workspace(&mut self, pane: usize, target: OpenTarget, backend: M2Backend) {
@@ -451,10 +466,11 @@ impl App {
         }
     }
 
-    fn focus(&mut self, pane: usize) {
+    fn focus(&mut self, pane: usize) -> bool {
         if pane < self.panes.len() {
             self.active = pane;
         }
+        true
     }
 
     fn resize_split(&mut self, delta: i8) {
@@ -512,6 +528,7 @@ impl App {
             let view = self.panes[pane].view;
             let workspace_index = self.panes[pane].workspace;
             let workspace = self.workspaces[workspace_index].as_mut().unwrap();
+            workspace.editor.set_processing(workspace.session.busy());
             workspace
                 .editor
                 .set_context(split, view != ViewKind::Shell, focused);
@@ -526,7 +543,10 @@ impl App {
                     frame,
                     area,
                     &mut workspace.highlighter,
-                    workspace.session.committed(),
+                    CommittedCells {
+                        cells: workspace.session.committed(),
+                        revision: workspace.session.committed_revision(),
+                    },
                     view,
                     &mut self.panes[pane].viewport,
                 ),
@@ -534,15 +554,16 @@ impl App {
         }
     }
 
-    fn poll(&mut self) -> bool {
-        self.poll_new_workspace();
-        self.workspaces.iter_mut().flatten().all(|workspace| {
-            workspace
-                .session
-                .poll()
-                .into_iter()
-                .all(|update| workspace.editor.apply(update))
-        })
+    fn poll(&mut self) -> (bool, bool) {
+        let mut dirty = self.poll_new_workspace();
+        let mut running = true;
+        for workspace in self.workspaces.iter_mut().flatten() {
+            for update in workspace.session.poll() {
+                dirty = true;
+                running &= workspace.editor.apply(update);
+            }
+        }
+        (running, dirty)
     }
 
     fn active_workspace_mut(&mut self) -> &mut Workspace {
@@ -587,10 +608,19 @@ fn welcome_message(m2_version: &str) -> String {
 pub fn run(backend: M2Backend) -> Result<()> {
     let mut terminal = ReplTerminal::enter()?;
     let mut app = App::new(backend);
+    let mut dirty = true;
     loop {
-        terminal.draw(|frame| app.draw(frame))?;
-        if !app.poll() {
+        if dirty {
+            terminal.draw(|frame| app.draw(frame))?;
+            dirty = false;
+        }
+        let (running, updated) = app.poll();
+        if !running {
             break;
+        }
+        if updated {
+            dirty = true;
+            continue;
         }
         let Some(event) = terminal.next_event(EVENT_POLL_INTERVAL)? else {
             continue;
@@ -598,6 +628,7 @@ pub fn run(backend: M2Backend) -> Result<()> {
         if !app.handle_event(event) {
             break;
         }
+        dirty = true;
     }
     terminal.leave()
 }
@@ -607,16 +638,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn control_c_and_q_leave_previews_but_not_the_shell() {
-        for code in ['c', 'q'] {
-            let key = KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL);
-            assert!(leaves_preview(key, ViewKind::SyntaxTree));
-            assert!(!leaves_preview(key, ViewKind::Shell));
-        }
-        assert!(!leaves_preview(
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
-            ViewKind::SyntaxTree,
-        ));
+    fn previews_consume_scroll_actions_and_forward_quit() {
+        let mut preview = Pane::new(0, 0, ViewKind::SyntaxTree);
+        let mut shell = Pane::new(1, 0, ViewKind::Shell);
+        preview.viewport.scroll = 0;
+
+        assert!(preview.handle_action(Action::ScrollFeedDown).is_none());
+        assert_eq!(preview.viewport.scroll, 10);
+        assert!(preview.handle_action(Action::Quit) == Some(Action::Quit));
+        assert!(shell.handle_action(Action::ScrollFeedDown) == Some(Action::ScrollFeedDown));
     }
 
     #[test]

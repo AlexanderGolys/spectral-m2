@@ -1,17 +1,675 @@
-[dark.soft]
-native = { bright_aqua = "#8ec07c", bright_blue = "#83a598", bright_green = "#b8bb26", bright_orange = "#fe8019", bright_purple = "#d3869b", bright_red = "#fb4934", bright_yellow = "#fabd2f", dark0 = "#282828", dark0_hard = "#1d2021", dark0_soft = "#32302f", dark1 = "#3c3836", dark2 = "#504945", dark3 = "#665c54", dark4 = "#7c6f64", dark4_256 = "#7c6f64", faded_aqua = "#427b58", faded_blue = "#076678", faded_green = "#79740e", faded_orange = "#af3a03", faded_purple = "#8f3f71", faded_red = "#9d0006", faded_yellow = "#b57614", gray_244 = "#928374", gray_245 = "#928374", light0 = "#fbf1c7", light0_hard = "#f9f5d7", light0_soft = "#f2e5bc", light1 = "#ebdbb2", light2 = "#d5c4a1", light3 = "#bdae93", light4 = "#a89984", light4_256 = "#a89984", neutral_aqua = "#689d6a", neutral_blue = "#458588", neutral_green = "#98971a", neutral_orange = "#d65d0e", neutral_purple = "#b16286", neutral_red = "#cc241d", neutral_yellow = "#d79921" }
+name = "gruvbox"
 
-[dark.medium]
-native = { bright_aqua = "#8ec07c", bright_blue = "#83a598", bright_green = "#b8bb26", bright_orange = "#fe8019", bright_purple = "#d3869b", bright_red = "#fb4934", bright_yellow = "#fabd2f", dark0 = "#282828", dark0_hard = "#1d2021", dark0_soft = "#32302f", dark1 = "#3c3836", dark2 = "#504945", dark3 = "#665c54", dark4 = "#7c6f64", dark4_256 = "#7c6f64", faded_aqua = "#427b58", faded_blue = "#076678", faded_green = "#79740e", faded_orange = "#af3a03", faded_purple = "#8f3f71", faded_red = "#9d0006", faded_yellow = "#b57614", gray_244 = "#928374", gray_245 = "#928374", light0 = "#fbf1c7", light0_hard = "#f9f5d7", light0_soft = "#f2e5bc", light1 = "#ebdbb2", light2 = "#d5c4a1", light3 = "#bdae93", light4 = "#a89984", light4_256 = "#a89984", neutral_aqua = "#689d6a", neutral_blue = "#458588", neutral_green = "#98971a", neutral_orange = "#d65d0e", neutral_purple = "#b16286", neutral_red = "#cc241d", neutral_yellow = "#d79921" }
+[variants]
+dark = ["hard", "medium", "soft"]
+light = ["hard", "medium", "soft"]
 
-[dark.hard]
-native = { bright_aqua = "#8ec07c", bright_blue = "#83a598", bright_green = "#b8bb26", bright_orange = "#fe8019", bright_purple = "#d3869b", bright_red = "#fb4934", bright_yellow = "#fabd2f", dark0 = "#282828", dark0_hard = "#1d2021", dark0_soft = "#32302f", dark1 = "#3c3836", dark2 = "#504945", dark3 = "#665c54", dark4 = "#7c6f64", dark4_256 = "#7c6f64", faded_aqua = "#427b58", faded_blue = "#076678", faded_green = "#79740e", faded_orange = "#af3a03", faded_purple = "#8f3f71", faded_red = "#9d0006", faded_yellow = "#b57614", gray_244 = "#928374", gray_245 = "#928374", light0 = "#fbf1c7", light0_hard = "#f9f5d7", light0_soft = "#f2e5bc", light1 = "#ebdbb2", light2 = "#d5c4a1", light3 = "#bdae93", light4 = "#a89984", light4_256 = "#a89984", neutral_aqua = "#689d6a", neutral_blue = "#458588", neutral_green = "#98971a", neutral_orange = "#d65d0e", neutral_purple = "#b16286", neutral_red = "#cc241d", neutral_yellow = "#d79921" }
+[colors.accent_aqua.dark]
+hard = "#8ec07c"
+medium = "#8ec07c"
+soft = "#8ec07c"
 
-[light.soft]
-native = { bright_aqua = "#8ec07c", bright_blue = "#83a598", bright_green = "#b8bb26", bright_orange = "#fe8019", bright_purple = "#d3869b", bright_red = "#fb4934", bright_yellow = "#fabd2f", dark0 = "#282828", dark0_hard = "#1d2021", dark0_soft = "#32302f", dark1 = "#3c3836", dark2 = "#504945", dark3 = "#665c54", dark4 = "#7c6f64", dark4_256 = "#7c6f64", faded_aqua = "#427b58", faded_blue = "#076678", faded_green = "#79740e", faded_orange = "#af3a03", faded_purple = "#8f3f71", faded_red = "#9d0006", faded_yellow = "#b57614", gray_244 = "#928374", gray_245 = "#928374", light0 = "#fbf1c7", light0_hard = "#f9f5d7", light0_soft = "#f2e5bc", light1 = "#ebdbb2", light2 = "#d5c4a1", light3 = "#bdae93", light4 = "#a89984", light4_256 = "#a89984", neutral_aqua = "#689d6a", neutral_blue = "#458588", neutral_green = "#98971a", neutral_orange = "#d65d0e", neutral_purple = "#b16286", neutral_red = "#cc241d", neutral_yellow = "#d79921" }
+[colors.accent_aqua.light]
+hard = "#427b58"
+medium = "#427b58"
+soft = "#427b58"
 
-[light.medium]
-native = { bright_aqua = "#8ec07c", bright_blue = "#83a598", bright_green = "#b8bb26", bright_orange = "#fe8019", bright_purple = "#d3869b", bright_red = "#fb4934", bright_yellow = "#fabd2f", dark0 = "#282828", dark0_hard = "#1d2021", dark0_soft = "#32302f", dark1 = "#3c3836", dark2 = "#504945", dark3 = "#665c54", dark4 = "#7c6f64", dark4_256 = "#7c6f64", faded_aqua = "#427b58", faded_blue = "#076678", faded_green = "#79740e", faded_orange = "#af3a03", faded_purple = "#8f3f71", faded_red = "#9d0006", faded_yellow = "#b57614", gray_244 = "#928374", gray_245 = "#928374", light0 = "#fbf1c7", light0_hard = "#f9f5d7", light0_soft = "#f2e5bc", light1 = "#ebdbb2", light2 = "#d5c4a1", light3 = "#bdae93", light4 = "#a89984", light4_256 = "#a89984", neutral_aqua = "#689d6a", neutral_blue = "#458588", neutral_green = "#98971a", neutral_orange = "#d65d0e", neutral_purple = "#b16286", neutral_red = "#cc241d", neutral_yellow = "#d79921" }
+[colors.accent_blue.dark]
+hard = "#83a598"
+medium = "#83a598"
+soft = "#83a598"
 
-[light.hard]
-native = { bright_aqua = "#8ec07c", bright_blue = "#83a598", bright_green = "#b8bb26", bright_orange = "#fe8019", bright_purple = "#d3869b", bright_red = "#fb4934", bright_yellow = "#fabd2f", dark0 = "#282828", dark0_hard = "#1d2021", dark0_soft = "#32302f", dark1 = "#3c3836", dark2 = "#504945", dark3 = "#665c54", dark4 = "#7c6f64", dark4_256 = "#7c6f64", faded_aqua = "#427b58", faded_blue = "#076678", faded_green = "#79740e", faded_orange = "#af3a03", faded_purple = "#8f3f71", faded_red = "#9d0006", faded_yellow = "#b57614", gray_244 = "#928374", gray_245 = "#928374", light0 = "#fbf1c7", light0_hard = "#f9f5d7", light0_soft = "#f2e5bc", light1 = "#ebdbb2", light2 = "#d5c4a1", light3 = "#bdae93", light4 = "#a89984", light4_256 = "#a89984", neutral_aqua = "#689d6a", neutral_blue = "#458588", neutral_green = "#98971a", neutral_orange = "#d65d0e", neutral_purple = "#b16286", neutral_red = "#cc241d", neutral_yellow = "#d79921" }
+[colors.accent_blue.light]
+hard = "#076678"
+medium = "#076678"
+soft = "#076678"
+
+[colors.accent_green.dark]
+hard = "#b8bb26"
+medium = "#b8bb26"
+soft = "#b8bb26"
+
+[colors.accent_green.light]
+hard = "#79740e"
+medium = "#79740e"
+soft = "#79740e"
+
+[colors.accent_orange.dark]
+hard = "#fe8019"
+medium = "#fe8019"
+soft = "#fe8019"
+
+[colors.accent_orange.light]
+hard = "#af3a03"
+medium = "#af3a03"
+soft = "#af3a03"
+
+[colors.accent_purple.dark]
+hard = "#d3869b"
+medium = "#d3869b"
+soft = "#d3869b"
+
+[colors.accent_purple.light]
+hard = "#8f3f71"
+medium = "#8f3f71"
+soft = "#8f3f71"
+
+[colors.accent_red.dark]
+hard = "#fb4934"
+medium = "#fb4934"
+soft = "#fb4934"
+
+[colors.accent_red.light]
+hard = "#9d0006"
+medium = "#9d0006"
+soft = "#9d0006"
+
+[colors.accent_yellow.dark]
+hard = "#fabd2f"
+medium = "#fabd2f"
+soft = "#fabd2f"
+
+[colors.accent_yellow.light]
+hard = "#b57614"
+medium = "#b57614"
+soft = "#b57614"
+
+[colors.background.dark]
+hard = "#1d2021"
+medium = "#282828"
+soft = "#32302f"
+
+[colors.background.light]
+hard = "#f9f5d7"
+medium = "#fbf1c7"
+soft = "#f2e5bc"
+
+[colors.code_background.dark]
+hard = "#161819"
+medium = "#1d2021"
+soft = "#282828"
+
+[colors.code_background.light]
+hard = "#d5c4a1"
+medium = "#d5c4a1"
+soft = "#d5c4a1"
+
+[colors.printed_background.dark]
+hard = "#3c3836"
+medium = "#3c3836"
+soft = "#3c3836"
+
+[colors.printed_background.light]
+hard = "#ebdbb2"
+medium = "#ebdbb2"
+soft = "#ebdbb2"
+
+[colors.border_background.dark]
+hard = "#1d2021"
+medium = "#282828"
+soft = "#32302f"
+
+[colors.border_background.light]
+hard = "#ebdbb2"
+medium = "#ebdbb2"
+soft = "#ebdbb2"
+
+[colors.bright_aqua.dark]
+hard = "#8ec07c"
+medium = "#8ec07c"
+soft = "#8ec07c"
+
+[colors.bright_aqua.light]
+hard = "#8ec07c"
+medium = "#8ec07c"
+soft = "#8ec07c"
+
+[colors.bright_blue.dark]
+hard = "#83a598"
+medium = "#83a598"
+soft = "#83a598"
+
+[colors.bright_blue.light]
+hard = "#83a598"
+medium = "#83a598"
+soft = "#83a598"
+
+[colors.bright_green.dark]
+hard = "#b8bb26"
+medium = "#b8bb26"
+soft = "#b8bb26"
+
+[colors.bright_green.light]
+hard = "#b8bb26"
+medium = "#b8bb26"
+soft = "#b8bb26"
+
+[colors.bright_orange.dark]
+hard = "#fe8019"
+medium = "#fe8019"
+soft = "#fe8019"
+
+[colors.bright_orange.light]
+hard = "#fe8019"
+medium = "#fe8019"
+soft = "#fe8019"
+
+[colors.bright_purple.dark]
+hard = "#d3869b"
+medium = "#d3869b"
+soft = "#d3869b"
+
+[colors.bright_purple.light]
+hard = "#d3869b"
+medium = "#d3869b"
+soft = "#d3869b"
+
+[colors.bright_red.dark]
+hard = "#fb4934"
+medium = "#fb4934"
+soft = "#fb4934"
+
+[colors.bright_red.light]
+hard = "#fb4934"
+medium = "#fb4934"
+soft = "#fb4934"
+
+[colors.bright_yellow.dark]
+hard = "#fabd2f"
+medium = "#fabd2f"
+soft = "#fabd2f"
+
+[colors.bright_yellow.light]
+hard = "#fabd2f"
+medium = "#fabd2f"
+soft = "#fabd2f"
+
+[colors.dark0.dark]
+hard = "#282828"
+medium = "#282828"
+soft = "#282828"
+
+[colors.dark0.light]
+hard = "#282828"
+medium = "#282828"
+soft = "#282828"
+
+[colors.dark0_hard.dark]
+hard = "#1d2021"
+medium = "#1d2021"
+soft = "#1d2021"
+
+[colors.dark0_hard.light]
+hard = "#1d2021"
+medium = "#1d2021"
+soft = "#1d2021"
+
+[colors.dark0_soft.dark]
+hard = "#32302f"
+medium = "#32302f"
+soft = "#32302f"
+
+[colors.dark0_soft.light]
+hard = "#32302f"
+medium = "#32302f"
+soft = "#32302f"
+
+[colors.dark1.dark]
+hard = "#3c3836"
+medium = "#3c3836"
+soft = "#3c3836"
+
+[colors.dark1.light]
+hard = "#3c3836"
+medium = "#3c3836"
+soft = "#3c3836"
+
+[colors.dark2.dark]
+hard = "#504945"
+medium = "#504945"
+soft = "#504945"
+
+[colors.dark2.light]
+hard = "#504945"
+medium = "#504945"
+soft = "#504945"
+
+[colors.dark3.dark]
+hard = "#665c54"
+medium = "#665c54"
+soft = "#665c54"
+
+[colors.dark3.light]
+hard = "#665c54"
+medium = "#665c54"
+soft = "#665c54"
+
+[colors.dark4.dark]
+hard = "#7c6f64"
+medium = "#7c6f64"
+soft = "#7c6f64"
+
+[colors.dark4.light]
+hard = "#7c6f64"
+medium = "#7c6f64"
+soft = "#7c6f64"
+
+[colors.dark4_256.dark]
+hard = "#7c6f64"
+medium = "#7c6f64"
+soft = "#7c6f64"
+
+[colors.dark4_256.light]
+hard = "#7c6f64"
+medium = "#7c6f64"
+soft = "#7c6f64"
+
+[colors.faded_aqua.dark]
+hard = "#427b58"
+medium = "#427b58"
+soft = "#427b58"
+
+[colors.faded_aqua.light]
+hard = "#427b58"
+medium = "#427b58"
+soft = "#427b58"
+
+[colors.faded_blue.dark]
+hard = "#076678"
+medium = "#076678"
+soft = "#076678"
+
+[colors.faded_blue.light]
+hard = "#076678"
+medium = "#076678"
+soft = "#076678"
+
+[colors.faded_green.dark]
+hard = "#79740e"
+medium = "#79740e"
+soft = "#79740e"
+
+[colors.faded_green.light]
+hard = "#79740e"
+medium = "#79740e"
+soft = "#79740e"
+
+[colors.faded_orange.dark]
+hard = "#af3a03"
+medium = "#af3a03"
+soft = "#af3a03"
+
+[colors.faded_orange.light]
+hard = "#af3a03"
+medium = "#af3a03"
+soft = "#af3a03"
+
+[colors.faded_purple.dark]
+hard = "#8f3f71"
+medium = "#8f3f71"
+soft = "#8f3f71"
+
+[colors.faded_purple.light]
+hard = "#8f3f71"
+medium = "#8f3f71"
+soft = "#8f3f71"
+
+[colors.faded_red.dark]
+hard = "#9d0006"
+medium = "#9d0006"
+soft = "#9d0006"
+
+[colors.faded_red.light]
+hard = "#9d0006"
+medium = "#9d0006"
+soft = "#9d0006"
+
+[colors.faded_yellow.dark]
+hard = "#b57614"
+medium = "#b57614"
+soft = "#b57614"
+
+[colors.faded_yellow.light]
+hard = "#b57614"
+medium = "#b57614"
+soft = "#b57614"
+
+[colors.gray_244.dark]
+hard = "#928374"
+medium = "#928374"
+soft = "#928374"
+
+[colors.gray_244.light]
+hard = "#928374"
+medium = "#928374"
+soft = "#928374"
+
+[colors.gray_245.dark]
+hard = "#928374"
+medium = "#928374"
+soft = "#928374"
+
+[colors.gray_245.light]
+hard = "#928374"
+medium = "#928374"
+soft = "#928374"
+
+[colors.light0.dark]
+hard = "#fbf1c7"
+medium = "#fbf1c7"
+soft = "#fbf1c7"
+
+[colors.light0.light]
+hard = "#fbf1c7"
+medium = "#fbf1c7"
+soft = "#fbf1c7"
+
+[colors.light0_hard.dark]
+hard = "#f9f5d7"
+medium = "#f9f5d7"
+soft = "#f9f5d7"
+
+[colors.light0_hard.light]
+hard = "#f9f5d7"
+medium = "#f9f5d7"
+soft = "#f9f5d7"
+
+[colors.light0_soft.dark]
+hard = "#f2e5bc"
+medium = "#f2e5bc"
+soft = "#f2e5bc"
+
+[colors.light0_soft.light]
+hard = "#f2e5bc"
+medium = "#f2e5bc"
+soft = "#f2e5bc"
+
+[colors.light1.dark]
+hard = "#ebdbb2"
+medium = "#ebdbb2"
+soft = "#ebdbb2"
+
+[colors.light1.light]
+hard = "#ebdbb2"
+medium = "#ebdbb2"
+soft = "#ebdbb2"
+
+[colors.light2.dark]
+hard = "#d5c4a1"
+medium = "#d5c4a1"
+soft = "#d5c4a1"
+
+[colors.light2.light]
+hard = "#d5c4a1"
+medium = "#d5c4a1"
+soft = "#d5c4a1"
+
+[colors.light3.dark]
+hard = "#bdae93"
+medium = "#bdae93"
+soft = "#bdae93"
+
+[colors.light3.light]
+hard = "#bdae93"
+medium = "#bdae93"
+soft = "#bdae93"
+
+[colors.light4.dark]
+hard = "#a89984"
+medium = "#a89984"
+soft = "#a89984"
+
+[colors.light4.light]
+hard = "#a89984"
+medium = "#a89984"
+soft = "#a89984"
+
+[colors.light4_256.dark]
+hard = "#a89984"
+medium = "#a89984"
+soft = "#a89984"
+
+[colors.light4_256.light]
+hard = "#a89984"
+medium = "#a89984"
+soft = "#a89984"
+
+[colors.neutral_aqua.dark]
+hard = "#689d6a"
+medium = "#689d6a"
+soft = "#689d6a"
+
+[colors.neutral_aqua.light]
+hard = "#689d6a"
+medium = "#689d6a"
+soft = "#689d6a"
+
+[colors.neutral_blue.dark]
+hard = "#458588"
+medium = "#458588"
+soft = "#458588"
+
+[colors.neutral_blue.light]
+hard = "#458588"
+medium = "#458588"
+soft = "#458588"
+
+[colors.neutral_green.dark]
+hard = "#98971a"
+medium = "#98971a"
+soft = "#98971a"
+
+[colors.neutral_green.light]
+hard = "#98971a"
+medium = "#98971a"
+soft = "#98971a"
+
+[colors.neutral_orange.dark]
+hard = "#d65d0e"
+medium = "#d65d0e"
+soft = "#d65d0e"
+
+[colors.neutral_orange.light]
+hard = "#d65d0e"
+medium = "#d65d0e"
+soft = "#d65d0e"
+
+[colors.neutral_purple.dark]
+hard = "#b16286"
+medium = "#b16286"
+soft = "#b16286"
+
+[colors.neutral_purple.light]
+hard = "#b16286"
+medium = "#b16286"
+soft = "#b16286"
+
+[colors.neutral_red.dark]
+hard = "#cc241d"
+medium = "#cc241d"
+soft = "#cc241d"
+
+[colors.neutral_red.light]
+hard = "#cc241d"
+medium = "#cc241d"
+soft = "#cc241d"
+
+[colors.neutral_yellow.dark]
+hard = "#d79921"
+medium = "#d79921"
+soft = "#d79921"
+
+[colors.neutral_yellow.light]
+hard = "#d79921"
+medium = "#d79921"
+soft = "#d79921"
+
+[colors.selection.dark]
+hard = "#665c54"
+medium = "#665c54"
+soft = "#665c54"
+
+[colors.selection.light]
+hard = "#bdae93"
+medium = "#bdae93"
+soft = "#bdae93"
+
+[colors.statusline.dark]
+hard = "#504945"
+medium = "#504945"
+soft = "#504945"
+
+[colors.statusline.light]
+hard = "#d5c4a1"
+medium = "#d5c4a1"
+soft = "#d5c4a1"
+
+[colors.text.dark]
+hard = "#ebdbb2"
+medium = "#ebdbb2"
+soft = "#ebdbb2"
+
+[colors.text.light]
+hard = "#3c3836"
+medium = "#3c3836"
+soft = "#3c3836"
+
+[groups]
+
+Comment = { fg = "gray_244", italic = true }
+Constant = { fg = "accent_orange" }
+String = { fg = "accent_green", italic = true }
+Character = { fg = "accent_green", italic = true }
+Number = { fg = "accent_purple" }
+Boolean = { fg = "accent_purple" }
+Float = { fg = "accent_purple" }
+Identifier = { fg = "text" }
+Function = { fg = "accent_green", bold = true }
+Statement = { fg = "accent_red" }
+Conditional = { fg = "accent_red" }
+Repeat = { fg = "accent_red" }
+Label = { fg = "accent_red" }
+Operator = { fg = "accent_orange" }
+Keyword = { fg = "accent_red" }
+Exception = { fg = "accent_red" }
+PreProc = { fg = "accent_green", bold = true }
+Include = { fg = "accent_green", bold = true }
+Define = { fg = "accent_green", bold = true }
+Macro = { fg = "accent_green", bold = true }
+PreCondit = { fg = "accent_green", bold = true }
+Type = { fg = "accent_yellow" }
+StorageClass = { fg = "accent_red" }
+Structure = { fg = "accent_yellow" }
+Typedef = { fg = "accent_yellow" }
+Special = { fg = "accent_orange" }
+SpecialChar = { fg = "accent_green", italic = true }
+Tag = { fg = "accent_blue", sp = "accent_blue", underline = true }
+Delimiter = { fg = "accent_orange" }
+SpecialComment = { fg = "gray_244", italic = true }
+Debug = { fg = "accent_red" }
+Underlined = { fg = "accent_blue", sp = "accent_blue", underline = true }
+Ignore = { fg = "gray_244" }
+Error = { fg = "accent_red", sp = "accent_red", bold = true, reverse = true }
+Todo = { fg = "accent_yellow", sp = "accent_yellow", bold = true }
+Added = { fg = "accent_green", bold = true }
+Changed = { fg = "accent_blue", sp = "accent_blue" }
+Removed = { fg = "accent_red", sp = "accent_red", bold = true, reverse = true }
+
+Warning = { fg = "accent_yellow", sp = "accent_yellow" }
+Info = { fg = "accent_blue", sp = "accent_blue" }
+Hint = { fg = "accent_aqua" }
+DiagnosticError = { sp = "accent_red", underline = true }
+DiagnosticWarning = { sp = "accent_yellow", underline = true }
+DiagnosticInfo = { sp = "accent_blue", underline = true }
+DiagnosticHint = { sp = "accent_aqua", underline = true }
+
+Installation = { fg = "accent_red" }
+Property = { fg = "accent_blue" }
+Namespace = { fg = "text" }
+Package = { fg = "text" }
+CompiledFunction = { fg = "accent_orange" }
+Symbol = { fg = "accent_orange" }
+Variable = { fg = "text" }
+AlgVariable = { fg = "accent_orange" }
+Parameter = { fg = "accent_blue" }
+Regex = { fg = "accent_blue", sp = "accent_blue", underline = true }
+Punctuation = { fg = "accent_orange" }
+Quote = { fg = "accent_orange" }
+Documentation = { fg = "accent_blue", sp = "accent_blue", underline = true }
+
+LspTypeClass = { fg = "accent_yellow" }
+LspTypeComment = { fg = "gray_244", italic = true }
+LspTypeDecorator = { fg = "accent_green", bold = true }
+LspTypeEnum = { fg = "accent_yellow" }
+LspTypeEnumMember = { fg = "accent_orange" }
+LspTypeEvent = { fg = "accent_orange" }
+LspTypeFunction = { fg = "accent_green", bold = true }
+LspTypeInterface = { fg = "accent_yellow" }
+LspTypeKeyword = { fg = "accent_red" }
+LspTypeMacro = { fg = "accent_green", bold = true }
+LspTypeMethod = { fg = "accent_green", bold = true }
+LspTypeModifier = { fg = "accent_red" }
+LspTypeNamespace = { fg = "text" }
+LspTypeNumber = { fg = "accent_purple" }
+LspTypeOperator = { fg = "accent_orange" }
+LspTypeParameter = { fg = "accent_blue" }
+LspTypeProperty = { fg = "accent_blue" }
+LspTypeRegexp = { fg = "accent_blue", sp = "accent_blue", underline = true }
+LspTypeString = { fg = "accent_green", italic = true }
+LspTypeStruct = { fg = "accent_yellow" }
+LspTypeType = { fg = "accent_yellow" }
+LspTypeTypeParameter = { fg = "accent_yellow" }
+LspTypeVariable = { fg = "text" }
+
+LspModAbstract = { italic = true }
+LspModAsync = { italic = true }
+LspModDeclaration = { bold = true }
+LspModDefaultLibrary = { italic = true }
+LspModDefinition = { bold = true }
+LspModDeprecated = { crossed_out = true }
+LspModDocumentation = { italic = true }
+LspModModification = { underline = true }
+LspModReadonly = { italic = true }
+LspModStatic = { underline = true }
+
+Visual = { bg = "selection" }
+Value = { fg = "text" }
+Muted = { fg = "gray_244" }
+Printed = { fg = "accent_green", bg = "printed_background", italic = true }
+ShellCommand = { fg = "accent_aqua" }
+ShellMessage = { fg = "gray_244" }
+ShellError = { fg = "accent_red", sp = "accent_red", bold = true, reverse = true }
+HintText = { fg = "gray_244" }
+Normal = { bg = "background" }
+CodeBlock = { bg = "code_background" }
+Separator = { fg = "border_background" }
+ValueBorder = { fg = "selection", sp = "selection" }
+OutputNumber = { fg = "accent_green" }
+ErrorBorder = { fg = "accent_red", sp = "accent_red" }
+WarningBorder = { fg = "accent_yellow", sp = "accent_yellow" }
+InfoBorder = { fg = "accent_blue", sp = "accent_blue" }
+Statusline1 = { fg = "accent_green" }
+Statusline2 = { fg = "accent_yellow" }
+Statusline3 = { fg = "accent_red" }
+StatuslineBorder = { fg = "selection", sp = "selection" }
+StatuslineBg = { bg = "statusline" }
+StatuslineError = { fg = "accent_red", sp = "accent_red" }
+StatuslineWarning = { fg = "accent_yellow", sp = "accent_yellow" }
+KeymapHint = { fg = "accent_aqua" }
+PickerText = { fg = "text" }
+Picker = { bg = "dark1" }
+PickerSelected = { fg = "background", bg = "accent_green" }
+PickerBorder = { fg = "selection", sp = "selection" }
+
+Accent1 = { fg = "accent_red" }
+Accent2 = { fg = "accent_orange" }
+Accent3 = { fg = "accent_yellow" }
+Accent4 = { fg = "accent_green" }
+Accent5 = { fg = "accent_aqua" }
+Accent6 = { fg = "accent_blue" }
+Accent7 = { fg = "accent_purple" }
+
+BgColor1 = { bg = "background" }
+BgColor2 = { bg = "code_background" }
+BgColor3 = { bg = "border_background" }
+BgColor4 = { bg = "selection" }

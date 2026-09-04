@@ -1,17 +1,415 @@
-[dark.soft]
-native = { aqua = "#83c092", bg0 = "#333c43", bg1 = "#3a464c", bg2 = "#434f55", bg3 = "#4d5960", bg4 = "#555f66", bg5 = "#5d6b66", bg_blue = "#3f5865", bg_dim = "#293136", bg_green = "#48584e", bg_purple = "#4e4953", bg_red = "#59464c", bg_visual = "#5c3f4f", bg_yellow = "#55544a", blue = "#7fbbb3", fg = "#d3c6aa", green = "#a7c080", grey0 = "#7a8478", grey1 = "#859289", grey2 = "#9da9a0", orange = "#e69875", purple = "#d699b6", red = "#e67e80", statusline1 = "#a7c080", statusline2 = "#d3c6aa", statusline3 = "#e67e80", yellow = "#dbbc7f" }
+name = "everforest"
 
-[dark.medium]
-native = { aqua = "#83c092", bg0 = "#2d353b", bg1 = "#343f44", bg2 = "#3d484d", bg3 = "#475258", bg4 = "#4f585e", bg5 = "#56635f", bg_blue = "#3a515d", bg_dim = "#232a2e", bg_green = "#425047", bg_purple = "#4a444e", bg_red = "#514045", bg_visual = "#543a48", bg_yellow = "#4d4c43", blue = "#7fbbb3", fg = "#d3c6aa", green = "#a7c080", grey0 = "#7a8478", grey1 = "#859289", grey2 = "#9da9a0", orange = "#e69875", purple = "#d699b6", red = "#e67e80", statusline1 = "#a7c080", statusline2 = "#d3c6aa", statusline3 = "#e67e80", yellow = "#dbbc7f" }
+[variants]
+dark = ["hard", "medium", "soft"]
+light = ["hard", "medium", "soft"]
 
-[dark.hard]
-native = { aqua = "#83c092", bg0 = "#272e33", bg1 = "#2e383c", bg2 = "#374145", bg3 = "#414b50", bg4 = "#495156", bg5 = "#4f5b58", bg_blue = "#384b55", bg_dim = "#1e2326", bg_green = "#3c4841", bg_purple = "#463f48", bg_red = "#493b40", bg_visual = "#4c3743", bg_yellow = "#45443c", blue = "#7fbbb3", fg = "#d3c6aa", green = "#a7c080", grey0 = "#7a8478", grey1 = "#859289", grey2 = "#9da9a0", orange = "#e69875", purple = "#d699b6", red = "#e67e80", statusline1 = "#a7c080", statusline2 = "#d3c6aa", statusline3 = "#e67e80", yellow = "#dbbc7f" }
+[colors.aqua.dark]
+hard = "#83c092"
+medium = "#83c092"
+soft = "#83c092"
 
-[light.soft]
-native = { aqua = "#35a77c", bg0 = "#f3ead3", bg1 = "#eae4ca", bg2 = "#e5dfc5", bg3 = "#ddd8be", bg4 = "#d8d3ba", bg5 = "#b9c0ab", bg_blue = "#e1e7dd", bg_dim = "#e5dfc5", bg_green = "#e5e6c5", bg_purple = "#f1ddd4", bg_red = "#fadbd0", bg_visual = "#e1e4bd", bg_yellow = "#f1e4c5", blue = "#3a94c5", fg = "#5c6a72", green = "#8da101", grey0 = "#a6b0a0", grey1 = "#939f91", grey2 = "#829181", orange = "#f57d26", purple = "#df69ba", red = "#f85552", statusline1 = "#93b259", statusline2 = "#708089", statusline3 = "#e66868", yellow = "#dfa000" }
+[colors.aqua.light]
+hard = "#35a77c"
+medium = "#35a77c"
+soft = "#35a77c"
 
-[light.medium]
-native = { aqua = "#35a77c", bg0 = "#fdf6e3", bg1 = "#f4f0d9", bg2 = "#efebd4", bg3 = "#e6e2cc", bg4 = "#e0dcc7", bg5 = "#bdc3af", bg_blue = "#e9f0e9", bg_dim = "#efebd4", bg_green = "#f0f1d2", bg_purple = "#fae8e2", bg_red = "#fde3da", bg_visual = "#eaedc8", bg_yellow = "#faedcd", blue = "#3a94c5", fg = "#5c6a72", green = "#8da101", grey0 = "#a6b0a0", grey1 = "#939f91", grey2 = "#829181", orange = "#f57d26", purple = "#df69ba", red = "#f85552", statusline1 = "#93b259", statusline2 = "#708089", statusline3 = "#e66868", yellow = "#dfa000" }
+[colors.bg0.dark]
+hard = "#272e33"
+medium = "#2d353b"
+soft = "#333c43"
 
-[light.hard]
-native = { aqua = "#35a77c", bg0 = "#fffbef", bg1 = "#f8f5e4", bg2 = "#f2efdf", bg3 = "#edeada", bg4 = "#e8e5d5", bg5 = "#bec5b2", bg_blue = "#ecf5ed", bg_dim = "#f2efdf", bg_green = "#f3f5d9", bg_purple = "#fceced", bg_red = "#ffe7de", bg_visual = "#f0f2d4", bg_yellow = "#fef2d5", blue = "#3a94c5", fg = "#5c6a72", green = "#8da101", grey0 = "#a6b0a0", grey1 = "#939f91", grey2 = "#829181", orange = "#f57d26", purple = "#df69ba", red = "#f85552", statusline1 = "#93b259", statusline2 = "#708089", statusline3 = "#e66868", yellow = "#dfa000" }
+[colors.bg0.light]
+hard = "#fffbef"
+medium = "#fdf6e3"
+soft = "#f3ead3"
+
+[colors.bg1.dark]
+hard = "#2e383c"
+medium = "#343f44"
+soft = "#3a464c"
+
+[colors.bg1.light]
+hard = "#f8f5e4"
+medium = "#f4f0d9"
+soft = "#eae4ca"
+
+[colors.bg2.dark]
+hard = "#374145"
+medium = "#3d484d"
+soft = "#434f55"
+
+[colors.bg2.light]
+hard = "#f2efdf"
+medium = "#efebd4"
+soft = "#e5dfc5"
+
+[colors.bg3.dark]
+hard = "#414b50"
+medium = "#475258"
+soft = "#4d5960"
+
+[colors.bg3.light]
+hard = "#edeada"
+medium = "#e6e2cc"
+soft = "#ddd8be"
+
+[colors.bg4.dark]
+hard = "#495156"
+medium = "#4f585e"
+soft = "#555f66"
+
+[colors.bg4.light]
+hard = "#e8e5d5"
+medium = "#e0dcc7"
+soft = "#d8d3ba"
+
+[colors.bg5.dark]
+hard = "#4f5b58"
+medium = "#56635f"
+soft = "#5d6b66"
+
+[colors.bg5.light]
+hard = "#bec5b2"
+medium = "#bdc3af"
+soft = "#b9c0ab"
+
+[colors.bg_blue.dark]
+hard = "#384b55"
+medium = "#3a515d"
+soft = "#3f5865"
+
+[colors.bg_blue.light]
+hard = "#ecf5ed"
+medium = "#e9f0e9"
+soft = "#e1e7dd"
+
+[colors.bg_dim.dark]
+hard = "#1e2326"
+medium = "#232a2e"
+soft = "#293136"
+
+[colors.bg_dim.light]
+hard = "#f2efdf"
+medium = "#efebd4"
+soft = "#e5dfc5"
+
+[colors.bg_green.dark]
+hard = "#3c4841"
+medium = "#425047"
+soft = "#48584e"
+
+[colors.bg_green.light]
+hard = "#f3f5d9"
+medium = "#f0f1d2"
+soft = "#e5e6c5"
+
+[colors.bg_purple.dark]
+hard = "#463f48"
+medium = "#4a444e"
+soft = "#4e4953"
+
+[colors.bg_purple.light]
+hard = "#fceced"
+medium = "#fae8e2"
+soft = "#f1ddd4"
+
+[colors.bg_red.dark]
+hard = "#493b40"
+medium = "#514045"
+soft = "#59464c"
+
+[colors.bg_red.light]
+hard = "#ffe7de"
+medium = "#fde3da"
+soft = "#fadbd0"
+
+[colors.bg_visual.dark]
+hard = "#4c3743"
+medium = "#543a48"
+soft = "#5c3f4f"
+
+[colors.bg_visual.light]
+hard = "#f0f2d4"
+medium = "#eaedc8"
+soft = "#e1e4bd"
+
+[colors.bg_yellow.dark]
+hard = "#45443c"
+medium = "#4d4c43"
+soft = "#55544a"
+
+[colors.bg_yellow.light]
+hard = "#fef2d5"
+medium = "#faedcd"
+soft = "#f1e4c5"
+
+[colors.blue.dark]
+hard = "#7fbbb3"
+medium = "#7fbbb3"
+soft = "#7fbbb3"
+
+[colors.blue.light]
+hard = "#3a94c5"
+medium = "#3a94c5"
+soft = "#3a94c5"
+
+[colors.fg.dark]
+hard = "#d3c6aa"
+medium = "#d3c6aa"
+soft = "#d3c6aa"
+
+[colors.fg.light]
+hard = "#5c6a72"
+medium = "#5c6a72"
+soft = "#5c6a72"
+
+[colors.green.dark]
+hard = "#a7c080"
+medium = "#a7c080"
+soft = "#a7c080"
+
+[colors.green.light]
+hard = "#8da101"
+medium = "#8da101"
+soft = "#8da101"
+
+[colors.grey0.dark]
+hard = "#7a8478"
+medium = "#7a8478"
+soft = "#7a8478"
+
+[colors.grey0.light]
+hard = "#a6b0a0"
+medium = "#a6b0a0"
+soft = "#a6b0a0"
+
+[colors.grey1.dark]
+hard = "#859289"
+medium = "#859289"
+soft = "#859289"
+
+[colors.grey1.light]
+hard = "#939f91"
+medium = "#939f91"
+soft = "#939f91"
+
+[colors.grey2.dark]
+hard = "#9da9a0"
+medium = "#9da9a0"
+soft = "#9da9a0"
+
+[colors.grey2.light]
+hard = "#829181"
+medium = "#829181"
+soft = "#829181"
+
+[colors.orange.dark]
+hard = "#e69875"
+medium = "#e69875"
+soft = "#e69875"
+
+[colors.orange.light]
+hard = "#f57d26"
+medium = "#f57d26"
+soft = "#f57d26"
+
+[colors.purple.dark]
+hard = "#d699b6"
+medium = "#d699b6"
+soft = "#d699b6"
+
+[colors.purple.light]
+hard = "#df69ba"
+medium = "#df69ba"
+soft = "#df69ba"
+
+[colors.red.dark]
+hard = "#e67e80"
+medium = "#e67e80"
+soft = "#e67e80"
+
+[colors.red.light]
+hard = "#f85552"
+medium = "#f85552"
+soft = "#f85552"
+
+[colors.statusline1.dark]
+hard = "#a7c080"
+medium = "#a7c080"
+soft = "#a7c080"
+
+[colors.statusline1.light]
+hard = "#93b259"
+medium = "#93b259"
+soft = "#93b259"
+
+[colors.statusline2.dark]
+hard = "#d3c6aa"
+medium = "#d3c6aa"
+soft = "#d3c6aa"
+
+[colors.statusline2.light]
+hard = "#708089"
+medium = "#708089"
+soft = "#708089"
+
+[colors.statusline3.dark]
+hard = "#e67e80"
+medium = "#e67e80"
+soft = "#e67e80"
+
+[colors.statusline3.light]
+hard = "#e66868"
+medium = "#e66868"
+soft = "#e66868"
+
+[colors.yellow.dark]
+hard = "#dbbc7f"
+medium = "#dbbc7f"
+soft = "#dbbc7f"
+
+[colors.yellow.light]
+hard = "#dfa000"
+medium = "#dfa000"
+soft = "#dfa000"
+
+[groups]
+
+Comment = { fg = "grey1", italic = true }
+Constant = { fg = "purple", italic = true }
+String = { fg = "aqua" }
+Character = { fg = "aqua" }
+Number = { fg = "purple" }
+Boolean = { fg = "purple" }
+Float = { fg = "purple" }
+Identifier = { fg = "fg" }
+Function = { fg = "green" }
+Statement = { fg = "red" }
+Conditional = { fg = "red" }
+Repeat = { fg = "red" }
+Label = { fg = "orange" }
+Operator = { fg = "orange" }
+Keyword = { fg = "red" }
+Exception = { fg = "red" }
+PreProc = { fg = "green" }
+Include = { fg = "green" }
+Define = { fg = "green" }
+Macro = { fg = "green" }
+PreCondit = { fg = "green" }
+Type = { fg = "yellow", italic = true }
+StorageClass = { fg = "red" }
+Structure = { fg = "yellow", italic = true }
+Typedef = { fg = "yellow", italic = true }
+Special = { fg = "blue" }
+SpecialChar = { fg = "aqua" }
+Tag = { fg = "blue", sp = "blue", underline = true }
+Delimiter = { fg = "grey1" }
+SpecialComment = { fg = "grey1", italic = true }
+Debug = { fg = "red" }
+Underlined = { fg = "blue", sp = "blue", underline = true }
+Ignore = { fg = "grey1" }
+Error = { fg = "red", sp = "red" }
+Todo = { fg = "yellow", sp = "yellow", bold = true }
+Added = { fg = "green" }
+Changed = { fg = "blue", sp = "blue" }
+Removed = { fg = "red", sp = "red" }
+
+Warning = { fg = "yellow", sp = "yellow" }
+Info = { fg = "blue", sp = "blue" }
+Hint = { fg = "aqua" }
+DiagnosticError = { sp = "red", underline = true }
+DiagnosticWarning = { sp = "yellow", underline = true }
+DiagnosticInfo = { sp = "blue", underline = true }
+DiagnosticHint = { sp = "aqua", underline = true }
+
+Installation = { fg = "orange" }
+Property = { fg = "blue" }
+Namespace = { fg = "yellow", italic = true }
+Package = { fg = "yellow", italic = true }
+CompiledFunction = { fg = "green" }
+Symbol = { fg = "blue" }
+Variable = { fg = "fg" }
+AlgVariable = { fg = "purple", italic = true }
+Parameter = { fg = "fg" }
+Regex = { fg = "blue", sp = "blue", underline = true }
+Punctuation = { fg = "grey2" }
+Quote = { fg = "yellow" }
+Documentation = { fg = "blue", sp = "blue", underline = true }
+
+LspTypeClass = { fg = "yellow", italic = true }
+LspTypeComment = { fg = "grey1", italic = true }
+LspTypeDecorator = { fg = "green" }
+LspTypeEnum = { fg = "yellow", italic = true }
+LspTypeEnumMember = { fg = "purple", italic = true }
+LspTypeEvent = { fg = "blue" }
+LspTypeFunction = { fg = "green" }
+LspTypeInterface = { fg = "yellow", italic = true }
+LspTypeKeyword = { fg = "red" }
+LspTypeMacro = { fg = "green" }
+LspTypeMethod = { fg = "green" }
+LspTypeModifier = { fg = "red" }
+LspTypeNamespace = { fg = "yellow", italic = true }
+LspTypeNumber = { fg = "purple" }
+LspTypeOperator = { fg = "orange" }
+LspTypeParameter = { fg = "fg" }
+LspTypeProperty = { fg = "blue" }
+LspTypeRegexp = { fg = "blue", sp = "blue", underline = true }
+LspTypeString = { fg = "aqua" }
+LspTypeStruct = { fg = "yellow", italic = true }
+LspTypeType = { fg = "yellow", italic = true }
+LspTypeTypeParameter = { fg = "yellow", italic = true }
+LspTypeVariable = { fg = "fg" }
+
+LspModAbstract = { italic = true }
+LspModAsync = { italic = true }
+LspModDeclaration = { bold = true }
+LspModDefaultLibrary = { italic = true }
+LspModDefinition = { bold = true }
+LspModDeprecated = { crossed_out = true }
+LspModDocumentation = { italic = true }
+LspModModification = { underline = true }
+LspModReadonly = { italic = true }
+LspModStatic = { underline = true }
+
+Visual = { bg = "bg_visual" }
+Value = { fg = "fg" }
+Muted = { fg = "grey1" }
+Printed = { fg = "aqua", bg = "bg1" }
+ShellCommand = { fg = "aqua" }
+ShellMessage = { fg = "grey0" }
+ShellError = { fg = "red", sp = "red" }
+HintText = { fg = "grey0" }
+Normal = { bg = "bg0" }
+CodeBlock = { bg = "bg_dim" }
+Separator = { fg = "bg0" }
+ValueBorder = { fg = "bg3", sp = "bg3" }
+OutputNumber = { fg = "statusline1" }
+ErrorBorder = { fg = "red", sp = "red" }
+WarningBorder = { fg = "yellow", sp = "yellow" }
+InfoBorder = { fg = "blue", sp = "blue" }
+Statusline1 = { fg = "statusline1" }
+Statusline2 = { fg = "statusline2" }
+Statusline3 = { fg = "statusline3" }
+StatuslineBorder = { fg = "bg5", sp = "bg5" }
+StatuslineBg = { bg = "bg1" }
+StatuslineError = { fg = "red", sp = "red" }
+StatuslineWarning = { fg = "yellow", sp = "yellow" }
+KeymapHint = { fg = "aqua" }
+PickerText = { fg = "fg" }
+Picker = { bg = "bg_green" }
+PickerSelected = { fg = "bg0", bg = "green" }
+PickerBorder = { fg = "bg4", sp = "bg4" }
+
+Accent1 = { fg = "red" }
+Accent2 = { fg = "orange" }
+Accent3 = { fg = "yellow" }
+Accent4 = { fg = "green" }
+Accent5 = { fg = "aqua" }
+Accent6 = { fg = "blue" }
+Accent7 = { fg = "purple" }
+
+BgColor1 = { bg = "bg1" }
+BgColor2 = { bg = "bg2" }
+BgColor3 = { bg = "bg3" }
+BgColor4 = { bg = "bg4" }

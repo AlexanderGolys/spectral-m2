@@ -91,7 +91,7 @@ impl Painter {
                     literal,
                     match literal.kind {
                         LiteralKind::Integer => HLGroup::Number,
-                        LiteralKind::Float => HLGroup::Number,
+                        LiteralKind::Float => HLGroup::Float,
                         LiteralKind::String | LiteralKind::RawString => HLGroup::String,
                     },
                     0,
@@ -163,13 +163,13 @@ impl Painter {
 fn word_kind(word: &str) -> HLGroup {
     let keyword = word.strip_prefix("Core$").unwrap_or(word);
     match keyword {
-        "if" | "else" | "then" | "when" | "list" | "do" => HLGroup::Keyword,
-        "for" | "while" | "in" | "from" | "to" => HLGroup::Keyword,
-        "return" | "break" | "continue" => HLGroup::Keyword,
-        "try" | "catch" | "throw" | "trap" | "except" | "shield" => HLGroup::Keyword,
-        "global" | "local" | "symbol" | "threadVariable" | "threadLocal" => HLGroup::Keyword,
+        "if" | "else" | "then" | "when" | "list" | "do" => HLGroup::Conditional,
+        "for" | "while" | "in" | "from" | "to" => HLGroup::Repeat,
+        "return" | "break" | "continue" => HLGroup::Statement,
+        "try" | "catch" | "throw" | "trap" | "except" | "shield" => HLGroup::Exception,
+        "global" | "local" | "symbol" | "threadVariable" | "threadLocal" => HLGroup::StorageClass,
         "time" | "timing" | "elapsedTime" | "elapsedTiming" | "profile" | "TEST" | "breakpoint"
-        | "finish" | "step" => HLGroup::Keyword,
+        | "finish" | "step" => HLGroup::Debug,
         "and" | "or" | "xor" | "not" | "SPACE" => HLGroup::Operator,
         "new" | "of" => HLGroup::Keyword,
         "true" | "false" => HLGroup::Boolean,
@@ -512,7 +512,8 @@ mod tests {
     #[test]
     fn m2_syn_highlights_lexical_and_typed_roles() {
         for (source, needle, expected) in [
-            ("if x then 1 else 0", "if", HLGroup::Keyword),
+            ("if x then 1 else 0", "if", HLGroup::Conditional),
+            ("1.0", "1.0", HLGroup::Float),
             ("1 + 2", "1", HLGroup::Number),
             ("f 1", "f", HLGroup::Function),
             ("loadPackage \"Foo\"", "\"Foo\"", HLGroup::Package),
@@ -531,7 +532,7 @@ mod tests {
         let mut highlighter = SyntaxHighlighter::new();
         let spans = highlighter.highlight("if x then \"unfinished");
 
-        assert!(spans.iter().any(|span| span.kind == HLGroup::Keyword));
+        assert!(spans.iter().any(|span| span.kind == HLGroup::Conditional));
         assert!(spans.iter().any(|span| span.kind == HLGroup::String));
     }
 

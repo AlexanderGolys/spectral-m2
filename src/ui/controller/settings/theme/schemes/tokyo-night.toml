@@ -1,11 +1,529 @@
-[dark.night]
-native = { bg = "#1a1b26", bg_dark = "#16161e", bg_dark1 = "#0c0e14", bg_float = "#16161e", bg_highlight = "#292e42", bg_popup = "#16161e", bg_search = "#3d59a1", bg_sidebar = "#16161e", bg_statusline = "#16161e", bg_visual = "#283457", black = "#15161e", blue = "#7aa2f7", blue0 = "#3d59a1", blue1 = "#2ac3de", blue2 = "#0db9d7", blue5 = "#89ddff", blue6 = "#b4f9f8", blue7 = "#394b70", border = "#15161e", border_highlight = "#27a1b9", comment = "#565f89", cyan = "#7dcfff", dark3 = "#545c7e", dark5 = "#737aa2", error = "#db4b4b", fg = "#c0caf5", fg_dark = "#a9b1d6", fg_float = "#c0caf5", fg_gutter = "#3b4261", fg_sidebar = "#a9b1d6", green = "#9ece6a", green1 = "#73daca", green2 = "#41a6b5", hint = "#1abc9c", info = "#0db9d7", magenta = "#bb9af7", magenta2 = "#ff007c", orange = "#ff9e64", purple = "#9d7cd8", red = "#f7768e", red1 = "#db4b4b", teal = "#1abc9c", terminal_black = "#414868", todo = "#7aa2f7", warning = "#e0af68", yellow = "#e0af68" }
+name = "tokyo night"
 
-[dark.storm]
-native = { bg = "#24283b", bg_dark = "#1f2335", bg_dark1 = "#1b1e2d", bg_float = "#1f2335", bg_highlight = "#292e42", bg_popup = "#1f2335", bg_search = "#3d59a1", bg_sidebar = "#1f2335", bg_statusline = "#1f2335", bg_visual = "#2e3c64", black = "#1d202f", blue = "#7aa2f7", blue0 = "#3d59a1", blue1 = "#2ac3de", blue2 = "#0db9d7", blue5 = "#89ddff", blue6 = "#b4f9f8", blue7 = "#394b70", border = "#1d202f", border_highlight = "#29a4bd", comment = "#565f89", cyan = "#7dcfff", dark3 = "#545c7e", dark5 = "#737aa2", error = "#db4b4b", fg = "#c0caf5", fg_dark = "#a9b1d6", fg_float = "#c0caf5", fg_gutter = "#3b4261", fg_sidebar = "#a9b1d6", green = "#9ece6a", green1 = "#73daca", green2 = "#41a6b5", hint = "#1abc9c", info = "#0db9d7", magenta = "#bb9af7", magenta2 = "#ff007c", orange = "#ff9e64", purple = "#9d7cd8", red = "#f7768e", red1 = "#db4b4b", teal = "#1abc9c", terminal_black = "#414868", todo = "#7aa2f7", warning = "#e0af68", yellow = "#e0af68" }
+[variants]
+dark = ["night", "storm", "moon"]
+light = ["day"]
 
-[dark.moon]
-native = { bg = "#222436", bg_dark = "#1e2030", bg_dark1 = "#191b29", bg_float = "#1e2030", bg_highlight = "#2f334d", bg_popup = "#1e2030", bg_search = "#3e68d7", bg_sidebar = "#1e2030", bg_statusline = "#1e2030", bg_visual = "#2d3f76", black = "#1b1d2b", blue = "#82aaff", blue0 = "#3e68d7", blue1 = "#65bcff", blue2 = "#0db9d7", blue5 = "#89ddff", blue6 = "#b4f9f8", blue7 = "#394b70", border = "#1b1d2b", border_highlight = "#589ed7", comment = "#636da6", cyan = "#86e1fc", dark3 = "#545c7e", dark5 = "#737aa2", error = "#c53b53", fg = "#c8d3f5", fg_dark = "#828bb8", fg_float = "#c8d3f5", fg_gutter = "#3b4261", fg_sidebar = "#828bb8", green = "#c3e88d", green1 = "#4fd6be", green2 = "#41a6b5", hint = "#4fd6be", info = "#0db9d7", magenta = "#c099ff", magenta2 = "#ff007c", orange = "#ff966c", purple = "#fca7ea", red = "#ff757f", red1 = "#c53b53", teal = "#4fd6be", terminal_black = "#444a73", todo = "#82aaff", warning = "#ffc777", yellow = "#ffc777" }
+[colors.bg.dark]
+night = "#1a1b26"
+storm = "#24283b"
+moon = "#222436"
 
-[light.day]
-native = { bg = "#e1e2e7", bg_dark = "#d0d5e3", bg_dark1 = "#c1c9df", bg_float = "#d0d5e3", bg_highlight = "#c4c8da", bg_popup = "#d0d5e3", bg_search = "#7890dd", bg_sidebar = "#d0d5e3", bg_statusline = "#d0d5e3", bg_visual = "#b7c1e3", black = "#b4b5b9", blue = "#2e7de9", blue0 = "#7890dd", blue1 = "#188092", blue2 = "#07879d", blue5 = "#006a83", blue6 = "#2e5857", blue7 = "#92a6d5", border = "#b4b5b9", border_highlight = "#4094a3", comment = "#848cb5", cyan = "#007197", dark3 = "#8990b3", dark5 = "#68709a", error = "#c64343", fg = "#3760bf", fg_dark = "#6172b0", fg_float = "#3760bf", fg_gutter = "#a8aecb", fg_sidebar = "#6172b0", green = "#587539", green1 = "#387068", green2 = "#38919f", hint = "#118c74", info = "#07879d", magenta = "#9854f1", magenta2 = "#d20065", orange = "#b15c00", purple = "#7847bd", red = "#f52a65", red1 = "#c64343", teal = "#118c74", terminal_black = "#a1a6c5", todo = "#2e7de9", warning = "#8c6c3e", yellow = "#8c6c3e" }
+[colors.bg.light]
+day = "#e1e2e7"
+
+[colors.bg_dark.dark]
+night = "#16161e"
+storm = "#1f2335"
+moon = "#1e2030"
+
+[colors.bg_dark.light]
+day = "#d0d5e3"
+
+[colors.bg_dark1.dark]
+night = "#0c0e14"
+storm = "#1b1e2d"
+moon = "#191b29"
+
+[colors.bg_dark1.light]
+day = "#c1c9df"
+
+[colors.bg_float.dark]
+night = "#16161e"
+storm = "#1f2335"
+moon = "#1e2030"
+
+[colors.bg_float.light]
+day = "#d0d5e3"
+
+[colors.bg_highlight.dark]
+night = "#292e42"
+storm = "#292e42"
+moon = "#2f334d"
+
+[colors.bg_highlight.light]
+day = "#c4c8da"
+
+[colors.bg_popup.dark]
+night = "#16161e"
+storm = "#1f2335"
+moon = "#1e2030"
+
+[colors.bg_popup.light]
+day = "#d0d5e3"
+
+[colors.bg_search.dark]
+night = "#3d59a1"
+storm = "#3d59a1"
+moon = "#3e68d7"
+
+[colors.bg_search.light]
+day = "#7890dd"
+
+[colors.bg_sidebar.dark]
+night = "#16161e"
+storm = "#1f2335"
+moon = "#1e2030"
+
+[colors.bg_sidebar.light]
+day = "#d0d5e3"
+
+[colors.bg_statusline.dark]
+night = "#16161e"
+storm = "#1f2335"
+moon = "#1e2030"
+
+[colors.bg_statusline.light]
+day = "#d0d5e3"
+
+[colors.bg_visual.dark]
+night = "#283457"
+storm = "#2e3c64"
+moon = "#2d3f76"
+
+[colors.bg_visual.light]
+day = "#b7c1e3"
+
+[colors.black.dark]
+night = "#15161e"
+storm = "#1d202f"
+moon = "#1b1d2b"
+
+[colors.black.light]
+day = "#b4b5b9"
+
+[colors.blue.dark]
+night = "#7aa2f7"
+storm = "#7aa2f7"
+moon = "#82aaff"
+
+[colors.blue.light]
+day = "#2e7de9"
+
+[colors.blue0.dark]
+night = "#3d59a1"
+storm = "#3d59a1"
+moon = "#3e68d7"
+
+[colors.blue0.light]
+day = "#7890dd"
+
+[colors.blue1.dark]
+night = "#2ac3de"
+storm = "#2ac3de"
+moon = "#65bcff"
+
+[colors.blue1.light]
+day = "#188092"
+
+[colors.blue2.dark]
+night = "#0db9d7"
+storm = "#0db9d7"
+moon = "#0db9d7"
+
+[colors.blue2.light]
+day = "#07879d"
+
+[colors.blue5.dark]
+night = "#89ddff"
+storm = "#89ddff"
+moon = "#89ddff"
+
+[colors.blue5.light]
+day = "#006a83"
+
+[colors.blue6.dark]
+night = "#b4f9f8"
+storm = "#b4f9f8"
+moon = "#b4f9f8"
+
+[colors.blue6.light]
+day = "#2e5857"
+
+[colors.blue7.dark]
+night = "#394b70"
+storm = "#394b70"
+moon = "#394b70"
+
+[colors.blue7.light]
+day = "#92a6d5"
+
+[colors.border.dark]
+night = "#15161e"
+storm = "#1d202f"
+moon = "#1b1d2b"
+
+[colors.border.light]
+day = "#b4b5b9"
+
+[colors.border_highlight.dark]
+night = "#27a1b9"
+storm = "#29a4bd"
+moon = "#589ed7"
+
+[colors.border_highlight.light]
+day = "#4094a3"
+
+[colors.comment.dark]
+night = "#565f89"
+storm = "#565f89"
+moon = "#636da6"
+
+[colors.comment.light]
+day = "#848cb5"
+
+[colors.cyan.dark]
+night = "#7dcfff"
+storm = "#7dcfff"
+moon = "#86e1fc"
+
+[colors.cyan.light]
+day = "#007197"
+
+[colors.dark3.dark]
+night = "#545c7e"
+storm = "#545c7e"
+moon = "#545c7e"
+
+[colors.dark3.light]
+day = "#8990b3"
+
+[colors.dark5.dark]
+night = "#737aa2"
+storm = "#737aa2"
+moon = "#737aa2"
+
+[colors.dark5.light]
+day = "#68709a"
+
+[colors.error.dark]
+night = "#db4b4b"
+storm = "#db4b4b"
+moon = "#c53b53"
+
+[colors.error.light]
+day = "#c64343"
+
+[colors.fg.dark]
+night = "#c0caf5"
+storm = "#c0caf5"
+moon = "#c8d3f5"
+
+[colors.fg.light]
+day = "#3760bf"
+
+[colors.fg_dark.dark]
+night = "#a9b1d6"
+storm = "#a9b1d6"
+moon = "#828bb8"
+
+[colors.fg_dark.light]
+day = "#6172b0"
+
+[colors.fg_float.dark]
+night = "#c0caf5"
+storm = "#c0caf5"
+moon = "#c8d3f5"
+
+[colors.fg_float.light]
+day = "#3760bf"
+
+[colors.fg_gutter.dark]
+night = "#3b4261"
+storm = "#3b4261"
+moon = "#3b4261"
+
+[colors.fg_gutter.light]
+day = "#a8aecb"
+
+[colors.fg_sidebar.dark]
+night = "#a9b1d6"
+storm = "#a9b1d6"
+moon = "#828bb8"
+
+[colors.fg_sidebar.light]
+day = "#6172b0"
+
+[colors.green.dark]
+night = "#9ece6a"
+storm = "#9ece6a"
+moon = "#c3e88d"
+
+[colors.green.light]
+day = "#587539"
+
+[colors.green1.dark]
+night = "#73daca"
+storm = "#73daca"
+moon = "#4fd6be"
+
+[colors.green1.light]
+day = "#387068"
+
+[colors.green2.dark]
+night = "#41a6b5"
+storm = "#41a6b5"
+moon = "#41a6b5"
+
+[colors.green2.light]
+day = "#38919f"
+
+[colors.hint.dark]
+night = "#1abc9c"
+storm = "#1abc9c"
+moon = "#4fd6be"
+
+[colors.hint.light]
+day = "#118c74"
+
+[colors.info.dark]
+night = "#0db9d7"
+storm = "#0db9d7"
+moon = "#0db9d7"
+
+[colors.info.light]
+day = "#07879d"
+
+[colors.magenta.dark]
+night = "#bb9af7"
+storm = "#bb9af7"
+moon = "#c099ff"
+
+[colors.magenta.light]
+day = "#9854f1"
+
+[colors.magenta2.dark]
+night = "#ff007c"
+storm = "#ff007c"
+moon = "#ff007c"
+
+[colors.magenta2.light]
+day = "#d20065"
+
+[colors.orange.dark]
+night = "#ff9e64"
+storm = "#ff9e64"
+moon = "#ff966c"
+
+[colors.orange.light]
+day = "#b15c00"
+
+[colors.purple.dark]
+night = "#9d7cd8"
+storm = "#9d7cd8"
+moon = "#fca7ea"
+
+[colors.purple.light]
+day = "#7847bd"
+
+[colors.red.dark]
+night = "#f7768e"
+storm = "#f7768e"
+moon = "#ff757f"
+
+[colors.red.light]
+day = "#f52a65"
+
+[colors.red1.dark]
+night = "#db4b4b"
+storm = "#db4b4b"
+moon = "#c53b53"
+
+[colors.red1.light]
+day = "#c64343"
+
+[colors.selection.dark]
+night = "#394b70"
+storm = "#394b70"
+moon = "#394b70"
+
+[colors.selection.light]
+day = "#b7c1e3"
+
+[colors.statusline_canvas.dark]
+night = "#0c0e14"
+storm = "#1b1e2d"
+moon = "#191b29"
+
+[colors.statusline_canvas.light]
+day = "#d0d5e3"
+
+[colors.teal.dark]
+night = "#1abc9c"
+storm = "#1abc9c"
+moon = "#4fd6be"
+
+[colors.teal.light]
+day = "#118c74"
+
+[colors.terminal_black.dark]
+night = "#414868"
+storm = "#414868"
+moon = "#444a73"
+
+[colors.terminal_black.light]
+day = "#a1a6c5"
+
+[colors.todo.dark]
+night = "#7aa2f7"
+storm = "#7aa2f7"
+moon = "#82aaff"
+
+[colors.todo.light]
+day = "#2e7de9"
+
+[colors.warning.dark]
+night = "#e0af68"
+storm = "#e0af68"
+moon = "#ffc777"
+
+[colors.warning.light]
+day = "#8c6c3e"
+
+[colors.yellow.dark]
+night = "#e0af68"
+storm = "#e0af68"
+moon = "#ffc777"
+
+[colors.yellow.light]
+day = "#8c6c3e"
+
+[groups]
+
+Comment = { fg = "comment", italic = true }
+Constant = { fg = "blue1" }
+String = { fg = "green" }
+Character = { fg = "green" }
+Number = { fg = "orange" }
+Boolean = { fg = "orange" }
+Float = { fg = "orange" }
+Identifier = { fg = "fg" }
+Function = { fg = "blue" }
+Statement = { fg = "purple", italic = true }
+Conditional = { fg = "purple", italic = true }
+Repeat = { fg = "purple", italic = true }
+Label = { fg = "blue" }
+Operator = { fg = "blue5" }
+Keyword = { fg = "purple", italic = true }
+Exception = { fg = "purple", italic = true }
+PreProc = { fg = "blue" }
+Include = { fg = "blue" }
+Define = { fg = "blue" }
+Macro = { fg = "blue" }
+PreCondit = { fg = "blue" }
+Type = { fg = "blue1" }
+StorageClass = { fg = "purple", italic = true }
+Structure = { fg = "blue1" }
+Typedef = { fg = "blue1" }
+Special = { fg = "blue1" }
+SpecialChar = { fg = "green" }
+Tag = { fg = "fg", sp = "fg", underline = true }
+Delimiter = { fg = "blue5" }
+SpecialComment = { fg = "comment", italic = true }
+Debug = { fg = "purple", italic = true }
+Underlined = { fg = "fg", sp = "fg", underline = true }
+Ignore = { fg = "fg_dark" }
+Error = { fg = "error", sp = "error" }
+Todo = { fg = "warning", sp = "warning", bold = true }
+Added = { fg = "blue" }
+Changed = { fg = "blue", sp = "blue" }
+Removed = { fg = "error", sp = "error" }
+
+Warning = { fg = "warning", sp = "warning" }
+Info = { fg = "blue", sp = "blue" }
+Hint = { fg = "cyan" }
+DiagnosticError = { sp = "error", underline = true }
+DiagnosticWarning = { sp = "warning", underline = true }
+DiagnosticInfo = { sp = "blue", underline = true }
+DiagnosticHint = { sp = "cyan", underline = true }
+
+Installation = { fg = "blue" }
+Property = { fg = "green1" }
+Namespace = { fg = "cyan" }
+Package = { fg = "cyan" }
+CompiledFunction = { fg = "blue1" }
+Symbol = { fg = "blue1" }
+Variable = { fg = "fg" }
+AlgVariable = { fg = "red" }
+Parameter = { fg = "yellow" }
+Regex = { fg = "fg", sp = "fg", underline = true }
+Punctuation = { fg = "fg_dark" }
+Quote = { fg = "blue1" }
+Documentation = { fg = "fg", sp = "fg", underline = true }
+
+LspTypeClass = { fg = "blue1" }
+LspTypeComment = { fg = "comment", italic = true }
+LspTypeDecorator = { fg = "blue" }
+LspTypeEnum = { fg = "blue1" }
+LspTypeEnumMember = { fg = "blue1" }
+LspTypeEvent = { fg = "blue1" }
+LspTypeFunction = { fg = "blue" }
+LspTypeInterface = { fg = "blue1" }
+LspTypeKeyword = { fg = "purple", italic = true }
+LspTypeMacro = { fg = "blue" }
+LspTypeMethod = { fg = "blue" }
+LspTypeModifier = { fg = "purple", italic = true }
+LspTypeNamespace = { fg = "cyan" }
+LspTypeNumber = { fg = "orange" }
+LspTypeOperator = { fg = "blue5" }
+LspTypeParameter = { fg = "yellow" }
+LspTypeProperty = { fg = "green1" }
+LspTypeRegexp = { fg = "fg", sp = "fg", underline = true }
+LspTypeString = { fg = "green" }
+LspTypeStruct = { fg = "blue1" }
+LspTypeType = { fg = "blue1" }
+LspTypeTypeParameter = { fg = "blue1" }
+LspTypeVariable = { fg = "fg" }
+
+LspModAbstract = { italic = true }
+LspModAsync = { italic = true }
+LspModDeclaration = { bold = true }
+LspModDefaultLibrary = { italic = true }
+LspModDefinition = { bold = true }
+LspModDeprecated = { crossed_out = true }
+LspModDocumentation = { italic = true }
+LspModModification = { underline = true }
+LspModReadonly = { italic = true }
+LspModStatic = { underline = true }
+
+Visual = { bg = "selection" }
+Value = { fg = "fg" }
+Muted = { fg = "fg_dark" }
+Printed = { fg = "green", bg = "bg_dark" }
+ShellCommand = { fg = "cyan" }
+ShellMessage = { fg = "fg_dark" }
+ShellError = { fg = "error", sp = "error" }
+HintText = { fg = "fg_dark" }
+Normal = { bg = "bg" }
+CodeBlock = { bg = "bg_dark1" }
+Separator = { fg = "bg_dark" }
+ValueBorder = { fg = "terminal_black", sp = "terminal_black" }
+OutputNumber = { fg = "green" }
+ErrorBorder = { fg = "error", sp = "error" }
+WarningBorder = { fg = "warning", sp = "warning" }
+InfoBorder = { fg = "blue", sp = "blue" }
+Statusline1 = { fg = "green" }
+Statusline2 = { fg = "yellow" }
+Statusline3 = { fg = "red" }
+StatuslineBorder = { fg = "terminal_black", sp = "terminal_black" }
+StatuslineBg = { bg = "statusline_canvas" }
+StatuslineError = { fg = "error", sp = "error" }
+StatuslineWarning = { fg = "warning", sp = "warning" }
+KeymapHint = { fg = "cyan" }
+PickerText = { fg = "fg" }
+Picker = { bg = "bg_visual" }
+PickerSelected = { fg = "bg", bg = "green" }
+PickerBorder = { fg = "terminal_black", sp = "terminal_black" }
+
+Accent1 = { fg = "red" }
+Accent2 = { fg = "orange" }
+Accent3 = { fg = "yellow" }
+Accent4 = { fg = "green" }
+Accent5 = { fg = "cyan" }
+Accent6 = { fg = "blue" }
+Accent7 = { fg = "magenta" }
+
+BgColor1 = { bg = "bg_dark" }
+BgColor2 = { bg = "bg" }
+BgColor3 = { bg = "bg_highlight" }
+BgColor4 = { bg = "bg_visual" }

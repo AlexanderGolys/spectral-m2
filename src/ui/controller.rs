@@ -2,11 +2,10 @@
 //! scrolling, and rendering.
 
 pub mod commands;
-mod icons;
 mod picker;
 pub mod settings;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::text::{Line, Span};
@@ -16,25 +15,30 @@ use std::ops::Range;
 use these_macros_should_be_illegal::discriminated_str;
 
 use self::commands::Command;
-use self::picker::{Line as PickerLine, LineContext, Picker, PickerItem, PickerItems};
-use self::settings::keymap::{Action, Keymap};
+#[cfg(test)]
+use self::picker::{LineContext, PickerItem};
+use self::picker::{Picker, PickerController, PickerInput, PickerItems, PickerMode, ValueItem};
+use self::settings::keymap::Keymaps;
 use self::settings::theme::groups::{Groups, HLGroup};
 use self::settings::theme::Appearance;
-use self::settings::{SettingField, Settings, StatusLinePosition};
-use super::block::render::{Prompt, RenderContext};
-use super::block::{
-    Block, BlockKind, Cell, CodeBlock, ErrorMessageBlock, SyntaxTreeBlock, TextBlock,
-};
+use self::settings::{Settings, StatusLinePosition};
+use super::action::Action;
+use super::block::render::RenderContext;
+use super::block::syntax_tree::SyntaxTreeBlock;
+use super::block::{Block, BlockKind, Cell, CellState, CodeBlock, ErrorMessageBlock, TextBlock};
 use super::config::UI;
-use super::element::{Element, HLSpan, StyleElement, Text, TextSpan};
+use super::debug::FrameStats;
+use super::element::{Element, HLSpan, StyleElement, TextSpan};
+use super::feed::{BlockView, Feed};
+use super::key::KeyEvent;
 use super::statusline::{StatusLine, StatusLineContext, StatusLineEvent};
 use super::DEBUG_POST;
 use crate::app::session::CommittedCell;
 use crate::code::highlight::Highlighter;
-use crate::input::InputCode;
+use crate::input::{InputCode, InputContext, InputSetting, InputSettings};
 
-/// Control flow requested by one editor key event.
-pub enum EditorAction {
+/// An outward effect produced while handling input or an [`Action`].
+pub enum Reaction {
     Continue,
     Submit,
     Post(&'static str),
@@ -64,20 +68,11 @@ pub enum OpenTarget {
     Split,
 }
 
+// @##Hardcoded
 impl OpenTarget {
-    fn from_key(key: KeyEvent, can_split: bool) -> Option<Self> {
-        if key.code == KeyCode::Char('v')
-            && key.modifiers.contains(KeyModifiers::ALT)
-            && !key.modifiers.contains(KeyModifiers::CONTROL)
-            && can_split
-        {
+    fn alternative(key: KeyEvent, can_split: bool) -> Option<Self> {
+        if key.code == KeyCode::Char('v') && key.alt() && !key.ctrl() && can_split {
             Some(Self::Split)
-        } else if key.code == KeyCode::Enter
-            && !key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-        {
-            Some(Self::Current)
         } else {
             None
         }
@@ -111,9 +106,26 @@ impl OutputMode {
 pub struct Viewport {
     pub scroll: usize,
     output: OutputMode,
+    preview: Option<PreviewCache>,
+}
+
+/// Immutable committed cells paired with the revision that changes them.
+pub struct CommittedCells<'a> {
+    /// Cells in evaluation order.
+    pub cells: &'a [CommittedCell],
+    /// Workspace revision for cache invalidation.
+    pub revision: u64,
+}
+
+/// Parsed block model retained by one code or syntax-tree preview pane.
+struct PreviewCache {
+    revision: u64,
+    view: ViewKind,
+    blocks: Vec<Box<dyn Block>>,
 }
 
 impl Viewport {
+    // @##Suspicious
     pub fn for_view(view: ViewKind) -> Self {
         Self {
             scroll: if view == ViewKind::SyntaxTree {
@@ -129,6 +141,75 @@ impl Viewport {
         self.output = self.output.cycle(delta);
         self.scroll = 0;
     }
+
+    fn render_committed(
+        &mut self,
+        committed: CommittedCells<'_>,
+        view: ViewKind,
+        highlighter: &mut dyn Highlighter,
+        context: &RenderContext,
+        area: Rect,
+        buffer: &mut Buffer,
+    ) -> Vec<Rect> {
+        if self
+            .preview
+            .as_ref()
+            .is_none_or(|cache| cache.revision != committed.revision || cache.view != view)
+        {
+            let blocks: Vec<Box<dyn Block>> = match view {
+                ViewKind::Code => (!committed.cells.is_empty())
+                    .then(|| {
+                        Box::new(CodeBlock::new(committed.cells.iter().map(|cell| {
+                            Cell::resolved(
+                                cell.code.clone(),
+                                cell.number,
+                                cell.state,
+                                highlighter.highlight(&cell.code),
+                            )
+                        }))) as Box<dyn Block>
+                    })
+                    .into_iter()
+                    .collect(),
+                ViewKind::SyntaxTree => committed
+                    .cells
+                    .iter()
+                    .map(|cell| {
+                        Box::new(SyntaxTreeBlock::new(
+                            cell.code.clone(),
+                            highlighter.highlight(&cell.code),
+                            cell.tree.clone(),
+                        )) as Box<dyn Block>
+                    })
+                    .collect(),
+                _ => unreachable!("only committed previews are cached"),
+            };
+            self.preview = Some(PreviewCache {
+                revision: committed.revision,
+                view,
+                blocks,
+            });
+        }
+        let blocks = self
+            .preview
+            .as_ref()
+            .unwrap()
+            .blocks
+            .iter()
+            .map(Box::as_ref)
+            .collect::<Vec<_>>();
+        let empty = match view {
+            ViewKind::Code => "no committed code",
+            ViewKind::SyntaxTree => "no committed syntax trees",
+            _ => unreachable!(),
+        };
+        BlockView::new(&blocks, empty).render(
+            context,
+            area,
+            buffer,
+            &mut self.scroll,
+            context.groups().transcript(),
+        )
+    }
 }
 
 /// A session result to apply to the editor model.
@@ -136,7 +217,7 @@ pub enum EditorUpdate {
     Ignore,
     /// Leave the shell; the backend shuts down with it.
     Quit,
-    ContinueSubmission,
+    ContinueSubmission(String),
     Diagnostic(String),
     SyntaxDiagnostic {
         message: String,
@@ -150,11 +231,14 @@ pub enum EditorUpdate {
     CellSucceeded {
         id: u64,
         index: usize,
+        number: u32,
+        state: CellState,
         outputs: Vec<Box<dyn Block>>,
     },
     CellFailed {
         id: u64,
         index: usize,
+        number: u32,
         message: String,
     },
 }
@@ -169,19 +253,29 @@ pub enum EditorEvent {
     OpenStyle,
     RestoreDefaults,
     SetSettings(Settings),
+    SetInput(InputSettings),
     SetAppearance(Appearance),
     Rebind(Action, KeyEvent),
 }
 
 /// One independently cyclic axis of a colour appearance.
+#[discriminated_str(label)]
 #[derive(Clone, Copy)]
 enum AppearanceField {
-    Colorscheme,
-    Brightness,
-    Background,
+    Colorscheme = "colorscheme",
+    Brightness = "brightness",
+    Background = "background",
 }
 
 impl AppearanceField {
+    fn value(self, appearance: Appearance) -> String {
+        match self {
+            Self::Colorscheme => appearance.colorscheme_label(),
+            Self::Brightness => appearance.variant().brightness().to_string(),
+            Self::Background => appearance.background_label().to_string(),
+        }
+    }
+
     fn adjust(self, appearance: Appearance, delta: i8) -> Appearance {
         match self {
             Self::Colorscheme => appearance.cycle_colorscheme(delta),
@@ -195,7 +289,7 @@ impl AppearanceField {
 #[derive(Clone, Copy)]
 struct ScreenPosition {
     column: u16,
-    row: usize,
+    row: i64,
 }
 
 /// A mouse selection spanning captured screen cells.
@@ -212,40 +306,10 @@ struct ScreenCell {
     selectable: bool,
 }
 
-/// Projection of selection exclusions from an offscreen composition into its viewport.
-trait SelectionExclusions {
-    fn project(&mut self, exclusions: impl IntoIterator<Item = Rect>, area: Rect, top: usize);
-}
-
-impl SelectionExclusions for Vec<Rect> {
-    fn project(&mut self, exclusions: impl IntoIterator<Item = Rect>, area: Rect, top: usize) {
-        let bottom = top + usize::from(area.height);
-        self.extend(exclusions.into_iter().filter_map(|excluded| {
-            let start = usize::from(excluded.y).max(top);
-            let end = usize::from(excluded.bottom()).min(bottom);
-            (start < end).then(|| {
-                Rect::new(
-                    area.x + excluded.x,
-                    area.y + (start - top) as u16,
-                    excluded.width.min(area.width.saturating_sub(excluded.x)),
-                    (end - start) as u16,
-                )
-            })
-        }));
-    }
-}
-
-/// Region in which the current mouse selection began.
-#[derive(Clone, Copy)]
-enum MouseSelection {
-    Input,
-    Screen,
-}
-
 const SHELL_ITEMS: &[ShellItem] = &[
-    ShellItem::Setting(SettingField::MaxInputHeight),
-    ShellItem::Setting(SettingField::InputScrolloff),
-    ShellItem::Setting(SettingField::StatusLine),
+    ShellItem::Input(InputSetting::MaxHeight),
+    ShellItem::Input(InputSetting::Scrolloff),
+    ShellItem::Statusline,
     ShellItem::Style,
     ShellItem::RestoreDefault,
 ];
@@ -253,284 +317,95 @@ const SHELL_ITEMS: &[ShellItem] = &[
 /// One item listed in the settings picker.
 #[derive(Clone, Copy)]
 enum ShellItem {
-    Setting(SettingField),
+    Input(InputSetting),
+    Statusline,
     Style,
     RestoreDefault,
 }
 
-/// A shell setting line that updates its own displayed state on arrow keys.
-struct SettingItem {
-    field: SettingField,
-    settings: Settings,
-}
-
-impl Text for SettingItem {
-    type Context = LineContext;
-
-    fn spans(&self, context: &LineContext) -> Vec<Span<'static>> {
-        context.value(self.field.label(), &self.field.value(&self.settings), false)
-    }
-}
-
-impl PickerItem for SettingItem {
-    fn handle_key(&mut self, key: KeyEvent) -> Option<EditorEvent> {
-        let delta = match key.code {
-            KeyCode::Left => -1,
-            KeyCode::Right => 1,
-            _ => return None,
-        };
-        self.field.adjust(&mut self.settings, delta);
-        Some(EditorEvent::SetSettings(self.settings))
-    }
-}
-
-/// The settings entry opening the dedicated style picker.
-struct StyleItem {
-    appearance: Appearance,
-}
-
-impl Text for StyleItem {
-    type Context = LineContext;
-
-    fn spans(&self, context: &LineContext) -> Vec<Span<'static>> {
-        context.value("style", &self.appearance.colorscheme_label(), false)
-    }
-}
-
-impl PickerItem for StyleItem {
-    fn handle_key(&mut self, key: KeyEvent) -> Option<EditorEvent> {
-        (key.code == KeyCode::Enter).then_some(EditorEvent::OpenStyle)
-    }
-}
-
-/// A single-span picker line that restores every setting on Enter.
-struct RestoreDefaultsItem;
-
-impl Text for RestoreDefaultsItem {
-    type Context = LineContext;
-
-    fn spans(&self, context: &LineContext) -> Vec<Span<'static>> {
-        context.finish(vec![Span::styled(
-            if context.selected {
-                " > restore default"
-            } else {
-                "   restore default"
-            },
-            if context.selected {
-                context.groups.prompt()
-            } else {
-                context.groups.muted()
-            },
-        )])
-    }
-}
-
-impl PickerItem for RestoreDefaultsItem {
-    fn handle_key(&mut self, key: KeyEvent) -> Option<EditorEvent> {
-        (key.code == KeyCode::Enter).then_some(EditorEvent::RestoreDefaults)
-    }
-}
-
-/// A keymap line that accepts a replacement modified key.
-struct KeymapItem {
-    action: Action,
-    key: String,
-}
-
-impl Text for KeymapItem {
-    type Context = LineContext;
-
-    fn spans(&self, context: &LineContext) -> Vec<Span<'static>> {
-        context.value(self.action.description(), &self.key, false)
-    }
-}
-
-impl PickerItem for KeymapItem {
-    fn handle_key(&mut self, key: KeyEvent) -> Option<EditorEvent> {
-        if matches!(key.code, KeyCode::Char(_))
-            && !key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-            || matches!(
-                key.code,
-                KeyCode::Esc
-                    | KeyCode::Enter
-                    | KeyCode::Left
-                    | KeyCode::Right
-                    | KeyCode::Up
-                    | KeyCode::Down
-                    | KeyCode::Tab
-                    | KeyCode::BackTab
-            )
-        {
-            return None;
-        }
-        Some(EditorEvent::Rebind(self.action, key))
-    }
-}
-
-/// A theme line that cycles one appearance axis on arrow keys.
-struct AppearanceItem {
-    field: AppearanceField,
-    appearance: Appearance,
-}
-
-impl AppearanceItem {
-    fn label(&self) -> &'static str {
-        match self.field {
-            AppearanceField::Colorscheme => "colorscheme",
-            AppearanceField::Brightness => "brightness",
-            AppearanceField::Background => "background",
-        }
-    }
-
-    fn value(&self) -> String {
-        match self.field {
-            AppearanceField::Colorscheme => self.appearance.colorscheme_label(),
-            AppearanceField::Brightness => self.appearance.variant().brightness().to_string(),
-            AppearanceField::Background => self.appearance.background_label().to_string(),
-        }
-    }
-}
-
-impl Text for AppearanceItem {
-    type Context = LineContext;
-
-    fn spans(&self, context: &LineContext) -> Vec<Span<'static>> {
-        context.value(self.label(), &self.value(), false)
-    }
-}
-
-impl PickerItem for AppearanceItem {
-    fn handle_key(&mut self, key: KeyEvent) -> Option<EditorEvent> {
-        let delta = match key.code {
-            KeyCode::Left => -1,
-            KeyCode::Right => 1,
-            _ => return None,
-        };
-        self.appearance = self.field.adjust(self.appearance, delta);
-        Some(EditorEvent::SetAppearance(self.appearance))
-    }
-}
-
-macro_rules! picker_item {
-    ($item:ty) => {
-        picker_item!($item, |_| None);
-    };
-    ($item:ty, $width:expr) => {
-        impl PickerLine for $item {
-            fn alignment_width(&self) -> Option<usize> {
-                $width(self)
-            }
-        }
-    };
-}
-
-picker_item!(SettingItem, |item: &SettingItem| Some(
-    item.field.label().chars().count()
-));
-picker_item!(StyleItem, |_| Some("style".len()));
-picker_item!(RestoreDefaultsItem);
-picker_item!(KeymapItem, |item: &KeymapItem| Some(
-    item.action.description().chars().count()
-));
-picker_item!(AppearanceItem, |item: &AppearanceItem| Some(
-    item.label().chars().count()
-));
-
-/// Keyboard behavior attached to an otherwise presentation-only picker.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PickerMode {
-    FilteredCommands,
-    Commands,
-    Settings,
-    Style,
-    Keymaps,
-}
-
-/// A picker paired with the controller that interprets its unhandled keys.
-struct PickerController {
-    mode: PickerMode,
-    picker: Picker,
+/// The editor child that receives an otherwise unclaimed input event.
+#[derive(Clone, Copy)]
+enum ElementFocus {
+    /// The editable input field.
+    Input,
+    /// The topmost picker and its keyboard policy.
+    Picker(PickerMode),
 }
 
 /// Presentation settings shared by every workspace.
 #[derive(Clone)]
 pub struct EditorConfig {
     settings: Settings,
-    keymap: Keymap,
+    input: InputSettings,
+    keymaps: Keymaps,
     appearance: Appearance,
 }
 
 /// The transcript feed, live input, and viewport state.
 pub struct Editor {
-    feed: Vec<Box<dyn Block>>,
+    feed: Feed,
     input: InputCode,
-    scroll_offset: usize,
-    /// First visual row of the input drawn, once the source outgrows its pane.
-    input_scroll: usize,
     settings: Settings,
-    keymap: Keymap,
+    keymaps: Keymaps,
     appearance: Appearance,
     groups: Groups,
     status_line: StatusLine,
-    macaulay_version: Option<String>,
+    continuation: Option<String>,
+    processing: bool,
     pickers: Vec<PickerController>,
-    /// The input pane's area from the last frame, so wheel events can tell
-    /// whether the pointer is over the input or the feed.
-    input_area: Rect,
-    input_text_area: Rect,
     feed_area: Rect,
-    feed_top: usize,
-    mouse_selection: Option<MouseSelection>,
+    feed_top: i64,
+    screen_selecting: bool,
     screen_selection: Option<ScreenSelection>,
     screen: Vec<Vec<ScreenCell>>,
     screen_area: Rect,
     selection_exclusions: Vec<Rect>,
     split: bool,
     previewing: bool,
-    focused: bool,
+    pane_focused: bool,
     highlight_debug: bool,
     highlight_debug_scroll: usize,
+    frame_stats: FrameStats,
 }
 
 impl Editor {
     pub fn new(welcome: String) -> Self {
-        let appearance = Appearance::default();
+        let appearance = Appearance::load();
         let mut editor = Self {
-            feed: vec![Box::new(TextBlock::system(welcome))],
+            feed: Feed::new(Box::new(TextBlock::system(welcome))),
             input: InputCode::new(),
-            scroll_offset: 0,
-            input_scroll: 0,
             settings: Settings::default(),
-            keymap: Keymap::default(),
+            keymaps: Keymaps::default(),
             appearance,
             groups: appearance.groups(),
             status_line: StatusLine::default(),
-            macaulay_version: None,
+            continuation: None,
+            processing: false,
             pickers: Vec::new(),
-            input_area: Rect::ZERO,
-            input_text_area: Rect::ZERO,
             feed_area: Rect::ZERO,
             feed_top: 0,
-            mouse_selection: None,
+            screen_selecting: false,
             screen_selection: None,
             screen: Vec::new(),
             screen_area: Rect::ZERO,
             selection_exclusions: Vec::new(),
             split: false,
             previewing: false,
-            focused: true,
+            pane_focused: true,
             highlight_debug: false,
             highlight_debug_scroll: 0,
+            frame_stats: FrameStats::default(),
         };
         editor.refresh_status_line();
         editor
     }
 
-    pub fn with_macaulay_version(mut self, version: String) -> Self {
-        self.macaulay_version = Some(format!("Macaulay2 v{version}"));
-        self
+    /// Reflect whether this editor's backend currently owns unfinished work.
+    pub fn set_processing(&mut self, processing: bool) {
+        if self.processing != processing {
+            self.processing = processing;
+            self.refresh_status_line();
+        }
     }
 
     pub fn submission(&self) -> &str {
@@ -540,55 +415,56 @@ impl Editor {
     pub fn config(&self) -> EditorConfig {
         EditorConfig {
             settings: self.settings,
-            keymap: self.keymap.clone(),
+            input: self.input.settings(),
+            keymaps: self.keymaps.clone(),
             appearance: self.appearance,
         }
     }
 
     pub fn set_config(&mut self, config: &EditorConfig) {
         self.settings = config.settings;
-        self.keymap.clone_from(&config.keymap);
+        self.input.set_settings(config.input);
+        self.keymaps.clone_from(&config.keymaps);
         self.apply_appearance(config.appearance);
         self.refresh_status_line();
     }
 
     pub fn append_error(&mut self, message: impl Into<String>) {
-        self.feed
-            .push(Box::new(ErrorMessageBlock::new(message.into())));
-        self.scroll_offset = 0;
+        self.push_block(Box::new(ErrorMessageBlock::new(message.into())));
     }
 
-    pub fn set_context(&mut self, split: bool, previewing: bool, focused: bool) {
+    pub fn set_context(&mut self, split: bool, previewing: bool, pane_focused: bool) {
         self.split = split;
         self.previewing = previewing;
-        self.focused = focused;
+        self.pane_focused = pane_focused;
     }
 
     pub fn picker_open(&self) -> bool {
-        !self.pickers.is_empty()
+        matches!(self.focus(), ElementFocus::Picker(_))
     }
 
-    pub fn handle_preview_key(&mut self, key: KeyEvent) -> EditorAction {
-        if self.picker_open() {
+    /// Resolve a terminal key through the active command keymaps.
+    pub fn resolve_action(&self, key: KeyEvent) -> Option<Action> {
+        (self.previewing && !self.picker_open())
+            .then(|| self.keymaps.preview_action(key))
+            .flatten()
+            .or_else(|| {
+                self.keymaps.action(
+                    key,
+                    matches!(self.focus(), ElementFocus::Picker(PickerMode::Keymaps)),
+                )
+            })
+    }
+
+    /// Forward unbound preview input to its focused component.
+    pub fn handle_preview_key(&mut self, key: KeyEvent) -> Reaction {
+        if matches!(self.focus(), ElementFocus::Picker(_)) {
             return self.handle_picker_key(key);
         }
         if let Some(action) = self.handle_debug_key(key) {
             return action;
         }
-        let action = self.keymap.action(key);
-        match action {
-            Some(Action::CopySelection) => self
-                .selected_screen_text()
-                .map_or(EditorAction::Continue, EditorAction::Copy),
-            Some(Action::OpenCommands) => {
-                self.toggle_picker(PickerMode::Commands, Self::open_commands);
-                EditorAction::Continue
-            }
-            Some(action) => commands::shortcut(action).map_or(EditorAction::Continue, |command| {
-                command.run(self, OpenTarget::Current)
-            }),
-            None => EditorAction::Continue,
-        }
+        Reaction::Continue
     }
 
     /// Apply a session result. Returns whether the shell should keep running.
@@ -596,44 +472,44 @@ impl Editor {
         match update {
             EditorUpdate::Quit => return false,
             EditorUpdate::Ignore => {}
-            EditorUpdate::ContinueSubmission => self.input.field_mut().insert_char('\n'),
+            EditorUpdate::ContinueSubmission(reason) => {
+                self.continuation = Some(reason);
+                self.input.field_mut().insert_char('\n');
+            }
             EditorUpdate::Diagnostic(diagnostic) => self.input.set_diagnostic(diagnostic, None),
             EditorUpdate::SyntaxDiagnostic { message, range } => {
+                self.continuation = None;
                 self.input.set_diagnostic(message, range);
             }
             EditorUpdate::Message(block) => {
-                self.feed.push(block);
-                self.scroll_offset = 0;
+                self.push_block(block);
             }
             EditorUpdate::Pending { id, cells } => {
+                self.continuation = None;
                 self.input.accept_submission();
                 self.push_submission(id, cells);
             }
             EditorUpdate::CellSucceeded {
-                id, index, outputs, ..
+                id,
+                index,
+                number,
+                state,
+                outputs,
             } => {
                 self.input.clear_diagnostic();
-                if let Some(submission) = self.feed.iter_mut().find_map(|block| {
-                    block
-                        .submission_mut()
-                        .filter(|submission| submission.id() == id)
-                }) {
-                    submission.succeed(index, outputs);
-                    self.scroll_offset = 0;
-                }
+                self.feed.update_submission(id, |submission| {
+                    submission.succeed(index, number, state, outputs)
+                });
             }
             EditorUpdate::CellFailed {
-                id, index, message, ..
+                id,
+                index,
+                number,
+                message,
             } => {
                 self.input.clear_diagnostic();
-                if let Some(submission) = self.feed.iter_mut().find_map(|block| {
-                    block
-                        .submission_mut()
-                        .filter(|submission| submission.id() == id)
-                }) {
-                    submission.fail(index, message);
-                    self.scroll_offset = 0;
-                }
+                self.feed
+                    .update_submission(id, |submission| submission.fail(index, number, message));
             }
         }
         self.refresh_status_line();
@@ -651,24 +527,24 @@ impl Editor {
     }
 
     fn push_submission(&mut self, id: u64, cells: Vec<(String, Vec<HLSpan>)>) {
-        self.feed
-            .push(Box::new(super::block::SubmissionBlock::new(id, cells)));
-        self.scroll_offset = 0;
+        self.push_block(Box::new(super::block::SubmissionBlock::new(id, cells)));
+    }
+
+    fn push_block(&mut self, block: Box<dyn Block>) {
+        self.feed.push(block);
     }
 
     pub fn paste(&mut self, text: &str) {
-        self.input.clear_diagnostic();
-        self.input.field_mut().insert_str(text);
+        self.input.insert(text);
         self.refresh_status_line();
     }
 
     /// Route the wheel by what it is pointing at: over the input pane it resizes
     /// the pane, everywhere else it scrolls the feed.
-    pub fn handle_mouse(&mut self, event: MouseEvent) -> EditorAction {
+    pub fn handle_mouse(&mut self, event: MouseEvent) -> Reaction {
         if let Some(action) = self.handle_screen_mouse(event) {
             return action;
         }
-        let completes_selection = matches!(event.kind, MouseEventKind::Up(MouseButton::Left));
         match event.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let delta = if event.kind == MouseEventKind::ScrollUp {
@@ -676,49 +552,30 @@ impl Editor {
                 } else {
                     -1
                 };
-                if self.pointer_over_input(&event) {
-                    SettingField::MaxInputHeight.adjust(&mut self.settings, delta);
-                } else if delta > 0 {
-                    self.scroll_offset = self.scroll_offset.saturating_add(1);
+                if self.input.contains(event) {
+                    self.input.adjust(InputSetting::MaxHeight, delta);
                 } else {
-                    self.scroll_offset = self.scroll_offset.saturating_sub(1);
-                }
-            }
-            MouseEventKind::Down(MouseButton::Left) if self.pointer_over_input(&event) => {
-                self.screen_selection = None;
-                self.mouse_selection = Some(MouseSelection::Input);
-                if let Some(cursor) = self.input_cursor_at_mouse(event) {
-                    self.input.field_mut().start_selection(cursor);
-                }
-            }
-            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) => {
-                if matches!(self.mouse_selection, Some(MouseSelection::Input)) {
-                    if let Some(cursor) = self.input_cursor_at_mouse(event) {
-                        self.input.field_mut().continue_selection(cursor);
-                    }
-                }
-                if matches!(event.kind, MouseEventKind::Up(MouseButton::Left)) {
-                    self.mouse_selection = None;
+                    self.feed.scroll(delta);
                 }
             }
             _ => {}
         }
-        if completes_selection {
-            if let Some(text) = self.input.field().selected_text().map(str::to_string) {
-                return EditorAction::Copy(text);
-            }
+        let (handled, copy) = self.input.handle_mouse(event);
+        if handled {
+            self.screen_selection = None;
+            return copy.map_or(Reaction::Continue, Reaction::Copy);
         }
-        EditorAction::Continue
+        Reaction::Continue
     }
 
-    pub fn handle_preview_mouse(&mut self, event: MouseEvent) -> EditorAction {
+    pub fn handle_preview_mouse(&mut self, event: MouseEvent) -> Reaction {
         self.handle_screen_mouse(event)
-            .unwrap_or(EditorAction::Continue)
+            .unwrap_or(Reaction::Continue)
     }
 
-    fn handle_screen_mouse(&mut self, event: MouseEvent) -> Option<EditorAction> {
+    fn handle_screen_mouse(&mut self, event: MouseEvent) -> Option<Reaction> {
         match event.kind {
-            MouseEventKind::Down(MouseButton::Left) if !self.pointer_over_input(&event) => {
+            MouseEventKind::Down(MouseButton::Left) if !self.input.contains(event) => {
                 self.input.field_mut().clear_selection();
                 let position = self.screen_position(event)?;
                 self.screen_selection = Some(ScreenSelection {
@@ -727,10 +584,10 @@ impl Editor {
                     dragged: false,
                     text: None,
                 });
-                self.mouse_selection = Some(MouseSelection::Screen);
+                self.screen_selecting = true;
             }
             MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
-                if matches!(self.mouse_selection, Some(MouseSelection::Screen)) =>
+                if self.screen_selecting =>
             {
                 if let Some(position) = self.screen_position(event) {
                     if let Some(selection) = self.screen_selection.as_mut() {
@@ -740,16 +597,16 @@ impl Editor {
                     }
                 }
                 if matches!(event.kind, MouseEventKind::Up(MouseButton::Left)) {
-                    self.mouse_selection = None;
+                    self.screen_selecting = false;
                     if let Some(text) = self.selected_screen_text() {
                         self.screen_selection.as_mut().unwrap().text = Some(text.clone());
-                        return Some(EditorAction::Copy(text));
+                        return Some(Reaction::Copy(text));
                     }
                 }
             }
             _ => return None,
         }
-        Some(EditorAction::Continue)
+        Some(Reaction::Continue)
     }
 
     fn screen_position(&self, event: MouseEvent) -> Option<ScreenPosition> {
@@ -766,7 +623,7 @@ impl Editor {
         let screen_row = event.row.clamp(area.y, area.bottom().saturating_sub(1));
         Some(ScreenPosition {
             column,
-            row: self.feed_top + usize::from(screen_row.saturating_sub(area.y)),
+            row: self.feed_top + i64::from(screen_row.saturating_sub(area.y)),
         })
     }
 
@@ -784,7 +641,7 @@ impl Editor {
             if content_row < self.feed_top {
                 continue;
             }
-            let screen_row = content_row - self.feed_top;
+            let screen_row = (content_row - self.feed_top) as usize;
             if screen_row >= usize::from(self.feed_area.height) {
                 continue;
             }
@@ -819,56 +676,42 @@ impl Editor {
         (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
-    fn input_cursor_at_mouse(&self, event: MouseEvent) -> Option<usize> {
-        let area = self.input_text_area;
-        if area.width == 0 || area.height == 0 {
-            return None;
-        }
-        let row = event
-            .row
-            .saturating_sub(area.y)
-            .min(area.height.saturating_sub(1));
-        let column = event.column.saturating_sub(area.x).min(area.width) as usize;
-        Some(
-            self.input
-                .cursor_at_visual(area.width, self.input_scroll + row as usize, column),
-        )
-    }
-
-    fn pointer_over_input(&self, event: &MouseEvent) -> bool {
-        let area = self.input_area;
-        event.row >= area.y
-            && event.row < area.y.saturating_add(area.height)
-            && event.column >= area.x
-            && event.column < area.x.saturating_add(area.width)
-    }
-
-    pub fn handle_key(&mut self, key: KeyEvent) -> EditorAction {
-        if !self.pickers.is_empty() {
+    /// Forward unbound shell input to its focused component.
+    pub fn handle_input(&mut self, key: KeyEvent) -> Reaction {
+        if matches!(self.focus(), ElementFocus::Picker(_)) {
             return self.handle_picker_key(key);
         }
         if let Some(action) = self.handle_debug_key(key) {
             return action;
         }
+        self.screen_selection = None;
+        self.input.handle_key(key);
+        if self.input.text().is_empty() {
+            self.continuation = None;
+        }
+        if self.input.text() == commands::PREFIX {
+            self.open_filtered_commands();
+        }
+        self.refresh_status_line();
+        Reaction::Continue
+    }
 
-        let Some(action) = self.keymap.action(key) else {
-            self.screen_selection = None;
-            // Anything the table does not claim is ordinary typing.
-            if !key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-            {
-                if let KeyCode::Char(character) = key.code {
-                    self.input.clear_diagnostic();
-                    self.input.field_mut().insert_char(character);
-                    if character == '/' && self.input.text() == "/" {
-                        self.open_filtered_commands();
-                    }
-                }
-            }
-            self.refresh_status_line();
-            return EditorAction::Continue;
-        };
+    #[cfg(test)]
+    fn handle_key(&mut self, key: KeyEvent) -> Reaction {
+        match self.resolve_action(key) {
+            Some(action) => self.handle_action(action),
+            None => self.handle_input(key),
+        }
+    }
+
+    /// React to a mapped command after its originating key has been discarded.
+    pub fn handle_action(&mut self, action: Action) -> Reaction {
+        if matches!(self.focus(), ElementFocus::Picker(_)) {
+            return self.handle_picker_action(action);
+        }
+        if let Some(result) = self.handle_debug_action(action) {
+            return result;
+        }
         if action != Action::CopySelection {
             self.screen_selection = None;
         }
@@ -876,72 +719,47 @@ impl Editor {
             return command.run(self, OpenTarget::Current);
         }
 
-        if matches!(
-            action,
-            Action::Submit
-                | Action::InsertNewline
-                | Action::InsertTab
-                | Action::DeleteBack
-                | Action::DeleteForward
-        ) {
-            self.input.clear_diagnostic();
-        }
-        if action == Action::ClearInput {
-            self.input.clear();
-            self.refresh_status_line();
-            return EditorAction::Continue;
-        }
         if action == Action::CopySelection {
-            if let Some(text) = self
-                .input
-                .field()
-                .selected_text()
-                .map(str::to_string)
-                .or_else(|| self.selected_screen_text())
-            {
-                return EditorAction::Copy(text);
-            }
-            return EditorAction::Continue;
+            let text = if self.previewing {
+                self.selected_screen_text()
+            } else {
+                self.input
+                    .field()
+                    .selected_text()
+                    .map(str::to_string)
+                    .or_else(|| self.selected_screen_text())
+            };
+            return text.map_or(Reaction::Continue, Reaction::Copy);
+        }
+        if self.previewing {
+            return Reaction::Continue;
         }
         if action == Action::Submit {
+            self.input.clear_diagnostic();
             if let Some(command) = commands::exact(self.input.text(), self.split) {
+                self.continuation = None;
                 self.input.accept_submission();
                 return command.run(self, OpenTarget::Current);
             }
+            // Submitting is not an edit, so an incomplete buffer's inserted
+            // newline must not consume a live selection.
+            self.input.field_mut().clear_selection();
+            self.refresh_status_line();
+            return Reaction::Submit;
         }
 
-        let field = self.input.field_mut();
         match action {
-            // Submitting is not an edit, so it must not consume a live selection:
-            // an incomplete buffer comes back as `ContinueSubmission`, whose
-            // inserted newline would otherwise delete the selected text.
-            Action::Submit => {
-                field.clear_selection();
-                return EditorAction::Submit;
-            }
-            Action::InsertNewline => field.insert_char('\n'),
-            Action::InsertTab => field.insert_char('\t'),
-            Action::DeleteBack => field.backspace(),
-            Action::DeleteForward => field.delete_forward(),
-            Action::MoveLeft => field.move_left(),
-            Action::MoveRight => field.move_right(),
-            Action::MoveLineStart => field.move_home(),
-            Action::MoveLineEnd => field.move_end(),
-            Action::MoveUp if field.cursor_on_first_line() => field.history_prev(),
-            Action::MoveUp => field.move_up(),
-            Action::MoveDown if field.cursor_on_last_line() => field.history_next(),
-            Action::MoveDown => field.move_down(),
-            Action::SelectLeft => field.select_left(),
-            Action::SelectRight => field.select_right(),
-            Action::SelectLineStart => field.select_home(),
-            Action::SelectLineEnd => field.select_end(),
             Action::CopySelection => unreachable!("copy selection is handled before editing"),
-            Action::ClearInput => unreachable!("clear input is handled before borrowing the field"),
-            Action::ScrollFeedUp => self.scroll_offset = self.scroll_offset.saturating_add(1),
-            Action::ScrollFeedDown => self.scroll_offset = self.scroll_offset.saturating_sub(1),
+            Action::Submit => unreachable!("submission is handled before component dispatch"),
+            Action::ScrollFeedUp => self.feed.scroll(1),
+            Action::ScrollFeedDown => self.feed.scroll(-1),
             Action::OpenCommands => self.toggle_picker(PickerMode::Commands, Self::open_commands),
             Action::ToggleHighlightDebug => unreachable!("debug toggles before input handling"),
-            Action::Quit
+            Action::FocusPaneLeft
+            | Action::FocusPaneRight
+            | Action::ResizePaneLeft
+            | Action::ResizePaneRight
+            | Action::Quit
             | Action::OpenSettings
             | Action::OpenStyle
             | Action::OpenKeymaps
@@ -954,14 +772,14 @@ impl Editor {
             | Action::ClosePane => unreachable!("commands run before input handling"),
         }
         self.refresh_status_line();
-        EditorAction::Continue
+        Reaction::Continue
     }
 
     fn open_commands(&mut self) {
         let commands = commands::matching("", self.split);
         self.pickers = vec![PickerController {
             mode: PickerMode::Commands,
-            picker: commands::picker(&commands, &self.keymap, self.split),
+            picker: commands::picker(&commands, &self.keymaps, self.split),
         }];
         self.refresh_status_line();
     }
@@ -988,13 +806,13 @@ impl Editor {
         let commands = commands::matching("", self.split);
         self.pickers = vec![PickerController {
             mode: PickerMode::FilteredCommands,
-            picker: commands::filtered_picker(&commands, &self.keymap, self.split),
+            picker: commands::picker(&commands, &self.keymaps, self.split),
         }];
         self.refresh_status_line();
     }
 
     fn refresh_commands(&mut self) {
-        let Some(query) = self.input.text().strip_prefix('/') else {
+        let Some(query) = commands::query(self.input.text()) else {
             self.pickers.clear();
             self.refresh_status_line();
             return;
@@ -1012,7 +830,7 @@ impl Editor {
         else {
             return;
         };
-        let mut picker = commands::filtered_picker(&commands, &self.keymap, self.split);
+        let mut picker = commands::picker(&commands, &self.keymaps, self.split);
         picker.select(selected);
         self.pickers.last_mut().unwrap().picker = picker;
     }
@@ -1029,7 +847,7 @@ impl Editor {
         self.refresh_status_line();
     }
 
-    fn run_command(&mut self, command: Command, target: OpenTarget) -> EditorAction {
+    fn run_command(&mut self, command: Command, target: OpenTarget) -> Reaction {
         if self
             .pickers
             .last()
@@ -1046,7 +864,6 @@ impl Editor {
     fn clear_feed(&mut self) {
         self.finish_command();
         self.feed.clear();
-        self.scroll_offset = 0;
         self.screen_selection = None;
     }
 
@@ -1067,14 +884,33 @@ impl Editor {
             .iter()
             .copied()
             .map(|item| match item {
-                ShellItem::Setting(field) => Box::new(SettingItem {
-                    field,
-                    settings: self.settings,
-                }) as Box<dyn PickerItem>,
-                ShellItem::Style => Box::new(StyleItem {
-                    appearance: self.appearance,
-                }) as Box<dyn PickerItem>,
-                ShellItem::RestoreDefault => Box::new(RestoreDefaultsItem) as Box<dyn PickerItem>,
+                ShellItem::Input(field) => {
+                    let mut settings = self.input.settings();
+                    ValueItem::adjust(field.label(), field.value(settings), move |delta| {
+                        field.adjust(&mut settings, delta);
+                        EditorEvent::SetInput(settings)
+                    })
+                }
+                ShellItem::Statusline => {
+                    let mut settings = self.settings;
+                    let value = match settings.statusline {
+                        StatusLinePosition::BelowInput => "below input",
+                        StatusLinePosition::AboveInput => "above input",
+                        StatusLinePosition::Off => "off",
+                    };
+                    ValueItem::adjust("statusline", value, move |delta| {
+                        settings.statusline = settings.statusline.cycle(delta);
+                        EditorEvent::SetSettings(settings)
+                    })
+                }
+                ShellItem::Style => {
+                    ValueItem::enter("style", self.appearance.colorscheme_label(), false, || {
+                        EditorEvent::OpenStyle
+                    })
+                }
+                ShellItem::RestoreDefault => {
+                    ValueItem::enter("restore default", "", true, || EditorEvent::RestoreDefaults)
+                }
             })
             .collect()
     }
@@ -1083,13 +919,17 @@ impl Editor {
         Action::REMAPPABLE
             .iter()
             .map(|&action| {
-                Box::new(KeymapItem {
-                    action,
-                    key: self
-                        .keymap
+                ValueItem::custom(
+                    action.description(),
+                    self.keymaps
                         .key_for(action)
                         .unwrap_or_else(|| "unbound".to_string()),
-                }) as Box<dyn PickerItem>
+                    false,
+                    move |input| match input {
+                        PickerInput::Key(key) => Some(EditorEvent::Rebind(action, key)),
+                        _ => None,
+                    },
+                )
             })
             .collect()
     }
@@ -1101,151 +941,78 @@ impl Editor {
             AppearanceField::Background,
         ]
         .into_iter()
-        .map(|field| Box::new(AppearanceItem { field, appearance }) as Box<dyn PickerItem>)
+        .map(|field| {
+            ValueItem::adjust(field.label(), field.value(appearance), move |delta| {
+                EditorEvent::SetAppearance(field.adjust(appearance, delta))
+            })
+        })
         .collect()
     }
 
-    fn handle_picker_key(&mut self, key: KeyEvent) -> EditorAction {
-        let remapping = matches!(
-            self.pickers.last().map(|controller| controller.mode),
-            Some(PickerMode::Keymaps)
-        );
-        if remapping && self.keymap.action(key) == Some(Action::OpenKeymaps) {
-            self.close_if_open(PickerMode::Keymaps);
-            return EditorAction::Continue;
-        }
-        if !remapping {
-            if let Some(action) = self.handle_debug_key(key) {
-                return action;
-            }
-        }
-        if !remapping {
-            match self.keymap.action(key) {
-                Some(Action::OpenCommands) => {
-                    self.toggle_picker(PickerMode::Commands, Self::open_commands);
-                    return EditorAction::Continue;
-                }
-                Some(action) => {
-                    if let Some(command) = commands::shortcut(action) {
-                        return command.run(self, OpenTarget::Current);
-                    }
-                }
-                None => {}
-            }
-        }
-        let controller = self.pickers.last_mut().unwrap();
-        let mut events = Vec::new();
-        let handled = match key.code {
-            KeyCode::Up => {
-                controller.picker.move_selection(-1);
-                true
-            }
-            KeyCode::Down => {
-                controller.picker.move_selection(1);
-                true
-            }
-            _ => controller
-                .picker
-                .selected_item_mut()
-                .and_then(|item| item.handle_key(key))
-                .is_some_and(|event| {
-                    events.push(event);
-                    true
-                }),
+    fn handle_picker_key(&mut self, key: KeyEvent) -> Reaction {
+        let ElementFocus::Picker(_) = self.focus() else {
+            return Reaction::Continue;
         };
-        if !handled {
-            match controller.mode {
-                PickerMode::FilteredCommands => match key.code {
-                    KeyCode::Char(_)
-                        if !key
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        events.push(EditorEvent::EditCommand(key));
-                    }
-                    KeyCode::Backspace | KeyCode::Delete => {
-                        events.push(EditorEvent::EditCommand(key));
-                    }
-                    KeyCode::Esc => events.push(EditorEvent::FinishCommand),
-                    _ => {}
-                },
-                PickerMode::Commands => match key.code {
-                    KeyCode::Esc => events.push(EditorEvent::ClosePicker),
-                    KeyCode::Char(character)
-                        if !key
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        events.push(EditorEvent::ResumeTyping(character));
-                    }
-                    _ => {}
-                },
-                PickerMode::Settings | PickerMode::Style => match key.code {
-                    KeyCode::Esc => events.push(EditorEvent::ClosePicker),
-                    KeyCode::Char(character)
-                        if !key
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        events.push(EditorEvent::ResumeTyping(character));
-                    }
-                    _ => {}
-                },
-                PickerMode::Keymaps => match key.code {
-                    KeyCode::Esc => events.push(EditorEvent::ClosePicker),
-                    KeyCode::Char(character)
-                        if !key
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        events.push(EditorEvent::ResumeTyping(character));
-                    }
-                    _ => {}
-                },
-            }
-        }
-        for event in events {
+        if let Some(event) = self.pickers.last_mut().unwrap().handle_key(key) {
             let action = self.handle_picker_event(event);
-            if !matches!(action, EditorAction::Continue) {
+            if !matches!(action, Reaction::Continue) {
                 return action;
             }
         }
         self.refresh_status_line();
-        EditorAction::Continue
+        Reaction::Continue
+    }
+
+    fn handle_picker_action(&mut self, action: Action) -> Reaction {
+        let ElementFocus::Picker(mode) = self.focus() else {
+            return Reaction::Continue;
+        };
+        if mode == PickerMode::Keymaps && action == Action::OpenKeymaps {
+            self.close_if_open(PickerMode::Keymaps);
+            return Reaction::Continue;
+        }
+        if mode != PickerMode::Keymaps {
+            if let Some(result) = self.handle_debug_action(action) {
+                return result;
+            }
+            if action == Action::OpenCommands {
+                self.toggle_picker(PickerMode::Commands, Self::open_commands);
+                return Reaction::Continue;
+            }
+            if let Some(command) = commands::shortcut(action) {
+                return command.run(self, OpenTarget::Current);
+            }
+        }
+        if let Some(event) = self.pickers.last_mut().unwrap().handle_action(action) {
+            let result = self.handle_picker_event(event);
+            if !matches!(result, Reaction::Continue) {
+                return result;
+            }
+        }
+        self.refresh_status_line();
+        Reaction::Continue
+    }
+
+    fn focus(&self) -> ElementFocus {
+        self.pickers.last().map_or(ElementFocus::Input, |picker| {
+            ElementFocus::Picker(picker.mode)
+        })
     }
 
     fn open_settings_from_commands(&mut self) {
-        if self.close_if_open(PickerMode::Settings) {
-            return;
-        }
-        if matches!(
-            self.pickers.last().map(|controller| controller.mode),
-            Some(PickerMode::FilteredCommands)
-        ) {
-            self.input.clear();
-        }
-        self.pickers.push(PickerController {
-            mode: PickerMode::Settings,
-            picker: self.settings_picker(),
-        });
-        self.refresh_status_line();
+        self.open_from_commands(PickerMode::Settings, Self::settings_picker);
     }
 
     fn open_style_from_commands(&mut self) {
-        if self.close_if_open(PickerMode::Style) {
-            return;
-        }
-        if matches!(
-            self.pickers.last().map(|controller| controller.mode),
-            Some(PickerMode::FilteredCommands)
-        ) {
-            self.input.clear();
-        }
-        self.open_style();
+        self.open_from_commands(PickerMode::Style, Self::style_picker);
     }
 
     fn open_keymaps_from_commands(&mut self) {
-        if self.close_if_open(PickerMode::Keymaps) {
+        self.open_from_commands(PickerMode::Keymaps, Self::keymaps_picker);
+    }
+
+    fn open_from_commands(&mut self, mode: PickerMode, picker: fn(&Self) -> Picker) {
+        if self.close_if_open(mode) {
             return;
         }
         if matches!(
@@ -1255,8 +1022,8 @@ impl Editor {
             self.input.clear();
         }
         self.pickers.push(PickerController {
-            mode: PickerMode::Keymaps,
-            picker: self.keymaps_picker(),
+            mode,
+            picker: picker(self),
         });
         self.refresh_status_line();
     }
@@ -1269,7 +1036,7 @@ impl Editor {
         self.refresh_status_line();
     }
 
-    fn handle_picker_event(&mut self, event: EditorEvent) -> EditorAction {
+    fn handle_picker_event(&mut self, event: EditorEvent) -> Reaction {
         match event {
             EditorEvent::EditCommand(key) => {
                 match key.code {
@@ -1310,7 +1077,8 @@ impl Editor {
             EditorEvent::OpenStyle => self.open_style(),
             EditorEvent::RestoreDefaults => {
                 self.settings = Settings::default();
-                self.keymap = Keymap::default();
+                self.input.set_settings(InputSettings::default());
+                self.keymaps = Keymaps::default();
                 self.apply_appearance(Appearance::default());
                 let items = self.shell_items();
                 self.pickers.last_mut().unwrap().picker.set_items(items);
@@ -1320,30 +1088,37 @@ impl Editor {
                 let items = self.shell_items();
                 self.pickers.last_mut().unwrap().picker.set_items(items);
             }
+            EditorEvent::SetInput(settings) => {
+                self.input.set_settings(settings);
+                let items = self.shell_items();
+                self.pickers.last_mut().unwrap().picker.set_items(items);
+            }
             EditorEvent::SetAppearance(appearance) => {
                 self.apply_appearance(appearance);
                 let items = Self::appearance_items(appearance);
                 self.pickers.last_mut().unwrap().picker.set_items(items);
             }
             EditorEvent::Rebind(action, key) => {
-                if self.keymap.rebind(action, key) {
+                if self.keymaps.rebind(action, key) {
                     let items = self.keymap_items();
                     self.pickers.last_mut().unwrap().picker.set_items(items);
                 }
             }
         }
-        EditorAction::Continue
+        Reaction::Continue
     }
 
     fn apply_appearance(&mut self, appearance: Appearance) {
+        if self.appearance == appearance {
+            return;
+        }
         self.appearance = appearance;
         self.groups = appearance.groups();
+        self.feed.invalidate();
+        appearance.save();
     }
 
-    fn handle_debug_key(&mut self, key: KeyEvent) -> Option<EditorAction> {
-        if self.keymap.action(key) == Some(Action::ToggleHighlightDebug) {
-            return Some(self.toggle_highlight_debug());
-        }
+    fn handle_debug_key(&mut self, key: KeyEvent) -> Option<Reaction> {
         if self.highlight_debug && key.code == KeyCode::Esc {
             return Some(self.toggle_highlight_debug());
         }
@@ -1363,19 +1138,38 @@ impl Editor {
                 }
                 _ => return None,
             }
-            return Some(EditorAction::Continue);
+            return Some(Reaction::Continue);
         }
         None
     }
 
-    fn toggle_highlight_debug(&mut self) -> EditorAction {
+    fn handle_debug_action(&mut self, action: Action) -> Option<Reaction> {
+        if action == Action::ToggleHighlightDebug {
+            return Some(self.toggle_highlight_debug());
+        }
+        if self.highlight_debug {
+            match action {
+                Action::ScrollFeedUp => {
+                    self.highlight_debug_scroll = self.highlight_debug_scroll.saturating_sub(10)
+                }
+                Action::ScrollFeedDown => {
+                    self.highlight_debug_scroll = self.highlight_debug_scroll.saturating_add(10)
+                }
+                _ => return None,
+            }
+            return Some(Reaction::Continue);
+        }
+        None
+    }
+
+    fn toggle_highlight_debug(&mut self) -> Reaction {
         self.highlight_debug = !self.highlight_debug;
         self.highlight_debug_scroll = 0;
-        self.scroll_offset = 0;
+        self.feed.follow();
         if self.highlight_debug {
-            EditorAction::Post(DEBUG_POST)
+            Reaction::Post(DEBUG_POST)
         } else {
-            EditorAction::Continue
+            Reaction::Continue
         }
     }
 
@@ -1384,16 +1178,10 @@ impl Editor {
             .groups
             .prompt()
             .add_modifier(ratatui::style::Modifier::BOLD);
-        let mut entries = vec![("palette".into(), heading)];
-        entries.extend(
-            self.appearance
-                .variant()
-                .palette()
-                .colors()
-                .into_iter()
-                .map(|(name, color)| (name.into(), ratatui::style::Style::new().fg(color))),
-        );
-        entries.push(("highlight groups".into(), heading));
+        let mut entries = vec![
+            (self.frame_stats.label(), self.groups.muted()),
+            ("highlight groups".into(), heading),
+        ];
         entries.extend(
             self.groups
                 .highlight_groups()
@@ -1405,7 +1193,7 @@ impl Editor {
 
     fn draw_highlight_debug(&mut self, frame: &mut Frame) {
         let available = self.feed_area;
-        if !self.highlight_debug || available.width < 4 || available.height < 3 {
+        if !self.highlight_debug || available.width < 4 || available.height < 5 {
             return;
         }
         let entries = self.highlight_debug_entries();
@@ -1414,33 +1202,49 @@ impl Editor {
             self.appearance.scheme().label(),
             self.appearance.variant().label()
         );
-        let width = entries
+        let header_width = entries[..2]
             .iter()
             .map(|(name, _)| name.chars().count())
             .chain([title.chars().count()])
             .max()
+            .unwrap_or(1);
+        let groups = &entries[2..];
+        let rows = usize::from(available.height - 4);
+        let column_width = groups
+            .iter()
+            .map(|(name, _)| name.chars().count() + 2)
+            .max()
             .unwrap_or(1)
-            .saturating_add(2)
-            .min(usize::from(available.width)) as u16;
-        let content_width = usize::from(width - 2);
-        let visible = usize::from(available.height - 2).min(entries.len());
+            .min(usize::from(available.width - 2));
+        let columns = groups
+            .len()
+            .div_ceil(rows)
+            .min((usize::from(available.width - 2) / column_width).max(1));
+        let visible = rows * columns;
         self.highlight_debug_scroll = self
             .highlight_debug_scroll
-            .min(entries.len().saturating_sub(visible));
-        let lines = entries
-            .into_iter()
+            .min(groups.len().saturating_sub(visible));
+        let visible_groups = groups
+            .iter()
             .skip(self.highlight_debug_scroll)
             .take(visible)
-            .map(|(label, style)| {
-                let truncated = label.chars().count() > content_width;
-                let mut label: String = label.chars().take(content_width).collect();
-                if truncated && content_width > 1 {
-                    label.pop();
-                    label.push('…');
-                }
-                Line::from(Span::styled(format!("{label:<content_width$}"), style))
-            })
             .collect::<Vec<_>>();
+        let shown_rows = visible_groups.len().min(rows);
+        let shown_columns = visible_groups.len().div_ceil(shown_rows.max(1));
+        let content_width = (column_width * shown_columns).max(header_width);
+        let width = (content_width + 2).min(usize::from(available.width)) as u16;
+        let mut lines = entries[..2]
+            .iter()
+            .map(|(label, style)| Line::from(Span::styled(label.clone(), *style)))
+            .collect::<Vec<_>>();
+        lines.extend((0..shown_rows).map(|row| {
+            Line::from(
+                (0..shown_columns)
+                    .filter_map(|column| visible_groups.get(column * shown_rows + row))
+                    .map(|(label, style)| Span::styled(format!("{label:<column_width$}"), *style))
+                    .collect::<Vec<_>>(),
+            )
+        }));
         let height = lines.len() as u16 + 2;
         let area = Rect::new(
             available.right() - width,
@@ -1459,15 +1263,12 @@ impl Editor {
     }
 
     fn refresh_status_line(&mut self) {
-        if !self.pickers.is_empty() {
-            return;
-        }
         let commands_key = self
-            .keymap
+            .keymaps
             .key_for(Action::OpenCommands)
             .unwrap_or_default();
         let settings_key = self
-            .keymap
+            .keymaps
             .key_for(Action::OpenSettings)
             .unwrap_or_default();
         let event = if self.input.text().is_empty() {
@@ -1499,6 +1300,9 @@ impl Editor {
         highlighter: &mut dyn Highlighter,
         in_debugger: bool,
     ) {
+        if self.pane_focused {
+            self.frame_stats.tick();
+        }
         self.selection_exclusions.clear();
         let theme = self.groups;
         let input_prefix = UI.prompt_width();
@@ -1506,10 +1310,10 @@ impl Editor {
 
         let editor_area = area;
 
-        let input_height = self.input_height(editor_area.width, input_prefix, editor_area.height);
-        let status_height = u16::from(
-            self.pickers.is_empty() && self.settings.statusline != StatusLinePosition::Off,
-        );
+        let input_height = self
+            .input
+            .height(editor_area.width, input_prefix, editor_area.height);
+        let status_height = u16::from(self.settings.statusline != StatusLinePosition::Off);
         let picker_height = self
             .pickers
             .last()
@@ -1563,25 +1367,37 @@ impl Editor {
             );
             self.selection_exclusions.push(sections[1]);
         }
-        self.input_area = input_area;
         self.selection_exclusions.push(input_area);
-        self.draw_input(
-            frame,
+        let command = commands::query(self.input.text())
+            .is_some_and(|query| !commands::matching(query, self.split).is_empty());
+        if let Some(cursor) = self.input.render(
+            InputContext {
+                render: &input_context,
+                highlighter,
+                command,
+                debugging: in_debugger,
+                focused: self.pane_focused && matches!(self.focus(), ElementFocus::Input),
+            },
             input_area,
-            &input_context,
-            highlighter,
-            self.focused,
-            in_debugger,
-        );
+            frame.buffer_mut(),
+        ) {
+            frame.set_cursor_position(cursor);
+        }
         TuiBlock::default()
-            .style(theme.transcript())
+            .style(theme.statusline_bg())
             .render(status_area, frame.buffer_mut());
         self.status_line.render(
             &StatusLineContext {
-                idle_left: self
-                    .macaulay_version
-                    .clone()
-                    .map(|version| TextSpan::new(version, HLGroup::Muted)),
+                idle_left: Some(if self.processing {
+                    TextSpan::new("Processing", HLGroup::StatuslineWarning)
+                } else if let Some(reason) = &self.continuation {
+                    TextSpan::new(
+                        format!("Input pending ({reason})"),
+                        HLGroup::StatuslineError,
+                    )
+                } else {
+                    TextSpan::new("Ready", HLGroup::Statusline1)
+                }),
                 ..StatusLineContext::new(theme)
             },
             status_area,
@@ -1600,12 +1416,15 @@ impl Editor {
         frame: &mut Frame,
         area: Rect,
         highlighter: &mut dyn Highlighter,
-        committed: &[CommittedCell],
+        committed: CommittedCells<'_>,
         view: ViewKind,
         viewport: &mut Viewport,
     ) {
+        if self.pane_focused {
+            self.frame_stats.tick();
+        }
         self.selection_exclusions.clear();
-        self.input_area = Rect::ZERO;
+        self.input.hide();
         let theme = self.groups;
         frame.render_widget(Clear, area);
         TuiBlock::default()
@@ -1632,46 +1451,24 @@ impl Editor {
         match view {
             ViewKind::Shell => unreachable!("shells use Editor::draw"),
             ViewKind::Code => {
-                let code = (!committed.is_empty()).then(|| {
-                    CodeBlock::new(committed.iter().map(|cell| {
-                        Cell::resolved(cell.code.clone(), highlighter.highlight(&cell.code))
-                    }))
-                });
-                let blocks: Vec<&dyn Block> = code
-                    .as_ref()
-                    .map(|block| vec![block as &dyn Block])
-                    .unwrap_or_default();
-                render_preview_blocks(
-                    frame,
-                    sections[0],
+                self.selection_exclusions.extend(viewport.render_committed(
+                    committed,
+                    view,
+                    highlighter,
                     &context,
-                    &blocks,
-                    &mut viewport.scroll,
-                    &mut self.selection_exclusions,
-                    "no committed code",
-                );
+                    sections[0],
+                    frame.buffer_mut(),
+                ));
             }
             ViewKind::SyntaxTree => {
-                let blocks: Vec<Box<dyn Block>> = committed
-                    .iter()
-                    .map(|cell| {
-                        Box::new(SyntaxTreeBlock::new(
-                            cell.code.clone(),
-                            highlighter.highlight(&cell.code),
-                            cell.tree.clone(),
-                        )) as Box<dyn Block>
-                    })
-                    .collect();
-                let blocks: Vec<&dyn Block> = blocks.iter().map(Box::as_ref).collect();
-                render_preview_blocks(
-                    frame,
-                    sections[0],
+                self.selection_exclusions.extend(viewport.render_committed(
+                    committed,
+                    view,
+                    highlighter,
                     &context,
-                    &blocks,
-                    &mut viewport.scroll,
-                    &mut self.selection_exclusions,
-                    "no committed syntax trees",
-                );
+                    sections[0],
+                    frame.buffer_mut(),
+                ));
             }
             ViewKind::Output => {
                 let blocks: Vec<&dyn Block> = self
@@ -1680,7 +1477,7 @@ impl Editor {
                     .flat_map(|block| {
                         let top = (viewport.output == OutputMode::Everything
                             && block.kind() != BlockKind::Input)
-                            .then_some(block.as_ref());
+                            .then_some(block);
                         top.into_iter()
                             .chain(block.outputs().iter().map(Box::as_ref))
                     })
@@ -1693,21 +1490,21 @@ impl Editor {
                         OutputMode::Everything => block.kind() != BlockKind::Input,
                     })
                     .collect();
-                render_preview_blocks(
-                    frame,
-                    sections[0],
-                    &context,
-                    &blocks,
-                    &mut viewport.scroll,
-                    &mut self.selection_exclusions,
-                    "no matching output",
+                self.selection_exclusions.extend(
+                    BlockView::new(&blocks, "no matching output").render(
+                        &context,
+                        sections[0],
+                        frame.buffer_mut(),
+                        &mut viewport.scroll,
+                        theme.transcript(),
+                    ),
                 );
             }
         }
-        self.feed_top = viewport.scroll;
+        self.feed_top = viewport.scroll as i64;
         self.selection_exclusions.extend([sections[1], sections[2]]);
         TuiBlock::default()
-            .style(theme.transcript())
+            .style(theme.statusline_bg())
             .render(sections[2], frame.buffer_mut());
         let center = (view == ViewKind::SyntaxTree).then(|| {
             vec![TextSpan::new(
@@ -1748,7 +1545,7 @@ impl Editor {
                 ]);
             }
             right.extend([
-                TextSpan::new("ctrl+q ", HLGroup::KeymapHint),
+                TextSpan::new("q ", HLGroup::KeymapHint),
                 TextSpan::new(format!("{action} view"), HLGroup::Muted),
             ]);
             StatusLine::default().render(
@@ -1756,7 +1553,7 @@ impl Editor {
                     idle_left: title.map(|title| {
                         TextSpan::new(
                             title,
-                            if self.focused {
+                            if self.pane_focused {
                                 HLGroup::Value
                             } else {
                                 HLGroup::Muted
@@ -1777,7 +1574,7 @@ impl Editor {
     }
 
     fn capture_screen(&mut self, frame: &mut Frame) {
-        let area = frame.area();
+        let area = self.feed_area;
         let buffer = frame.buffer_mut();
         self.screen_area = area;
         self.screen = (area.y..area.bottom())
@@ -1814,7 +1611,7 @@ impl Editor {
         let area = self.feed_area;
         let buffer = frame.buffer_mut();
         for y in area.y..area.bottom() {
-            let content_row = self.feed_top + usize::from(y - area.y);
+            let content_row = self.feed_top + i64::from(y - area.y);
             if content_row < start.row || content_row > end.row {
                 continue;
             }
@@ -1842,211 +1639,21 @@ impl Editor {
         }
     }
 
-    /// The input pane's height: enough for the wrapped source and its margins,
-    /// but never more than the configured share of the editor, past which the
-    /// input scrolls internally rather than crowding out the feed.
-    fn input_height(&self, width: u16, prefix: u16, editor_height: u16) -> u16 {
-        let rows = self.input.visual_rows(width.saturating_sub(prefix)) as u16;
-        let chrome = 2 + u16::from(self.input.diagnostic().is_some());
-        let cap = editor_height
-            .saturating_mul(u16::from(self.settings.max_input_height_percent))
-            .saturating_div(100)
-            .max(UI.min_input_height);
-        rows.saturating_add(chrome).clamp(UI.min_input_height, cap)
-    }
-
-    /// The first visual row to draw, chosen so the cursor keeps `input_scrolloff`
-    /// rows of context from both edges. With a viewport too short to honour both
-    /// margins the cursor is centred instead, which degrades smoothly rather than
-    /// fighting itself between the two clamps.
-    fn input_scroll(&self, cursor_row: usize, rows: usize, viewport: usize) -> usize {
-        let last_start = rows.saturating_sub(viewport);
-        let scrolloff = usize::from(self.settings.input_scrolloff);
-        if viewport <= 2 * scrolloff + 1 {
-            return cursor_row.saturating_sub(viewport / 2).min(last_start);
-        }
-        let highest = cursor_row.saturating_sub(scrolloff);
-        let lowest = (cursor_row + scrolloff + 1).saturating_sub(viewport);
-        self.input_scroll.clamp(lowest, highest).min(last_start)
-    }
-
     fn draw_feed(&mut self, frame: &mut Frame, area: Rect, context: &RenderContext) -> bool {
         if area.width == 0 || area.height == 0 {
             self.feed_top = 0;
             return false;
         }
-
-        let heights: Vec<u16> = self
-            .feed
-            .iter()
-            .map(|block| block.height(context))
-            .collect();
-        let total: u16 = heights.iter().sum();
-        let buffer_height = total.max(area.height).max(1);
-        let mut composition = Buffer::empty(Rect::new(0, 0, area.width, buffer_height));
-        let composition_area = *composition.area();
-        TuiBlock::default()
-            .style(self.appearance.canvas(context.groups().transcript()))
-            .render(composition_area, &mut composition);
-
-        // An underfilled transcript grows upward from the input. Once full, the
-        // leading offset is zero and the existing scrolling path is unchanged.
-        let mut y = buffer_height - total;
-        let mut feed_exclusions = Vec::new();
-        for (block, height) in self.feed.iter().zip(&heights) {
-            let block_area = Rect::new(0, y, area.width, *height);
-            block.render(context, block_area, &mut composition);
-            block.selection_exclusions(context, block_area, &mut feed_exclusions);
-            y += height;
-        }
-
-        let visible = area.height as usize;
-        let max_scroll = (total as usize).saturating_sub(visible);
-        // Park the offset at the top of the feed rather than letting it run past
-        // it, so scrolling back down moves on the first notch instead of after as
-        // many notches as were spent overshooting.
-        self.scroll_offset = self.scroll_offset.min(max_scroll);
-        let top = max_scroll - self.scroll_offset;
-        self.feed_top = top;
-        let destination = frame.buffer_mut();
-        for row in 0..area.height {
-            let source_y = top + row as usize;
-            if source_y >= buffer_height as usize {
-                break;
-            }
-            for column in 0..area.width {
-                if let Some(cell) = composition.cell((column, source_y as u16)) {
-                    if let Some(slot) = destination.cell_mut((area.x + column, area.y + row)) {
-                        *slot = cell.clone();
-                    }
-                }
-            }
-        }
-        self.selection_exclusions
-            .project(feed_exclusions, area, top);
-        total < area.height
-    }
-
-    fn draw_input(
-        &mut self,
-        frame: &mut Frame,
-        area: Rect,
-        context: &RenderContext,
-        highlighter: &mut dyn Highlighter,
-        focused: bool,
-        debugging: bool,
-    ) {
-        let diagnostic = self.input.diagnostic().map(str::to_string);
-        let code = context.groups().code();
-        let text_width = area.width.saturating_sub(context.prefix());
-        let mut rows = self
-            .input
-            .highlighted_lines(context, highlighter, debugging);
-        if self
-            .input
-            .text()
-            .strip_prefix('/')
-            .is_some_and(|query| !commands::matching(query, self.split).is_empty())
-        {
-            for span in rows
-                .iter_mut()
-                .flat_map(|line| line.spans.iter_mut().skip(1))
-            {
-                span.style = span.style.patch(context.groups().prompt());
-            }
-        }
-
-        let chrome = 2 + u16::from(diagnostic.is_some());
-        let viewport = area.height.saturating_sub(chrome).max(1) as usize;
-        let (cursor_row, cursor_column) = self.input.visual_cursor(text_width);
-        self.input_scroll = self.input_scroll(cursor_row, rows.len(), viewport);
-        self.input_text_area = Rect::new(
-            area.x + context.prefix(),
-            area.y + 1,
-            text_width,
-            viewport as u16,
-        );
-
-        let mut lines = if debugging {
-            let warning = context.groups().warning().bold().patch(code);
-            vec![Line::from(vec![
-                Prompt::new("", warning).spans(&())[0].clone(),
-                Span::styled("DEBUGGER", warning),
-            ])]
-        } else {
-            vec![Line::default()]
-        };
-        lines.extend(rows.into_iter().skip(self.input_scroll).take(viewport));
-        if let Some(message) = diagnostic {
-            let error = context.groups().error().patch(code);
-            lines.push(Line::from(vec![
-                Prompt::new("", error).spans(&())[0].clone(),
-                Span::styled(message, error),
-            ]));
-        }
-        lines.push(Line::default());
-        frame.render_widget(Paragraph::new(lines).style(code), area);
-
-        if focused {
-            frame.set_cursor_position(Position::new(
-                area.x + context.prefix() + cursor_column as u16,
-                area.y + 1 + (cursor_row - self.input_scroll) as u16,
-            ));
-        }
-    }
-}
-
-fn render_preview_blocks(
-    frame: &mut Frame,
-    area: Rect,
-    context: &RenderContext,
-    blocks: &[&dyn Block],
-    scroll: &mut usize,
-    selection_exclusions: &mut Vec<Rect>,
-    empty: &str,
-) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    if blocks.is_empty() {
-        frame.render_widget(
-            Paragraph::new(empty)
-                .style(context.groups().muted())
-                .alignment(Alignment::Center),
+        let (underfilled, exclusions) = self.feed.render(
+            context,
             area,
+            frame.buffer_mut(),
+            self.appearance.canvas(context.groups().transcript()),
         );
-        return;
+        self.feed_top = -(self.feed.offset() as i64);
+        self.selection_exclusions.extend(exclusions);
+        underfilled
     }
-    let heights: Vec<_> = blocks.iter().map(|block| block.height(context)).collect();
-    let total: u16 = heights.iter().sum();
-    let mut composition = Buffer::empty(Rect::new(0, 0, area.width, total.max(1)));
-    TuiBlock::default()
-        .style(context.groups().transcript())
-        .render(*composition.area(), &mut composition);
-    let mut y = 0;
-    let mut exclusions = Vec::new();
-    for (block, height) in blocks.iter().zip(heights) {
-        let block_area = Rect::new(0, y, area.width, height);
-        block.render(context, block_area, &mut composition);
-        block.selection_exclusions(context, block_area, &mut exclusions);
-        y += height;
-    }
-    let max_scroll = usize::from(total.saturating_sub(area.height));
-    *scroll = (*scroll).min(max_scroll);
-    for row in 0..area.height {
-        let source_y = *scroll + usize::from(row);
-        if source_y >= usize::from(total) {
-            break;
-        }
-        for column in 0..area.width {
-            if let Some(cell) = composition.cell((column, source_y as u16)) {
-                if let Some(slot) = frame.buffer_mut().cell_mut((area.x + column, area.y + row)) {
-                    *slot = cell.clone();
-                }
-            }
-        }
-    }
-    selection_exclusions.project(exclusions, area, *scroll);
 }
 
 fn ordered_screen_positions(
@@ -2123,7 +1730,8 @@ fn is_border_title(symbols: &[String], start: usize, end: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::block::CellState;
+    use crate::ui::block::{CellState, OutputBlock};
+    use crossterm::event::{KeyEvent as CrosstermKeyEvent, KeyModifiers};
     use m2_syn::PrettyNode;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -2191,7 +1799,10 @@ mod tests {
                     frame,
                     frame.area(),
                     &mut highlighter,
-                    committed,
+                    CommittedCells {
+                        cells: committed,
+                        revision: 0,
+                    },
                     view,
                     viewport,
                 )
@@ -2225,9 +1836,9 @@ mod tests {
     fn mouse_wheel_changes_feed_scroll_offset() {
         let mut editor = Editor::new(String::new());
         editor.handle_mouse(wheel(MouseEventKind::ScrollUp, 0));
-        assert_eq!(editor.scroll_offset, 1);
+        assert_eq!(editor.feed.offset(), 1);
         editor.handle_mouse(wheel(MouseEventKind::ScrollDown, 0));
-        assert_eq!(editor.scroll_offset, 0);
+        assert_eq!(editor.feed.offset(), 0);
     }
 
     #[test]
@@ -2247,8 +1858,8 @@ mod tests {
         press(&mut editor, KeyCode::Left, KeyModifiers::SHIFT);
         press(&mut editor, KeyCode::Left, KeyModifiers::SHIFT);
 
-        let copied = editor.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
-        let EditorAction::Copy(text) = copied else {
+        let copied = editor.handle_key(key(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        let Reaction::Copy(text) = copied else {
             panic!("copy binding did not receive the selection");
         };
         assert_eq!(text, "cd");
@@ -2258,15 +1869,16 @@ mod tests {
     fn mouse_drag_selects_input_text() {
         let mut editor = Editor::new(String::new());
         editor.input.field_mut().insert_str("abcd");
-        editor.input_area = Rect::new(0, 5, 20, 3);
-        editor.input_text_area = Rect::new(5, 6, 15, 1);
+        editor
+            .input
+            .set_test_area(Rect::new(0, 5, 20, 3), Rect::new(5, 6, 15, 1));
 
         editor.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 6));
         editor.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 8, 6));
         let copied = editor.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 8, 6));
 
         assert_eq!(editor.input.field().selected_text(), Some("abc"));
-        let EditorAction::Copy(text) = copied else {
+        let Reaction::Copy(text) = copied else {
             panic!("mouse release did not copy the input selection");
         };
         assert_eq!(text, "abc");
@@ -2277,7 +1889,10 @@ mod tests {
         let mut editor = Editor::new("hello".to_string());
         let rows = rendered_editor(&mut editor, 40, 10);
         let row = rows.iter().position(|row| row.contains("hello")).unwrap() as u16;
-        let start = rows[row as usize].find("hello").unwrap() as u16;
+        let start = rows[row as usize]
+            .chars()
+            .position(|character| character == 'h')
+            .unwrap() as u16;
 
         editor.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), start, row));
         editor.handle_mouse(mouse(
@@ -2287,7 +1902,7 @@ mod tests {
         ));
         let copied =
             editor.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), start + 4, row));
-        let EditorAction::Copy(text) = copied else {
+        let Reaction::Copy(text) = copied else {
             panic!("mouse release did not copy the screen selection");
         };
         assert_eq!(text, "hello");
@@ -2299,8 +1914,8 @@ mod tests {
         editor.paste("draft");
 
         assert!(matches!(
-            editor.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT)),
-            EditorAction::Restart
+            editor.handle_key(key(KeyCode::Char('r'), KeyModifiers::ALT)),
+            Reaction::Restart
         ));
         editor.apply(EditorUpdate::Message(Box::new(TextBlock::system(
             "restarted",
@@ -2310,12 +1925,38 @@ mod tests {
     }
 
     #[test]
+    fn resolved_submission_keeps_its_input_and_output_numbers() {
+        let mut editor = Editor::new(String::new());
+        editor.apply(EditorUpdate::Pending {
+            id: 4,
+            cells: vec![("x".into(), Vec::new())],
+        });
+        editor.apply(EditorUpdate::CellSucceeded {
+            id: 4,
+            index: 0,
+            number: 12,
+            state: CellState::Value,
+            outputs: vec![Box::new(
+                OutputBlock::value("value".into(), None).numbered(12),
+            )],
+        });
+
+        let rows = rendered_editor(&mut editor, 40, 12);
+
+        assert!(rows.iter().any(|row| row.contains("  12▏ x")), "{rows:#?}");
+        assert!(
+            rows.iter().any(|row| row.contains("  o12 value")),
+            "{rows:#?}"
+        );
+    }
+
+    #[test]
     fn mouse_selection_skips_output_types() {
         let mut editor = Editor::new(String::new());
-        editor.feed = vec![Box::new(crate::ui::block::OutputBlock::value(
+        editor.feed = Feed::new(Box::new(crate::ui::block::OutputBlock::value(
             "value".to_string(),
             Some("ZZ".to_string()),
-        ))];
+        )));
         let rows = rendered_editor(&mut editor, 40, 10);
         let row = rows.iter().position(|row| row.contains("value")).unwrap() as u16;
 
@@ -2323,7 +1964,7 @@ mod tests {
         editor.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 39, row));
         let copied = editor.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 39, row));
 
-        let EditorAction::Copy(text) = copied else {
+        let Reaction::Copy(text) = copied else {
             panic!("mouse release did not copy the output selection");
         };
         assert_eq!(text, "value");
@@ -2334,15 +1975,16 @@ mod tests {
         let mut editor = Editor::new("first".to_string());
         let rows = rendered_editor(&mut editor, 40, 12);
         let first = rows.iter().position(|row| row.contains("first")).unwrap();
+        let border = rows.iter().position(|row| row.contains('╭')).unwrap();
 
-        assert!(rows[..first].iter().all(|row| row.trim().is_empty()));
+        assert!(rows[..border].iter().all(|row| row.trim().is_empty()));
         editor.feed.push(Box::new(TextBlock::system("second")));
         let rows = rendered_editor(&mut editor, 40, 12);
         let moved = rows.iter().position(|row| row.contains("first")).unwrap();
         let appended = rows.iter().position(|row| row.contains("second")).unwrap();
 
         assert!(moved < first);
-        assert!(appended > moved && appended < editor.input_area.y as usize);
+        assert!(appended > moved && appended < editor.input.area().y as usize);
     }
 
     #[test]
@@ -2360,6 +2002,7 @@ mod tests {
         editor.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), start + 4, 1));
         editor.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), start + 4, 1));
         let selected_row = editor.screen_selection.as_ref().unwrap().anchor.row;
+        let selected_text = editor.selected_screen_text().unwrap();
 
         editor.handle_mouse(wheel(MouseEventKind::ScrollUp, 0));
         rendered_editor(&mut editor, 40, 10);
@@ -2369,11 +2012,11 @@ mod tests {
             editor.screen_selection.as_ref().unwrap().anchor.row,
             selected_row
         );
-        let copied = editor.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
-        let EditorAction::Copy(text) = copied else {
+        let copied = editor.handle_key(key(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        let Reaction::Copy(text) = copied else {
             panic!("scrolling cleared the feed selection");
         };
-        assert_eq!(text, format!("line{selected_row}"));
+        assert_eq!(text, selected_text);
     }
 
     #[test]
@@ -2399,51 +2042,55 @@ mod tests {
     #[test]
     fn mouse_wheel_over_input_resizes_it() {
         let mut editor = Editor::new(String::new());
-        editor.input_area = Rect::new(0, 10, 40, 4);
-        let before = editor.settings.max_input_height_percent;
+        editor
+            .input
+            .set_test_area(Rect::new(0, 10, 40, 4), Rect::ZERO);
+        let before = editor.input.settings().max_height_percent;
 
         editor.handle_mouse(wheel(MouseEventKind::ScrollUp, 11));
-        assert_eq!(editor.settings.max_input_height_percent, before + 5);
-        assert_eq!(editor.scroll_offset, 0, "the feed must not move");
+        assert_eq!(editor.input.settings().max_height_percent, before + 5);
+        assert_eq!(editor.feed.offset(), 0, "the feed must not move");
 
         editor.handle_mouse(wheel(MouseEventKind::ScrollDown, 11));
-        assert_eq!(editor.settings.max_input_height_percent, before);
+        assert_eq!(editor.input.settings().max_height_percent, before);
     }
 
     #[test]
     fn settings_picker_adjusts_the_selected_field() {
         let mut editor = Editor::new(String::new());
-        let before = editor.settings.input_scrolloff;
+        let before = editor.input.settings().scrolloff;
 
         open_settings(&mut editor);
-        editor.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        editor.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        editor.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        editor.handle_key(key(KeyCode::Right, KeyModifiers::NONE));
 
-        assert_eq!(editor.settings.input_scrolloff, before + 1);
+        assert_eq!(editor.input.settings().scrolloff, before + 1);
         assert_eq!(editor.input.text(), "", "the setting consumes the key");
 
-        editor.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        editor.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        editor.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        editor.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
         assert!(editor.pickers.is_empty());
     }
 
     #[test]
     fn max_input_height_changes_by_five_percentage_points() {
         let mut editor = Editor::new(String::new());
-        let before = editor.settings.max_input_height_percent;
+        let before = editor.input.settings().max_height_percent;
 
         open_settings(&mut editor);
         press(&mut editor, KeyCode::Right, KeyModifiers::NONE);
 
-        assert_eq!(editor.settings.max_input_height_percent, before + 5);
+        assert_eq!(editor.input.settings().max_height_percent, before + 5);
     }
 
     #[test]
     fn restore_default_resets_shell_keymaps_and_style_on_enter() {
         let mut editor = Editor::new(String::new());
-        let rebound = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
-        editor.settings.max_input_height_percent = 40;
-        assert!(editor.keymap.rebind(Action::ClearInput, rebound));
+        let rebound = key(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        let mut input = editor.input.settings();
+        input.max_height_percent = 40;
+        editor.input.set_settings(input);
+        assert!(editor.keymaps.rebind(Action::ClearFeed, rebound));
         editor.apply_appearance(editor.appearance.cycle_colorscheme(1));
         editor.open_settings_from_commands();
 
@@ -2453,18 +2100,33 @@ mod tests {
         press(&mut editor, KeyCode::Down, KeyModifiers::NONE);
         press(&mut editor, KeyCode::Enter, KeyModifiers::NONE);
 
-        let defaults = Settings::default();
+        let defaults = InputSettings::default();
         assert_eq!(
-            editor.settings.max_input_height_percent,
-            defaults.max_input_height_percent
+            editor.input.settings().max_height_percent,
+            defaults.max_height_percent
         );
-        assert_eq!(editor.settings.input_scrolloff, defaults.input_scrolloff);
-        assert!(editor.keymap.action(rebound).is_none());
+        assert_eq!(editor.input.settings().scrolloff, defaults.scrolloff);
+        assert!(editor.resolve_action(rebound).is_none());
         assert_eq!(editor.appearance, Appearance::default());
     }
 
+    #[test]
+    fn unchanged_config_keeps_the_retained_feed() {
+        let mut editor = Editor::new("visible".into());
+        rendered_buffer(&mut editor, 40, 10);
+        assert!(editor.feed.retained());
+
+        editor.set_config(&editor.config());
+
+        assert!(editor.feed.retained());
+    }
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        CrosstermKeyEvent::new(code, modifiers).into()
+    }
+
     fn press(editor: &mut Editor, code: KeyCode, modifiers: KeyModifiers) {
-        editor.handle_key(KeyEvent::new(code, modifiers));
+        editor.handle_key(key(code, modifiers));
     }
 
     fn picker_title(editor: &Editor) -> Option<&'static str> {
@@ -2501,6 +2163,7 @@ mod tests {
         item.spans(&LineContext {
             width: 80,
             value_column: 40,
+            columns: None,
             selected: false,
             groups,
         })
@@ -2528,7 +2191,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_style_keeps_changes() {
+    fn enter_closes_style_and_keeps_changes() {
         let mut editor = Editor::new(String::new());
         let original = editor.appearance;
 
@@ -2537,7 +2200,7 @@ mod tests {
         press(&mut editor, KeyCode::Right, KeyModifiers::NONE);
         assert_ne!(editor.appearance, original);
 
-        press(&mut editor, KeyCode::Esc, KeyModifiers::NONE);
+        press(&mut editor, KeyCode::Enter, KeyModifiers::NONE);
         assert_ne!(editor.appearance, original);
         assert_eq!(picker_title(&editor), Some("commands"));
     }
@@ -2638,8 +2301,16 @@ mod tests {
         let mut editor = Editor::new(String::new());
         press(&mut editor, KeyCode::Char('/'), KeyModifiers::NONE);
 
-        let action = editor.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-        assert!(matches!(action, EditorAction::Quit));
+        let action = editor.handle_key(key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(matches!(action, Reaction::Quit));
+    }
+
+    #[test]
+    fn plain_q_leaves_a_preview() {
+        let mut editor = Editor::new(String::new());
+        editor.set_context(false, true, true);
+
+        assert!(editor.resolve_action(KeyCode::Char('q').into()) == Some(Action::Quit));
     }
 
     #[test]
@@ -2655,12 +2326,6 @@ mod tests {
         press(&mut editor, KeyCode::Char('z'), KeyModifiers::NONE);
         assert!(editor.pickers.is_empty());
         assert_eq!(editor.input.text(), "xyz");
-
-        let mut editor = Editor::new(String::new());
-        open_keymaps(&mut editor);
-        press(&mut editor, KeyCode::Char('y'), KeyModifiers::NONE);
-        assert!(editor.pickers.is_empty());
-        assert_eq!(editor.input.text(), "y");
     }
 
     #[test]
@@ -2709,8 +2374,8 @@ mod tests {
     #[test]
     fn opener_shortcuts_toggle_and_switch_pickers() {
         let mut editor = Editor::new(String::new());
-        let commands = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL);
-        let settings = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL);
+        let commands = key(KeyCode::Char('/'), KeyModifiers::CONTROL);
+        let settings = key(KeyCode::Char('o'), KeyModifiers::CONTROL);
 
         editor.handle_key(commands);
         assert_eq!(picker_title(&editor), Some("commands"));
@@ -2733,10 +2398,10 @@ mod tests {
     fn command_keymaps_run_callbacks_and_toggle_their_pickers() {
         let mut editor = Editor::new(String::new());
 
-        let action = editor.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT));
+        let action = editor.handle_key(key(KeyCode::Char('c'), KeyModifiers::ALT));
         assert!(matches!(
             action,
-            EditorAction::Open(ViewKind::Code, OpenTarget::Current)
+            Reaction::Open(ViewKind::Code, OpenTarget::Current)
         ));
 
         for (key, title) in [('s', "style"), ('k', "keymaps")] {
@@ -2763,11 +2428,11 @@ mod tests {
         for _ in 0..4 {
             press(&mut editor, KeyCode::Down, KeyModifiers::NONE);
         }
-        let action = editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let action = editor.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(editor.pickers.is_empty());
         assert!(matches!(
             action,
-            EditorAction::Open(ViewKind::Code, OpenTarget::Current)
+            Reaction::Open(ViewKind::Code, OpenTarget::Current)
         ));
         assert_eq!(editor.input.text(), "x");
 
@@ -2781,22 +2446,22 @@ mod tests {
         let mut editor = Editor::new(String::new());
         editor.input = InputCode::new_in_memory();
 
-        for character in "/sy".chars() {
+        for character in "/as".chars() {
             press(&mut editor, KeyCode::Char(character), KeyModifiers::NONE);
         }
-        let action = editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let action = editor.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(
             action,
-            EditorAction::Open(ViewKind::SyntaxTree, OpenTarget::Current)
+            Reaction::Open(ViewKind::SyntaxTree, OpenTarget::Current)
         ));
 
         press(&mut editor, KeyCode::Up, KeyModifiers::NONE);
-        assert_eq!(editor.input.text(), "/syntax tree");
+        assert_eq!(editor.input.text(), "/ast");
 
-        let action = editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let action = editor.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(
             action,
-            EditorAction::Open(ViewKind::SyntaxTree, OpenTarget::Current)
+            Reaction::Open(ViewKind::SyntaxTree, OpenTarget::Current)
         ));
         assert!(editor.input.text().is_empty());
     }
@@ -2810,10 +2475,10 @@ mod tests {
         for character in "/de".chars() {
             press(&mut editor, KeyCode::Char(character), KeyModifiers::NONE);
         }
-        let action = editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let action = editor.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(editor.highlight_debug);
         assert!(editor.pickers.is_empty());
-        assert!(matches!(action, EditorAction::Post(DEBUG_POST)));
+        assert!(matches!(action, Reaction::Post(DEBUG_POST)));
 
         editor.post(EditorUpdate::Pending {
             id: 7,
@@ -2837,10 +2502,10 @@ mod tests {
         }
 
         assert_eq!(editor.pickers.last().unwrap().picker.len(), 1);
-        let action = editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let action = editor.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(
             action,
-            EditorAction::Open(ViewKind::Code, OpenTarget::Current)
+            Reaction::Open(ViewKind::Code, OpenTarget::Current)
         ));
     }
 
@@ -2859,11 +2524,11 @@ mod tests {
     }
 
     #[test]
-    fn command_shortcuts_stay_aligned_beside_their_labels() {
+    fn command_picker_uses_literal_and_aligned_columns_when_they_fit() {
         let mut editor = Editor::new(String::new());
         press(&mut editor, KeyCode::Char('/'), KeyModifiers::NONE);
 
-        let rows = rendered_editor(&mut editor, 70, 16);
+        let rows = rendered_editor(&mut editor, 120, 16);
         let settings = rows
             .iter()
             .find(|row| row.contains("settings") && row.contains("ctrl+o"))
@@ -2873,11 +2538,15 @@ mod tests {
             .find(|row| row.contains("quit") && row.contains("ctrl+c"))
             .unwrap_or_else(|| panic!("quit command missing from {rows:#?}"));
 
-        assert!(!settings.contains("configure spectral-m2"));
-        assert!(!quit.contains("leave spectral-m2"));
-        let column = settings.find("ctrl+o").unwrap();
-        assert_eq!(Some(column), quit.find("ctrl+c"));
-        assert!(column < 30, "shortcut drifted across the row: {settings}");
+        assert!(settings.contains(Action::OpenSettings.description()));
+        assert!(quit.contains(Action::Quit.description()));
+        assert!(settings.contains("/settings"));
+        assert!(quit.contains("/quit"));
+        assert_eq!(
+            settings.find(Action::OpenSettings.description()),
+            quit.find(Action::Quit.description())
+        );
+        assert_eq!(settings.find("ctrl+o"), quit.find("ctrl+c"));
     }
 
     #[test]
@@ -2919,13 +2588,13 @@ mod tests {
     fn statusline_setting_cycles_in_both_directions() {
         let mut settings = Settings::default();
 
-        SettingField::StatusLine.adjust(&mut settings, 1);
+        settings.statusline = settings.statusline.cycle(1);
         assert_eq!(settings.statusline, StatusLinePosition::AboveInput);
-        SettingField::StatusLine.adjust(&mut settings, 1);
+        settings.statusline = settings.statusline.cycle(1);
         assert_eq!(settings.statusline, StatusLinePosition::Off);
-        SettingField::StatusLine.adjust(&mut settings, 1);
+        settings.statusline = settings.statusline.cycle(1);
         assert_eq!(settings.statusline, StatusLinePosition::BelowInput);
-        SettingField::StatusLine.adjust(&mut settings, -1);
+        settings.statusline = settings.statusline.cycle(-1);
         assert_eq!(settings.statusline, StatusLinePosition::Off);
     }
 
@@ -2936,13 +2605,13 @@ mod tests {
         editor.settings.statusline = StatusLinePosition::AboveInput;
         let rows = rendered_editor(&mut editor, 40, 10);
 
-        assert!(rows[editor.input_area.y as usize].trim().is_empty());
-        assert!(rows[editor.input_area.y.saturating_sub(1) as usize].contains("ctrl+/ commands"));
+        assert!(rows[editor.input.area().y as usize].trim().is_empty());
+        assert!(rows[editor.input.area().y.saturating_sub(1) as usize].contains("ctrl+/ commands"));
 
         editor.settings.statusline = StatusLinePosition::Off;
         let rows = rendered_editor(&mut editor, 40, 10);
 
-        assert_eq!(editor.input_area.bottom(), 10);
+        assert_eq!(editor.input.area().bottom(), 10);
         assert!(rows.iter().all(|row| !row.contains("ctrl+/ commands")));
     }
 
@@ -2953,8 +2622,8 @@ mod tests {
 
         let rows = rendered_editor(&mut editor, 40, 10);
         let status = rows.last().unwrap();
-        let top_margin = &rows[editor.input_area.y as usize];
-        let bottom_margin = &rows[editor.input_area.bottom().saturating_sub(1) as usize];
+        let top_margin = &rows[editor.input.area().y as usize];
+        let bottom_margin = &rows[editor.input.area().bottom().saturating_sub(1) as usize];
 
         assert!(status
             .trim_end()
@@ -2965,43 +2634,37 @@ mod tests {
         assert!(
             bottom_margin.trim().is_empty(),
             "bottom margin {bottom_margin:?} in {:?}",
-            editor.input_area
+            editor.input.area()
         );
     }
 
     #[test]
-    fn highlight_debug_lists_every_native_color_and_highlight_group() {
+    fn highlight_debug_lists_only_the_complete_highlight_group_space() {
         let mut editor = Editor::new(String::new());
         press(&mut editor, KeyCode::Char('d'), KeyModifiers::CONTROL);
 
         let rows = rendered_editor(&mut editor, 120, 120);
         let screen = rows.join("\n");
         let title_row = rows.iter().position(|row| row.contains("debug")).unwrap();
-        assert!(screen.contains("palette"));
-        assert!(screen.contains("bg_dim"));
-        assert!(screen.contains("statusline3"));
+        assert!(screen.contains("FPS"));
         assert!(screen.contains("highlight groups"));
-        assert!(screen.contains("BgCode"));
+        assert!(screen.contains("Conditional"));
+        assert!(screen.contains("LspTypeClass"));
+        assert!(screen.contains("Accent1"));
+        assert!(screen.contains("BgColor1"));
+        assert!(screen.contains("CodeBlock"));
         assert!(screen.contains("Normal"));
         assert!(screen.contains("Delimiter"));
         let entries = editor.highlight_debug_entries();
-        assert_eq!(
-            entries.len(),
-            editor.appearance.variant().palette().colors().len()
-                + editor.groups.highlight_groups().len()
-                + 2
-        );
-        for (name, color) in editor.appearance.variant().palette().colors() {
-            let (_, style) = entries
-                .iter()
-                .find(|(entry, _)| entry == name)
-                .unwrap_or_else(|| panic!("native color {name} did not reach the TUI"));
-            assert_eq!(style.fg, Some(color), "{name}");
-        }
-        assert!(title_row > 0);
+        assert_eq!(entries.len(), editor.groups.highlight_groups().len() + 2);
+        assert!(!entries.iter().any(|(name, _)| name == "bg_dim"));
+        assert!(entries
+            .iter()
+            .skip(2)
+            .all(|(name, _)| screen.contains(name)));
         assert!(rows[title_row].ends_with('┐'));
         assert_eq!(
-            rows.iter().find_map(|row| row.find("BgCode")).unwrap(),
+            rows.iter().find_map(|row| row.find("CodeBlock")).unwrap(),
             rows.iter().find_map(|row| row.find("Normal")).unwrap(),
         );
         assert_eq!(
@@ -3026,7 +2689,7 @@ mod tests {
             .draw(|frame| editor.draw(frame, frame.area(), &mut highlighter, false))
             .expect("draw editor");
 
-        let margin = &terminal.backend().buffer()[(0, editor.input_area.y)];
+        let margin = &terminal.backend().buffer()[(0, editor.input.area().y)];
         assert_eq!(margin.symbol(), " ");
         assert_eq!(margin.bg, editor.groups.code().bg.unwrap());
         assert_ne!(margin.bg, editor.groups.transcript().bg.unwrap());
@@ -3045,14 +2708,14 @@ mod tests {
             .expect("welcome text");
 
         assert_eq!(buffer[(0, 0)].bg, ratatui::style::Color::Reset);
-        assert_eq!(buffer[content].bg, editor.groups.transcript().bg.unwrap());
+        assert_eq!(buffer[content].bg, ratatui::style::Color::Reset);
         assert_eq!(
-            buffer[(0, editor.input_area.y)].bg,
+            buffer[(0, editor.input.area().y)].bg,
             editor.groups.code().bg.unwrap()
         );
         assert_eq!(
             buffer[(0, buffer.area().bottom() - 1)].bg,
-            editor.groups.transcript().bg.unwrap()
+            editor.groups.statusline_bg().bg.unwrap()
         );
     }
 
@@ -3063,48 +2726,61 @@ mod tests {
         let buffer = rendered_buffer(&mut editor, 70, 20);
         let foreground = editor.groups.prompt().fg.unwrap();
 
-        for x in editor.input_text_area.x..editor.input_text_area.x + 6 {
-            assert_eq!(buffer[(x, editor.input_text_area.y)].fg, foreground);
+        let text_area = editor.input.text_area();
+        for x in text_area.x..text_area.x + 6 {
+            assert_eq!(buffer[(x, text_area.y)].fg, foreground);
         }
     }
 
     #[test]
-    fn idle_left_status_shows_the_live_macaulay_version() {
-        let mut editor = Editor::new(String::new()).with_macaulay_version("1.26.06".to_string());
+    fn statusline_reports_ready_pending_and_processing() {
+        let mut editor = Editor::new(String::new());
         let rows = rendered_editor(&mut editor, 70, 10);
+        assert!(rows.last().unwrap().contains("Ready"));
 
-        assert_eq!(rows.last().unwrap().find("Macaulay2 v1.26.06"), Some(2));
-        press(&mut editor, KeyCode::Char('/'), KeyModifiers::NONE);
+        press(&mut editor, KeyCode::Char('('), KeyModifiers::NONE);
         let rows = rendered_editor(&mut editor, 70, 10);
+        assert!(rows.last().unwrap().contains("Ready"));
+
+        editor.apply(EditorUpdate::ContinueSubmission(
+            "unclosed parenthesized expression".into(),
+        ));
+        let buffer = rendered_buffer(&mut editor, 70, 10);
+        let status = (0..70).map(|x| buffer[(x, 9)].symbol()).collect::<String>();
+        assert!(status.contains("Input pending (unclosed"));
+        assert_eq!(
+            buffer[(UI.statusline_margin, 9)].fg,
+            editor.groups.style(HLGroup::StatuslineError).fg.unwrap()
+        );
+
+        editor.set_processing(true);
+        let rows = rendered_editor(&mut editor, 70, 10);
+        assert!(rows.last().unwrap().contains("Processing"));
         assert!(!rows.last().unwrap().contains("Macaulay2"));
-        press(&mut editor, KeyCode::Esc, KeyModifiers::NONE);
-        let rows = rendered_editor(&mut editor, 70, 10);
-        assert_eq!(rows.last().unwrap().find("Macaulay2 v1.26.06"), Some(2));
     }
 
     #[test]
-    fn pickers_hide_the_statusline_tutorial() {
+    fn modified_enter_inserts_a_newline_without_submitting() {
+        for modifier in [KeyModifiers::SHIFT, KeyModifiers::ALT] {
+            let mut editor = Editor::new(String::new());
+            editor.input.field_mut().insert_str("x");
+
+            assert!(matches!(
+                editor.handle_key(key(KeyCode::Enter, modifier)),
+                Reaction::Continue
+            ));
+            assert_eq!(editor.submission(), "x\n");
+        }
+    }
+
+    #[test]
+    fn pickers_keep_the_regular_statusline() {
         let mut editor = Editor::new(String::new());
+        editor.refresh_status_line();
         editor.open_settings_from_commands();
-        let backend = TestBackend::new(70, 12);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut highlighter = EmptyHighlighter;
-        terminal
-            .draw(|frame| editor.draw(frame, frame.area(), &mut highlighter, false))
-            .unwrap();
-        let screen =
-            terminal
-                .backend()
-                .buffer()
-                .content()
-                .iter()
-                .fold(String::new(), |mut screen, cell| {
-                    screen.push_str(cell.symbol());
-                    screen
-                });
-        assert!(!screen.contains("select"));
-        assert!(!screen.contains("enter open"));
-        assert!(!screen.contains("esc back"));
+        let rows = rendered_editor(&mut editor, 70, 12);
+
+        assert!(rows.last().unwrap().contains("ctrl+o settings"));
     }
 
     #[test]
@@ -3128,7 +2804,7 @@ mod tests {
     #[test]
     fn status_line_keeps_settings_available_below_a_full_feed() {
         let mut editor = Editor::new(String::new());
-        editor.feed = vec![Box::new(OccupiedFeed)];
+        editor.feed = Feed::new(Box::new(OccupiedFeed));
 
         let rows = rendered_editor(&mut editor, 40, 10);
         let status = rows.last().unwrap();
@@ -3142,11 +2818,11 @@ mod tests {
         press(&mut editor, KeyCode::Char('/'), KeyModifiers::NONE);
         press(&mut editor, KeyCode::Char('c'), KeyModifiers::NONE);
         press(&mut editor, KeyCode::Char('o'), KeyModifiers::NONE);
-        let action = editor.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let action = editor.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
 
         assert!(matches!(
             action,
-            EditorAction::Open(ViewKind::Code, OpenTarget::Current)
+            Reaction::Open(ViewKind::Code, OpenTarget::Current)
         ));
         assert!(editor.submission().is_empty());
     }
@@ -3172,7 +2848,50 @@ mod tests {
         assert!(screen.contains("committedCode = 1"));
         assert!(screen.contains("CommittedTree"));
         assert!(!screen.contains("UNCOMMITTED_DRAFT"));
-        assert!(rows.last().unwrap().contains("ctrl+q leave view"));
+        assert!(rows.last().unwrap().contains("q leave view"));
+    }
+
+    #[test]
+    fn unchanged_preview_reuses_committed_highlights() {
+        /// A semantic highlighter counting preview rebuilds.
+        struct CountingHighlighter(usize);
+
+        impl Highlighter for CountingHighlighter {
+            fn highlight(&mut self, _source: &str) -> Vec<HLSpan> {
+                self.0 += 1;
+                Vec::new()
+            }
+        }
+
+        let committed = [CommittedCell {
+            number: 1,
+            state: CellState::Value,
+            code: "x".into(),
+            tree: PrettyNode::syntax("Symbol", None),
+        }];
+        let mut editor = Editor::new(String::new());
+        let mut viewport = Viewport::default();
+        let mut highlighter = CountingHighlighter(0);
+        let backend = TestBackend::new(70, 18);
+        let mut terminal = Terminal::new(backend).unwrap();
+        for revision in [1, 1, 2] {
+            terminal
+                .draw(|frame| {
+                    editor.draw_preview(
+                        frame,
+                        frame.area(),
+                        &mut highlighter,
+                        CommittedCells {
+                            cells: &committed,
+                            revision,
+                        },
+                        ViewKind::Code,
+                        &mut viewport,
+                    )
+                })
+                .unwrap();
+        }
+        assert_eq!(highlighter.0, 2);
     }
 
     #[test]
@@ -3194,7 +2913,10 @@ mod tests {
                     frame,
                     frame.area(),
                     &mut highlighter,
-                    &committed,
+                    CommittedCells {
+                        cells: &committed,
+                        revision: 0,
+                    },
                     ViewKind::SyntaxTree,
                     &mut viewport,
                 )
@@ -3206,12 +2928,12 @@ mod tests {
             .map(|x| buffer[(x, y)].symbol())
             .collect();
         let banner = row.find("Syntax Tree Preview Mode").unwrap();
-        let key = row.find("ctrl+q").unwrap() as u16;
+        let key = row.find("q leave view").unwrap() as u16;
 
         assert_eq!(banner, (usize::from(buffer.area().width) - 24) / 2);
         assert_eq!(
             buffer[(banner as u16, y)].fg,
-            editor.groups.preview_mode().fg.unwrap()
+            editor.groups.style(HLGroup::Statusline2).fg.unwrap()
         );
         assert!(!row.contains("syntax tree"));
         assert_eq!(buffer[(key, y)].fg, editor.groups.prompt().fg.unwrap());
@@ -3263,7 +2985,7 @@ mod tests {
             editor.handle_preview_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), end, row));
             let copied =
                 editor.handle_preview_mouse(mouse(MouseEventKind::Up(MouseButton::Left), end, row));
-            let EditorAction::Copy(copied) = copied else {
+            let Reaction::Copy(copied) = copied else {
                 panic!("preview selection did not copy {text}");
             };
             assert_eq!(copied, text);
@@ -3275,7 +2997,7 @@ mod tests {
         let select = |editor: &mut Editor, row| {
             editor.handle_preview_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0, row));
             editor.handle_preview_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 69, row));
-            let EditorAction::Copy(text) =
+            let Reaction::Copy(text) =
                 editor.handle_preview_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 69, row))
             else {
                 panic!("preview selection was not copied");
@@ -3301,10 +3023,10 @@ mod tests {
             .unwrap() as u16;
         assert_eq!(select(&mut editor, row), "CODE_TEXT");
 
-        editor.feed = vec![Box::new(crate::ui::block::OutputBlock::value(
+        editor.feed = Feed::new(Box::new(crate::ui::block::OutputBlock::value(
             "VALUE_TEXT".to_string(),
             None,
-        ))];
+        )));
         let mut viewport = Viewport::default();
         viewport.cycle_output(-1);
         let rows = rendered_preview(&mut editor, &[], ViewKind::Output, &mut viewport);
@@ -3322,16 +3044,18 @@ mod tests {
         let mut submission = SubmissionBlock::new(0, [("x".to_string(), Vec::new())]);
         submission.succeed(
             0,
+            1,
+            CellState::Value,
             vec![
                 Box::new(TextBlock::printed("PRINTED_ONLY")),
-                Box::new(OutputBlock::value(
-                    "VALUE_ONLY".to_string(),
-                    Some("TYPE_ONLY".to_string()),
-                )),
+                Box::new(
+                    OutputBlock::value("VALUE_ONLY".to_string(), Some("TYPE_ONLY".to_string()))
+                        .numbered(1),
+                ),
             ],
         );
         let mut editor = Editor::new(String::new());
-        editor.feed = vec![Box::new(submission)];
+        editor.feed = Feed::new(Box::new(submission));
         let mut viewport = Viewport::default();
 
         let evaluation =

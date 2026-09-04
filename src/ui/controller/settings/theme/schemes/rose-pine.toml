@@ -1,8 +1,264 @@
-[dark.main]
-native = { _nc = "#16141f", base = "#191724", foam = "#9ccfd8", gold = "#f6c177", highlight_high = "#524f67", highlight_low = "#21202e", highlight_med = "#403d52", iris = "#c4a7e7", leaf = "#95b1ac", love = "#eb6f92", muted = "#6e6a86", overlay = "#26233a", pine = "#31748f", rose = "#ebbcba", subtle = "#908caa", surface = "#1f1d2e", text = "#e0def4" }
+name = "rosé pine"
 
-[dark.moon]
-native = { _nc = "#1f1d30", base = "#232136", foam = "#9ccfd8", gold = "#f6c177", highlight_high = "#56526e", highlight_low = "#2a283e", highlight_med = "#44415a", iris = "#c4a7e7", leaf = "#95b1ac", love = "#eb6f92", muted = "#6e6a86", overlay = "#393552", pine = "#3e8fb0", rose = "#ea9a97", subtle = "#908caa", surface = "#2a273f", text = "#e0def4" }
+[variants]
+dark = ["main", "moon"]
+light = ["dawn"]
 
-[light.dawn]
-native = { _nc = "#f8f0e7", base = "#faf4ed", foam = "#56949f", gold = "#ea9d34", highlight_high = "#cecacd", highlight_low = "#f4ede8", highlight_med = "#dfdad9", iris = "#907aa9", leaf = "#6d8f89", love = "#b4637a", muted = "#9893a5", overlay = "#f2e9e1", pine = "#286983", rose = "#d7827e", subtle = "#797593", surface = "#fffaf3", text = "#464261" }
+[colors._nc.dark]
+main = "#16141f"
+moon = "#1f1d30"
+
+[colors._nc.light]
+dawn = "#f8f0e7"
+
+[colors.base.dark]
+main = "#191724"
+moon = "#232136"
+
+[colors.base.light]
+dawn = "#faf4ed"
+
+[colors.foam.dark]
+main = "#9ccfd8"
+moon = "#9ccfd8"
+
+[colors.foam.light]
+dawn = "#56949f"
+
+[colors.gold.dark]
+main = "#f6c177"
+moon = "#f6c177"
+
+[colors.gold.light]
+dawn = "#ea9d34"
+
+[colors.highlight_high.dark]
+main = "#524f67"
+moon = "#56526e"
+
+[colors.highlight_high.light]
+dawn = "#cecacd"
+
+[colors.highlight_low.dark]
+main = "#21202e"
+moon = "#2a283e"
+
+[colors.highlight_low.light]
+dawn = "#f4ede8"
+
+[colors.highlight_med.dark]
+main = "#403d52"
+moon = "#44415a"
+
+[colors.highlight_med.light]
+dawn = "#dfdad9"
+
+[colors.iris.dark]
+main = "#c4a7e7"
+moon = "#c4a7e7"
+
+[colors.iris.light]
+dawn = "#907aa9"
+
+[colors.leaf.dark]
+main = "#95b1ac"
+moon = "#95b1ac"
+
+[colors.leaf.light]
+dawn = "#6d8f89"
+
+[colors.love.dark]
+main = "#eb6f92"
+moon = "#eb6f92"
+
+[colors.love.light]
+dawn = "#b4637a"
+
+[colors.muted.dark]
+main = "#6e6a86"
+moon = "#6e6a86"
+
+[colors.muted.light]
+dawn = "#9893a5"
+
+[colors.overlay.dark]
+main = "#26233a"
+moon = "#393552"
+
+[colors.overlay.light]
+dawn = "#f2e9e1"
+
+[colors.pine.dark]
+main = "#31748f"
+moon = "#3e8fb0"
+
+[colors.pine.light]
+dawn = "#286983"
+
+[colors.rose.dark]
+main = "#ebbcba"
+moon = "#ea9a97"
+
+[colors.rose.light]
+dawn = "#d7827e"
+
+[colors.subtle.dark]
+main = "#908caa"
+moon = "#908caa"
+
+[colors.subtle.light]
+dawn = "#797593"
+
+[colors.surface.dark]
+main = "#1f1d2e"
+moon = "#2a273f"
+
+[colors.surface.light]
+dawn = "#fffaf3"
+
+[colors.text.dark]
+main = "#e0def4"
+moon = "#e0def4"
+
+[colors.text.light]
+dawn = "#464261"
+
+[groups]
+
+Comment = { fg = "subtle", italic = true }
+Constant = { fg = "gold" }
+String = { fg = "gold" }
+Character = { fg = "gold" }
+Number = { fg = "gold" }
+Boolean = { fg = "rose" }
+Float = { fg = "gold" }
+Identifier = { fg = "text", italic = true }
+Function = { fg = "rose" }
+Statement = { fg = "pine" }
+Conditional = { fg = "pine" }
+Repeat = { fg = "pine" }
+Label = { fg = "foam" }
+Operator = { fg = "subtle" }
+Keyword = { fg = "pine" }
+Exception = { fg = "pine" }
+PreProc = { fg = "rose" }
+Include = { fg = "rose" }
+Define = { fg = "rose" }
+Macro = { fg = "rose" }
+PreCondit = { fg = "rose" }
+Type = { fg = "foam" }
+StorageClass = { fg = "pine" }
+Structure = { fg = "foam" }
+Typedef = { fg = "foam" }
+Special = { fg = "iris", italic = true }
+SpecialChar = { fg = "gold" }
+Tag = { fg = "iris", sp = "iris", underline = true }
+Delimiter = { fg = "subtle" }
+SpecialComment = { fg = "subtle", italic = true }
+Debug = { fg = "pine" }
+Underlined = { fg = "iris", sp = "iris", underline = true }
+Ignore = { fg = "subtle" }
+Error = { fg = "love", sp = "love" }
+Todo = { fg = "gold", sp = "gold", bold = true }
+Added = { fg = "rose" }
+Changed = { fg = "foam", sp = "foam" }
+Removed = { fg = "love", sp = "love" }
+
+Warning = { fg = "gold", sp = "gold" }
+Info = { fg = "foam", sp = "foam" }
+Hint = { fg = "pine" }
+DiagnosticError = { sp = "love", underline = true }
+DiagnosticWarning = { sp = "gold", underline = true }
+DiagnosticInfo = { sp = "foam", underline = true }
+DiagnosticHint = { sp = "pine", underline = true }
+
+Installation = { fg = "foam" }
+Property = { fg = "foam", italic = true }
+Namespace = { fg = "text" }
+Package = { fg = "text" }
+CompiledFunction = { fg = "rose" }
+Symbol = { fg = "iris", italic = true }
+Variable = { fg = "text", italic = true }
+AlgVariable = { fg = "love", bold = true, italic = true }
+Parameter = { fg = "iris", italic = true }
+Regex = { fg = "iris", sp = "iris", underline = true }
+Punctuation = { fg = "subtle" }
+Quote = { fg = "gold" }
+Documentation = { fg = "iris", sp = "iris", underline = true }
+
+LspTypeClass = { fg = "foam" }
+LspTypeComment = { fg = "subtle", italic = true }
+LspTypeDecorator = { fg = "rose" }
+LspTypeEnum = { fg = "foam" }
+LspTypeEnumMember = { fg = "gold" }
+LspTypeEvent = { fg = "iris", italic = true }
+LspTypeFunction = { fg = "rose" }
+LspTypeInterface = { fg = "foam" }
+LspTypeKeyword = { fg = "pine" }
+LspTypeMacro = { fg = "rose" }
+LspTypeMethod = { fg = "rose" }
+LspTypeModifier = { fg = "pine" }
+LspTypeNamespace = { fg = "text" }
+LspTypeNumber = { fg = "gold" }
+LspTypeOperator = { fg = "subtle" }
+LspTypeParameter = { fg = "iris", italic = true }
+LspTypeProperty = { fg = "foam", italic = true }
+LspTypeRegexp = { fg = "iris", sp = "iris", underline = true }
+LspTypeString = { fg = "gold" }
+LspTypeStruct = { fg = "foam" }
+LspTypeType = { fg = "foam" }
+LspTypeTypeParameter = { fg = "foam" }
+LspTypeVariable = { fg = "text", italic = true }
+
+LspModAbstract = { italic = true }
+LspModAsync = { italic = true }
+LspModDeclaration = { bold = true }
+LspModDefaultLibrary = { italic = true }
+LspModDefinition = { bold = true }
+LspModDeprecated = { crossed_out = true }
+LspModDocumentation = { italic = true }
+LspModModification = { underline = true }
+LspModReadonly = { italic = true }
+LspModStatic = { underline = true }
+
+Visual = { bg = "highlight_med" }
+Value = { fg = "text" }
+Muted = { fg = "subtle" }
+Printed = { fg = "gold", bg = "surface" }
+ShellCommand = { fg = "foam" }
+ShellMessage = { fg = "subtle" }
+ShellError = { fg = "love", sp = "love" }
+HintText = { fg = "subtle" }
+Normal = { bg = "base" }
+CodeBlock = { bg = "_nc" }
+Separator = { fg = "base" }
+ValueBorder = { fg = "highlight_low", sp = "highlight_low" }
+OutputNumber = { fg = "leaf" }
+ErrorBorder = { fg = "love", sp = "love" }
+WarningBorder = { fg = "gold", sp = "gold" }
+InfoBorder = { fg = "foam", sp = "foam" }
+Statusline1 = { fg = "leaf" }
+Statusline2 = { fg = "gold" }
+Statusline3 = { fg = "love" }
+StatuslineBorder = { fg = "highlight_low", sp = "highlight_low" }
+StatuslineBg = { bg = "_nc" }
+StatuslineError = { fg = "love", sp = "love" }
+StatuslineWarning = { fg = "gold", sp = "gold" }
+KeymapHint = { fg = "foam" }
+PickerText = { fg = "text" }
+Picker = { bg = "highlight_low" }
+PickerSelected = { fg = "base", bg = "leaf" }
+PickerBorder = { fg = "highlight_low", sp = "highlight_low" }
+
+Accent1 = { fg = "love" }
+Accent2 = { fg = "rose" }
+Accent3 = { fg = "gold" }
+Accent4 = { fg = "leaf" }
+Accent5 = { fg = "foam" }
+Accent6 = { fg = "pine" }
+Accent7 = { fg = "iris" }
+
+BgColor1 = { bg = "base" }
+BgColor2 = { bg = "surface" }
+BgColor3 = { bg = "overlay" }
+BgColor4 = { bg = "highlight_low" }

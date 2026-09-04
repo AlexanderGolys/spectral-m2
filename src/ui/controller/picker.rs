@@ -1,6 +1,6 @@
 //! Stateful text pickers rendered above the input.
 
-use crossterm::event::KeyEvent;
+use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line as TuiLine, Span};
@@ -8,13 +8,15 @@ use ratatui::widgets::{Block as TuiBlock, BorderType, Borders, Paragraph, Widget
 
 use super::settings::theme::groups::Groups;
 use super::EditorEvent;
+use crate::ui::action::Action;
 use crate::ui::config::UI;
 use crate::ui::element::{Element, Text};
+use crate::ui::key::KeyEvent;
 
 /// A single unwrapped text component.
 pub trait Line: Text<Context = LineContext> {
-    fn alignment_width(&self) -> Option<usize> {
-        None
+    fn column_widths(&self) -> [usize; 3] {
+        [0; 3]
     }
 }
 
@@ -22,6 +24,7 @@ pub trait Line: Text<Context = LineContext> {
 pub struct LineContext {
     pub width: usize,
     pub value_column: usize,
+    pub columns: Option<[usize; 2]>,
     pub selected: bool,
     pub groups: Groups,
 }
@@ -65,15 +68,208 @@ impl LineContext {
             Span::styled(value.to_string(), self.groups.value()),
         ])
     }
+
+    /// Render three left-aligned fields at shared tab stops when they fit.
+    pub fn columns(&self, columns: [(&str, ratatui::style::Style); 3]) -> Vec<Span<'static>> {
+        let marker = if self.selected { " > " } else { "   " };
+        let widths = columns.map(|(text, _)| text.chars().count());
+        let starts = self
+            .columns
+            .unwrap_or([widths[0] + 2, widths[0] + widths[1] + 4]);
+        let mut used = 0;
+        let mut spans = vec![Span::styled(
+            marker,
+            if self.selected {
+                self.groups.prompt()
+            } else {
+                self.groups.muted()
+            },
+        )];
+        for (index, (text, style)) in columns.into_iter().enumerate() {
+            if index > 0 {
+                let gap = starts[index - 1].saturating_sub(used).max(1);
+                spans.push(Span::raw(" ".repeat(gap)));
+                used += gap;
+            }
+            spans.push(Span::styled(text.to_string(), style));
+            used += widths[index];
+        }
+        self.finish(spans)
+    }
+}
+
+/// Input delivered to the selected picker row after command lookup.
+#[derive(Clone, Copy)]
+pub enum PickerInput {
+    /// A mapped application action whose physical key was discarded.
+    Action(Action),
+    /// Unmapped input interpreted privately by the picker.
+    Key(KeyEvent),
 }
 
 /// A line that owns its behavior and may request an editor state change.
 pub trait PickerItem: Line {
-    fn handle_key(&mut self, key: KeyEvent) -> Option<EditorEvent>;
+    fn handle(&mut self, input: PickerInput) -> Option<EditorEvent>;
+}
+
+/// Label/value picker row with component-owned key behavior.
+pub struct ValueItem {
+    label: String,
+    value: String,
+    trailing: bool,
+    handle: Box<dyn FnMut(PickerInput) -> Option<EditorEvent> + Send>,
+}
+
+impl ValueItem {
+    /// Create a boxed row with arbitrary key handling.
+    pub fn custom(
+        label: impl Into<String>,
+        value: impl Into<String>,
+        trailing: bool,
+        handle: impl FnMut(PickerInput) -> Option<EditorEvent> + Send + 'static,
+    ) -> Box<dyn PickerItem> {
+        Box::new(Self {
+            label: label.into(),
+            value: value.into(),
+            trailing,
+            handle: Box::new(handle),
+        })
+    }
+
+    /// Create a row adjusted by horizontal arrow keys.
+    pub fn adjust(
+        label: impl Into<String>,
+        value: impl Into<String>,
+        mut adjust: impl FnMut(i8) -> EditorEvent + Send + 'static,
+    ) -> Box<dyn PickerItem> {
+        Self::custom(label, value, false, move |input| match input {
+            PickerInput::Key(KeyEvent {
+                code: KeyCode::Left,
+                ..
+            }) => Some(adjust(-1)),
+            PickerInput::Key(KeyEvent {
+                code: KeyCode::Right,
+                ..
+            }) => Some(adjust(1)),
+            PickerInput::Action(Action::Submit) => Some(EditorEvent::ClosePicker),
+            _ => None,
+        })
+    }
+
+    /// Create a row activated by Enter.
+    pub fn enter(
+        label: impl Into<String>,
+        value: impl Into<String>,
+        trailing: bool,
+        event: impl Fn() -> EditorEvent + Send + 'static,
+    ) -> Box<dyn PickerItem> {
+        Self::custom(label, value, trailing, move |input| {
+            matches!(input, PickerInput::Action(Action::Submit)).then(&event)
+        })
+    }
+}
+
+impl Text for ValueItem {
+    type Context = LineContext;
+
+    fn spans(&self, context: &LineContext) -> Vec<Span<'static>> {
+        context.value(&self.label, &self.value, self.trailing)
+    }
+}
+
+impl Line for ValueItem {
+    fn column_widths(&self) -> [usize; 3] {
+        [
+            if self.trailing {
+                0
+            } else {
+                self.label.chars().count()
+            },
+            0,
+            0,
+        ]
+    }
+}
+
+impl PickerItem for ValueItem {
+    fn handle(&mut self, input: PickerInput) -> Option<EditorEvent> {
+        (self.handle)(input)
+    }
 }
 
 /// Heterogeneous picker rows in display order.
 pub type PickerItems = Vec<Box<dyn PickerItem>>;
+
+/// Keyboard behavior attached to a picker presentation.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PickerMode {
+    /// Slash-prefixed live command filtering.
+    FilteredCommands,
+    /// Complete command list.
+    Commands,
+    /// Shell settings.
+    Settings,
+    /// Color appearance.
+    Style,
+    /// Remappable keys.
+    Keymaps,
+}
+
+/// A picker paired with its component-owned unhandled-key policy.
+pub struct PickerController {
+    /// Active picker behavior.
+    pub mode: PickerMode,
+    /// Rendered and selected rows.
+    pub picker: Picker,
+}
+
+impl PickerController {
+    /// Handle navigation, row behavior, or mode-specific fallback behavior.
+    pub fn handle_key(&mut self, key: KeyEvent) -> Option<EditorEvent> {
+        self.handle(PickerInput::Key(key))
+    }
+
+    /// Handle a mapped action without retaining its originating key.
+    pub fn handle_action(&mut self, action: Action) -> Option<EditorEvent> {
+        self.handle(PickerInput::Action(action))
+    }
+
+    fn handle(&mut self, input: PickerInput) -> Option<EditorEvent> {
+        if matches!(
+            input,
+            PickerInput::Key(KeyEvent {
+                code: KeyCode::Esc,
+                ..
+            })
+        ) {
+            return Some(if self.mode == PickerMode::FilteredCommands {
+                EditorEvent::FinishCommand
+            } else {
+                EditorEvent::ClosePicker
+            });
+        }
+        let (handled, event) = self.picker.handle(input);
+        if handled {
+            return event;
+        }
+        let PickerInput::Key(key) = input else {
+            return None;
+        };
+        let printable = key.is_text();
+        match (self.mode, key.code) {
+            (PickerMode::FilteredCommands, KeyCode::Char(_)) if printable => {
+                Some(EditorEvent::EditCommand(key))
+            }
+            (PickerMode::FilteredCommands, KeyCode::Backspace | KeyCode::Delete) => {
+                Some(EditorEvent::EditCommand(key))
+            }
+            (_, KeyCode::Char(character)) if printable => {
+                Some(EditorEvent::ResumeTyping(character))
+            }
+            _ => None,
+        }
+    }
+}
 
 /// Presentation and selection state for a list of picker items.
 pub struct Picker {
@@ -133,15 +329,48 @@ impl Picker {
         }
     }
 
+    /// Handle picker navigation or forward input to the selected row.
+    pub fn handle(&mut self, input: PickerInput) -> (bool, Option<EditorEvent>) {
+        match input {
+            PickerInput::Key(KeyEvent {
+                code: KeyCode::Up, ..
+            }) => {
+                self.move_selection(-1);
+                (true, None)
+            }
+            PickerInput::Key(KeyEvent {
+                code: KeyCode::Down,
+                ..
+            }) => {
+                self.move_selection(1);
+                (true, None)
+            }
+            _ => {
+                let event = self.selected_item_mut().and_then(|item| item.handle(input));
+                (event.is_some(), event)
+            }
+        }
+    }
+
     fn text(&self, width: usize, height: usize, groups: &Groups) -> Vec<TuiLine<'static>> {
-        let label_width = self
-            .items
-            .iter()
-            .filter_map(|item| item.alignment_width())
-            .max()
-            .unwrap_or_default();
+        let widths =
+            self.items
+                .iter()
+                .map(|item| item.column_widths())
+                .fold([0; 3], |mut widths, item| {
+                    for index in 0..3 {
+                        widths[index] = widths[index].max(item[index]);
+                    }
+                    widths
+                });
+        let label_width = widths[0];
         let value_column =
             label_width / UI.picker_tab_width * UI.picker_tab_width + UI.picker_tab_width;
+        let hint_column = value_column
+            + widths[1] / UI.picker_tab_width * UI.picker_tab_width
+            + UI.picker_tab_width;
+        let columns = (3 + hint_column + widths[2] + UI.picker_right_margin <= width)
+            .then_some([value_column, hint_column]);
         let start = self
             .selected
             .saturating_sub(height / 2)
@@ -155,6 +384,7 @@ impl Picker {
                 TuiLine::from(item.spans(&LineContext {
                     width,
                     value_column,
+                    columns,
                     selected: index == self.selected,
                     groups: *groups,
                 }))
@@ -207,14 +437,28 @@ mod tests {
     }
 
     impl Line for TestItem {
-        fn alignment_width(&self) -> Option<usize> {
-            (!self.trailing).then(|| self.label.chars().count())
+        fn column_widths(&self) -> [usize; 3] {
+            [
+                if self.trailing {
+                    0
+                } else {
+                    self.label.chars().count()
+                },
+                0,
+                0,
+            ]
         }
     }
 
     impl PickerItem for TestItem {
-        fn handle_key(&mut self, key: KeyEvent) -> Option<EditorEvent> {
-            if key.code != KeyCode::Right {
+        fn handle(&mut self, input: PickerInput) -> Option<EditorEvent> {
+            if !matches!(
+                input,
+                PickerInput::Key(KeyEvent {
+                    code: KeyCode::Right,
+                    ..
+                })
+            ) {
                 return None;
             }
             self.value = "two";
@@ -286,7 +530,7 @@ mod tests {
         let event = picker
             .selected_item_mut()
             .unwrap()
-            .handle_key(KeyEvent::from(KeyCode::Right));
+            .handle(PickerInput::Key(KeyEvent::from(KeyCode::Right)));
 
         assert!(row(&rendered(&picker, 32), 1).contains("two"));
         assert!(matches!(event, Some(EditorEvent::FinishCommand)));

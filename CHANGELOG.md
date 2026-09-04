@@ -2,6 +2,27 @@
 
 All notable changes to Spectral M2 are documented here.
 
+## [0.4.0] - 2026-09-04
+
+### Added
+
+- Added a normalized action and key-event layer covering every shell command and alternate-pane activation with `Alt+V`.
+- Added retained feed rendering, render statistics, and live highlight-debug probes.
+- Added editable multiline input with selection-aware history, cursor scrolloff, configurable height, and `Shift+Space` insertion.
+
+### Changed
+
+- Split workspace state into independent sessions, editors, feeds, preview caches, and viewports.
+- Reworked output layout around aligned screen cells, consistent wrapping, shared consecutive-value boxes, and separate syntax-tree and wrapping components.
+- Made appearance hierarchical: schemes own their complete native palettes and semantic UI groups.
+- Limited redraws and retained-feed invalidation to state changes.
+
+### Fixed
+
+- Made runtime picker types available in normal builds.
+- Kept overflowing output type annotations visible on a fallback row.
+- Avoided redundant appearance persistence and feed invalidation during workspace synchronization.
+
 ## [0.3.0] - 2026-08-29
 
 First crates.io release.
@@ -22,4 +43,5 @@ First crates.io release.
 - Reorganized the shell around workspace sessions, typed feed blocks, responsive panes, and independently rendered previews.
 - Made installation Cargo-managed and removed manual binary copying and local-bin symlinks.
 
+[0.4.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/AlexanderGolys/spectral-m2/releases/tag/v0.3.0

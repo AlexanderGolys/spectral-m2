@@ -1,27 +1,29 @@
 //! Named colour schemes loaded from embedded TOML files.
 
+use std::collections::HashMap;
 use std::fmt;
+use std::fs;
+use std::path::Path;
 use std::sync::LazyLock;
 
-use ratatui::style::Style;
-use serde::de::DeserializeOwned;
+#[cfg(not(test))]
+use std::{env, path::PathBuf};
+
+use ratatui::style::{Color, Style};
+use serde::{Deserialize, Serialize};
 
 pub mod groups;
 mod palette;
 
-use self::groups::Groups;
-use self::palette::{
-    Catppuccin, Everforest, Gruvbox, GruvboxMaterial, Kanagawa, Palette, RosePine, TokyoNight,
-};
-
-/// Builds highlight groups from a source palette.
-type GroupsFactory = fn(&Palette) -> Groups;
+use self::groups::{Groups, StyleSpec};
+use self::palette::Palette;
 
 /// One palette leaf exposed by the flat appearance picker.
 pub struct Variant {
-    name: &'static str,
-    palette: &'static Palette,
-    groups: GroupsFactory,
+    name: String,
+    #[cfg(test)]
+    palette: Palette,
+    groups: Groups,
 }
 
 /// A named palette variant with its canonical brightness.
@@ -38,7 +40,7 @@ impl ColorVariant {
     }
 
     pub fn label(&self) -> &str {
-        self.variant().name
+        &self.variant().name
     }
 
     pub const fn brightness(&self) -> Brightness {
@@ -48,28 +50,32 @@ impl ColorVariant {
         }
     }
 
-    pub fn palette(&self) -> &'static Palette {
-        self.variant().palette
+    #[cfg(test)]
+    pub fn palette(&self) -> &Palette {
+        &self.variant().palette
     }
 
     fn groups(&self) -> Groups {
-        (self.variant().groups)(self.palette())
+        self.variant().groups
     }
 }
 
 /// A named colour scheme and the variants actually supplied for it.
 pub struct Scheme {
-    name: &'static str,
+    name: String,
     variants: Vec<ColorVariant>,
 }
 
 impl Scheme {
-    fn new(name: &'static str, variants: Vec<ColorVariant>) -> Self {
-        Self { name, variants }
+    fn embedded(source: &str) -> Self {
+        let file: SchemeFile =
+            toml::from_str(source).expect("embedded colour scheme must be valid TOML");
+        file.resolve()
+            .expect("embedded colour scheme references must be valid")
     }
 
     pub fn label(&self) -> &str {
-        self.name
+        &self.name
     }
 
     pub fn variants(&self) -> &[ColorVariant] {
@@ -78,7 +84,8 @@ impl Scheme {
 }
 
 /// Canonical terminal background brightness supplied by a scheme variant.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Brightness {
     Dark,
     Light,
@@ -93,114 +100,112 @@ impl fmt::Display for Brightness {
     }
 }
 
-fn embedded<T: DeserializeOwned>(source: &str) -> T {
-    toml::from_str(source).expect("embedded colour scheme must be valid TOML")
+/// Variant names divided by their terminal-background brightness.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Variants {
+    #[serde(default)]
+    dark: Vec<String>,
+    #[serde(default)]
+    light: Vec<String>,
 }
 
-macro_rules! embedded {
-    ($name:ident: $ty:ty = $file:literal) => {
-        /// A complete embedded source palette collection.
-        static $name: LazyLock<$ty> =
-            LazyLock::new(|| embedded(include_str!(concat!("theme/schemes/", $file))));
-    };
+/// One named color's values across every scheme variant.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VariantColors {
+    #[serde(default)]
+    dark: HashMap<String, Color>,
+    #[serde(default)]
+    light: HashMap<String, Color>,
 }
 
-embedded!(CATPPUCCIN: Catppuccin = "catppuccin.toml");
-embedded!(TOKYO_NIGHT: TokyoNight = "tokyo-night.toml");
-embedded!(GRUVBOX: Gruvbox = "gruvbox.toml");
-embedded!(GRUVBOX_MATERIAL: GruvboxMaterial = "gruvbox-material.toml");
-embedded!(EVERFOREST: Everforest = "everforest.toml");
-embedded!(ROSE_PINE: RosePine = "rose-pine.toml");
-embedded!(KANAGAWA: Kanagawa = "kanagawa.toml");
-
-macro_rules! variants {
-    ($groups:path; $($brightness:ident $name:literal => $palette:expr),+ $(,)?) => {
-        vec![$(ColorVariant::$brightness(Variant {
-            name: $name,
-            palette: $palette,
-            groups: $groups,
-        })),+]
-    };
-    ($($brightness:ident $name:literal => $palette:tt with $groups:path),+ $(,)?) => {
-        vec![$(ColorVariant::$brightness(Variant {
-            name: $name,
-            palette: $palette,
-            groups: $groups,
-        })),+]
-    };
+impl VariantColors {
+    fn get(&self, brightness: Brightness, variant: &str) -> Option<Color> {
+        match brightness {
+            Brightness::Dark => &self.dark,
+            Brightness::Light => &self.light,
+        }
+        .get(variant)
+        .copied()
+    }
 }
+
+/// The complete color matrix keyed first by palette name.
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct Colors(HashMap<String, VariantColors>);
+
+impl Colors {
+    fn palette(&self, brightness: Brightness, variant: &str) -> Result<Palette, String> {
+        self.0
+            .iter()
+            .map(|(name, colors)| {
+                colors
+                    .get(brightness, variant)
+                    .map(|color| (name.clone(), color))
+                    .ok_or_else(|| format!("color `{name}` has no `{variant}` value"))
+            })
+            .collect::<Result<_, _>>()
+            .map(Palette::new)
+    }
+}
+
+/// A complete serialized scheme before its named colors are resolved.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SchemeFile {
+    name: String,
+    variants: Variants,
+    colors: Colors,
+    groups: Groups<StyleSpec>,
+}
+
+impl SchemeFile {
+    fn resolve(self) -> Result<Scheme, String> {
+        let mut variants = Vec::new();
+        for (brightness, names) in [
+            (Brightness::Dark, self.variants.dark),
+            (Brightness::Light, self.variants.light),
+        ] {
+            for name in names {
+                let palette = self.colors.palette(brightness, &name)?;
+                let groups = self.groups.resolve(&palette)?;
+                let variant = Variant {
+                    name,
+                    #[cfg(test)]
+                    palette,
+                    groups,
+                };
+                variants.push(match brightness {
+                    Brightness::Dark => ColorVariant::Dark(variant),
+                    Brightness::Light => ColorVariant::Light(variant),
+                });
+            }
+        }
+        Ok(Scheme {
+            name: self.name,
+            variants,
+        })
+    }
+}
+
+const SCHEME_FILES: &[&str] = &[
+    include_str!("theme/schemes/catppuccin.toml"),
+    include_str!("theme/schemes/tokyo-night.toml"),
+    include_str!("theme/schemes/gruvbox.toml"),
+    include_str!("theme/schemes/gruvbox-material.toml"),
+    include_str!("theme/schemes/everforest.toml"),
+    include_str!("theme/schemes/rose-pine.toml"),
+    include_str!("theme/schemes/kanagawa.toml"),
+];
 
 /// Installed schemes in picker order.
 static SCHEMES: LazyLock<Vec<Scheme>> = LazyLock::new(|| {
-    vec![
-        Scheme::new(
-            "catppuccin",
-            variants!(groups::catppuccin_groups;
-                Dark "mocha" => &CATPPUCCIN.dark.mocha,
-                Dark "macchiato" => &CATPPUCCIN.dark.macchiato,
-                Dark "frappé" => &CATPPUCCIN.dark.frappe,
-                Light "latte" => &CATPPUCCIN.light.latte,
-            ),
-        ),
-        Scheme::new(
-            "tokyo night",
-            variants!(
-                Dark "night" => (&TOKYO_NIGHT.dark.night) with groups::tokyo_night_groups,
-                Dark "storm" => (&TOKYO_NIGHT.dark.storm) with groups::tokyo_night_groups,
-                Dark "moon" => (&TOKYO_NIGHT.dark.moon) with groups::tokyo_night_groups,
-                Light "day" => (&TOKYO_NIGHT.light.day) with groups::tokyo_day_groups,
-            ),
-        ),
-        Scheme::new(
-            "gruvbox",
-            variants!(
-                Dark "hard" => (&GRUVBOX.dark.hard) with groups::gruvbox_dark_hard_groups,
-                Dark "medium" => (&GRUVBOX.dark.medium) with groups::gruvbox_dark_medium_groups,
-                Dark "soft" => (&GRUVBOX.dark.soft) with groups::gruvbox_dark_soft_groups,
-                Light "hard" => (&GRUVBOX.light.hard) with groups::gruvbox_light_hard_groups,
-                Light "medium" => (&GRUVBOX.light.medium) with groups::gruvbox_light_medium_groups,
-                Light "soft" => (&GRUVBOX.light.soft) with groups::gruvbox_light_soft_groups,
-            ),
-        ),
-        Scheme::new(
-            "gruvbox material",
-            variants!(groups::gruvbox_material_groups;
-                Dark "material" => &GRUVBOX_MATERIAL.dark.material,
-                Dark "mix" => &GRUVBOX_MATERIAL.dark.mix,
-                Dark "original" => &GRUVBOX_MATERIAL.dark.original,
-                Light "material" => &GRUVBOX_MATERIAL.light.material,
-                Light "mix" => &GRUVBOX_MATERIAL.light.mix,
-                Light "original" => &GRUVBOX_MATERIAL.light.original,
-            ),
-        ),
-        Scheme::new(
-            "everforest",
-            variants!(groups::everforest_groups;
-                Dark "hard" => &EVERFOREST.dark.hard,
-                Dark "medium" => &EVERFOREST.dark.medium,
-                Dark "soft" => &EVERFOREST.dark.soft,
-                Light "hard" => &EVERFOREST.light.hard,
-                Light "medium" => &EVERFOREST.light.medium,
-                Light "soft" => &EVERFOREST.light.soft,
-            ),
-        ),
-        Scheme::new(
-            "rosé pine",
-            variants!(groups::rose_pine_groups;
-                Dark "main" => &ROSE_PINE.dark.main,
-                Dark "moon" => &ROSE_PINE.dark.moon,
-                Light "dawn" => &ROSE_PINE.light.dawn,
-            ),
-        ),
-        Scheme::new(
-            "kanagawa",
-            variants!(
-                Dark "wave" => (&KANAGAWA.dark.wave) with groups::kanagawa_wave_groups,
-                Dark "dragon" => (&KANAGAWA.dark.dragon) with groups::kanagawa_dragon_groups,
-                Light "lotus" => (&KANAGAWA.light.lotus) with groups::kanagawa_lotus_groups,
-            ),
-        ),
-    ]
+    SCHEME_FILES
+        .iter()
+        .map(|source| Scheme::embedded(source))
+        .collect()
 });
 
 /// Position of a scheme in [`SCHEMES`].
@@ -231,6 +236,15 @@ pub struct Appearance {
     pub transparent_background: bool,
 }
 
+/// Stable appearance names stored independently of in-memory picker indices.
+#[derive(Serialize, Deserialize)]
+struct StoredAppearance {
+    scheme: String,
+    variant: String,
+    brightness: Brightness,
+    transparent_background: bool,
+}
+
 impl Default for Appearance {
     fn default() -> Self {
         let scheme = SCHEMES
@@ -253,6 +267,64 @@ impl Default for Appearance {
 }
 
 impl Appearance {
+    /// Load the last selected appearance, falling back to Everforest medium.
+    #[cfg(not(test))]
+    pub fn load() -> Self {
+        appearance_file_path()
+            .as_deref()
+            .and_then(Self::read)
+            .unwrap_or_default()
+    }
+
+    /// Keep tests independent of a developer's saved appearance.
+    #[cfg(test)]
+    pub fn load() -> Self {
+        Self::default()
+    }
+
+    /// Persist this appearance for the next process.
+    #[cfg(not(test))]
+    pub fn save(self) {
+        if let Some(path) = appearance_file_path() {
+            let _ = self.write(&path);
+        }
+    }
+
+    /// Keep tests from modifying the developer's saved appearance.
+    #[cfg(test)]
+    pub fn save(self) {}
+
+    fn read(path: &Path) -> Option<Self> {
+        let stored: StoredAppearance =
+            serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
+        let scheme = SCHEMES
+            .iter()
+            .position(|scheme| scheme.label() == stored.scheme)?;
+        let variant = SCHEMES[scheme].variants().iter().position(|variant| {
+            variant.label() == stored.variant && variant.brightness() == stored.brightness
+        })?;
+        Some(Self {
+            scheme: SchemeIndex(scheme),
+            variant: VariantIndex(variant),
+            transparent_background: stored.transparent_background,
+        })
+    }
+
+    fn write(self, path: &Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(
+            path,
+            serde_json::to_vec(&StoredAppearance {
+                scheme: self.scheme().label().into(),
+                variant: self.variant().label().into(),
+                brightness: self.variant().brightness(),
+                transparent_background: self.transparent_background,
+            })?,
+        )
+    }
+
     pub fn scheme(self) -> &'static Scheme {
         &SCHEMES[self.scheme.get()]
     }
@@ -351,10 +423,20 @@ impl Appearance {
     }
 }
 
+#[cfg(not(test))]
+fn appearance_file_path() -> Option<PathBuf> {
+    let config = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    Some(config.join("spectral-m2").join("appearance.json"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::groups::HLGroup;
     use super::*;
+    use std::env;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn every_configured_variant_paints_every_syntax_role() {
@@ -463,6 +545,25 @@ mod tests {
     }
 
     #[test]
+    fn appearance_survives_reloading() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "spectral-m2-appearance-{}-{nonce}.json",
+            std::process::id()
+        ));
+        let appearance = Appearance::default()
+            .cycle_colorscheme(1)
+            .cycle_background();
+        appearance.write(&path).unwrap();
+
+        assert_eq!(Appearance::read(&path), Some(appearance));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn transparent_background_only_clears_the_canvas() {
         let opaque = Appearance::default();
         let transparent = opaque.cycle_background();
@@ -488,73 +589,91 @@ mod tests {
         assert_eq!(appearance.variant().label(), "medium");
         assert!(appearance.variant().brightness() == Brightness::Dark);
         assert_eq!(
-            palette[palette::EverforestColor::bg0],
-            ratatui::style::Color::Rgb(0x2d, 0x35, 0x3b)
+            palette.resolve(Some("bg0")).unwrap(),
+            Some(Color::Rgb(0x2d, 0x35, 0x3b))
         );
         assert_eq!(
-            palette[palette::EverforestColor::fg],
-            ratatui::style::Color::Rgb(0xd3, 0xc6, 0xaa)
+            palette.resolve(Some("fg")).unwrap(),
+            Some(Color::Rgb(0xd3, 0xc6, 0xaa))
         );
     }
 
     #[test]
-    fn palette_trees_use_finite_native_color_names() {
+    fn serialized_schemes_keep_native_colors() {
+        let palette = |scheme: &str, variant: &str| {
+            SCHEMES
+                .iter()
+                .find(|candidate| candidate.label() == scheme)
+                .unwrap()
+                .variants()
+                .iter()
+                .find(|candidate| candidate.label() == variant)
+                .unwrap()
+                .palette()
+        };
         assert_eq!(
-            GRUVBOX.dark.soft[palette::GruvboxColor::bright_red],
-            ratatui::style::Color::Rgb(0xfb, 0x49, 0x34)
+            palette("gruvbox", "soft")
+                .resolve(Some("bright_red"))
+                .unwrap(),
+            Some(Color::Rgb(0xfb, 0x49, 0x34))
         );
         assert_eq!(
-            CATPPUCCIN.light.latte[palette::CatppuccinColor::mauve],
-            ratatui::style::Color::Rgb(0x88, 0x39, 0xef)
+            palette("catppuccin", "latte")
+                .resolve(Some("mauve"))
+                .unwrap(),
+            Some(Color::Rgb(0x88, 0x39, 0xef))
+        );
+        assert_eq!(
+            palette("everforest", "medium")
+                .resolve(Some("bg_dim"))
+                .unwrap(),
+            Some(Color::Rgb(0x23, 0x2a, 0x2e))
+        );
+        assert_eq!(
+            palette("kanagawa", "wave")
+                .resolve(Some("lotusWhite5"))
+                .unwrap(),
+            Some(Color::Rgb(0xe4, 0xd7, 0x94))
         );
     }
 
     #[test]
-    fn source_palettes_keep_native_names() {
-        assert_eq!(
-            EVERFOREST.dark.medium[palette::EverforestColor::bg_dim],
-            ratatui::style::Color::Rgb(0x23, 0x2a, 0x2e)
-        );
-        assert_eq!(
-            CATPPUCCIN.dark.mocha[palette::CatppuccinColor::rosewater],
-            ratatui::style::Color::Rgb(0xf5, 0xe0, 0xdc)
-        );
-        assert_eq!(
-            KANAGAWA.dark.wave[palette::KanagawaColor::lotusWhite5],
-            ratatui::style::Color::Rgb(0xe4, 0xd7, 0x94)
-        );
-    }
-
-    #[test]
-    fn every_palette_defines_its_finite_color_enum() {
-        macro_rules! complete {
-            ($color:ty; $($palette:expr),+ $(,)?) => {
-                for palette in [$($palette),+] {
-                    assert_eq!(palette.color_count(), <$color>::ALL.len());
-                    assert!(<$color>::ALL.iter().all(|&color| palette.defines(color)));
+    fn bright_dark_theme_surfaces_have_dark_text() {
+        let luma = |color| match color {
+            Color::Rgb(red, green, blue) => {
+                Some((299 * u32::from(red) + 587 * u32::from(green) + 114 * u32::from(blue)) / 1000)
+            }
+            _ => None,
+        };
+        for scheme in SCHEMES.iter() {
+            for variant in scheme
+                .variants()
+                .iter()
+                .filter(|variant| variant.brightness() == Brightness::Dark)
+            {
+                for (name, style) in variant.groups().highlight_groups() {
+                    if style.bg.and_then(luma).is_some_and(|value| value > 140) {
+                        assert!(
+                            style.fg.and_then(luma).is_some_and(|value| value < 80),
+                            "{} {}: {name} has a bright background without dark text",
+                            scheme.label(),
+                            variant.label()
+                        );
+                    }
                 }
-            };
+            }
         }
+    }
 
-        complete!(palette::CatppuccinColor;
-            &CATPPUCCIN.dark.mocha, &CATPPUCCIN.dark.macchiato,
-            &CATPPUCCIN.dark.frappe, &CATPPUCCIN.light.latte);
-        complete!(palette::TokyoNightColor;
-            &TOKYO_NIGHT.dark.night, &TOKYO_NIGHT.dark.storm,
-            &TOKYO_NIGHT.dark.moon, &TOKYO_NIGHT.light.day);
-        complete!(palette::GruvboxColor;
-            &GRUVBOX.dark.soft, &GRUVBOX.dark.medium, &GRUVBOX.dark.hard,
-            &GRUVBOX.light.soft, &GRUVBOX.light.medium, &GRUVBOX.light.hard);
-        complete!(palette::GruvboxMaterialColor;
-            &GRUVBOX_MATERIAL.dark.material, &GRUVBOX_MATERIAL.dark.mix,
-            &GRUVBOX_MATERIAL.dark.original, &GRUVBOX_MATERIAL.light.material,
-            &GRUVBOX_MATERIAL.light.mix, &GRUVBOX_MATERIAL.light.original);
-        complete!(palette::EverforestColor;
-            &EVERFOREST.dark.soft, &EVERFOREST.dark.medium, &EVERFOREST.dark.hard,
-            &EVERFOREST.light.soft, &EVERFOREST.light.medium, &EVERFOREST.light.hard);
-        complete!(palette::RosePineColor;
-            &ROSE_PINE.dark.main, &ROSE_PINE.dark.moon, &ROSE_PINE.light.dawn);
-        complete!(palette::KanagawaColor;
-            &KANAGAWA.dark.wave, &KANAGAWA.dark.dragon, &KANAGAWA.light.lotus);
+    #[test]
+    fn every_variant_defines_the_same_complete_color_matrix() {
+        for scheme in SCHEMES.iter() {
+            let expected = scheme.variants()[0].palette().colors();
+            for variant in scheme.variants() {
+                let palette = variant.palette();
+                assert_eq!(palette.color_count(), expected.len());
+                assert!(expected.iter().all(|&(name, _)| palette.defines(name)));
+            }
+        }
     }
 }

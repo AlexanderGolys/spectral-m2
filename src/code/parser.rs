@@ -35,7 +35,7 @@ pub struct SyntaxDiagnostic {
 #[derive(Debug, PartialEq)]
 pub enum ParseVerdict {
     Complete(Vec<ParsedCell>),
-    Incomplete,
+    Incomplete(String),
     SyntaxError(SyntaxDiagnostic),
 }
 
@@ -70,11 +70,22 @@ fn ran_out_of_input(error: &NativeParseError, source: &str) -> bool {
     }
 }
 
+fn incomplete_reason(error: &NativeParseError) -> String {
+    let message = error.to_string().replace("unterminated", "unclosed");
+    message
+        .split_once(": expected")
+        .or_else(|| message.split_once(", found"))
+        .map_or(message.as_str(), |(reason, _)| reason)
+        .to_string()
+}
+
 /// Classify a buffer without evaluating it.
 pub fn check(source: &str) -> ParseVerdict {
     match parse_native(source) {
         Ok(file) => ParseVerdict::Complete(parsed_cells(&file)),
-        Err(error) if ran_out_of_input(&error, source) => ParseVerdict::Incomplete,
+        Err(error) if ran_out_of_input(&error, source) => {
+            ParseVerdict::Incomplete(incomplete_reason(&error))
+        }
         Err(error) => {
             let range = error
                 .span()
@@ -166,7 +177,7 @@ mod tests {
         }
         for source in incomplete {
             let verdict = check(source);
-            if verdict != ParseVerdict::Incomplete {
+            if !matches!(verdict, ParseVerdict::Incomplete(_)) {
                 wrong.push(format!("{source:?} => {verdict:?}, wanted Incomplete"));
             }
         }

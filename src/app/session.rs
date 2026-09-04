@@ -68,6 +68,7 @@ pub struct Session {
     next_input_number: u32,
     next_submission_id: u64,
     committed: Vec<CommittedCell>,
+    committed_revision: u64,
     pending: Option<PendingSubmission>,
     restarting: bool,
 }
@@ -86,6 +87,7 @@ impl Session {
             next_input_number: 1,
             next_submission_id: 0,
             committed: Vec::new(),
+            committed_revision: 0,
             pending: None,
             restarting: false,
         }
@@ -106,6 +108,11 @@ impl Session {
 
     pub fn committed(&self) -> &[CommittedCell] {
         &self.committed
+    }
+
+    /// Revision of the immutable committed-cell sequence.
+    pub const fn committed_revision(&self) -> u64 {
+        self.committed_revision
     }
 
     pub fn busy(&self) -> bool {
@@ -139,7 +146,9 @@ impl Session {
 
         let source = source.trim();
         let parsed = match parser::check(source) {
-            ParseVerdict::Incomplete => return EditorUpdate::ContinueSubmission,
+            ParseVerdict::Incomplete(reason) => {
+                return EditorUpdate::ContinueSubmission(reason);
+            }
             ParseVerdict::SyntaxError(diagnostic) => {
                 return EditorUpdate::SyntaxDiagnostic {
                     message: diagnostic.message,
@@ -224,6 +233,7 @@ impl Session {
                     code: cell.code.clone(),
                     tree: cell.tree,
                 });
+                self.committed_revision = self.committed_revision.wrapping_add(1);
                 let finished = self
                     .pending
                     .as_ref()
@@ -234,7 +244,9 @@ impl Session {
                 EditorUpdate::CellSucceeded {
                     id,
                     index,
-                    outputs: response_blocks(&response, &cell.code),
+                    number,
+                    state,
+                    outputs: response_blocks(&response, &cell.code, number),
                 }
             }
             Ok(response) => {
@@ -243,6 +255,7 @@ impl Session {
                 EditorUpdate::CellFailed {
                     id,
                     index,
+                    number,
                     message: captured_error(&response.transcript, &cell.code),
                 }
             }
@@ -251,6 +264,7 @@ impl Session {
                 EditorUpdate::CellFailed {
                     id,
                     index,
+                    number,
                     message: format!("Communication error: {message}"),
                 }
             }
@@ -265,6 +279,7 @@ impl Session {
                 self.in_debugger = false;
                 self.next_input_number = 1;
                 self.committed.clear();
+                self.committed_revision = self.committed_revision.wrapping_add(1);
                 EditorUpdate::Message(Box::new(TextBlock::system(
                     "Macaulay2 restarted -- the session is empty and numbering begins again",
                 )))
@@ -330,7 +345,7 @@ fn worker(mut backend: M2Backend, requests: Receiver<WorkerRequest>, events: Sen
     }
 }
 
-fn response_blocks(response: &M2Response, code: &str) -> Vec<Box<dyn Block>> {
+fn response_blocks(response: &M2Response, code: &str, number: u32) -> Vec<Box<dyn Block>> {
     let output = captured_output(
         &response.transcript,
         code,
@@ -345,15 +360,10 @@ fn response_blocks(response: &M2Response, code: &str) -> Vec<Box<dyn Block>> {
     if !output.printed.is_empty() {
         blocks.push(Box::new(TextBlock::printed(output.printed)));
     }
-    match (output.value, response.has_value) {
-        (Some(value), _) => blocks.push(Box::new(OutputBlock::value(value.text, value.type_info))),
-        (None, true) => blocks.extend(
-            response
-                .type_info
-                .clone()
-                .map(|ty| Box::new(OutputBlock::muted(ty)) as Box<dyn Block>),
-        ),
-        (None, false) => {}
+    if let (Some(value), true) = (output.value, response.has_value) {
+        blocks.push(Box::new(
+            OutputBlock::value(value.text, value.type_info).numbered(number),
+        ));
     }
     blocks
 }
@@ -375,6 +385,24 @@ mod tests {
         updates.extend(session.poll());
         assert!(!session.busy(), "evaluation timed out");
         updates
+    }
+
+    #[test]
+    fn null_and_muted_results_create_no_output_blocks() {
+        for (value, type_info, has_value) in [
+            (Some("null".to_string()), Some("Nothing".to_string()), false),
+            (None, Some("ZZ".to_string()), true),
+        ] {
+            let response = M2Response {
+                is_error: false,
+                transcript: "x\n\n".into(),
+                value,
+                type_info,
+                has_value,
+                depth: 1,
+            };
+            assert!(response_blocks(&response, "x", 1).is_empty());
+        }
     }
 
     #[test]

@@ -5,21 +5,22 @@
 //! receives its highlighter separately because highlighting is an application-wide
 //! service rather than editor state.
 
-use m2_syn::{PrettyDetailRole, PrettyNode, PrettyNodeRole};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
-use self::layout::WrappedText;
-use self::render::{Bordered, Highlights, RenderContext};
+use self::render::{BorderLayout, Bordered, Highlights, RenderContext};
+use self::wrap::WrappedText;
 use crate::backend::transcript::strip_m2_location;
-use crate::ui::controller::settings::theme::groups::HLGroup;
+use crate::ui::config::UI;
+use crate::ui::controller::settings::theme::groups::Groups;
 use crate::ui::element::{Element, HLSpan, SpanText};
 
-pub mod layout;
 pub mod render;
+pub mod syntax_tree;
+pub mod wrap;
 
 /// The semantic role of one feed block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,31 +64,91 @@ pub enum CellState {
     Null,
 }
 
+/// Content displayed before one submitted source cell.
+#[derive(Clone, Copy)]
+enum CellMarker {
+    Bare,
+    Empty,
+    Number(u32, CellState),
+    Pending,
+    Queued,
+    Failed(u32),
+}
+
+impl CellMarker {
+    fn number(self) -> Option<u32> {
+        match self {
+            Self::Number(number, _) | Self::Failed(number) => Some(number),
+            _ => None,
+        }
+    }
+
+    fn width(self, layout: BorderLayout) -> u16 {
+        if matches!(self, Self::Bare) {
+            0
+        } else {
+            layout.prefix()
+        }
+    }
+
+    fn label(self, groups: &Groups) -> Option<(String, Style)> {
+        Some(match self {
+            Self::Number(number, state) => (
+                number.to_string(),
+                match state {
+                    CellState::Value | CellState::Muted | CellState::Null => groups.muted(),
+                },
+            ),
+            Self::Pending => (":".into(), groups.muted()),
+            Self::Queued => ("…".into(), groups.muted()),
+            Self::Failed(number) => (number.to_string(), groups.error()),
+            Self::Bare | Self::Empty => return None,
+        })
+    }
+
+    fn span(self, layout: BorderLayout, base: Style) -> Span<'static> {
+        Span::styled(" ".repeat(self.width(layout).into()), base)
+    }
+
+    fn render(self, groups: &Groups, base: Style, area: Rect, row: u16, buf: &mut Buffer) {
+        if let Some((label, style)) = self.label(groups) {
+            let width = label.chars().count() as u16;
+            Paragraph::new(Span::styled(label, style.patch(base)))
+                .render(Rect::new(area.x + UI.cell_margin, row, width, 1), buf);
+        }
+    }
+}
+
 /// One lexical Macaulay2 input cell and the byte ranges highlighted within it.
 pub struct Cell {
     text: String,
+    number: Option<(u32, CellState)>,
     spans: Vec<HLSpan>,
 }
 
 impl Cell {
-    fn new(text: String, spans: Vec<HLSpan>) -> Self {
-        Self { text, spans }
+    fn new(text: String, number: Option<(u32, CellState)>, spans: Vec<HLSpan>) -> Self {
+        Self {
+            text,
+            number,
+            spans,
+        }
     }
 
     /// Create a numbered input cell from source and spans produced for that source.
     #[cfg(test)]
     fn input(text: String, spans: Vec<HLSpan>) -> Self {
-        Self::new(text, spans)
+        Self::new(text, None, spans)
     }
 
     /// Create a numbered input cell with its result state.
-    pub fn resolved(text: String, spans: Vec<HLSpan>) -> Self {
-        Self::new(text, spans)
+    pub fn resolved(text: String, number: u32, state: CellState, spans: Vec<HLSpan>) -> Self {
+        Self::new(text, Some((number, state)), spans)
     }
 
     /// Create an unnumbered cell that was not submitted to Macaulay2.
     fn rejected(text: String, spans: Vec<HLSpan>) -> Self {
-        Self::new(text, spans)
+        Self::new(text, None, spans)
     }
 
     /// Put this cell and another cell into one code block.
@@ -104,326 +165,18 @@ impl Cell {
             .collect::<Vec<_>>();
         WrappedText::code(&self.text, width, &spans)
     }
+
+    fn marker(&self) -> CellMarker {
+        self.number.map_or(CellMarker::Empty, |(number, state)| {
+            CellMarker::Number(number, state)
+        })
+    }
 }
 
 /// One feed block containing one or more lexical input cells.
 pub struct CodeBlock {
     cells: Vec<Cell>,
 }
-
-/// One committed cell followed by its typed syntax presentation.
-pub struct SyntaxTreeBlock {
-    code: CodeBlock,
-    tree: PrettyNode,
-}
-
-/// One displayed tree row with the structural path leading to it.
-struct TreeEntry<'a> {
-    label: String,
-    node: &'a PrettyNode,
-}
-
-fn tree_label(parent: &str, child: &str) -> String {
-    match (parent, child) {
-        (_, "contents" | "delimiter") => parent.to_string(),
-        ("", child) => child.to_string(),
-        (parent, child) if child.starts_with('[') => format!("{parent}{child}"),
-        _ => format!("{parent}.{child}"),
-    }
-}
-
-fn push_tree_node<'a>(node: &'a PrettyNode, label: String, entries: &mut Vec<TreeEntry<'a>>) {
-    match node.role() {
-        PrettyNodeRole::Absent => {}
-        PrettyNodeRole::Collection if node.name() != "Delimited" => {
-            push_tree_children(node, label, entries);
-        }
-        PrettyNodeRole::Syntax | PrettyNodeRole::Token | PrettyNodeRole::Collection => {
-            entries.push(TreeEntry { label, node });
-        }
-    }
-}
-
-fn push_tree_edge<'a>(
-    edge: &'a m2_syn::PrettyEdge,
-    parent: &str,
-    entries: &mut Vec<TreeEntry<'a>>,
-) {
-    push_tree_node(edge.node(), tree_label(parent, edge.label()), entries);
-}
-
-fn push_tree_children<'a>(node: &'a PrettyNode, label: String, entries: &mut Vec<TreeEntry<'a>>) {
-    for edge in node.children() {
-        push_tree_edge(edge, &label, entries);
-    }
-}
-
-fn tree_children(node: &PrettyNode) -> Vec<TreeEntry<'_>> {
-    let mut entries = Vec::new();
-    push_tree_children(node, String::new(), &mut entries);
-    entries
-}
-
-fn compact_source(text: &str, width: usize) -> String {
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if width == 0 {
-        return String::new();
-    }
-    if text.chars().count() <= width {
-        text
-    } else {
-        text.chars()
-            .take(width.saturating_sub(1))
-            .chain(['…'])
-            .collect()
-    }
-}
-
-fn delimiter_boundaries(node: &PrettyNode) -> Option<(&PrettyNode, Option<&PrettyNode>)> {
-    let boundaries = node
-        .children()
-        .iter()
-        .find(|edge| edge.label() == "delimiter")?
-        .node()
-        .children();
-    Some((
-        boundaries
-            .iter()
-            .find(|edge| edge.label() == "opening")?
-            .node(),
-        boundaries
-            .iter()
-            .find(|edge| edge.label() == "closing")
-            .map(m2_syn::PrettyEdge::node),
-    ))
-}
-
-fn delimiter_text(node: &PrettyNode) -> &str {
-    node.detail().map_or("", m2_syn::PrettyDetail::text)
-}
-
-impl SyntaxTreeBlock {
-    /// Create a highlighted committed cell and its `m2-syn` pretty tree.
-    pub fn new(text: String, spans: Vec<HLSpan>, tree: PrettyNode) -> Self {
-        Self {
-            code: CodeBlock::new([Cell::resolved(text, spans)]),
-            tree,
-        }
-    }
-
-    fn tree_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
-        fn line(
-            node: &PrettyNode,
-            label: Option<&str>,
-            prefix: &str,
-            branch: &str,
-            delimiter: bool,
-            context: &RenderContext,
-        ) -> Line<'static> {
-            let groups = context.groups();
-            let name = groups.style(HLGroup::Type);
-            let mut spans = vec![Span::styled(format!("{prefix}{branch}"), groups.muted())];
-            let token = (node.role() == PrettyNodeRole::Token)
-                .then(|| {
-                    node.name()
-                        .strip_prefix("Token![")
-                        .and_then(|name| name.strip_suffix(']'))
-                })
-                .flatten();
-            if delimiter {
-                spans.push(Span::styled(
-                    delimiter_text(node).to_string(),
-                    groups.tree_code(),
-                ));
-            } else if let Some(token) = token {
-                spans.extend([
-                    Span::styled("Token![", groups.preview_mode()),
-                    Span::styled(token.to_string(), groups.tree_code()),
-                    Span::styled("]", groups.preview_mode()),
-                ]);
-            } else {
-                spans.push(Span::styled(node.name().to_string(), name));
-            }
-            if let Some(label) = label.filter(|label| {
-                !label.is_empty()
-                    && !label.bytes().all(|byte| byte.is_ascii_digit())
-                    && (delimiter || node.role() != PrettyNodeRole::Token)
-            }) {
-                spans.extend([
-                    Span::styled("  ", groups.muted()),
-                    Span::styled(label.to_string(), groups.style(HLGroup::Property)),
-                    Span::styled(":", groups.muted()),
-                ]);
-            }
-            if !delimiter && token.is_none() {
-                if let Some(detail) = node.detail().filter(|detail| {
-                    detail.role() == PrettyDetailRole::Text
-                        && node.span().and_then(|span| span.text()) == Some(detail.text())
-                }) {
-                    spans.push(Span::styled(
-                        format!(" {}", detail.text()),
-                        groups.tree_code(),
-                    ));
-                }
-            }
-            let location = node.span().map(|span| format!("  {span}"));
-            if !delimiter && node.role() != PrettyNodeRole::Token {
-                let occupied = Line::from(spans.clone()).width()
-                    + location.as_ref().map_or(0, |text| text.chars().count())
-                    + 1;
-                let width = usize::from(context.width())
-                    .saturating_sub(occupied)
-                    .min(48);
-                if let Some(text) = node
-                    .span()
-                    .and_then(|span| span.text())
-                    .map(|text| compact_source(text, width))
-                    .filter(|text| !text.is_empty())
-                {
-                    spans.push(Span::styled(format!(" {text}"), groups.tree_code()));
-                }
-            }
-            if let Some(location) = location {
-                spans.push(Span::styled(location, groups.muted()));
-            }
-            Line::from(spans)
-        }
-
-        fn walk_entry(
-            entry: &TreeEntry<'_>,
-            prefix: String,
-            last: bool,
-            context: &RenderContext,
-            lines: &mut Vec<Line<'static>>,
-        ) {
-            let branch = if last { "╰─" } else { "├─" };
-            if let Some((opening, closing)) = (entry.node.name() == "Delimited")
-                .then(|| delimiter_boundaries(entry.node))
-                .flatten()
-            {
-                lines.push(line(
-                    opening,
-                    Some(&entry.label),
-                    &prefix,
-                    branch,
-                    true,
-                    context,
-                ));
-                let prefix = format!("{prefix}{}", if last { "  " } else { "│ " });
-                let children: Vec<_> = entry
-                    .node
-                    .children()
-                    .iter()
-                    .filter(|edge| edge.label() != "delimiter")
-                    .flat_map(|edge| {
-                        let mut entries = Vec::new();
-                        push_tree_edge(edge, "", &mut entries);
-                        entries
-                    })
-                    .collect();
-                let trailing = closing.is_some();
-                for (index, child) in children.iter().enumerate() {
-                    walk_entry(
-                        child,
-                        prefix.clone(),
-                        !trailing && index + 1 == children.len(),
-                        context,
-                        lines,
-                    );
-                }
-                if let Some(closing) = closing {
-                    lines.push(line(closing, None, &prefix, "╰─", true, context));
-                }
-                return;
-            }
-            lines.push(line(
-                entry.node,
-                Some(&entry.label),
-                &prefix,
-                branch,
-                false,
-                context,
-            ));
-            let children = tree_children(entry.node);
-            let prefix = format!("{prefix}{}", if last { "  " } else { "│ " });
-            for (index, entry) in children.iter().enumerate() {
-                walk_entry(
-                    entry,
-                    prefix.clone(),
-                    index + 1 == children.len(),
-                    context,
-                    lines,
-                );
-            }
-        }
-
-        let mut lines = vec![line(&self.tree, None, "", "", false, context)];
-        let children = tree_children(&self.tree);
-        for (index, entry) in children.iter().enumerate() {
-            walk_entry(
-                entry,
-                String::new(),
-                index + 1 == children.len(),
-                context,
-                &mut lines,
-            );
-        }
-        lines.push(Line::default());
-        lines
-    }
-
-    fn lines(&self, context: &RenderContext) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
-        let mut source = self.code.preview_lines(context);
-        let mut tree = self.tree_lines(context);
-        let width = source
-            .iter()
-            .chain(&tree)
-            .map(Line::width)
-            .max()
-            .unwrap_or_default();
-        let padding = usize::from(context.width()).saturating_sub(width) / 2;
-        for line in source.iter_mut().chain(&mut tree) {
-            if !line.spans.is_empty() {
-                line.spans.insert(0, Span::raw(" ".repeat(padding)));
-            }
-        }
-        (source, tree)
-    }
-}
-
-impl Element for SyntaxTreeBlock {
-    type Context = RenderContext;
-
-    fn height(&self, context: &RenderContext) -> u16 {
-        let (source, tree) = self.lines(context);
-        1 + source.len() as u16 + tree.len() as u16
-    }
-
-    fn render(&self, context: &RenderContext, area: Rect, buf: &mut Buffer) {
-        let groups = context.groups();
-        let (source, tree) = self.lines(context);
-        let separator = Line::from(Span::styled("─".repeat(area.width.into()), groups.border()));
-        Paragraph::new(vec![separator])
-            .style(groups.code())
-            .render(Rect::new(area.x, area.y, area.width, 1), buf);
-        let source_height = source.len() as u16;
-        Paragraph::new(source).style(groups.transcript()).render(
-            Rect::new(area.x, area.y + 1, area.width, source_height),
-            buf,
-        );
-        Paragraph::new(tree).style(groups.code()).render(
-            Rect::new(
-                area.x,
-                area.y + 1 + source_height,
-                area.width,
-                area.height.saturating_sub(1 + source_height),
-            ),
-            buf,
-        );
-    }
-}
-
-impl Block for SyntaxTreeBlock {}
 
 impl CodeBlock {
     /// Create a code block from lexical cells in display order.
@@ -433,17 +186,30 @@ impl CodeBlock {
         }
     }
 
-    fn body_height(&self, context: &RenderContext) -> u16 {
+    fn layout(&self) -> BorderLayout {
         self.cells
             .iter()
-            .map(|cell| cell.wrapped(context.width()).height())
+            .filter_map(|cell| cell.marker().number())
+            .max()
+            .map_or_else(BorderLayout::plain, BorderLayout::numbered)
+    }
+
+    fn body_height(&self, context: &RenderContext) -> u16 {
+        let layout = self.layout();
+        self.cells
+            .iter()
+            .map(|cell| {
+                cell.wrapped(context.width().saturating_sub(cell.marker().width(layout)))
+                    .height()
+            })
             .sum()
     }
 
     fn lines(&self, context: &RenderContext, style: Style) -> Vec<Line<'static>> {
+        let layout = self.layout();
         let mut rendered = vec![Line::default()];
         for cell in &self.cells {
-            rendered.extend(cell_lines(cell, context, style));
+            rendered.extend(cell_lines(cell, cell.marker(), layout, context, style));
         }
         rendered.push(Line::default());
         rendered
@@ -451,9 +217,16 @@ impl CodeBlock {
 
     fn preview_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
         let context = RenderContext::new(context.width(), 0, context.groups());
+        let layout = BorderLayout::plain();
         let mut rendered = Vec::new();
         for cell in &self.cells {
-            rendered.extend(cell_lines(cell, &context, context.groups().transcript()));
+            rendered.extend(cell_lines(
+                cell,
+                CellMarker::Bare,
+                layout,
+                &context,
+                context.groups().transcript(),
+            ));
         }
         rendered.push(Line::default());
         rendered
@@ -472,6 +245,16 @@ impl Element for CodeBlock {
         Paragraph::new(self.lines(context, style))
             .style(style)
             .render(area, buf);
+        let layout = self.layout();
+        layout.render_separator(area, context.groups().separator(), buf);
+        let mut row = area.y + 1;
+        for cell in &self.cells {
+            let marker = cell.marker();
+            marker.render(context.groups(), style, area, row, buf);
+            row += cell
+                .wrapped(context.width().saturating_sub(marker.width(layout)))
+                .height();
+        }
     }
 }
 
@@ -479,13 +262,44 @@ impl Block for CodeBlock {
     fn kind(&self) -> BlockKind {
         BlockKind::Input
     }
+
+    fn selection_exclusions(
+        &self,
+        context: &RenderContext,
+        area: Rect,
+        exclusions: &mut Vec<Rect>,
+    ) {
+        exclusions.push(Rect::new(
+            area.x,
+            area.y,
+            self.layout().prefix(),
+            self.height(context),
+        ));
+    }
 }
 
-fn cell_lines(cell: &Cell, context: &RenderContext, style: Style) -> Vec<Line<'static>> {
+fn cell_lines(
+    cell: &Cell,
+    marker: CellMarker,
+    layout: BorderLayout,
+    context: &RenderContext,
+    style: Style,
+) -> Vec<Line<'static>> {
+    let width = marker.width(layout);
     let spans = cell.spans.paint(0, &cell.text, style, context.groups());
-    cell.wrapped(context.width())
+    cell.wrapped(context.width().saturating_sub(width))
         .source_lines()
-        .map(|(range, _)| Line::from(spans.slice(range)))
+        .enumerate()
+        .map(|(index, (range, _))| {
+            let marker = if index == 0 {
+                marker
+            } else {
+                CellMarker::Empty
+            };
+            let mut line = vec![marker.span(layout, style)];
+            line.extend(spans.slice(range));
+            Line::from(line)
+        })
         .collect()
 }
 
@@ -493,9 +307,21 @@ fn cell_lines(cell: &Cell, context: &RenderContext, style: Style) -> Vec<Line<'s
 enum SubmissionState {
     Pending,
     Queued,
-    Succeeded,
-    Failed,
+    Succeeded(u32, CellState),
+    Failed(u32),
     Rejected,
+}
+
+impl SubmissionState {
+    fn marker(&self) -> CellMarker {
+        match self {
+            Self::Pending => CellMarker::Pending,
+            Self::Queued => CellMarker::Queued,
+            Self::Succeeded(number, state) => CellMarker::Number(*number, *state),
+            Self::Failed(number) => CellMarker::Failed(*number),
+            Self::Rejected => CellMarker::Empty,
+        }
+    }
 }
 
 /// Submitted cells that resolve in place while their M2 evaluation runs.
@@ -531,9 +357,15 @@ impl SubmissionBlock {
         self.id
     }
 
-    pub fn succeed(&mut self, index: usize, outputs: Vec<Box<dyn Block>>) {
+    pub fn succeed(
+        &mut self,
+        index: usize,
+        number: u32,
+        cell_state: CellState,
+        outputs: Vec<Box<dyn Block>>,
+    ) {
         if let Some((_, state)) = self.cells.get_mut(index) {
-            *state = SubmissionState::Succeeded;
+            *state = SubmissionState::Succeeded(number, cell_state);
         }
         if let Some((_, state)) = self.cells.get_mut(index + 1) {
             *state = SubmissionState::Pending;
@@ -552,9 +384,9 @@ impl SubmissionBlock {
         }
     }
 
-    pub fn fail(&mut self, index: usize, message: String) {
+    pub fn fail(&mut self, index: usize, number: u32, message: String) {
         if let Some((_, state)) = self.cells.get_mut(index) {
-            *state = SubmissionState::Failed;
+            *state = SubmissionState::Failed(number);
         }
         for (_, state) in self.cells.iter_mut().skip(index + 1) {
             *state = SubmissionState::Rejected;
@@ -562,23 +394,37 @@ impl SubmissionBlock {
         self.outputs.push(Box::new(ErrorMessageBlock { message }));
     }
 
-    fn code_height(&self, context: &RenderContext) -> u16 {
+    fn layout(&self) -> BorderLayout {
         self.cells
             .iter()
-            .map(|(cell, _)| cell.wrapped(context.width()).height())
+            .filter_map(|(_, state)| state.marker().number())
+            .max()
+            .map_or_else(BorderLayout::plain, BorderLayout::numbered)
+    }
+
+    fn code_height(&self, context: &RenderContext) -> u16 {
+        let layout = self.layout();
+        self.cells
+            .iter()
+            .map(|(cell, state)| {
+                let marker = state.marker();
+                cell.wrapped(context.width().saturating_sub(marker.width(layout)))
+                    .height()
+            })
             .sum::<u16>()
             + 2
     }
 
     fn code_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
+        let layout = self.layout();
         let mut lines = vec![Line::default()];
         for (cell, state) in &self.cells {
-            let style = if matches!(state, SubmissionState::Failed) {
+            let style = if matches!(state, SubmissionState::Failed(_)) {
                 context.groups().error().patch(context.groups().code())
             } else {
                 context.groups().code()
             };
-            lines.extend(cell_lines(cell, context, style));
+            lines.extend(cell_lines(cell, state.marker(), layout, context, style));
         }
         lines.push(Line::default());
         lines
@@ -602,6 +448,25 @@ impl Element for SubmissionBlock {
         Paragraph::new(self.code_lines(context))
             .style(context.groups().code())
             .render(Rect::new(area.x, area.y, area.width, code_height), buf);
+        let layout = self.layout();
+        layout.render_separator(
+            Rect::new(area.x, area.y, area.width, code_height),
+            context.groups().separator(),
+            buf,
+        );
+        let mut row = area.y + 1;
+        for (cell, state) in &self.cells {
+            let marker = state.marker();
+            let style = if matches!(state, SubmissionState::Failed(_)) {
+                context.groups().error().patch(context.groups().code())
+            } else {
+                context.groups().code()
+            };
+            marker.render(context.groups(), style, area, row, buf);
+            row += cell
+                .wrapped(context.width().saturating_sub(marker.width(layout)))
+                .height();
+        }
         let mut y = area.y + code_height;
         for block in &self.outputs {
             let height = block.height(context);
@@ -630,7 +495,14 @@ impl Block for SubmissionBlock {
         area: Rect,
         exclusions: &mut Vec<Rect>,
     ) {
-        let mut y = area.y + self.code_height(context);
+        let code_height = self.code_height(context);
+        exclusions.push(Rect::new(
+            area.x,
+            area.y,
+            self.layout().prefix(),
+            code_height,
+        ));
+        let mut y = area.y + code_height;
         for block in &self.outputs {
             let height = block.height(context);
             block.selection_exclusions(
@@ -674,21 +546,17 @@ impl TextBlock {
     }
 
     fn body(&self, context: &RenderContext) -> Vec<String> {
-        let mut lines = word_lines(&self.text, context.width());
+        let width = match self.kind {
+            TextKind::System => Bordered::text_width(context, BorderLayout::middle_third()),
+            TextKind::Printed => context
+                .width()
+                .saturating_sub(BorderLayout::plain().prefix()),
+        };
+        let mut lines = word_lines(&self.text, width);
         if lines.last().is_some_and(String::is_empty) {
             lines.pop();
         }
         lines
-    }
-
-    /// Blank rows drawn above the body. M2's printed output is framed like a code
-    /// band, with a row of air on each side; Spectral's own messages keep their
-    /// tighter footer-only spacing so the banner sits flush at the top.
-    fn top_margin(&self) -> usize {
-        match self.kind {
-            TextKind::System => 0,
-            TextKind::Printed => 1,
-        }
     }
 }
 
@@ -696,24 +564,44 @@ impl Element for TextBlock {
     type Context = RenderContext;
 
     fn height(&self, context: &RenderContext) -> u16 {
-        (self.body(context).len() + self.top_margin()) as u16 + 1
+        self.body(context).len() as u16 + 2
     }
 
     fn render(&self, context: &RenderContext, area: Rect, buf: &mut Buffer) {
         let theme = context.groups();
-        let base = theme.transcript();
-        let text = match self.kind {
-            TextKind::System => theme.muted().patch(base),
-            TextKind::Printed => theme.printed().patch(base),
-        };
-        let mut lines: Vec<Line<'static>> = vec![Line::default(); self.top_margin()];
-        lines.extend(
-            self.body(context)
-                .into_iter()
-                .map(|line| Line::from(Span::styled(line, text))),
-        );
-        lines.push(Line::default());
-        Paragraph::new(lines).style(base).render(area, buf);
+        match self.kind {
+            TextKind::System => {
+                let body = self
+                    .body(context)
+                    .into_iter()
+                    .map(|line| {
+                        Line::from(Span::styled(line, theme.info())).alignment(Alignment::Center)
+                    })
+                    .collect();
+                Bordered::new(
+                    BorderLayout::middle_third(),
+                    Style::new(),
+                    theme.info_border(),
+                    None,
+                    body,
+                )
+                .render(&(), area, buf);
+            }
+            TextKind::Printed => {
+                let prefix = usize::from(BorderLayout::plain().prefix());
+                let margin = Line::from(Span::raw(" ".repeat(prefix)));
+                let mut lines = vec![margin.clone()];
+                lines.extend(
+                    self.body(context).into_iter().map(|line| {
+                        Line::from(vec![Span::raw(" ".repeat(prefix)), Span::raw(line)])
+                    }),
+                );
+                lines.push(margin);
+                Paragraph::new(lines)
+                    .style(theme.printed())
+                    .render(area, buf);
+            }
+        }
     }
 }
 
@@ -724,11 +612,28 @@ impl Block for TextBlock {
             TextKind::Printed => BlockKind::Printed,
         }
     }
+
+    fn selection_exclusions(
+        &self,
+        _context: &RenderContext,
+        area: Rect,
+        exclusions: &mut Vec<Rect>,
+    ) {
+        if matches!(self.kind, TextKind::Printed) {
+            exclusions.push(Rect::new(
+                area.x,
+                area.y,
+                BorderLayout::plain().prefix(),
+                area.height,
+            ));
+        }
+    }
 }
 
 /// One result inside a possibly shared value border.
 struct OutputCell {
-    text: Option<String>,
+    number: Option<u32>,
+    text: String,
     ty: Option<String>,
 }
 
@@ -737,84 +642,70 @@ pub struct OutputBlock {
     cells: Vec<OutputCell>,
 }
 
-/// Placement of a result's type inside its bordered body.
-#[derive(Clone, Copy)]
-enum TypePlacement {
-    None,
-    Inline,
-    Newline,
-}
-
 impl OutputBlock {
     /// Create a rendered value and its optional type.
     pub fn value(text: String, ty: Option<String>) -> Self {
         Self {
             cells: vec![OutputCell {
-                text: Some(text),
+                number: None,
+                text,
                 ty,
             }],
         }
     }
 
-    /// Create the type-only result of a muted but bound value.
-    pub fn muted(ty: String) -> Self {
-        Self {
-            cells: vec![OutputCell {
-                text: None,
-                ty: Some(ty),
-            }],
-        }
+    /// Attach the `oN` assigned by Macaulay2 to this value.
+    pub fn numbered(mut self, number: u32) -> Self {
+        self.cells[0].number = Some(number);
+        self
+    }
+
+    fn border_layout(&self) -> BorderLayout {
+        self.cells
+            .iter()
+            .filter_map(|cell| cell.number)
+            .max()
+            .map_or_else(BorderLayout::plain, BorderLayout::output)
     }
 
     fn text_width(&self, context: &RenderContext) -> u16 {
-        Bordered::text_width(context)
+        Bordered::text_width(context, self.border_layout())
     }
 
-    fn layout(&self, cell: &OutputCell, context: &RenderContext) -> (Vec<String>, TypePlacement) {
-        let value = match cell.text.as_deref() {
-            Some("") | None => Vec::new(),
-            Some(text) => word_lines(text, self.text_width(context)),
-        };
-        let placement = match (&cell.ty, value.as_slice()) {
-            (None, _) => TypePlacement::None,
-            (Some(ty), [line])
-                if line.chars().count() + ty.chars().count()
-                    < usize::from(self.text_width(context)) =>
-            {
-                TypePlacement::Inline
-            }
-            (Some(_), _) => TypePlacement::Newline,
-        };
-        (value, placement)
+    fn layout(&self, cell: &OutputCell, context: &RenderContext) -> Vec<String> {
+        if cell.text.is_empty() {
+            Vec::new()
+        } else {
+            word_lines(&cell.text, self.text_width(context))
+        }
     }
 
     fn lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
         let theme = context.groups();
         let width = self.text_width(context);
-        let (value, placement) = self.layout(cell, context);
-        let mut lines: Vec<_> = value
+        let mut lines: Vec<_> = self
+            .layout(cell, context)
             .into_iter()
             .map(|line| Line::from(Span::styled(line, theme.value())))
             .collect();
-        match (placement, &cell.ty) {
-            (TypePlacement::Inline, Some(ty)) => {
-                let value = lines[0].spans[0].content.to_string();
-                let padding =
-                    usize::from(width).saturating_sub(value.chars().count() + ty.chars().count());
-                lines[0] = Line::from(vec![
-                    Span::styled(value, theme.value()),
-                    Span::raw(" ".repeat(padding)),
-                    Span::styled(ty.clone(), theme.type_info()),
-                ]);
+        if let Some(ty) = &cell.ty {
+            if lines.is_empty() {
+                lines.push(Line::default());
             }
-            (TypePlacement::Newline, Some(ty)) => {
-                let padding = usize::from(width).saturating_sub(ty.chars().count());
-                lines.push(Line::from(vec![
-                    Span::raw(" ".repeat(padding)),
-                    Span::styled(ty.clone(), theme.type_info()),
-                ]));
+            let ty = Span::styled(ty.clone(), theme.type_info());
+            let padding =
+                usize::from(width).saturating_sub(lines.last().unwrap().width() + ty.width());
+            match padding {
+                0 => lines.push(Line::from(vec![
+                    Span::raw(" ".repeat(usize::from(width).saturating_sub(ty.width()))),
+                    ty,
+                ])),
+                _ => lines
+                    .last_mut()
+                    .unwrap()
+                    .spans
+                    .extend([Span::raw(" ".repeat(padding)), ty]),
             }
-            _ => {}
         }
         lines
     }
@@ -837,7 +728,24 @@ impl Element for OutputBlock {
         for cell in &self.cells {
             body.extend(self.lines(cell, context));
         }
-        Bordered::new(Style::new(), theme.border(), None, None, body).render(&(), area, buf);
+        let layout = self.border_layout();
+        Bordered::new(layout, Style::new(), theme.border(), None, body).render(&(), area, buf);
+        let mut row = Bordered::inner(area, layout).y;
+        for cell in &self.cells {
+            if let Some(number) = cell.number {
+                let label = format!("o{number}");
+                Paragraph::new(Span::styled(label.clone(), theme.output_number())).render(
+                    Rect::new(
+                        area.x + UI.cell_margin,
+                        row,
+                        label.chars().count() as u16,
+                        1,
+                    ),
+                    buf,
+                );
+            }
+            row += self.lines(cell, context).len() as u16;
+        }
     }
 }
 
@@ -848,22 +756,23 @@ impl Block for OutputBlock {
         area: Rect,
         exclusions: &mut Vec<Rect>,
     ) {
-        let right = Bordered::inner(area).right();
-        let mut row = area.y + 1;
+        let layout = self.border_layout();
+        let inner = Bordered::inner(area, layout);
+        let right = inner.right();
+        let mut row = inner.y;
         for cell in &self.cells {
-            let (value, placement) = self.layout(cell, context);
+            let lines = self.lines(cell, context);
+            exclusions.push(Rect::new(area.x, row, layout.prefix(), lines.len() as u16));
             if let Some(ty) = &cell.ty {
-                let ty_row = match placement {
-                    TypePlacement::Inline => Some(row),
-                    TypePlacement::Newline => Some(row + value.len() as u16),
-                    TypePlacement::None => None,
-                };
-                if let Some(ty_row) = ty_row {
-                    let width = ty.chars().count() as u16;
-                    exclusions.push(Rect::new(right.saturating_sub(width), ty_row, width, 1));
-                }
+                let width = ty.chars().count() as u16;
+                exclusions.push(Rect::new(
+                    right.saturating_sub(width),
+                    row + lines.len().saturating_sub(1) as u16,
+                    width,
+                    1,
+                ));
             }
-            row += value.len() as u16 + u16::from(matches!(placement, TypePlacement::Newline));
+            row += lines.len() as u16;
         }
     }
 
@@ -885,21 +794,29 @@ impl Element for WarningBlock {
     type Context = RenderContext;
 
     fn height(&self, context: &RenderContext) -> u16 {
-        word_lines(&self.text, Bordered::text_width(context)).len() as u16 + 2
+        word_lines(
+            &self.text,
+            Bordered::text_width(context, BorderLayout::plain()),
+        )
+        .len() as u16
+            + 2
     }
 
     fn render(&self, context: &RenderContext, area: Rect, buf: &mut Buffer) {
         let theme = context.groups();
-        let body = word_lines(&self.text, Bordered::text_width(context))
-            .into_iter()
-            .map(|line| Line::from(Span::styled(line, theme.warning_bg())))
-            .collect();
-        let title = Some(Line::from(Span::styled(" Warning ", theme.warning_bg())));
+        let body = word_lines(
+            &self.text,
+            Bordered::text_width(context, BorderLayout::plain()),
+        )
+        .into_iter()
+        .map(|line| Line::from(Span::styled(line, theme.warning())))
+        .collect();
+        let title = Some(Line::from(Span::styled(" Warning ", theme.warning())));
         Bordered::new(
-            theme.warning_bg(),
+            BorderLayout::plain(),
+            Style::new(),
             theme.warning_border(),
             title,
-            None,
             body,
         )
         .render(&(), area, buf);
@@ -911,10 +828,6 @@ impl Block for WarningBlock {
         BlockKind::Warning
     }
 }
-
-
-
-
 
 fn word_lines(text: &str, width: u16) -> Vec<String> {
     WrappedText::word(text, width)
@@ -930,16 +843,26 @@ fn error_box_text(message: &str, context: &RenderContext) -> Vec<String> {
         .map(strip_m2_location)
         .collect::<Vec<_>>()
         .join("\n");
-    word_lines(&message, Bordered::text_width(context))
+    word_lines(
+        &message,
+        Bordered::text_width(context, BorderLayout::plain()),
+    )
 }
 
 fn render_error_box(message: &str, context: &RenderContext, area: Rect, buf: &mut Buffer) {
     let theme = context.groups();
     let body = error_box_text(message, context)
         .into_iter()
-        .map(|line| Line::from(Span::styled(line, theme.error_bg())))
+        .map(|line| Line::from(Span::styled(line, theme.error())))
         .collect();
-    Bordered::new(theme.error_bg(), theme.error_border(), None, None, body).render(&(), area, buf);
+    Bordered::new(
+        BorderLayout::plain(),
+        Style::new(),
+        theme.error_border(),
+        None,
+        body,
+    )
+    .render(&(), area, buf);
 }
 
 /// An evaluation error whose submitted code is already present in the feed.
@@ -971,15 +894,13 @@ impl Block for ErrorMessageBlock {
     }
 }
 
-
-
-
 #[cfg(test)]
 mod tests {
+    use super::syntax_tree::SyntaxTreeBlock;
     use super::*;
     use crate::code::highlight::Highlighter;
-    use crate::ui::controller::settings::theme::groups::Groups;
-    use m2_syn::{DelimiterKind, DoubleSpan, Span as M2Span};
+    use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
+    use m2_syn::{DelimiterKind, DoubleSpan, PrettyNode, Span as M2Span};
 
     fn rendered_buffer(block: &dyn Block, width: u16, groups: &Groups) -> Buffer {
         let context = RenderContext::new(width, 0, groups);
@@ -1125,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    fn syntax_tree_centers_its_content_and_inverts_the_source_band() {
+    fn syntax_tree_uses_the_full_width_and_inverts_the_source_band() {
         let groups = Groups::default();
         let width = 60;
         let buffer = rendered_buffer(&syntax_tree_fixture(), width, &groups);
@@ -1136,21 +1057,9 @@ mod tests {
                     .collect::<String>()
             })
             .collect();
-        let occupied: Vec<_> = rows[1..]
-            .iter()
-            .filter_map(|row| {
-                let cells: Vec<_> = row.chars().collect();
-                Some((
-                    cells.iter().position(|cell| *cell != ' ')?,
-                    cells.iter().rposition(|cell| *cell != ' ')?,
-                ))
-            })
-            .collect();
-        let left = occupied.iter().map(|(left, _)| left).min().unwrap();
-        let right = occupied.iter().map(|(_, right)| right).max().unwrap();
-
         assert!(rows[0].chars().all(|cell| cell == '─'));
-        assert!(left.abs_diff(width as usize - right - 1) <= 1, "{rows:#?}");
+        assert!(rows[1].starts_with("(x,y)"), "{rows:#?}");
+        assert!(rows[3].starts_with("Root"), "{rows:#?}");
         assert_eq!(buffer[(0, 0)].bg, groups.code().bg.unwrap());
         assert_eq!(buffer[(0, 1)].bg, groups.transcript().bg.unwrap());
         assert_eq!(buffer[(0, 3)].bg, groups.code().bg.unwrap());
@@ -1190,7 +1099,7 @@ mod tests {
     }
 
     #[test]
-    fn code_uses_the_full_width_and_outputs_share_the_fixed_inset() {
+    fn code_and_output_reserve_the_cell_marker_margin() {
         let theme = Groups::default();
         let width = 40;
         let input = CodeBlock::new([Cell::input("x".to_string(), Vec::new())]);
@@ -1198,18 +1107,105 @@ mod tests {
 
         let input = rendered_rows(&input, width, &theme);
         let output = rendered_rows(&output, width, &theme);
-        assert_eq!(input[1].find('x'), Some(0));
-        assert_eq!(output[0].chars().nth(1), Some('╭'));
+        assert_eq!(
+            input[1].chars().position(|character| character == 'x'),
+            Some(4)
+        );
+        assert_eq!(output[0].chars().nth(2), Some('╭'));
     }
 
     #[test]
-    fn hard_wrapped_code_has_no_prefix() {
+    fn successful_cell_and_output_numbers_align_without_bold() {
+        use ratatui::style::Modifier;
+
+        let groups = Groups::default();
+        let input = CodeBlock::new([Cell::resolved("x".into(), 7, CellState::Value, Vec::new())]);
+        let output = OutputBlock::value("x".into(), None).numbered(7);
+        let input = rendered_buffer(&input, 20, &groups);
+        let output = rendered_buffer(&output, 20, &groups);
+
+        assert_eq!(input[(1, 1)].symbol(), "7");
+        assert_eq!(output[(1, 1)].symbol(), "o");
+        assert_eq!(output[(2, 1)].symbol(), "7");
+        assert_eq!(output[(2, 0)].symbol(), "╭");
+        assert_eq!(output[(2, 2)].symbol(), "╰");
+        assert_eq!(input[(1, 1)].fg, groups.muted().fg.unwrap());
+        assert_eq!(output[(2, 1)].fg, groups.output_number().fg.unwrap());
+        assert!(!input[(1, 1)].modifier.contains(Modifier::BOLD));
+        assert!(!output[(2, 1)].modifier.contains(Modifier::BOLD));
+        assert_eq!(input[(2, 0)].symbol(), "▏");
+        assert_eq!(input[(2, 0)].fg, groups.separator().fg.unwrap());
+
+        let null = rendered_buffer(
+            &CodeBlock::new([Cell::resolved("x".into(), 7, CellState::Null, Vec::new())]),
+            20,
+            &groups,
+        );
+        assert_eq!(null[(1, 1)].fg, groups.muted().fg.unwrap());
+    }
+
+    #[test]
+    fn multi_digit_output_opens_one_cell_in_the_shared_border() {
+        let groups = Groups::default();
+        let output = OutputBlock::value("a\nb".into(), None).numbered(12);
+        let output = rendered_buffer(&output, 20, &groups);
+
+        assert_eq!(output[(2, 0)].symbol(), "╭");
+        assert_eq!(output[(1, 1)].symbol(), "o");
+        assert_eq!(output[(2, 1)].symbol(), "1");
+        assert_eq!(output[(3, 1)].symbol(), "2");
+        assert_eq!(output[(2, 2)].symbol(), "│");
+        assert_eq!(output[(2, 3)].symbol(), "╰");
+    }
+
+    #[test]
+    fn hard_wrapped_code_keeps_its_prefix() {
         let theme = Groups::default();
         let input = CodeBlock::new([Cell::input("abcdefgh".to_string(), Vec::new())]);
 
-        let rows = rendered_rows(&input, 4, &theme);
-        assert_eq!(rows[1].find("abcd"), Some(0));
-        assert_eq!(rows[2].find("efgh"), Some(0));
+        let rows = rendered_rows(&input, 8, &theme);
+        assert_eq!(
+            rows[1].chars().position(|character| character == 'a'),
+            Some(4)
+        );
+        assert_eq!(
+            rows[2].chars().position(|character| character == 'e'),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn merged_code_uses_its_longest_number_and_continuous_separator() {
+        let mut submission =
+            SubmissionBlock::new(1, ["a", "b"].map(|text| (text.to_string(), Vec::new())));
+        submission.succeed(0, 9, CellState::Value, Vec::new());
+        submission.succeed(1, 10, CellState::Value, Vec::new());
+
+        let rows = rendered_rows(&submission, 20, &Groups::default());
+        assert_eq!(rows[0].chars().nth(3), Some('▏'));
+        assert_eq!(rows[1].chars().nth(1), Some('9'));
+        assert_eq!(rows[2].chars().nth(1), Some('1'));
+        assert_eq!(rows[2].chars().nth(2), Some('0'));
+        assert_eq!(
+            rows[1].chars().position(|character| character == 'a'),
+            Some(5)
+        );
+        assert_eq!(
+            rows[2].chars().position(|character| character == 'b'),
+            Some(5)
+        );
+        assert_eq!(rows[3].chars().nth(3), Some('▏'));
+    }
+
+    #[test]
+    fn printed_text_keeps_padding_without_a_separator() {
+        let rows = rendered_rows(&TextBlock::printed("text"), 20, &Groups::default());
+
+        assert!(rows.iter().all(|row| !row.contains('▏')));
+        assert_eq!(
+            rows[1].chars().position(|character| character == 't'),
+            Some(4)
+        );
     }
 
     #[test]
@@ -1258,8 +1254,14 @@ mod tests {
         assert_eq!(code.cells[1].text, "y");
         assert_eq!(code.cells[1].spans[0].content, 0..1);
         let rows = rendered_rows(&code, 20, &Groups::default());
-        assert_eq!(rows[1].trim(), "x");
-        assert_eq!(rows[2].trim(), "y");
+        assert_eq!(
+            rows[1].chars().position(|character| character == 'x'),
+            Some(4)
+        );
+        assert_eq!(
+            rows[2].chars().position(|character| character == 'y'),
+            Some(4)
+        );
     }
 
     #[test]
@@ -1272,32 +1274,36 @@ mod tests {
                 ("c".to_string(), Vec::new()),
             ],
         );
-        submission.succeed(0, Vec::new());
-        assert!(matches!(submission.cells[0].1, SubmissionState::Succeeded));
+        submission.succeed(0, 1, CellState::Value, Vec::new());
+        assert!(matches!(
+            submission.cells[0].1,
+            SubmissionState::Succeeded(1, CellState::Value)
+        ));
         assert!(matches!(submission.cells[1].1, SubmissionState::Pending));
-        submission.fail(1, "bad cell".to_string());
-        assert!(matches!(submission.cells[1].1, SubmissionState::Failed));
+        submission.fail(1, 2, "bad cell".to_string());
+        assert!(matches!(submission.cells[1].1, SubmissionState::Failed(2)));
         assert!(matches!(submission.cells[2].1, SubmissionState::Rejected));
     }
 
     #[test]
-    fn result_states_merge() {
+    fn non_values_do_not_add_output_cells() {
         let mut submission = SubmissionBlock::new(
             1,
             ["a", "b", "c"].map(|text| (text.to_string(), Vec::new())),
         );
-        submission.succeed(0, vec![Box::new(OutputBlock::value("a".to_string(), None))]);
-        submission.succeed(1, vec![Box::new(OutputBlock::muted("ZZ".to_string()))]);
         submission.succeed(
-            2,
-            vec![Box::new(OutputBlock::value(
-                "null".to_string(),
-                Some("Nothing".to_string()),
-            ))],
+            0,
+            1,
+            CellState::Value,
+            vec![Box::new(
+                OutputBlock::value("a".to_string(), None).numbered(1),
+            )],
         );
+        submission.succeed(1, 2, CellState::Muted, Vec::new());
+        submission.succeed(2, 3, CellState::Null, Vec::new());
 
         assert_eq!(submission.outputs.len(), 1);
-        assert_eq!(submission.outputs[0].value_mut().unwrap().cells.len(), 3);
+        assert_eq!(submission.outputs[0].value_mut().unwrap().cells.len(), 1);
     }
 
     #[test]
@@ -1307,7 +1313,11 @@ mod tests {
         for (index, number) in [1, 2].into_iter().enumerate() {
             submission.succeed(
                 index,
-                vec![Box::new(OutputBlock::value(number.to_string(), None))],
+                number,
+                CellState::Value,
+                vec![Box::new(
+                    OutputBlock::value(number.to_string(), None).numbered(number),
+                )],
             );
         }
 
@@ -1329,11 +1339,10 @@ mod tests {
         assert_eq!(rows.len(), 3);
         assert!(rows[1].contains("x + y") && rows[1].contains('R'));
         let cells: Vec<_> = rows[1].chars().collect();
-        let borders: Vec<_> = cells
+        let border = cells
             .iter()
-            .enumerate()
-            .filter_map(|(index, character)| (*character == '│').then_some(index))
-            .collect();
+            .rposition(|character| *character == '│')
+            .unwrap();
         let value = cells
             .iter()
             .position(|character| *character == 'x')
@@ -1343,7 +1352,7 @@ mod tests {
             .position(|character| *character == 'R')
             .unwrap();
         assert_eq!(value, 4);
-        assert_eq!(borders[1] - ty, 2);
+        assert_eq!(border - ty, 2);
     }
 
     #[test]
@@ -1359,8 +1368,11 @@ mod tests {
         );
         assert_eq!(rows.len(), 3);
         assert!(rows[0].contains('╭') && rows[0].contains('╮'));
-        assert_eq!(rows[0].chars().nth(1), Some('╭'));
-        assert_eq!(input[1].chars().next(), Some('x'));
+        assert_eq!(rows[0].chars().nth(2), Some('╭'));
+        assert_eq!(
+            input[1].chars().position(|character| character == 'x'),
+            Some(4)
+        );
         assert!(rows[2].contains('╰') && rows[2].contains('╯'));
     }
 
@@ -1376,64 +1388,67 @@ mod tests {
 
         for block in boxes {
             let buffer = rendered_buffer(block.as_ref(), 20, &theme);
-            assert_eq!(buffer[(1, 0)].symbol(), "╭");
-            assert_eq!(buffer[(1, block.height(&context) - 1)].symbol(), "╰");
+            assert_eq!(buffer[(2, 0)].symbol(), "╭");
+            assert_eq!(buffer[(2, block.height(&context) - 1)].symbol(), "╰");
         }
     }
 
     #[test]
-    fn diagnostic_boxes_use_their_tinted_surfaces() {
+    fn diagnostic_boxes_leave_their_surfaces_unfilled() {
         let theme = Groups::default();
-        for (block, surface) in [
+        for (block, text) in [
             (
                 Box::new(WarningBlock {
                     text: "warning".into(),
                 }) as Box<dyn Block>,
-                theme.warning_bg(),
+                theme.warning(),
             ),
             (
                 Box::new(ErrorMessageBlock::new("error".into())) as Box<dyn Block>,
-                theme.error_bg(),
+                theme.error(),
             ),
         ] {
             let buffer = rendered_buffer(block.as_ref(), 20, &theme);
             let cell = &buffer[(5, 1)];
-            assert_eq!(
-                (cell.fg, cell.bg),
-                (surface.fg.unwrap(), surface.bg.unwrap())
-            );
+            assert_eq!(cell.fg, text.fg.unwrap());
+            assert_eq!(cell.bg, ratatui::style::Color::Reset);
         }
     }
 
     #[test]
-    fn multiline_output_keeps_the_type_on_its_own_last_row() {
+    fn multiline_output_keeps_the_type_beside_its_last_value_row() {
         let theme = Groups::default();
         let block = OutputBlock::value("x\ny".to_string(), Some("R".to_string()));
 
         let rows = rendered_rows(&block, 40, &theme);
-        assert_eq!(rows.len(), 5);
+        assert_eq!(rows.len(), 4);
         assert!(rows[1].contains('x'));
-        assert!(rows[2].contains('y'));
-        assert!(rows[3].contains('R'));
+        assert!(rows[2].contains('y') && rows[2].contains('R'));
+    }
+
+    #[test]
+    fn overflowing_type_moves_below_a_full_value_row() {
+        let theme = Groups::default();
+        let width = 20;
+        let context = RenderContext::new(width, 0, &theme);
+        let width = OutputBlock::value(String::new(), None).text_width(&context);
+        let block = OutputBlock::value("x".repeat(width.into()), Some("R".into()));
+
+        let rows = rendered_rows(&block, 20, &theme);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[1].matches('x').count(), usize::from(width));
+        assert!(!rows[1].contains('R'));
+        assert!(rows[2].contains('R'));
     }
 
     #[test]
     fn a_result_shows_its_type() {
         let theme = Groups::default();
-        let block = OutputBlock::value("null".to_string(), Some("Nothing".to_string()));
+        let block = OutputBlock::value("x".to_string(), Some("R".to_string()));
 
         let rows = rendered_rows(&block, 40, &theme);
-        assert!(rows[1].contains("null"));
-        assert!(rows[1].contains("Nothing"));
-    }
-
-    #[test]
-    fn a_silent_binding_shows_only_its_type() {
-        let theme = Groups::default();
-        let block = OutputBlock::muted("ZZ".to_string());
-
-        let rows = rendered_rows(&block, 40, &theme);
-        assert!(rows[1].contains("ZZ"), "unexpected rows: {rows:?}");
+        assert!(rows[1].contains('x'));
+        assert!(rows[1].contains('R'));
     }
 
     #[test]
@@ -1451,6 +1466,17 @@ mod tests {
         let theme = Groups::default();
         let context = RenderContext::new(80, 0, &theme);
         let block = TextBlock::system("commands:\n  /settings\n  /code");
-        assert_eq!(block.height(&context), 4);
+        assert_eq!(block.height(&context), 5);
+    }
+
+    #[test]
+    fn system_block_is_a_centered_info_box() {
+        let theme = Groups::default();
+        let buffer = rendered_buffer(&TextBlock::system("message"), 60, &theme);
+
+        assert_eq!(buffer[(20, 0)].symbol(), "╭");
+        assert_eq!(buffer[(40, 0)].symbol(), "╮");
+        assert_eq!(buffer[(27, 1)].symbol(), "m");
+        assert_eq!(buffer[(27, 1)].fg, theme.info().fg.unwrap());
     }
 }

@@ -1,164 +1,63 @@
 //! Key bindings as data.
 //!
-//! Every key the editor responds to resolves to an [`Action`] through a
-//! [`Keymap`], so the same table drives dispatch, the status line's hints, and
-//! the bindings picker. Nothing reads a raw [`KeyCode`] outside this module.
+//! An action binding consumes its terminal key and emits an [`Action`]. Keys
+//! without a binding continue to the focused component as ordinary input.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use these_macros_should_be_illegal::discriminated_str;
+use std::collections::{HashMap, HashSet};
 
-use crate::ui::controller::{icons::Icon, OpenTarget};
-/// A finite keymap target. Real commands keep their callbacks and properties in
-/// [`Command`](crate::ui::controller::commands::Command); input actions stay here.
-#[discriminated_str(description)]
-#[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Action {
-    Quit = "quit spectral-m2",
-    Submit = "evaluate the input",
-    InsertNewline = "insert a line break",
-    ScrollFeedUp = "scroll the feed up",
-    ScrollFeedDown = "scroll the feed down",
-    OpenCommands = "open commands",
-    OpenSettings = "open settings",
-    OpenStyle = "open style",
-    OpenKeymaps = "open keymaps",
-    ClearFeed = "clear the feed",
-    OpenCode = "open code",
-    NewWorkspace = "open a new workspace",
-    OpenOutput = "open output",
-    OpenSyntaxTree = "open syntax tree",
-    Restart = "restart Macaulay2",
-    ClosePane = "close the focused pane",
-    ToggleHighlightDebug = "toggle highlight groups",
-    MoveLeft = "move left",
-    MoveRight = "move right",
-    MoveUp = "move up, or recall older input",
-    MoveDown = "move down, or recall newer input",
-    MoveLineStart = "move to line start",
-    MoveLineEnd = "move to line end",
-    SelectLeft = "extend selection left",
-    SelectRight = "extend selection right",
-    SelectLineStart = "extend selection to line start",
-    SelectLineEnd = "extend selection to line end",
-    CopySelection = "copy the selection",
-    ClearInput = "clear input text",
-    DeleteBack = "delete before the cursor",
-    DeleteForward = "delete under the cursor",
-    InsertTab = "insert a tab",
-}
+use crossterm::event::KeyCode;
+use KeyCode::*;
 
-impl Action {
-    pub const REMAPPABLE: &'static [Self] = &[
-        Self::OpenCommands,
-        Self::OpenSettings,
-        Self::OpenStyle,
-        Self::OpenKeymaps,
-        Self::ClearFeed,
-        Self::OpenCode,
-        Self::NewWorkspace,
-        Self::OpenOutput,
-        Self::OpenSyntaxTree,
-        Self::Restart,
-        Self::ClosePane,
-        Self::Quit,
-        Self::ToggleHighlightDebug,
-        Self::ClearInput,
-        Self::CopySelection,
-    ];
+use crate::ui::action::Action;
+use crate::ui::key::{KeyEvent, KeyMod};
+use KeyMod::{Alt, Ctrl, Shift};
 
-    fn is_remappable(self) -> bool {
-        Self::REMAPPABLE.contains(&self)
-    }
-}
-
-/// One key, its modifiers, and what it does.
-#[derive(Clone)]
-pub struct Binding {
-    pub code: KeyCode,
-    pub modifiers: KeyModifiers,
-    pub action: Action,
-}
-
-impl Binding {
-    pub fn new(code: KeyCode, modifiers: KeyModifiers, action: Action) -> Self {
-        Self {
-            code,
-            modifiers,
-            action,
-        }
-    }
-
-    /// How this key reads to a user: `ctrl+c`, `shift+enter`, `left`.
-    pub fn label(&self) -> String {
-        use KeyCode::*;
-        let mut parts = Vec::new();
-        if self.modifiers.contains(KeyModifiers::CONTROL) {
-            parts.push("ctrl".to_string());
-        }
-        if self.modifiers.contains(KeyModifiers::ALT) {
-            parts.push("alt".to_string());
-        }
-        if self.modifiers.contains(KeyModifiers::SHIFT) {
-            parts.push("shift".to_string());
-        }
-        parts.push(match self.code {
-            Char(' ') => Icon::Space.symbol().into(),
-            Char(character) => character.into(),
-            Enter => Icon::Enter.symbol().into(),
-            Tab => Icon::Tab.symbol().into(),
-            Backspace => Icon::Backspace.symbol().into(),
-            Delete => "del".into(),
-            Left => Icon::Left.symbol().into(),
-            Right => Icon::Right.symbol().into(),
-            Up => Icon::Up.symbol().into(),
-            Down => Icon::Down.symbol().into(),
-            Home => "home".into(),
-            End => "end".into(),
-            PageUp => "pgup".into(),
-            PageDown => "pgdn".into(),
-            Esc => "esc".into(),
-            other => format!("{other:?}").to_lowercase(),
-        });
-        parts.join("+")
-    }
-
-    /// Does this binding claim `key`? Shift is ignored for printable characters
-    /// other than space, since the terminal reports the shifted character itself.
-    fn matches(&self, key: KeyEvent) -> bool {
-        if self.code != key.code
-            && !(self.modifiers.contains(KeyModifiers::CONTROL)
-                && matches!(
-                    (self.code, key.code),
-                    (KeyCode::Char('/'), KeyCode::Char('7'))
-                ))
-        {
-            return false;
-        }
-        let mask = if matches!(self.code, KeyCode::Char(character) if character != ' ')
-            && !self.modifiers.is_empty()
-        {
-            KeyModifiers::CONTROL | KeyModifiers::ALT
-        } else {
-            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT
-        };
-        key.modifiers & mask == self.modifiers & mask
-    }
-}
-
-/// The editor's bindings, in the order the bindings picker lists them.
-#[derive(Clone)]
-pub struct Keymap {
-    bindings: Vec<Binding>,
+/// One action attached to a normalized key.
+#[derive(Clone, Copy)]
+struct Keymap {
+    action: Action,
+    remappable: bool,
 }
 
 impl Keymap {
-    /// The action `key` triggers, if any. The first matching binding wins, so
-    /// more specific combinations are listed before their bare keys.
-    pub fn action(&self, key: KeyEvent) -> Option<Action> {
+    fn new(action: Action) -> Self {
+        Self {
+            action,
+            remappable: action.is_remappable(),
+        }
+    }
+
+    fn fixed(action: Action) -> Self {
+        Self {
+            action,
+            remappable: false,
+        }
+    }
+}
+
+/// The editor's exact normalized-key bindings.
+#[derive(Clone)]
+pub struct Keymaps {
+    bindings: HashMap<KeyEvent, Keymap>,
+    preview: HashMap<KeyEvent, Keymap>,
+    reserved: HashSet<KeyEvent>,
+}
+
+impl Keymaps {
+    /// Resolve a terminal key to an action, after which the key is discarded.
+    pub fn action(&self, key: KeyEvent, remapping: bool) -> Option<Action> {
         self.bindings
-            .iter()
-            .find(|binding| binding.matches(key))
+            .get(&key.binding())
+            .filter(|binding| {
+                !remapping || !binding.remappable || binding.action == Action::OpenKeymaps
+            })
+            .map(|binding| binding.action)
+    }
+
+    /// Resolve a fixed key owned by preview panes.
+    pub fn preview_action(&self, key: KeyEvent) -> Option<Action> {
+        self.preview
+            .get(&key.binding())
             .map(|binding| binding.action)
     }
 
@@ -166,116 +65,105 @@ impl Keymap {
     pub fn key_for(&self, action: Action) -> Option<String> {
         self.bindings
             .iter()
-            .find(|binding| binding.action == action)
-            .map(Binding::label)
+            .find_map(|(key, binding)| (binding.action == action).then(|| key.to_string()))
     }
 
     pub fn rebind(&mut self, action: Action, key: KeyEvent) -> bool {
+        let key = key.binding();
         if !action.is_remappable()
-            || OpenTarget::from_key(key, true) == Some(OpenTarget::Split)
-            || matches!(key.code, KeyCode::Char(_))
-                && !key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            || self.reserved.contains(&key)
+            || self
+                .bindings
+                .get(&key)
+                .is_some_and(|binding| !binding.remappable)
         {
             return false;
         }
         let Some(target) = self
             .bindings
             .iter()
-            .position(|binding| binding.action == action)
+            .find_map(|(key, binding)| (binding.action == action).then_some(*key))
         else {
             return false;
         };
-        let conflict = self
+        if self
             .bindings
-            .iter()
-            .position(|binding| binding.matches(key));
-        if conflict.is_some_and(|index| !self.bindings[index].action.is_remappable()) {
+            .get(&key)
+            .is_some_and(|binding| !binding.remappable)
+        {
             return false;
         }
-
-        if let Some(conflict) = conflict.filter(|index| *index != target) {
-            let old_code = self.bindings[target].code;
-            let old_modifiers = self.bindings[target].modifiers;
-            self.bindings[conflict].code = old_code;
-            self.bindings[conflict].modifiers = old_modifiers;
+        if key == target {
+            return true;
         }
-        self.bindings[target].code = key.code;
-        self.bindings[target].modifiers = key.modifiers;
+        let binding = self.bindings.remove(&target).unwrap();
+        if let Some(conflict) = self.bindings.remove(&key) {
+            self.bindings.insert(target, conflict);
+        }
+        self.bindings.insert(key, binding);
         true
     }
 }
 
-macro_rules! mod_key {
-    (Ctrl) => {
-        KeyModifiers::CONTROL
-    };
-    (Shift) => {
-        KeyModifiers::SHIFT
-    };
-    (Alt) => {
-        KeyModifiers::ALT
-    };
-    ($a:literal) => {
-        KeyCode::Char($a)
-    };
-    ($a:ident) => {
-        KeyCode::$a
-    };
-    () => {
-        KeyModifiers::NONE
+macro_rules! keymap {
+    ($action:ident <- $key:expr) => {
+        (key!($key), Keymap::new(Action::$action))
     };
 }
 
-macro_rules! binding {
-    ($mod:ident - $key:tt, $action:ident) => {
-        Binding::new(mod_key! {$key}, mod_key!($mod), Action::$action)
-    };
-    ($key:tt, $action:ident) => {
-        Binding::new(mod_key! {$key}, mod_key!(), Action::$action)
+macro_rules! key {
+    ($key:expr) => {
+        Into::<KeyEvent>::into($key)
     };
 }
 
-impl Default for Keymap {
+impl Default for Keymaps {
     fn default() -> Self {
         Self {
-            bindings: vec![
-                binding!(Ctrl - 'c', Quit),
-                binding!(Ctrl - '/', OpenCommands),
-                binding!(Ctrl - 'o', OpenSettings),
-                binding!(Alt - 's', OpenStyle),
-                binding!(Alt - 'k', OpenKeymaps),
-                binding!(Alt - 'l', ClearFeed),
-                binding!(Alt - 'c', OpenCode),
-                binding!(Alt - 'n', NewWorkspace),
-                binding!(Alt - 'o', OpenOutput),
-                binding!(Alt - 't', OpenSyntaxTree),
-                binding!(Alt - 'r', Restart),
-                binding!(Alt - 'w', ClosePane),
-                binding!(Ctrl - 'd', ToggleHighlightDebug),
-                binding!(Ctrl - 'y', CopySelection),
-                binding!(Ctrl - 'l', ClearInput),
-                binding!(Shift - ' ', InsertNewline),
-                binding!(Shift - Enter, InsertNewline),
-                binding!(Alt - Enter, InsertNewline),
-                binding!(Enter, Submit),
-                binding!(PageUp, ScrollFeedUp),
-                binding!(PageDown, ScrollFeedDown),
-                binding!(Shift - Left, SelectLeft),
-                binding!(Shift - Right, SelectRight),
-                binding!(Shift - Home, SelectLineStart),
-                binding!(Shift - End, SelectLineEnd),
-                binding!(Left, MoveLeft),
-                binding!(Right, MoveRight),
-                binding!(Up, MoveUp),
-                binding!(Down, MoveDown),
-                binding!(Home, MoveLineStart),
-                binding!(End, MoveLineEnd),
-                binding!(Backspace, DeleteBack),
-                binding!(Delete, DeleteForward),
-                binding!(Tab, InsertTab),
-            ],
+            bindings: HashMap::from([
+                keymap!(FocusPaneLeft <- Left + Ctrl),
+                keymap!(FocusPaneRight <- Right + Ctrl),
+                keymap!(ResizePaneLeft <- Left + Ctrl + Shift),
+                keymap!(ResizePaneRight <- Right + Ctrl + Shift),
+                keymap!(Quit <- Char('c') + Ctrl),
+                keymap!(OpenCommands <- Char('/') + Ctrl),
+                keymap!(OpenSettings <- Char('o') + Ctrl),
+                keymap!(OpenStyle <- Char('s') + Alt),
+                keymap!(OpenKeymaps <- Char('k') + Alt),
+                keymap!(ClearFeed <- Char('l') + Alt),
+                keymap!(OpenCode <- Char('c') + Alt),
+                keymap!(NewWorkspace <- Char('n') + Alt),
+                keymap!(OpenOutput <- Char('o') + Alt),
+                keymap!(OpenSyntaxTree <- Char('t') + Alt),
+                keymap!(Restart <- Char('r') + Alt),
+                keymap!(ClosePane <- Char('w') + Alt),
+                keymap!(ToggleHighlightDebug <- Char('d') + Ctrl),
+                keymap!(CopySelection <- Char('y') + Ctrl),
+                keymap!(Submit <- Enter),
+                keymap!(ScrollFeedUp <- PageUp),
+                keymap!(ScrollFeedDown <- PageDown),
+            ]),
+            preview: HashMap::from([(key!(Char('q')), Keymap::fixed(Action::Quit))]),
+            reserved: HashSet::from([
+                key!(Char('v') + Alt),
+                key!(Char('l') + Ctrl),
+                key!(Char(' ') + Shift),
+                key!(Enter + Shift),
+                key!(Enter + Alt),
+                key!(Left + Shift),
+                key!(Right + Shift),
+                key!(Home + Shift),
+                key!(End + Shift),
+                key!(Left),
+                key!(Right),
+                key!(Up),
+                key!(Down),
+                key!(Home),
+                key!(End),
+                key!(Backspace),
+                key!(Delete),
+                key!(Tab),
+            ]),
         }
     }
 }
@@ -284,102 +172,106 @@ impl Default for Keymap {
 mod tests {
     use super::*;
 
-    #[test]
-    fn modified_bindings_win_over_their_bare_key() {
-        let keymap = Keymap::default();
-        let plain = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        let shifted = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
-
-        assert!(keymap.action(plain) == Some(Action::Submit));
-        assert!(keymap.action(shifted) == Some(Action::InsertNewline));
+    fn action(keymaps: &Keymaps, key: KeyEvent) -> Option<Action> {
+        keymaps.action(key, false)
     }
 
     #[test]
-    fn shift_space_inserts_newline_without_claiming_plain_space() {
-        let keymap = Keymap::default();
+    fn editing_keys_are_not_command_bindings() {
+        let keymaps = Keymaps::default();
+        let plain = key!(Enter);
+        let shifted = key!(Enter + Shift);
 
-        assert!(
-            keymap.action(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::SHIFT))
-                == Some(Action::InsertNewline)
-        );
-        assert!(keymap
-            .action(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
-            .is_none());
+        assert!(action(&keymaps, plain) == Some(Action::Submit));
+        assert!(action(&keymaps, shifted).is_none());
+    }
+
+    #[test]
+    fn spaces_are_forwarded_to_the_editor() {
+        let keymaps = Keymaps::default();
+
+        for key in [key!(Char(' ')), key!(Char(' ') + Shift)] {
+            assert!(action(&keymaps, key).is_none());
+        }
+    }
+
+    #[test]
+    fn preview_exit_is_fixed_to_plain_q() {
+        let keymaps = Keymaps::default();
+
+        assert!(keymaps.preview_action(key!(Char('q'))) == Some(Action::Quit));
+        assert!(keymaps.preview_action(key!(Char('q') + Ctrl)).is_none());
     }
 
     // The terminal reports a shifted letter as the letter itself, so a binding on
     // a character must not demand the shift state match.
     #[test]
     fn character_bindings_ignore_shift() {
-        let keymap = Keymap::default();
-        let shifted = KeyEvent::new(
-            KeyCode::Char('c'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        );
+        let keymaps = Keymaps::default();
+        let shifted = key!(Char('c') + Ctrl + Shift);
 
-        assert!(keymap.action(shifted) == Some(Action::Quit));
+        assert!(action(&keymaps, shifted) == Some(Action::Quit));
     }
 
     #[test]
     fn control_slash_accepts_legacy_terminal_encoding() {
-        let keymap = Keymap::default();
-        let legacy = KeyEvent::new(KeyCode::Char('7'), KeyModifiers::CONTROL);
+        let keymaps = Keymaps::default();
+        let legacy = key!(Char('7') + Ctrl);
 
-        assert!(keymap.action(legacy) == Some(Action::OpenCommands));
+        assert!(action(&keymaps, legacy) == Some(Action::OpenCommands));
     }
 
     #[test]
     fn keys_are_labelled_for_display() {
-        let keymap = Keymap::default();
+        let keymaps = Keymaps::default();
+        let ctrl = if cfg!(target_os = "macos") {
+            "⌘"
+        } else {
+            "ctrl"
+        };
         assert_eq!(
-            keymap.key_for(Action::OpenSettings).as_deref(),
-            Some("ctrl+o")
+            keymaps.key_for(Action::OpenSettings),
+            Some(format!("{ctrl}+o"))
         );
         assert_eq!(
-            keymap.key_for(Action::OpenCommands).as_deref(),
-            Some("ctrl+/")
+            keymaps.key_for(Action::OpenCommands),
+            Some(format!("{ctrl}+/"))
         );
         assert_eq!(
-            keymap.key_for(Action::InsertNewline),
-            Some(format!("shift+{}", Icon::Space.symbol()))
-        );
-        assert_eq!(
-            keymap.key_for(Action::MoveLeft),
-            Some(Icon::Left.symbol().into())
+            keymaps.key_for(Action::ResizePaneLeft),
+            Some(format!("{ctrl}+⇧+←"))
         );
     }
 
     #[test]
     fn remapping_swaps_remappable_conflicts_and_preserves_fixed_keys() {
-        let mut keymap = Keymap::default();
-        let copy = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL);
-        let left = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        let mut keymaps = Keymaps::default();
+        let copy = key!(Char('y') + Ctrl);
+        let submit = key!(Enter);
 
-        assert!(keymap.rebind(Action::ClearInput, copy));
-        assert!(keymap.action(copy) == Some(Action::ClearInput));
-        assert!(
-            keymap.action(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL))
-                == Some(Action::CopySelection)
-        );
-        assert!(!keymap.rebind(Action::ClearInput, left));
-        assert!(keymap.action(left) == Some(Action::MoveLeft));
+        let clear = Action::ClearFeed;
+        assert!(keymaps.rebind(clear, copy));
+        assert!(action(&keymaps, copy) == Some(clear));
+        assert!(action(&keymaps, key!(Char('l') + Alt)) == Some(Action::CopySelection));
+        assert!(!keymaps.rebind(clear, submit));
+        assert!(action(&keymaps, submit) == Some(Action::Submit));
     }
 
     #[test]
-    fn plain_typing_cannot_be_claimed_by_a_remapping() {
-        let mut keymap = Keymap::default();
-        let letter = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+    fn plain_typing_can_be_claimed_by_a_remapping() {
+        let mut keymaps = Keymaps::default();
+        let letter = key!(Char('a'));
 
-        assert!(!keymap.rebind(Action::ClearInput, letter));
-        assert!(keymap.action(letter).is_none());
+        assert!(keymaps.rebind(Action::ClearFeed, letter));
+        assert!(action(&keymaps, letter) == Some(Action::ClearFeed));
     }
 
     #[test]
     fn alternative_view_cannot_be_claimed_by_a_remapping() {
-        let mut keymap = Keymap::default();
-        let alternative = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT);
+        let mut keymaps = Keymaps::default();
+        let alternative = key!(Char('v') + Alt);
 
-        assert!(!keymap.rebind(Action::ClearInput, alternative));
-        assert!(keymap.action(alternative).is_none());
+        assert!(!keymaps.rebind(Action::ClearFeed, alternative));
+        assert!(action(&keymaps, alternative).is_none());
     }
 }
