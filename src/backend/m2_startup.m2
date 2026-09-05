@@ -1,37 +1,50 @@
--- spectral-m2 startup script
--- Reads the listen port from the script argument, opens a listener, and serves
--- JSON-RPC 2.0 requests over a loopback TCP socket.
+-- spectral-m2 backend: the shell's top-level mode, installed into a real M2.
 --
--- The Rust crate's TCP transport opens one connection per request, so the
--- connection is the message boundary: M2 reads one JSON value, dispatches it via
--- the JSONRPC package, writes one response, and closes the connection.
+-- This file is loaded with `-e` before M2 enters its own top level, which then
+-- reads the whole session from stdin. That is the point: one reader, holding
+-- one local dictionary, for the session's lifetime -- exactly what an
+-- interactive M2 does. Evaluating each cell through `capture` instead gave
+-- every cell a local dictionary of its own, so a top-level `x := 1` bound a
+-- symbol the next cell's parse never saw. See the "One Reader Per Session"
+-- decision record.
+--
+-- Two channels, both driven by the shell:
+--
+--   stdin   one cell, then the terminator statement, per submission.
+--   stdout  everything M2 says. The shell hands the child a single pipe for
+--           both stdout and stderr, so printed text, diagnostics and the marked
+--           frames below arrive in the order M2 produced them -- ordering is the
+--           kernel's business rather than something we have to guess at.
+--
+-- `echoOff` and the mode's lack of an InputPrompt keep the channel free of
+-- scaffolding: no echoed input, no `iN :` prompt, no `oN =` labels. Printed text
+-- arrives as itself and needs no unpicking.
 
-needsPackage "JSONRPC"
 needsPackage "JSON"
-
--- The TUI passes the port to listen on as the script's sole argument
--- (scriptCommandLine#0 is this script's own path, #1 the port). This avoids a
--- shared rendezvous file the two processes could disagree on (e.g. under $TMPDIR).
-serverHost = "127.0.0.1"
-port = value scriptCommandLine#1
-
-rpcServer = new JSONRPCServer;
 
 (() -> (
     mode := global SpectralTopLevelMode;
-    -- Rendered value, type annotation, and whether an oN was bound. The last is
-    -- not implied by the first: a `;`-suppressed result binds oN without ever
-    -- being rendered. A MutableHashTable, not a MutableList: the hooks below run
-    -- on the task thread that `evaluate` schedules, and M2 documents mutable hash
-    -- tables as thread safe while changes inside mutable lists are not.
+    -- The rendered value and type annotation of the statement in flight, filled
+    -- by the hooks below and read once by the frame that closes the input.
     output := new MutableHashTable from {
         symbol value => null,
-        symbol typeInfo => null,
-        symbol hasValue => false
+        symbol typeInfo => null
     };
-    -- The input number of the evaluation in flight, or null when none is: the
-    -- shell's iN, which is also the name the result must be bound under.
-    inputNumber := null;
+    hypertextType := value Core#"private dictionary"#"Hypertext";
+    -- Whether the statement in flight ran to completion: the hooks below are the
+    -- last thing a statement does, and one that throws runs none of them.
+    --
+    -- Nothing here asks what a failed statement *managed* to do before it failed,
+    -- because there is no answer to that. A throw can land anywhere -- part-way
+    -- through a nested parallel assignment, with some of its targets bound and
+    -- the rest not -- so any reading of the session's state afterwards is a
+    -- guess. This flag is only ever allowed to make a frame say the wrong thing,
+    -- never to decide whether a frame is sent.
+    completed := false;
+    -- Set by the terminator and cleared by the hook pass that immediately follows
+    -- it, so the shell's own statement never reports itself as a result. It spans
+    -- one statement boundary and is read nowhere else.
+    ownStatement := false;
     renderAfterPrint := value -> "" | concatenate apply(
         select(deepSplice sequence value, item -> item =!= null),
         item -> toString net item
@@ -43,19 +56,39 @@ rpcServer = new JSONRPCServer;
             value
         else lookupMethod value
     );
-    -- Recording rather than printing keeps the captured transcript free of
-    -- everything but genuinely printed text. A `;` still suppresses the value:
-    -- NoPrint deliberately skips `net value`, which is the render the punctuation
-    -- exists to avoid on large objects. The type is read either way, so the shell
-    -- can say what a suppressed result is without paying to render it.
-    recordValue := value -> (
+    -- Recording rather than printing keeps the channel free of everything but
+    -- genuinely printed text. A `;` still suppresses the value: NoPrint
+    -- deliberately skips `net value`, which is the render the punctuation exists
+    -- to avoid on large objects. The type is read either way, so the shell can
+    -- say what a suppressed result is without paying to render it.
+    renderAtom := value -> (
         netValue := "" | toString net value;
-        output.value = try hashTable {
-            "tex" => hashTable {
-                "source" => tex value,
-                "fallback" => netValue
+        if instance(value, FunctionClosure) or instance(value, CompiledFunctionClosure) then
+            hashTable {"net" => netValue}
+        else try hashTable {
+                "tex" => hashTable {
+                    "source" => tex value,
+                    "fallback" => netValue
+                }
+            } else hashTable {"net" => netValue}
+    );
+    renderValue := value -> (
+        if instance(value, hypertextType) then hashTable {
+            "markup" => hashTable {
+                "html" => html value,
+                "fallback" => "" | toString net value
             }
-        } else hashTable {"net" => netValue};
+        }
+        else if class value === HashTable then hashTable {
+            "hashtable" => apply(pairs value, pair -> apply(toList pair, renderAtom))
+        }
+        else if class value === VerticalList then hashTable {
+            "verticallist" => apply(toList value, renderAtom)
+        }
+        else renderAtom value
+    );
+    recordValue := value -> (
+        output.value = renderValue value;
     );
     recordInexactValue := value -> (
         savedPrecision := printingPrecision;
@@ -66,12 +99,47 @@ rpcServer = new JSONRPCServer;
         printingPrecision = savedPrecision;
         printingAccuracy = savedAccuracy;
     );
+
+    -- One frame closes one input. Marked with a control character no diagnostic
+    -- and no prompt can begin with, so the shell can pick frames out of the
+    -- stream by inspecting the first byte alone; printed text that happens to
+    -- start with it is the user's own doing and reads back as a frame, which is
+    -- the same bargain any in-band marker makes.
+    frameMark := ascii 29;
+    emitFrame := payload -> (
+        stdio << frameMark << toJSON payload << endl << flush;
+    );
+    sendResult := () -> emitFrame hashTable {
+        "number" => lineNumber,
+        "value" => output.value,
+        "typeInfo" => output.typeInfo,
+        -- Read from M2's own record rather than tracked separately: `oN` exists
+        -- exactly when the result was bound, which is what the shell is asking.
+        -- It is not implied by `value`, a `;`-suppressed result being bound
+        -- without ever being rendered.
+        "hasValue" => OutputDictionary#?("o" | toString lineNumber),
+        -- Nested interpreters are how M2 says it is sitting in the debugger;
+        -- the shell paints itself differently when it is.
+        "depth" => interpreterDepth,
+        "error" => not completed
+    };
+    forgetResult := () -> (
+        output.value = null;
+        output.typeInfo = null;
+        completed = false;
+    );
     recordTypeInfo := value -> (
+        -- The terminator's own pass through here, cleared as it is recognised.
+        if ownStatement then (
+            ownStatement = false;
+            return;
+        );
         lookupMethod := lookup(AfterPrint, class value);
         typeInfo := lookupMethod value;
         if typeInfo === null then
             typeInfo = class value;
         output.typeInfo = renderAfterPrint typeInfo;
+        completed = true;
     );
 
     -- Nothing deliberately has no Print override: an unterminated statement
@@ -83,112 +151,54 @@ rpcServer = new JSONRPCServer;
     -- Deliberately AfterPrint in both branches: stock M2 reads AfterNoPrint under
     -- a `;`, which only some classes define, so the type would appear or vanish
     -- with the punctuation. Reading AfterPrint always gives every class its type.
+    -- These run last for a statement that completed, which is what makes reaching
+    -- them the definition of having completed.
     Thing#{mode, AfterPrint} = recordTypeInfo;
     Thing#{mode, AfterNoPrint} = recordTypeInfo;
     protect mode;
 
-    -- Bind oN and rotate oo/ooo/oooo, mirroring Core.m2's Thing#AfterEval. Ours
-    -- replaces it for two reasons. First, `capture` restarts its inner session at
-    -- lineNumber 1, so Core's version names every result o1 and overwrites it --
-    -- the shell supplies the true input number instead. Second, the gate on
-    -- inputNumber keeps any capture the shell runs on its own behalf -- the user
-    -- init file, say -- from rotating oo or claiming a number. AfterEval is not
-    -- keyed by topLevelMode, so this is a global
-    -- replacement -- deliberate, since this process serves only the shell.
-    -- TODO the output bookkeeping should be inviolable -- `protect symbol oo`
-    -- must be refused rather than allowed to disable it. Until then this matches
-    -- Core's unguarded assignment, which a user can still break by protecting oo.
-    Thing#AfterEval = value -> (
-        if inputNumber =!= null then (
-            if ooo =!= null then
-                global oooo <- ooo;
-            if oo =!= null then
-                global ooo <- oo;
-            if value =!= null then (
-                global oo <- value;
-                output.hasValue = true;
-                (getGlobalSymbol(OutputDictionary,
-                    concatenate("o", toString inputNumber))) <- value;
-            );
-        );
-        value
+    -- Sent by the shell after every cell, and the only part of a submission the
+    -- user did not write. It is the sole thing that closes an input.
+    --
+    -- Sending is unconditional, and that is the whole point. A statement that
+    -- throws runs none of the hooks, so something has to close the input or the
+    -- shell waits for a frame that never comes; but a terminator that decided
+    -- *whether* to send would be reading state the failed statement may have
+    -- reached into. Getting that wrong sends two frames for one input, which
+    -- misfiles every result after it, or none, which hangs the session until a
+    -- timeout. So exactly one frame leaves here per submission by construction,
+    -- and the only thing inference is allowed to affect is what the frame says.
+    -- The top level carries on after an error -- unlike `capture`, which forces
+    -- `stopIfError` -- so this statement runs either way.
+    --
+    -- Rewinding `lineNumber` costs this statement its own input number, keeping
+    -- the shell's `iN` contiguous. A failed input is rewound past as well, so the
+    -- next cell reuses its number: nothing can refer to it, a statement that
+    -- throws having bound no `oN` and left `oo` where it was.
+    User#"spectral end of cell" = () -> (
+        lineNumber = lineNumber - 1;
+        sendResult();
+        if not completed then
+            lineNumber = lineNumber - 1;
+        forgetResult();
+        ownStatement = true;
     );
 
-    -- `number` is the shell's iN for this cell, or null for code the session runs
-    -- on its own behalf (the user init file), whose results bind no oN.
-    registerMethod(rpcServer, "evaluate", {"code", "number"}, (code, number) -> (
-        output.value = null;
-        output.typeInfo = null;
-        output.hasValue = false;
-        inputNumber = number;
-        previousTopLevelMode := topLevelMode;
-        topLevelMode = mode;
-        -- Same hazard `check` documents: JSONRPC traps method errors, and that
-        -- outer trap swallows the diagnostic before `capture` can write it into
-        -- the transcript -- an errored evaluation came back with the echoed input
-        -- and nothing else. Running the capture in its own task keeps the message.
-        (err, out) := taskResult schedule(() -> capture(code, UserMode => true));
-        topLevelMode = previousTopLevelMode;
-        inputNumber = null;
-        hashTable {
-            "transcript" => out,
-            "value" => output.value,
-            "typeInfo" => output.typeInfo,
-            "hasValue" => output.hasValue,
-            -- Nested interpreters are how M2 says it is sitting in the debugger;
-            -- the shell paints itself differently when it is.
-            "depth" => interpreterDepth,
-            "error" => err
-        }
-    ));
-))();
-
-registerMethod(rpcServer, "version", {}, () -> version#"VERSION");
-
--- Serve requests, having first handed the user back the names our transport
--- borrowed. Neither JSON nor JSONRPC is in M2's prelude, and a freshly loaded
--- package's dictionary is inserted at the FRONT of dictionaryPath -- ahead of
--- the user's own -- so leaving them loaded reserves thirteen unqualified names
--- (json, toJSON, fromJSON, handleRequest, registerMethod, setLogger,
--- makeRequest, Indent, IndentLevel, NameSeparator, ValueSeparator,
--- JSONRPCServer, JSONRPCError). It does not merely shadow: `json = 3` fails
--- outright with "assignment to protected global variable 'toJSON'", naming a
--- symbol the user never typed. `dismiss` returns the names; a user who wants
--- them can `needsPackage "JSON"` themselves, which re-adds the dictionary to the
--- path at no cost, since the package itself stays loaded.
---
--- This is deliberately ONE statement. M2 binds names as each statement is
--- parsed, so the two references below resolve while the dictionaries are still
--- on the path and keep working after the dismiss. Split them out and they do not
--- error -- they silently become their own unbound Symbols, failing later, at the
--- first request.
-(() -> (
-    -- The connection delivers a request in however many chunks TCP chooses, so
-    -- `payload` is routinely a partial JSON document and "does it parse yet" is
-    -- the read loop's exit condition. `??` guards its LEFT operand only -- errors
-    -- on the right propagate -- so the parse must sit there to yield null rather
-    -- than raise on an incomplete read.
-    parseRequest := payload -> fromJSON payload ?? null;
-    serveRequest := payload -> handleRequest(rpcServer, payload);
-    dismiss JSON;
-    dismiss JSONRPC;
-
-    listener := openListener concatenate("$", serverHost, ":", toString port);
-    while true do (
-        conn := openInOut listener;
-        payload := "";
-        request := null;
-        -- `read` yields the empty string at end of file. Without this guard a peer
-        -- that hangs up before it finished sending -- the Rust side reaching its
-        -- read timeout, say -- spins here forever, pinning a core and wedging the
-        -- listener against every later connection as well.
-        while request === null do (
-            chunk := read conn;
-            if length chunk === 0 then break;
-            payload = payload | chunk;
-            request = parseRequest payload;
-        );
-        if request =!= null then (conn << serveRequest payload << flush);
-        close conn;
-    )
+    -- Announced once the hooks are installed and before the first cell can be
+    -- read, so the shell knows the child is up and which M2 it got.
+    emitFrame hashTable {"ready" => version#"VERSION"};
 ))()
+
+-- Hand back the name the JSON transport borrowed. A freshly loaded package's
+-- dictionary is inserted at the FRONT of dictionaryPath -- ahead of the user's
+-- own -- so leaving it loaded reserves `json`, `toJSON`, `fromJSON` and the
+-- formatting options. It does not merely shadow: `json = 3` fails outright with
+-- "assignment to protected global variable 'toJSON'", naming a symbol the user
+-- never typed. `dismiss` returns the names; the package itself stays loaded, so
+-- the reference captured in the closure above keeps working.
+dismiss JSON
+
+-- Last, so that nothing above is echoed: from here the channel carries only what
+-- the session produces.
+echoOff()
+topLevelMode = SpectralTopLevelMode

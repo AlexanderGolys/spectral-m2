@@ -4,7 +4,7 @@
 //! and rendering consume the same visual-line ranges produced by the shared layout
 //! policies.
 
-use crate::ui::block::{Element, HLSpan, Text};
+use crate::ui::block::{Element, Exclusions, HLSpan, Text};
 use crate::ui::config::UI;
 use crate::ui::controller::settings::theme::groups::Groups;
 use ratatui::buffer::Buffer;
@@ -224,6 +224,26 @@ impl Bordered {
 
     pub(crate) fn text_width(context: &RenderContext, layout: FrameLayout) -> u16 {
         Self::inner(Rect::new(0, 0, context.width(), 0), layout).width
+    }
+
+    /// Exclude the frame and its padding while retaining rendered body glyphs.
+    pub(crate) fn exclude_frame(area: Rect, layout: FrameLayout, exclusions: &mut Exclusions) {
+        let frame = Self::area(area, layout);
+        let inner = Self::inner(area, layout);
+        match (frame.width, frame.height) {
+            (0, _) | (_, 0) => {}
+            _ => exclusions.extend([
+                Rect::new(frame.x, frame.y, frame.width, 1),
+                Rect::new(frame.x, frame.bottom() - 1, frame.width, 1),
+                Rect::new(frame.x, frame.y, inner.x - frame.x, frame.height),
+                Rect::new(
+                    inner.right(),
+                    frame.y,
+                    frame.right() - inner.right(),
+                    frame.height,
+                ),
+            ]),
+        }
     }
 }
 

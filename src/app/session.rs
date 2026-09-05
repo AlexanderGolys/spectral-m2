@@ -513,6 +513,10 @@ fn worker(mut backend: M2Backend, requests: Receiver<WorkerRequest>, events: Sen
                     let result = backend
                         .evaluate(code, Some(number))
                         .map_err(|error| error.to_string());
+                    // M2 numbers its own inputs, so the number a cell is labelled
+                    // and recalled by is the one it reports back, not the one the
+                    // shell guessed before submitting.
+                    let number = result.as_ref().map_or(number, |response| response.number);
                     let stop = result.as_ref().map_or(true, |response| response.is_error);
                     if events
                         .send(WorkerEvent::Cell {
@@ -570,9 +574,9 @@ fn response_blocks(
     if !output.printed.is_empty() {
         blocks.push(Box::new(TextBlock::printed(output.printed)));
     }
-    let value = match (output.value, response.has_value) {
-        (Some(value), true) => {
-            Some(OutputBlock::value(value.text, value.type_info).numbered(number))
+    let value = match (response.value.clone(), output.value, response.has_value) {
+        (Some(value), Some(rendered), true) => {
+            Some(OutputBlock::rendered(value, rendered.type_info).numbered(number))
         }
         _ => None,
     };
@@ -605,6 +609,7 @@ mod tests {
             (None, Some("ZZ".to_string()), true),
         ] {
             let response = M2Response {
+                number: 1,
                 is_error: false,
                 transcript: "x\n\n".into(),
                 value: value.map(M2Value::Net),

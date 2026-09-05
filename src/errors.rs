@@ -11,8 +11,6 @@ pub(crate) enum Error {
     Serialization(#[from] serde_json::Error),
     #[error(transparent)]
     Theme(#[from] toml::de::Error),
-    #[error(transparent)]
-    Transport(#[from] jsonrpc::Error),
     #[error("M2 process exited: {0}")]
     Process(String),
     #[error("timed out after {0} seconds")]

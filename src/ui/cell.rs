@@ -14,7 +14,7 @@ use ratatui::widgets::{Paragraph, Widget};
 use super::block::{Block, Element, Exclusions, HLSpan};
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::wrap::WrappedText;
-use crate::backend::transcript::strip_m2_location;
+use crate::backend::{transcript::strip_m2_location, M2Value};
 use crate::ui::config::UI;
 use crate::ui::controller::settings::theme::groups::Groups;
 
@@ -735,13 +735,18 @@ impl Block for TextBlock {
         }
     }
     fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
-        if matches!(self.kind, TextKind::Printed) {
-            exclusions.push(Rect::new(
+        match self.kind {
+            TextKind::System => Bordered::exclude_frame(
+                Rect::new(0, 0, context.width(), self.height(context)),
+                FrameLayout::middle_third(),
+                exclusions,
+            ),
+            TextKind::Printed => exclusions.push(Rect::new(
                 0,
                 0,
                 CellLayout::plain().prefix(),
                 self.height(context),
-            ));
+            )),
         }
     }
 }
@@ -750,6 +755,7 @@ impl Block for TextBlock {
 struct OutputCell {
     number: Option<u32>,
     text: String,
+    value: Option<M2Value>,
     ty: Option<String>,
 }
 
@@ -765,7 +771,20 @@ impl OutputBlock {
             cells: vec![OutputCell {
                 number: None,
                 text: text.trim_end().to_string(),
+                value: None,
                 ty: ty.map(|ty| ty.trim_end().to_string()),
+            }],
+        }
+    }
+
+    /// Retain a structured M2 value for width-aware terminal rendering.
+    pub(crate) fn rendered(value: M2Value, ty: Option<String>) -> Self {
+        Self {
+            cells: vec![OutputCell {
+                number: None,
+                text: value.render(),
+                value: Some(value),
+                ty,
             }],
         }
     }
@@ -806,10 +825,20 @@ impl OutputBlock {
     }
 
     fn layout(&self, cell: &OutputCell, context: &RenderContext) -> Vec<String> {
-        if cell.text.is_empty() {
+        let width = self.text_width(context);
+        let text = cell
+            .value
+            .as_ref()
+            .map_or_else(|| cell.text.clone(), |value| value.render_at(width.into()));
+        if text.is_empty() {
             Vec::new()
         } else {
-            word_lines(&cell.text, self.text_width(context))
+            match cell.value.as_ref() {
+                Some(M2Value::HashTable(_) | M2Value::VerticalList(_) | M2Value::Markup { .. }) => {
+                    text.lines().map(str::to_string).collect()
+                }
+                _ => word_lines(&text, width),
+            }
         }
     }
 
@@ -942,6 +971,7 @@ impl Block for OutputBlock {
     fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
         let area = Rect::new(0, 0, context.width(), self.height(context));
         let layout = self.border_layout();
+        Bordered::exclude_frame(area, layout, exclusions);
         let inner = Bordered::inner(area, layout);
         let right = inner.right();
         let mut row = inner.y;
@@ -1006,6 +1036,14 @@ impl Block for WarningBlock {
         )
         .render(&(), area, buf);
     }
+
+    fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
+        Bordered::exclude_frame(
+            Rect::new(0, 0, context.width(), self.height(context)),
+            CellLayout::plain().frame(),
+            exclusions,
+        );
+    }
 }
 
 fn word_lines(text: &str, width: u16) -> Vec<String> {
@@ -1063,6 +1101,14 @@ impl Block for ErrorMessageBlock {
     fn render_local(&self, context: &RenderContext, buf: &mut Buffer) {
         let area = *buf.area();
         render_error_box(&self.message, context, area, buf);
+    }
+
+    fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
+        Bordered::exclude_frame(
+            Rect::new(0, 0, context.width(), self.height(context)),
+            CellLayout::plain().frame(),
+            exclusions,
+        );
     }
 }
 

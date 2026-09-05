@@ -1737,16 +1737,11 @@ fn selectable_columns(symbols: &[String], allowed: &[bool]) -> Vec<bool> {
     let mut selectable = vec![false; symbols.len()];
     let mut segment_start = 0;
     while segment_start < symbols.len() {
-        while segment_start < symbols.len()
-            && (!allowed[segment_start] || is_box_drawing(&symbols[segment_start]))
-        {
+        while segment_start < symbols.len() && !allowed[segment_start] {
             segment_start += 1;
         }
         let mut segment_end = segment_start;
-        while segment_end < symbols.len()
-            && allowed[segment_end]
-            && !is_box_drawing(&symbols[segment_end])
-        {
+        while segment_end < symbols.len() && allowed[segment_end] {
             segment_end += 1;
         }
         mark_selectable_segment(symbols, segment_start, segment_end, &mut selectable);
@@ -1761,7 +1756,7 @@ fn mark_selectable_segment(
     segment_end: usize,
     selectable: &mut [bool],
 ) {
-    if segment_start >= segment_end || is_border_title(symbols, segment_start, segment_end) {
+    if segment_start >= segment_end {
         return;
     }
     let Some(last_content) = symbols[segment_start..segment_end]
@@ -1771,26 +1766,7 @@ fn mark_selectable_segment(
     else {
         return;
     };
-    let content_start = symbols[segment_start..=last_content]
-        .iter()
-        .position(|symbol| !symbol.trim().is_empty())
-        .map_or(segment_start, |index| segment_start + index);
-    if content_start <= last_content {
-        selectable[content_start..=last_content].fill(true);
-    }
-}
-
-fn is_box_drawing(symbol: &str) -> bool {
-    let mut characters = symbol.chars();
-    matches!(characters.next(), Some('\u{2500}'..='\u{257f}')) && characters.next().is_none()
-}
-
-fn is_border_title(symbols: &[String], start: usize, end: usize) -> bool {
-    start
-        .checked_sub(1)
-        .and_then(|index| symbols.get(index))
-        .is_some_and(|symbol| symbol == "─")
-        && symbols.get(end).is_some_and(|symbol| symbol == "─")
+    selectable[segment_start..=last_content].fill(true);
 }
 
 #[cfg(test)]
@@ -2046,6 +2022,24 @@ mod tests {
     }
 
     #[test]
+    fn mouse_selection_copies_rendered_fraction_exactly() {
+        let mut editor = Editor::new(String::new());
+        editor.feed = Feed::new(Box::new(OutputBlock::value(" 1\n───\n 2".into(), None)));
+        let rows = rendered_editor(&mut editor, 40, 10);
+        let first = rows.iter().position(|row| row.contains(" 1")).unwrap() as u16;
+        let last = rows.iter().position(|row| row.contains(" 2")).unwrap() as u16;
+
+        editor.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0, first));
+        editor.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 39, last));
+        let copied = editor.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 39, last));
+
+        let Reaction::Copy(text) = copied else {
+            panic!("mouse release did not copy the rendered fraction");
+        };
+        assert_eq!(text, " 1\n───\n 2");
+    }
+
+    #[test]
     fn underfilled_feed_grows_upward_from_the_input() {
         let mut editor = Editor::new("first".to_string());
         let rows = rendered_editor(&mut editor, 40, 12);
@@ -2095,13 +2089,14 @@ mod tests {
     }
 
     #[test]
-    fn selectable_cells_exclude_ui_regions_and_box_drawing() {
+    fn selectable_cells_follow_semantic_exclusions() {
         let symbols: Vec<String> = "  UI value │"
             .chars()
             .map(|character| character.to_string())
             .collect();
         let mut allowed = vec![true; symbols.len()];
-        allowed[2..4].fill(false);
+        allowed[2..5].fill(false);
+        *allowed.last_mut().unwrap() = false;
         let mask = selectable_columns(&symbols, &allowed);
         let selected: String = symbols
             .iter()
@@ -2111,6 +2106,19 @@ mod tests {
             .collect();
 
         assert_eq!(selected, "value");
+    }
+
+    #[test]
+    fn box_drawing_glyphs_are_selectable_math_content() {
+        let symbols = [" ", "─", "─", "─", " "].map(str::to_string);
+        let selected: String = symbols
+            .iter()
+            .zip(selectable_columns(&symbols, &[true; 5]))
+            .filter(|(_, selectable)| *selectable)
+            .map(|(symbol, _)| symbol.as_str())
+            .collect();
+
+        assert_eq!(selected, " ───");
     }
 
     // Over the input the wheel resizes the pane instead of scrolling the feed.
