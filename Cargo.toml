@@ -31,6 +31,7 @@ ratatui = { version = "0.30.0", features = ["serde"] }
 rand = "0.8.6"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+term-maths = "1.0.0"
 thiserror = "2.0.18"
 toml = "1.1.4"
 these-macros-should-be-illegal = "0.7.0"

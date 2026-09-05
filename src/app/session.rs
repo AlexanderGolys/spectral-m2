@@ -7,6 +7,8 @@ use std::thread;
 use m2_syn::{NativeCellParser, NativeCellState, PrettyNode, PrettyTree};
 
 use crate::backend::transcript::{captured_error, captured_output};
+#[cfg(test)]
+use crate::backend::M2Value;
 use crate::backend::{M2Backend, M2Response};
 use crate::code::highlight::Highlighter;
 use crate::errors::Result;
@@ -553,10 +555,11 @@ fn response_blocks(
     code: &str,
     number: u32,
 ) -> (Vec<Box<dyn Block>>, Option<OutputBlock>) {
+    let value = response.rendered_value();
     let output = captured_output(
         &response.transcript,
         code,
-        response.value.as_deref(),
+        value.as_deref(),
         response.type_info.as_deref(),
     );
     let mut blocks: Vec<Box<dyn Block>> = output
@@ -604,7 +607,7 @@ mod tests {
             let response = M2Response {
                 is_error: false,
                 transcript: "x\n\n".into(),
-                value,
+                value: value.map(M2Value::Net),
                 type_info,
                 has_value,
                 depth: 1,

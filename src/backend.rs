@@ -6,17 +6,21 @@ use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use std::{env, fs, thread};
 
 use crate::errors::{Error, Result};
 use jsonrpc::simple_tcp::TcpTransport;
 use jsonrpc::Client;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const STARTUP_SCRIPT: &str = include_str!("backend/m2_startup.m2");
 const STARTUP_FILE: &str = "backend.m2";
+static M2_ARRAY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\\begin\{array\}\{[clr]+\}").expect("valid M2 array pattern"));
 
 /// Code submitted for evaluation, tagged with the input number it was entered
 /// under. `number` is `None` for code the session runs on its own behalf, whose
@@ -25,6 +29,46 @@ const STARTUP_FILE: &str = "backend.m2";
 struct EvaluateParams<'a> {
     code: &'a str,
     number: Option<u32>,
+}
+
+/// A displayed M2 value in its preferred TeX form or its original Net form.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum M2Value {
+    /// TeX source accompanied by the Net spelling used when it is unsupported.
+    Tex { source: String, fallback: String },
+    /// A value for which M2 could not produce TeX.
+    Net(String),
+}
+
+impl M2Value {
+    /// Render this value as copyable terminal text.
+    pub(crate) fn render(&self) -> String {
+        match self {
+            Self::Net(text) => text.clone(),
+            Self::Tex { source, fallback } => {
+                let source = match source
+                    .strip_prefix('$')
+                    .and_then(|tex| tex.strip_suffix('$'))
+                {
+                    Some(source) => source,
+                    None => return fallback.clone(),
+                };
+                let source = M2_ARRAY
+                    .replace_all(source, r"\begin{matrix}")
+                    .replace(r"\end{array}", r"\end{matrix}");
+                let rendered = term_maths::render(&source).to_string();
+                match rendered.contains('\\') {
+                    true => fallback.clone(),
+                    false => rendered
+                        .lines()
+                        .map(str::trim_end)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                }
+            }
+        }
+    }
 }
 
 /// The output and status returned by one M2 evaluation.
@@ -36,7 +80,7 @@ pub(crate) struct M2Response {
     pub(crate) transcript: String,
     /// The rendered result, present only when M2 displayed it. A `;`-suppressed
     /// result is `None` here -- deliberately never rendered -- yet still bound.
-    pub(crate) value: Option<String>,
+    pub(crate) value: Option<M2Value>,
     pub(crate) type_info: Option<String>,
     /// Whether M2 bound an `oN` for this input. Not implied by `value`: a
     /// suppressed result binds one without producing rendered text.
@@ -44,6 +88,13 @@ pub(crate) struct M2Response {
     /// M2's interpreter depth after the evaluation. Anything above 1 means a
     /// nested interpreter, which is what being in the debugger looks like.
     pub(crate) depth: u32,
+}
+
+impl M2Response {
+    /// Render the displayed value, preserving its Net fallback.
+    pub(crate) fn rendered_value(&self) -> Option<String> {
+        self.value.as_ref().map(M2Value::render)
+    }
 }
 
 /// The live Macaulay2 child and its JSON-RPC client.
@@ -223,6 +274,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tex_values_render_as_plain_unicode_blocks() {
+        let fraction = M2Value::Tex {
+            source: r"$\frac{1}{2}$".into(),
+            fallback: "1\n-\n2".into(),
+        };
+        assert_eq!(fraction.render(), " 1\n───\n 2");
+
+        let matrix = M2Value::Tex {
+            source: concat!(
+                r"$\left(\!\begin{array}{cc}",
+                "\n",
+                r"x^{2}&y\\",
+                "\n",
+                r"1&x-y",
+                "\n",
+                r"\end{array}\!\right)$"
+            )
+            .into(),
+            fallback: "matrix fallback".into(),
+        };
+        assert_eq!(matrix.render(), "⎛ x²    y   ⎞\n⎝ 1   x - y ⎠");
+    }
+
+    #[test]
+    fn unsupported_tex_uses_its_net_fallback() {
+        let value = M2Value::Tex {
+            source: r"$\texttt{true}$".into(),
+            fallback: "true".into(),
+        };
+        assert_eq!(value.render(), "true");
+
+        let document = M2Value::Tex {
+            source: r"\par\textbf{Description}".into(),
+            fallback: "Description".into(),
+        };
+        assert_eq!(document.render(), "Description");
+    }
+
+    #[test]
     fn evaluation_distinguishes_printed_null_from_returned_value() {
         let backend = M2Backend::spawn().expect("spawn M2");
 
@@ -234,14 +324,14 @@ mod tests {
         assert!(printed.transcript.contains("hello"));
         // An unterminated statement reports its result even when that result is
         // null -- but null binds no oN, so there is no symbol to name it by.
-        assert_eq!(printed.value.as_deref(), Some("null"));
+        assert_eq!(printed.rendered_value().as_deref(), Some("null"));
         assert_eq!(printed.type_info.as_deref(), Some("Nothing"));
         assert!(!printed.has_value, "a null result binds no oN");
         assert_eq!(
             transcript::captured_output(
                 &printed.transcript,
                 "print \"hello\"",
-                printed.value.as_deref(),
+                printed.rendered_value().as_deref(),
                 printed.type_info.as_deref(),
             )
             .printed,
@@ -253,21 +343,32 @@ mod tests {
             .expect("evaluate returned value");
         assert!(!returned.is_error);
         assert!(returned.transcript.contains("2 + 2"));
-        assert_eq!(returned.value.as_deref(), Some("4"));
+        assert_eq!(returned.rendered_value().as_deref(), Some("4"));
         assert_eq!(returned.type_info.as_deref(), Some("ZZ"));
 
         let string = backend
             .evaluate("\"a\"", Some(6))
             .expect("evaluate string literal");
         assert!(!string.is_error, "string errored: {:?}", string.transcript);
-        assert_eq!(string.value.as_deref(), Some("a"));
+        assert_eq!(string.rendered_value().as_deref(), Some("a"));
         assert_eq!(string.type_info.as_deref(), Some("String"));
 
         let boolean = backend
             .evaluate("true", Some(7))
             .expect("evaluate boolean literal");
-        assert_eq!(boolean.value.as_deref(), Some("true"));
+        assert_eq!(boolean.rendered_value().as_deref(), Some("true"));
         assert_eq!(boolean.type_info.as_deref(), Some("Boolean"));
+
+        let fraction = backend.evaluate("1/2", Some(8)).expect("evaluate fraction");
+        assert_eq!(fraction.rendered_value().as_deref(), Some(" 1\n───\n 2"));
+
+        let matrix = backend
+            .evaluate("matrix{{1,2},{3,4}}", Some(9))
+            .expect("evaluate matrix");
+        assert_eq!(
+            matrix.rendered_value().as_deref(),
+            Some("⎛ 1  2 ⎞\n⎝ 3  4 ⎠")
+        );
 
         let spoofed_code = "print \"\\no184 = 11\"";
         let spoofed = backend
@@ -277,11 +378,11 @@ mod tests {
         assert!(spoofed.transcript.contains("o184 = 11"));
         // The spoofed marker stays printed text: the reported value is the
         // statement's actual result, which for `print` is null.
-        assert_eq!(spoofed.value.as_deref(), Some("null"));
+        assert_eq!(spoofed.rendered_value().as_deref(), Some("null"));
         let spoofed_output = crate::backend::transcript::captured_output(
             &spoofed.transcript,
             spoofed_code,
-            spoofed.value.as_deref(),
+            spoofed.rendered_value().as_deref(),
             spoofed.type_info.as_deref(),
         );
         assert_eq!(spoofed_output.printed, "\no184 = 11\n");
@@ -296,7 +397,7 @@ mod tests {
         let identity = backend
             .evaluate("oo === spectralValueProbe", Some(5))
             .expect("compare stored value identity");
-        assert_eq!(identity.value.as_deref(), Some("true"));
+        assert_eq!(identity.rendered_value().as_deref(), Some("true"));
     }
 
     // `capture` restarts its inner session at lineNumber 1, so M2's own AfterEval
@@ -307,7 +408,7 @@ mod tests {
 
         backend.evaluate("41 + 1", Some(42)).expect("evaluate");
         let recalled = backend.evaluate("o42", Some(43)).expect("recall o42");
-        assert_eq!(recalled.value.as_deref(), Some("42"));
+        assert_eq!(recalled.rendered_value().as_deref(), Some("42"));
 
         // A `;` suppresses rendering, so no value comes back -- but the binding
         // is still made, which is what has_value reports.
@@ -318,7 +419,7 @@ mod tests {
         assert!(suppressed.has_value, "a suppressed result still binds oN");
         assert_eq!(suppressed.type_info.as_deref(), Some("ZZ"));
         let recalled = backend.evaluate("o44", Some(45)).expect("recall o44");
-        assert_eq!(recalled.value.as_deref(), Some("7"));
+        assert_eq!(recalled.rendered_value().as_deref(), Some("7"));
     }
 
     // The transport loads JSON and JSONRPC, whose dictionaries would otherwise
@@ -375,7 +476,7 @@ mod tests {
             .expect("use quotient ring");
         let result = backend.evaluate("x+1", Some(3)).expect("evaluate element");
 
-        assert_eq!(result.value.as_deref(), Some("2"));
+        assert_eq!(result.rendered_value().as_deref(), Some("2"));
         assert!(
             result
                 .type_info
@@ -392,7 +493,7 @@ mod tests {
         let result = backend.evaluate("1.3", Some(1)).expect("evaluate real");
 
         assert!(!result.is_error, "{}", result.transcript);
-        assert_eq!(result.value.as_deref(), Some("1.3"));
+        assert_eq!(result.rendered_value().as_deref(), Some("1.3"));
         assert!(result.has_value);
     }
 
@@ -413,8 +514,8 @@ mod tests {
 
         assert!(!out.is_error, "probe errored: {:?}", out.transcript);
         assert!(
-            out.value.as_deref() == Some("1729"),
-            "expected 1729 in {:?}",
+            out.rendered_value().as_deref() == Some("1 729"),
+            "expected TeX-formatted 1 729 in {:?}",
             out.value
         );
     }

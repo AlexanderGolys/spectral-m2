@@ -48,7 +48,15 @@ rpcServer = new JSONRPCServer;
     -- NoPrint deliberately skips `net value`, which is the render the punctuation
     -- exists to avoid on large objects. The type is read either way, so the shell
     -- can say what a suppressed result is without paying to render it.
-    recordValue := value -> output.value = "" | toString net value;
+    recordValue := value -> (
+        netValue := "" | toString net value;
+        output.value = try hashTable {
+            "tex" => hashTable {
+                "source" => tex value,
+                "fallback" => netValue
+            }
+        } else hashTable {"net" => netValue};
+    );
     recordInexactValue := value -> (
         savedPrecision := printingPrecision;
         savedAccuracy := printingAccuracy;

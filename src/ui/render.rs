@@ -25,6 +25,7 @@ pub(crate) struct RenderContext {
     width: u16,
     prefix: u16,
     groups: Groups,
+    output_limit: Option<usize>,
 }
 
 impl RenderContext {
@@ -33,6 +34,7 @@ impl RenderContext {
             width,
             prefix,
             groups: *groups,
+            output_limit: Some(UI.max_output_rows),
         }
     }
 
@@ -42,7 +44,24 @@ impl RenderContext {
 
     /// Retain rendering services at a nested element's local width.
     pub(crate) fn with_width(&self, width: u16) -> Self {
-        Self::new(width, self.prefix, &self.groups)
+        Self {
+            width,
+            prefix: self.prefix,
+            groups: self.groups,
+            output_limit: self.output_limit,
+        }
+    }
+
+    /// Render returned values without the shell's row limit.
+    pub(crate) fn full_output(&self) -> Self {
+        Self {
+            output_limit: None,
+            ..self.with_width(self.width)
+        }
+    }
+
+    pub(crate) fn output_limit(&self) -> Option<usize> {
+        self.output_limit
     }
 
     pub(crate) fn prefix(&self) -> u16 {

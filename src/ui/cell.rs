@@ -815,10 +815,41 @@ impl OutputBlock {
 
     fn value_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
         let theme = context.groups();
-        self.layout(cell, context)
+        let lines = self
+            .layout(cell, context)
             .into_iter()
             .map(|line| Line::from(Span::styled(line, theme.value())))
-            .collect()
+            .collect();
+        match context.output_limit() {
+            Some(limit) => Self::fold(lines, limit, context),
+            None => lines,
+        }
+    }
+
+    fn fold(
+        mut lines: Vec<Line<'static>>,
+        limit: usize,
+        context: &RenderContext,
+    ) -> Vec<Line<'static>> {
+        match lines.len() <= limit {
+            true => lines,
+            false => {
+                let tail = limit.saturating_sub(1) / 2;
+                let head = limit.saturating_sub(tail + 1);
+                let hidden = lines.len() - head - tail;
+                let mut ending = lines.split_off(lines.len() - tail);
+                lines.truncate(head);
+                lines.push(
+                    Line::from(Span::styled(
+                        format!("⋯ {hidden} rows hidden · output view shows all"),
+                        context.groups().muted(),
+                    ))
+                    .alignment(Alignment::Center),
+                );
+                lines.append(&mut ending);
+                lines
+            }
+        }
     }
 
     fn type_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
@@ -1619,6 +1650,40 @@ mod tests {
         assert_eq!(rows.len(), 4);
         assert!(rows[1].contains('x'));
         assert!(rows[2].contains('y') && rows[2].contains('R'));
+    }
+
+    #[test]
+    fn long_output_keeps_its_beginning_and_end_until_opened() {
+        let theme = Groups::default();
+        let context = RenderContext::new(40, 0, &theme);
+        let block = OutputBlock::value(
+            (0..40)
+                .map(|row| format!("row {row:02}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            None,
+        );
+        let text = |lines: Vec<Line<'_>>| {
+            lines
+                .into_iter()
+                .map(|line| {
+                    line.spans
+                        .into_iter()
+                        .map(|span| span.content)
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let folded = text(block.value_lines(&block.cells[0], &context));
+        assert_eq!(folded.len(), UI.max_output_rows);
+        assert!(folded.first().unwrap().contains("row 00"));
+        assert!(folded.last().unwrap().contains("row 39"));
+        assert!(folded.iter().any(|line| line.contains("17 rows hidden")));
+
+        let full = text(block.value_lines(&block.cells[0], &context.full_output()));
+        assert_eq!(full.len(), 40);
+        assert!(!full.iter().any(|line| line.contains("rows hidden")));
     }
 
     #[test]

@@ -1555,6 +1555,7 @@ impl Editor {
                 ));
             }
             ViewKind::Output => {
+                let context = context.full_output();
                 let blocks = match viewport.output {
                     OutputMode::Evaluation => self.feed.evaluation_outputs(),
                     OutputMode::Values => self.feed.values(),

@@ -1,4 +1,4 @@
-//! Retained, viewport-sized transcript rendering.
+//! Eagerly retained transcript rendering with viewport-sized copying.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Offset, Rect};
@@ -17,7 +17,7 @@ struct ViewportState {
     anchor: Option<(usize, u16)>,
 }
 
-/// One feed element with its lazily computed local layout and cells.
+/// One feed element with its retained local layout and cells.
 struct RetainedBlock {
     content: FeedContent,
     layout: Option<(u16, u16)>,
@@ -389,6 +389,9 @@ impl Feed {
             area.height,
         );
         let context = RenderContext::new(area.width, context.prefix(), context.groups());
+        for block in &mut self.blocks {
+            block.render(&context, canvas);
+        }
         let anchor = self.anchor.take().or_else(|| {
             self.surface.as_ref().and_then(|surface| {
                 (self.scroll > 0
@@ -625,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn scrolling_renders_only_newly_visible_blocks() {
+    fn rendering_prepares_every_block_before_scrolling() {
         let counts = (0..3)
             .map(|_| Arc::new(AtomicUsize::new(0)))
             .collect::<Vec<_>>();
@@ -643,8 +646,8 @@ mod tests {
             counts
                 .iter()
                 .map(|count| count.load(Ordering::Relaxed))
-                .sum::<usize>(),
-            1
+                .collect::<Vec<_>>(),
+            vec![1, 1, 1]
         );
 
         feed.scroll(1);
@@ -655,8 +658,8 @@ mod tests {
             counts
                 .iter()
                 .map(|count| count.load(Ordering::Relaxed))
-                .sum::<usize>(),
-            2
+                .collect::<Vec<_>>(),
+            vec![1, 1, 1]
         );
     }
 

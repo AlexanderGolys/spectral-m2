@@ -14,6 +14,7 @@ pub(crate) struct UiConfig {
     pub(crate) picker_tab_width: usize,
     pub(crate) picker_right_margin: usize,
     pub(crate) statusline_margin: u16,
+    pub(crate) max_output_rows: usize,
 }
 
 /// Presentation configuration used by every UI element.
@@ -30,6 +31,7 @@ pub(crate) const UI: UiConfig = UiConfig {
     picker_tab_width: 4,
     picker_right_margin: 2,
     statusline_margin: 2,
+    max_output_rows: 24,
 };
 
 impl UiConfig {
