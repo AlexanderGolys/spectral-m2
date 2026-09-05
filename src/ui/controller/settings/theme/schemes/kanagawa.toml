@@ -994,9 +994,10 @@ ShellError = { fg = "error", sp = "error" }
 HintText = { fg = "comment" }
 Normal = { bg = "background" }
 CodeBlock = { bg = "background_dim" }
+PendingBlock = { bg = "selection" }
 Separator = { fg = "background" }
 ValueBorder = { fg = "border", sp = "border" }
-OutputNumber = { fg = "function" }
+OutputNumber = { fg = "property", bold = true }
 ErrorBorder = { fg = "error", sp = "error" }
 WarningBorder = { fg = "warning", sp = "warning" }
 InfoBorder = { fg = "url", sp = "url" }
@@ -1009,8 +1010,8 @@ StatuslineError = { fg = "error", sp = "error" }
 StatuslineWarning = { fg = "warning", sp = "warning" }
 KeymapHint = { fg = "property" }
 PickerText = { fg = "text" }
-Picker = { bg = "winterGreen" }
-PickerSelected = { fg = "background", bg = "string" }
+Picker = { bg = "border" }
+PickerSelected = { bg = "winterGreen" }
 PickerBorder = { fg = "border", sp = "border" }
 
 Accent1 = { fg = "samuraiRed" }

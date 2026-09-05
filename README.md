@@ -44,6 +44,10 @@ cargo run --release
 
 Type `/` for the filtered command picker, `Ctrl+/` for all commands, or `Ctrl+O` for settings. On a splittable command, `Alt+V` opens an alternative pane without replacing that command's own keymap.
 
+## Configuration
+
+Spectral reads `init.m2` and materializes its generated `backend.m2` in `$XDG_CONFIG_HOME/spectral-m2`, falling back to `~/.config/spectral-m2`. The persistent backend source lets Macaulay2's `code` inspect Spectral's hooks; it is replaced whenever the backend embedded in the binary changes.
+
 ## Documentation
 
 The [mdBook](https://github.com/AlexanderGolys/spectral-m2/tree/master/docs) describes editing, commands, workspaces, previews, styles, and every default key. Its Macaulay2 examples are highlighted by `mdbook-tsitter` using a Cargo-built parser. From a source checkout:

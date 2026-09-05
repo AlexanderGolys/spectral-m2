@@ -1,9 +1,9 @@
 //! Interactive editor: submitted feed, live input and history, navigation,
 //! scrolling, and rendering.
 
-pub mod commands;
+pub(crate) mod commands;
 mod picker;
-pub mod settings;
+pub(crate) mod settings;
 
 use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
@@ -11,7 +11,6 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, Clear, Paragraph, Widget};
 use ratatui::Frame;
-use std::ops::Range;
 use these_macros_should_be_illegal::discriminated_str;
 
 use self::commands::Command;
@@ -23,24 +22,28 @@ use self::settings::theme::groups::{Groups, HLGroup};
 use self::settings::theme::Appearance;
 use self::settings::{Settings, StatusLinePosition};
 use super::action::Action;
-use super::block::render::RenderContext;
-use super::block::syntax_tree::SyntaxTreeBlock;
-use super::block::{Block, BlockKind, Cell, CellState, CodeBlock, ErrorMessageBlock, TextBlock};
+use super::block::{Block, Element, Exclusions, HLSpan, TextSpan};
+use super::cell::{
+    Cell, CellState, CodeBlock, ErrorMessageBlock, EvaluationBlock, IncompleteBlock, OutputBlock,
+    TextBlock,
+};
 use super::config::UI;
 use super::debug::FrameStats;
-use super::element::{Element, HLSpan, StyleElement, TextSpan};
 use super::feed::{BlockView, Feed};
-use super::key::KeyEvent;
+use super::key::{KeyEvent, KeyMod};
+use super::render::RenderContext;
 use super::statusline::{StatusLine, StatusLineContext, StatusLineEvent};
+use super::syntax_tree::SyntaxTreeBlock;
 use super::DEBUG_POST;
 use crate::app::session::CommittedCell;
 use crate::code::highlight::Highlighter;
 use crate::input::{InputCode, InputContext, InputSetting, InputSettings};
 
 /// An outward effect produced while handling input or an [`Action`].
-pub enum Reaction {
+pub(crate) enum Reaction {
     Continue,
     Submit,
+    ResumeIncomplete,
     Post(&'static str),
     Restart,
     Quit,
@@ -53,7 +56,7 @@ pub enum Reaction {
 
 /// Content rendered by one workspace pane.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ViewKind {
+pub(crate) enum ViewKind {
     #[default]
     Shell,
     Code,
@@ -63,7 +66,7 @@ pub enum ViewKind {
 
 /// Whether a command replaces the focused pane or creates the right pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OpenTarget {
+pub(crate) enum OpenTarget {
     Current,
     Split,
 }
@@ -103,18 +106,18 @@ impl OutputMode {
 
 /// Independent scrolling and output-filter state for one pane.
 #[derive(Default)]
-pub struct Viewport {
-    pub scroll: usize,
+pub(crate) struct Viewport {
+    pub(crate) scroll: usize,
     output: OutputMode,
     preview: Option<PreviewCache>,
 }
 
 /// Immutable committed cells paired with the revision that changes them.
-pub struct CommittedCells<'a> {
+pub(crate) struct CommittedCells<'a> {
     /// Cells in evaluation order.
-    pub cells: &'a [CommittedCell],
+    pub(crate) cells: &'a [CommittedCell],
     /// Workspace revision for cache invalidation.
-    pub revision: u64,
+    pub(crate) revision: u64,
 }
 
 /// Parsed block model retained by one code or syntax-tree preview pane.
@@ -126,7 +129,7 @@ struct PreviewCache {
 
 impl Viewport {
     // @##Suspicious
-    pub fn for_view(view: ViewKind) -> Self {
+    pub(crate) fn for_view(view: ViewKind) -> Self {
         Self {
             scroll: if view == ViewKind::SyntaxTree {
                 usize::MAX
@@ -137,7 +140,7 @@ impl Viewport {
         }
     }
 
-    pub fn cycle_output(&mut self, delta: i8) {
+    pub(crate) fn cycle_output(&mut self, delta: i8) {
         self.output = self.output.cycle(delta);
         self.scroll = 0;
     }
@@ -150,7 +153,7 @@ impl Viewport {
         context: &RenderContext,
         area: Rect,
         buffer: &mut Buffer,
-    ) -> Vec<Rect> {
+    ) -> Exclusions {
         if self
             .preview
             .as_ref()
@@ -213,20 +216,36 @@ impl Viewport {
 }
 
 /// A session result to apply to the editor model.
-pub enum EditorUpdate {
+pub(crate) enum EditorUpdate {
     Ignore,
     /// Leave the shell; the backend shuts down with it.
     Quit,
-    ContinueSubmission(String),
-    Diagnostic(String),
-    SyntaxDiagnostic {
-        message: String,
-        range: Option<Range<usize>>,
+    Batch(Vec<Self>),
+    Incomplete {
+        source: String,
+        spans: Vec<HLSpan>,
+        reason: String,
     },
+    SyntaxFailed {
+        id: u64,
+        source: String,
+        spans: Vec<HLSpan>,
+        message: String,
+    },
+    /// Provisional whitespace retained only if later code makes it leading.
+    WhitespaceAccepted,
+    Diagnostic(String),
     Message(Box<dyn Block>),
     Pending {
         id: u64,
         cells: Vec<(String, Vec<HLSpan>)>,
+    },
+    Queued {
+        id: u64,
+        cells: Vec<(String, Vec<HLSpan>)>,
+    },
+    Started {
+        id: u64,
     },
     CellSucceeded {
         id: u64,
@@ -234,20 +253,22 @@ pub enum EditorUpdate {
         number: u32,
         state: CellState,
         outputs: Vec<Box<dyn Block>>,
+        value: Option<OutputBlock>,
     },
     CellFailed {
         id: u64,
         index: usize,
         number: u32,
+        outputs: Vec<Box<dyn Block>>,
         message: String,
     },
 }
 
 /// A state change requested by a picker or one of its lines.
-pub enum EditorEvent {
+pub(crate) enum EditorEvent {
     EditCommand(KeyEvent),
     ResumeTyping(char),
-    FinishCommand,
+    ClosePickers,
     RunCommand(Command, OpenTarget),
     ClosePicker,
     OpenStyle,
@@ -334,7 +355,7 @@ enum ElementFocus {
 
 /// Presentation settings shared by every workspace.
 #[derive(Clone)]
-pub struct EditorConfig {
+pub(crate) struct EditorConfig {
     settings: Settings,
     input: InputSettings,
     keymaps: Keymaps,
@@ -342,7 +363,7 @@ pub struct EditorConfig {
 }
 
 /// The transcript feed, live input, and viewport state.
-pub struct Editor {
+pub(crate) struct Editor {
     feed: Feed,
     input: InputCode,
     settings: Settings,
@@ -359,7 +380,7 @@ pub struct Editor {
     screen_selection: Option<ScreenSelection>,
     screen: Vec<Vec<ScreenCell>>,
     screen_area: Rect,
-    selection_exclusions: Vec<Rect>,
+    selection_exclusions: Exclusions,
     split: bool,
     previewing: bool,
     pane_focused: bool,
@@ -369,7 +390,7 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn new(welcome: String) -> Self {
+    pub(crate) fn new(welcome: String) -> Self {
         let appearance = Appearance::load();
         let mut editor = Self {
             feed: Feed::new(Box::new(TextBlock::system(welcome))),
@@ -388,7 +409,7 @@ impl Editor {
             screen_selection: None,
             screen: Vec::new(),
             screen_area: Rect::ZERO,
-            selection_exclusions: Vec::new(),
+            selection_exclusions: Exclusions::default(),
             split: false,
             previewing: false,
             pane_focused: true,
@@ -401,18 +422,18 @@ impl Editor {
     }
 
     /// Reflect whether this editor's backend currently owns unfinished work.
-    pub fn set_processing(&mut self, processing: bool) {
+    pub(crate) fn set_processing(&mut self, processing: bool) {
         if self.processing != processing {
             self.processing = processing;
             self.refresh_status_line();
         }
     }
 
-    pub fn submission(&self) -> &str {
+    pub(crate) fn submission(&self) -> &str {
         self.input.text()
     }
 
-    pub fn config(&self) -> EditorConfig {
+    pub(crate) fn config(&self) -> EditorConfig {
         EditorConfig {
             settings: self.settings,
             input: self.input.settings(),
@@ -421,7 +442,7 @@ impl Editor {
         }
     }
 
-    pub fn set_config(&mut self, config: &EditorConfig) {
+    pub(crate) fn set_config(&mut self, config: &EditorConfig) {
         self.settings = config.settings;
         self.input.set_settings(config.input);
         self.keymaps.clone_from(&config.keymaps);
@@ -429,22 +450,22 @@ impl Editor {
         self.refresh_status_line();
     }
 
-    pub fn append_error(&mut self, message: impl Into<String>) {
+    pub(crate) fn append_error(&mut self, message: impl Into<String>) {
         self.push_block(Box::new(ErrorMessageBlock::new(message.into())));
     }
 
-    pub fn set_context(&mut self, split: bool, previewing: bool, pane_focused: bool) {
+    pub(crate) fn set_context(&mut self, split: bool, previewing: bool, pane_focused: bool) {
         self.split = split;
         self.previewing = previewing;
         self.pane_focused = pane_focused;
     }
 
-    pub fn picker_open(&self) -> bool {
+    pub(crate) fn picker_open(&self) -> bool {
         matches!(self.focus(), ElementFocus::Picker(_))
     }
 
     /// Resolve a terminal key through the active command keymaps.
-    pub fn resolve_action(&self, key: KeyEvent) -> Option<Action> {
+    pub(crate) fn resolve_action(&self, key: KeyEvent) -> Option<Action> {
         (self.previewing && !self.picker_open())
             .then(|| self.keymaps.preview_action(key))
             .flatten()
@@ -457,7 +478,7 @@ impl Editor {
     }
 
     /// Forward unbound preview input to its focused component.
-    pub fn handle_preview_key(&mut self, key: KeyEvent) -> Reaction {
+    pub(crate) fn handle_preview_key(&mut self, key: KeyEvent) -> Reaction {
         if matches!(self.focus(), ElementFocus::Picker(_)) {
             return self.handle_picker_key(key);
         }
@@ -468,26 +489,56 @@ impl Editor {
     }
 
     /// Apply a session result. Returns whether the shell should keep running.
-    pub fn apply(&mut self, update: EditorUpdate) -> bool {
+    pub(crate) fn apply(&mut self, update: EditorUpdate) -> bool {
         match update {
             EditorUpdate::Quit => return false,
             EditorUpdate::Ignore => {}
-            EditorUpdate::ContinueSubmission(reason) => {
+            EditorUpdate::Batch(updates) => {
+                return updates.into_iter().all(|update| self.apply(update));
+            }
+            EditorUpdate::Incomplete {
+                source,
+                spans,
+                reason,
+            } => {
+                self.input.accept_submission();
+                self.feed
+                    .set_incomplete(IncompleteBlock::new(source, spans));
                 self.continuation = Some(reason);
-                self.input.field_mut().insert_char('\n');
+            }
+            EditorUpdate::SyntaxFailed {
+                id,
+                source,
+                spans,
+                message,
+            } => {
+                self.continuation = None;
+                if !self.input.text().is_empty() {
+                    self.input.restore(source.clone());
+                    self.input.accept_submission();
+                }
+                self.push_evaluation(EvaluationBlock::invalid(id, source, spans, message));
+            }
+            EditorUpdate::WhitespaceAccepted => {
+                self.continuation = None;
+                self.input.accept_submission();
             }
             EditorUpdate::Diagnostic(diagnostic) => self.input.set_diagnostic(diagnostic, None),
-            EditorUpdate::SyntaxDiagnostic { message, range } => {
-                self.continuation = None;
-                self.input.set_diagnostic(message, range);
-            }
             EditorUpdate::Message(block) => {
                 self.push_block(block);
             }
             EditorUpdate::Pending { id, cells } => {
                 self.continuation = None;
                 self.input.accept_submission();
-                self.push_submission(id, cells);
+                self.push_evaluation(EvaluationBlock::new(id, cells));
+            }
+            EditorUpdate::Queued { id, cells } => {
+                self.continuation = None;
+                self.input.accept_submission();
+                self.push_evaluation(EvaluationBlock::queued(id, cells));
+            }
+            EditorUpdate::Started { id } => {
+                self.feed.update_evaluation(id, EvaluationBlock::start);
             }
             EditorUpdate::CellSucceeded {
                 id,
@@ -495,53 +546,72 @@ impl Editor {
                 number,
                 state,
                 outputs,
+                value,
             } => {
                 self.input.clear_diagnostic();
-                self.feed.update_submission(id, |submission| {
-                    submission.succeed(index, number, state, outputs)
+                self.feed.update_evaluation(id, |evaluation| {
+                    evaluation.succeed(index, number, state, outputs, value)
                 });
             }
             EditorUpdate::CellFailed {
                 id,
                 index,
                 number,
+                outputs,
                 message,
             } => {
                 self.input.clear_diagnostic();
-                self.feed
-                    .update_submission(id, |submission| submission.fail(index, number, message));
+                self.feed.update_evaluation(id, |evaluation| {
+                    evaluation.fail(index, number, outputs, message)
+                });
             }
         }
         self.refresh_status_line();
         true
     }
 
-    pub fn post(&mut self, update: EditorUpdate) -> bool {
-        if let EditorUpdate::Pending { id, cells } = update {
-            self.push_submission(id, cells);
-            self.refresh_status_line();
-            true
-        } else {
-            self.apply(update)
+    pub(crate) fn post(&mut self, update: EditorUpdate) -> bool {
+        match update {
+            EditorUpdate::Batch(updates) => updates.into_iter().all(|update| self.post(update)),
+            EditorUpdate::Pending { id, cells } => {
+                self.push_evaluation(EvaluationBlock::new(id, cells));
+                self.refresh_status_line();
+                true
+            }
+            EditorUpdate::Queued { id, cells } => {
+                self.push_evaluation(EvaluationBlock::queued(id, cells));
+                self.refresh_status_line();
+                true
+            }
+            update => self.apply(update),
         }
     }
 
-    fn push_submission(&mut self, id: u64, cells: Vec<(String, Vec<HLSpan>)>) {
-        self.push_block(Box::new(super::block::SubmissionBlock::new(id, cells)));
+    fn push_evaluation(&mut self, block: EvaluationBlock) {
+        self.feed.push_evaluation(block);
+    }
+
+    /// Move the feed's unfinished tail back into the live editor.
+    pub(crate) fn take_incomplete(&mut self) -> Option<String> {
+        let source = self.feed.take_incomplete()?.into_source();
+        self.continuation = None;
+        self.input.restore(source.clone());
+        self.refresh_status_line();
+        Some(source)
     }
 
     fn push_block(&mut self, block: Box<dyn Block>) {
         self.feed.push(block);
     }
 
-    pub fn paste(&mut self, text: &str) {
+    pub(crate) fn paste(&mut self, text: &str) {
         self.input.insert(text);
         self.refresh_status_line();
     }
 
     /// Route the wheel by what it is pointing at: over the input pane it resizes
     /// the pane, everywhere else it scrolls the feed.
-    pub fn handle_mouse(&mut self, event: MouseEvent) -> Reaction {
+    pub(crate) fn handle_mouse(&mut self, event: MouseEvent) -> Reaction {
         if let Some(action) = self.handle_screen_mouse(event) {
             return action;
         }
@@ -568,7 +638,7 @@ impl Editor {
         Reaction::Continue
     }
 
-    pub fn handle_preview_mouse(&mut self, event: MouseEvent) -> Reaction {
+    pub(crate) fn handle_preview_mouse(&mut self, event: MouseEvent) -> Reaction {
         self.handle_screen_mouse(event)
             .unwrap_or(Reaction::Continue)
     }
@@ -677,12 +747,19 @@ impl Editor {
     }
 
     /// Forward unbound shell input to its focused component.
-    pub fn handle_input(&mut self, key: KeyEvent) -> Reaction {
+    pub(crate) fn handle_input(&mut self, key: KeyEvent) -> Reaction {
         if matches!(self.focus(), ElementFocus::Picker(_)) {
             return self.handle_picker_key(key);
         }
         if let Some(action) = self.handle_debug_key(key) {
             return action;
+        }
+        if key.code == KeyCode::Up
+            && key.ctrl()
+            && self.input.text().is_empty()
+            && self.continuation.is_some()
+        {
+            return Reaction::ResumeIncomplete;
         }
         self.screen_selection = None;
         self.input.handle_key(key);
@@ -705,7 +782,7 @@ impl Editor {
     }
 
     /// React to a mapped command after its originating key has been discarded.
-    pub fn handle_action(&mut self, action: Action) -> Reaction {
+    pub(crate) fn handle_action(&mut self, action: Action) -> Reaction {
         if matches!(self.focus(), ElementFocus::Picker(_)) {
             return self.handle_picker_action(action);
         }
@@ -835,7 +912,7 @@ impl Editor {
         self.pickers.last_mut().unwrap().picker = picker;
     }
 
-    fn finish_command(&mut self) {
+    fn close_pickers(&mut self) {
         let filtered = self
             .pickers
             .last()
@@ -853,16 +930,13 @@ impl Editor {
             .last()
             .is_some_and(|controller| matches!(controller.mode, PickerMode::FilteredCommands))
         {
-            self.input.clear();
-            self.input.field_mut().insert_char('/');
-            self.input.field_mut().insert_str(command.label());
             self.input.accept_submission();
         }
         command.run(self, target)
     }
 
     fn clear_feed(&mut self) {
-        self.finish_command();
+        self.close_pickers();
         self.feed.clear();
         self.screen_selection = None;
     }
@@ -919,12 +993,11 @@ impl Editor {
         Action::REMAPPABLE
             .iter()
             .map(|&action| {
-                ValueItem::custom(
+                ValueItem::keymap(
                     action.description(),
                     self.keymaps
                         .key_for(action)
                         .unwrap_or_else(|| "unbound".to_string()),
-                    false,
                     move |input| match input {
                         PickerInput::Key(key) => Some(EditorEvent::Rebind(action, key)),
                         _ => None,
@@ -1054,7 +1127,7 @@ impl Editor {
                     self.input.field_mut().insert_char(character);
                 }
             }
-            EditorEvent::FinishCommand => self.finish_command(),
+            EditorEvent::ClosePickers => self.close_pickers(),
             EditorEvent::RunCommand(command, target) => return self.run_command(command, target),
             EditorEvent::ClosePicker => {
                 self.pickers.pop();
@@ -1272,14 +1345,24 @@ impl Editor {
             .key_for(Action::OpenSettings)
             .unwrap_or_default();
         let event = if self.input.text().is_empty() {
-            StatusLineEvent::Show {
-                alignment: Alignment::Right,
-                spans: vec![
+            let spans = match &self.continuation {
+                Some(_) => vec![
+                    TextSpan::new(
+                        format!("{} ", KeyCode::Up + KeyMod::Ctrl),
+                        HLGroup::KeymapHint,
+                    ),
+                    TextSpan::new("continue", HLGroup::Muted),
+                ],
+                None => vec![
                     TextSpan::new(format!("{commands_key} "), HLGroup::KeymapHint),
                     TextSpan::new("commands · ", HLGroup::Muted),
                     TextSpan::new(format!("{settings_key} "), HLGroup::KeymapHint),
                     TextSpan::new("settings", HLGroup::Muted),
                 ],
+            };
+            StatusLineEvent::Show {
+                alignment: Alignment::Right,
+                spans,
             }
         } else {
             StatusLineEvent::Show {
@@ -1293,7 +1376,7 @@ impl Editor {
         self.status_line.handle(event);
     }
 
-    pub fn draw(
+    pub(crate) fn draw(
         &mut self,
         frame: &mut Frame,
         area: Rect,
@@ -1317,7 +1400,7 @@ impl Editor {
         let picker_height = self
             .pickers
             .last()
-            .map_or(0, |controller| controller.picker.height(&theme));
+            .map_or(0, |controller| controller.picker.height());
         // A long list must never squeeze the input out of the frame: the cursor
         // would then be placed outside it.
         let picker_height = picker_height.min(
@@ -1358,25 +1441,29 @@ impl Editor {
 
         self.feed_area = sections[0];
         self.draw_feed(frame, sections[0], &context);
+        let code_above = picker_height == 0
+            && self.settings.statusline != StatusLinePosition::AboveInput
+            && self.feed.ends_in_code();
         if let Some(controller) = self.pickers.last() {
-            controller.picker.render_styled(
-                &theme,
-                sections[1],
-                frame.buffer_mut(),
-                theme.picker(),
-            );
+            controller
+                .picker
+                .render(&theme, sections[1], frame.buffer_mut());
             self.selection_exclusions.push(sections[1]);
         }
         self.selection_exclusions.push(input_area);
-        let command = commands::query(self.input.text())
-            .is_some_and(|query| !commands::matching(query, self.split).is_empty());
+        let pending = self.feed.incomplete_source();
+        let command = pending.is_none()
+            && commands::query(self.input.text())
+                .is_some_and(|query| !commands::matching(query, self.split).is_empty());
         if let Some(cursor) = self.input.render(
             InputContext {
                 render: &input_context,
                 highlighter,
                 command,
                 debugging: in_debugger,
-                focused: self.pane_focused && matches!(self.focus(), ElementFocus::Input),
+                focused: self.pane_focused,
+                code_above,
+                pending,
             },
             input_area,
             frame.buffer_mut(),
@@ -1391,10 +1478,7 @@ impl Editor {
                 idle_left: Some(if self.processing {
                     TextSpan::new("Processing", HLGroup::StatuslineWarning)
                 } else if let Some(reason) = &self.continuation {
-                    TextSpan::new(
-                        format!("Input pending ({reason})"),
-                        HLGroup::StatuslineError,
-                    )
+                    TextSpan::new(format!("Waiting for {reason}"), HLGroup::Muted)
                 } else {
                     TextSpan::new("Ready", HLGroup::Statusline1)
                 }),
@@ -1411,7 +1495,7 @@ impl Editor {
         self.paint_screen_selection(frame);
     }
 
-    pub fn draw_preview(
+    pub(crate) fn draw_preview(
         &mut self,
         frame: &mut Frame,
         area: Rect,
@@ -1437,7 +1521,7 @@ impl Editor {
         let picker_height = self
             .pickers
             .last()
-            .map_or(0, |controller| controller.picker.height(&theme))
+            .map_or(0, |controller| controller.picker.height())
             .min(area.height.saturating_sub(1));
         let sections = Layout::vertical([
             Constraint::Min(0),
@@ -1471,25 +1555,11 @@ impl Editor {
                 ));
             }
             ViewKind::Output => {
-                let blocks: Vec<&dyn Block> = self
-                    .feed
-                    .iter()
-                    .flat_map(|block| {
-                        let top = (viewport.output == OutputMode::Everything
-                            && block.kind() != BlockKind::Input)
-                            .then_some(block);
-                        top.into_iter()
-                            .chain(block.outputs().iter().map(Box::as_ref))
-                    })
-                    .filter(|block| match viewport.output {
-                        OutputMode::Evaluation => matches!(
-                            block.kind(),
-                            BlockKind::Printed | BlockKind::Warning | BlockKind::Error
-                        ),
-                        OutputMode::Values => block.kind() == BlockKind::Value,
-                        OutputMode::Everything => block.kind() != BlockKind::Input,
-                    })
-                    .collect();
+                let blocks = match viewport.output {
+                    OutputMode::Evaluation => self.feed.evaluation_outputs(),
+                    OutputMode::Values => self.feed.values(),
+                    OutputMode::Everything => self.feed.outputs(),
+                };
                 self.selection_exclusions.extend(
                     BlockView::new(&blocks, "no matching output").render(
                         &context,
@@ -1513,12 +1583,9 @@ impl Editor {
             )]
         });
         if let Some(controller) = self.pickers.last() {
-            controller.picker.render_styled(
-                &theme,
-                sections[1],
-                frame.buffer_mut(),
-                theme.picker(),
-            );
+            controller
+                .picker
+                .render(&theme, sections[1], frame.buffer_mut());
             self.status_line.render(
                 &StatusLineContext {
                     center,
@@ -1585,9 +1652,7 @@ impl Editor {
                 let allowed: Vec<bool> = (area.x..area.right())
                     .map(|x| {
                         let position = Position::new(x, y);
-                        self.selection_exclusions
-                            .iter()
-                            .all(|excluded| !excluded.contains(position))
+                        !self.selection_exclusions.contains(position)
                     })
                     .collect();
                 let selectable = selectable_columns(&symbols, &allowed);
@@ -1730,7 +1795,7 @@ fn is_border_title(symbols: &[String], start: usize, end: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::block::{CellState, OutputBlock};
+    use crate::ui::cell::{CellState, OutputBlock};
     use crossterm::event::{KeyEvent as CrosstermKeyEvent, KeyModifiers};
     use m2_syn::PrettyNode;
     use ratatui::backend::TestBackend;
@@ -1746,22 +1811,19 @@ mod tests {
 
     struct OccupiedFeed;
 
-    impl Element for OccupiedFeed {
-        type Context = RenderContext;
-
-        fn height(&self, _context: &RenderContext) -> u16 {
+    impl Block for OccupiedFeed {
+        fn height(&self, _: &RenderContext) -> u16 {
             7
         }
 
-        fn render(&self, _context: &RenderContext, area: Rect, buf: &mut Buffer) {
+        fn render_local(&self, _: &RenderContext, buf: &mut Buffer) {
+            let area = *buf.area();
             Paragraph::new("feed").render(
                 Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
                 buf,
             );
         }
     }
-
-    impl Block for OccupiedFeed {}
 
     fn rendered_buffer(editor: &mut Editor, width: u16, height: u16) -> Buffer {
         let backend = TestBackend::new(width, height);
@@ -1936,14 +1998,13 @@ mod tests {
             index: 0,
             number: 12,
             state: CellState::Value,
-            outputs: vec![Box::new(
-                OutputBlock::value("value".into(), None).numbered(12),
-            )],
+            outputs: Vec::new(),
+            value: Some(OutputBlock::value("value".into(), None).numbered(12)),
         });
 
         let rows = rendered_editor(&mut editor, 40, 12);
 
-        assert!(rows.iter().any(|row| row.contains("  12▏ x")), "{rows:#?}");
+        assert!(rows.iter().any(|row| row.contains("  12│ x")), "{rows:#?}");
         assert!(
             rows.iter().any(|row| row.contains("  o12 value")),
             "{rows:#?}"
@@ -1951,9 +2012,22 @@ mod tests {
     }
 
     #[test]
+    fn accepted_whitespace_clears_the_live_input() {
+        let mut editor = Editor::new(String::new());
+        editor.input = InputCode::new_in_memory();
+        editor.paste(" \n\t");
+
+        editor.apply(EditorUpdate::WhitespaceAccepted);
+
+        assert!(editor.submission().is_empty());
+        press(&mut editor, KeyCode::Up, KeyModifiers::NONE);
+        assert!(editor.submission().is_empty());
+    }
+
+    #[test]
     fn mouse_selection_skips_output_types() {
         let mut editor = Editor::new(String::new());
-        editor.feed = Feed::new(Box::new(crate::ui::block::OutputBlock::value(
+        editor.feed = Feed::new(Box::new(crate::ui::cell::OutputBlock::value(
             "value".to_string(),
             Some("ZZ".to_string()),
         )));
@@ -2259,9 +2333,14 @@ mod tests {
         press(&mut editor, KeyCode::Down, KeyModifiers::NONE);
         press(&mut editor, KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(picker_title(&editor), Some("style"));
-        press(&mut editor, KeyCode::Esc, KeyModifiers::NONE);
+        press(&mut editor, KeyCode::Backspace, KeyModifiers::NONE);
         assert_eq!(picker_title(&editor), Some("settings"));
         assert_eq!(editor.pickers.last().unwrap().picker.selected(), 3);
+
+        press(&mut editor, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(picker_title(&editor), Some("style"));
+        press(&mut editor, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(editor.pickers.is_empty());
     }
 
     #[test]
@@ -2285,7 +2364,7 @@ mod tests {
         open_keymaps(&mut editor);
 
         assert_eq!(
-            editor.pickers.last().unwrap().picker.height(&editor.groups),
+            editor.pickers.last().unwrap().picker.height(),
             Action::REMAPPABLE.len() as u16 + 2
         );
         press(&mut editor, KeyCode::Char('x'), KeyModifiers::CONTROL);
@@ -2340,7 +2419,7 @@ mod tests {
         let picker = &editor.pickers.last().unwrap().picker;
         assert_eq!(picker.title(), "commands");
         assert_eq!(picker.len(), 1);
-        assert_eq!(picker.height(&Groups::default()), UI.picker_min_rows + 2);
+        assert_eq!(picker.height(), UI.picker_min_rows + 2);
         assert_eq!(editor.input.text(), "/set");
 
         press(&mut editor, KeyCode::Enter, KeyModifiers::NONE);
@@ -2422,7 +2501,7 @@ mod tests {
         press(&mut editor, KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(picker_title(&editor), Some("settings"));
         assert_eq!(editor.input.text(), "x");
-        press(&mut editor, KeyCode::Esc, KeyModifiers::NONE);
+        press(&mut editor, KeyCode::Backspace, KeyModifiers::NONE);
         assert_eq!(picker_title(&editor), Some("commands"));
 
         for _ in 0..4 {
@@ -2442,7 +2521,7 @@ mod tests {
     }
 
     #[test]
-    fn slash_command_history_records_the_completed_command() {
+    fn slash_commands_stay_out_of_input_history() {
         let mut editor = Editor::new(String::new());
         editor.input = InputCode::new_in_memory();
 
@@ -2456,18 +2535,11 @@ mod tests {
         ));
 
         press(&mut editor, KeyCode::Up, KeyModifiers::NONE);
-        assert_eq!(editor.input.text(), "/ast");
-
-        let action = editor.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(matches!(
-            action,
-            Reaction::Open(ViewKind::SyntaxTree, OpenTarget::Current)
-        ));
         assert!(editor.input.text().is_empty());
     }
 
     #[test]
-    fn debug_command_posts_through_the_session_and_enters_history() {
+    fn debug_command_posts_through_the_session_without_entering_history() {
         let mut editor = Editor::new(String::new());
         editor.input = InputCode::new_in_memory();
         let ordinary = editor.feed.len();
@@ -2490,7 +2562,7 @@ mod tests {
         assert!(!editor.highlight_debug);
         assert_eq!(editor.feed.len(), ordinary + 1);
         press(&mut editor, KeyCode::Up, KeyModifiers::NONE);
-        assert_eq!(editor.input.text(), "/debug");
+        assert!(editor.input.text().is_empty());
     }
 
     #[test]
@@ -2550,6 +2622,43 @@ mod tests {
     }
 
     #[test]
+    fn command_picker_uses_the_statusline_keymap_accent() {
+        let mut editor = Editor::new(String::new());
+        press(&mut editor, KeyCode::Char('/'), KeyModifiers::NONE);
+        let buffer = rendered_buffer(&mut editor, 120, 16);
+        let (x, y) = (0..16)
+            .find_map(|y| {
+                let row = (0..120)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>();
+                row.find("ctrl+o")
+                    .map(|x| (row[..x].chars().count() as u16, y))
+            })
+            .unwrap();
+
+        assert_eq!(buffer[(x, y)].fg, editor.groups.prompt().fg.unwrap());
+    }
+
+    #[test]
+    fn picker_keeps_the_live_input_cursor_visible() {
+        let mut editor = Editor::new(String::new());
+        press(&mut editor, KeyCode::Char('/'), KeyModifiers::NONE);
+        let backend = TestBackend::new(70, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut highlighter = EmptyHighlighter;
+
+        terminal
+            .draw(|frame| editor.draw(frame, frame.area(), &mut highlighter, false))
+            .unwrap();
+
+        assert!(terminal.backend().cursor_visible());
+        assert_eq!(
+            terminal.backend().cursor_position().y,
+            editor.input.text_area().y
+        );
+    }
+
+    #[test]
     fn an_empty_or_unmatched_command_returns_to_code_input() {
         let mut editor = Editor::new(String::new());
 
@@ -2565,6 +2674,19 @@ mod tests {
 
         press(&mut editor, KeyCode::Char('$'), KeyModifiers::NONE);
         assert_eq!(editor.input.text(), "/z$");
+    }
+
+    #[test]
+    fn space_leaves_command_selection_and_remains_in_the_input() {
+        let mut editor = Editor::new(String::new());
+
+        press(&mut editor, KeyCode::Char('/'), KeyModifiers::NONE);
+        press(&mut editor, KeyCode::Char(' '), KeyModifiers::NONE);
+        assert!(editor.pickers.is_empty());
+        assert_eq!(editor.input.text(), "/ ");
+
+        press(&mut editor, KeyCode::Char('x'), KeyModifiers::NONE);
+        assert_eq!(editor.input.text(), "/ x");
     }
 
     #[test]
@@ -2696,6 +2818,77 @@ mod tests {
     }
 
     #[test]
+    fn code_tail_draws_a_separator_on_the_input_margin() {
+        let mut editor = Editor::new(String::new());
+        editor.apply(EditorUpdate::Pending {
+            id: 1,
+            cells: vec![("x".into(), Vec::new())],
+        });
+        let buffer = rendered_buffer(&mut editor, 70, 20);
+        let y = editor.input.area().y;
+
+        for x in 0..70 {
+            assert_eq!(buffer[(x, y)].symbol(), "▀");
+            assert_eq!(buffer[(x, y)].fg, editor.groups.separator().fg.unwrap());
+            assert_eq!(buffer[(x, y)].bg, editor.groups.code().bg.unwrap());
+        }
+
+        editor.apply(EditorUpdate::CellSucceeded {
+            id: 1,
+            index: 0,
+            number: 1,
+            state: CellState::Value,
+            outputs: Vec::new(),
+            value: Some(OutputBlock::value("value".into(), None)),
+        });
+        let buffer = rendered_buffer(&mut editor, 70, 20);
+        assert_eq!(buffer[(0, editor.input.area().y)].symbol(), " ");
+    }
+
+    #[test]
+    fn separate_submissions_and_code_view_cells_have_one_blank_row() {
+        let mut editor = Editor::new(String::new());
+        for (id, code) in [(1, "firstCode"), (2, "secondCode")] {
+            editor.apply(EditorUpdate::Pending {
+                id,
+                cells: vec![(code.into(), Vec::new())],
+            });
+        }
+        let rows = rendered_editor(&mut editor, 70, 18);
+        let first = rows
+            .iter()
+            .position(|row| row.contains("firstCode"))
+            .unwrap();
+        let second = rows
+            .iter()
+            .position(|row| row.contains("secondCode"))
+            .unwrap();
+        assert_eq!(second - first, 2, "{rows:#?}");
+
+        let committed = ["firstCode", "secondCode"].map(|code| CommittedCell {
+            number: 1,
+            state: CellState::Null,
+            code: code.into(),
+            tree: PrettyNode::syntax("Symbol", None),
+        });
+        let rows = rendered_preview(
+            &mut editor,
+            &committed,
+            ViewKind::Code,
+            &mut Viewport::default(),
+        );
+        let first = rows
+            .iter()
+            .position(|row| row.contains("firstCode"))
+            .unwrap();
+        let second = rows
+            .iter()
+            .position(|row| row.contains("secondCode"))
+            .unwrap();
+        assert_eq!(second - first, 2, "{rows:#?}");
+    }
+
+    #[test]
     fn transparent_background_only_clears_unpainted_feed_cells() {
         let mut editor = Editor::new("visible".to_string());
         editor.apply_appearance(editor.appearance.cycle_background());
@@ -2742,21 +2935,108 @@ mod tests {
         let rows = rendered_editor(&mut editor, 70, 10);
         assert!(rows.last().unwrap().contains("Ready"));
 
-        editor.apply(EditorUpdate::ContinueSubmission(
-            "unclosed parenthesized expression".into(),
-        ));
+        editor.apply(EditorUpdate::Incomplete {
+            source: "(\n".into(),
+            spans: Vec::new(),
+            reason: "unclosed parenthesized expression".into(),
+        });
         let buffer = rendered_buffer(&mut editor, 70, 10);
         let status = (0..70).map(|x| buffer[(x, 9)].symbol()).collect::<String>();
-        assert!(status.contains("Input pending (unclosed"));
+        assert!(status.contains("Waiting for unclosed"));
+        assert!(status.contains("continue"));
         assert_eq!(
             buffer[(UI.statusline_margin, 9)].fg,
-            editor.groups.style(HLGroup::StatuslineError).fg.unwrap()
+            editor.groups.muted().fg.unwrap()
         );
 
         editor.set_processing(true);
         let rows = rendered_editor(&mut editor, 70, 10);
         assert!(rows.last().unwrap().contains("Processing"));
         assert!(!rows.last().unwrap().contains("Macaulay2"));
+    }
+
+    #[test]
+    fn control_up_moves_the_incomplete_tail_back_to_input() {
+        let mut editor = Editor::new(String::new());
+        editor.input = InputCode::new_in_memory();
+        editor.paste("f(");
+        editor.apply(EditorUpdate::Incomplete {
+            source: "f(\n".into(),
+            spans: Vec::new(),
+            reason: "unclosed parenthesized expression".into(),
+        });
+
+        assert!(editor.submission().is_empty());
+        assert!(matches!(
+            editor.handle_key(key(KeyCode::Up, KeyModifiers::CONTROL)),
+            Reaction::ResumeIncomplete
+        ));
+        assert_eq!(editor.take_incomplete().as_deref(), Some("f(\n"));
+        assert_eq!(editor.submission(), "f(\n");
+        assert_eq!(editor.feed.len(), 1);
+    }
+
+    #[test]
+    fn invalid_continuation_replaces_its_incomplete_block_with_one_error() {
+        let mut editor = Editor::new(String::new());
+        editor.input = InputCode::new_in_memory();
+        editor.apply(EditorUpdate::Incomplete {
+            source: "f(\n".into(),
+            spans: Vec::new(),
+            reason: "`)`".into(),
+        });
+        editor.paste("]  ");
+
+        editor.apply(EditorUpdate::SyntaxFailed {
+            id: 1,
+            source: "f(\n]".into(),
+            spans: Vec::new(),
+            message: "unexpected closing delimiter".into(),
+        });
+
+        assert_eq!(editor.feed.len(), 2);
+        assert!(editor.submission().is_empty());
+        assert!(editor.take_incomplete().is_none());
+        let rows = rendered_editor(&mut editor, 50, 12).join("\n");
+        assert_eq!(rows.matches("f(").count(), 1);
+        assert!(rows.contains("unexpected closing delimiter"));
+        press(&mut editor, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(editor.submission(), "f(\n]");
+    }
+
+    #[test]
+    fn evaluation_error_keeps_queued_and_incomplete_code_out_of_the_editor() {
+        let mut editor = Editor::new(String::new());
+        editor.input = InputCode::new_in_memory();
+        editor.apply(EditorUpdate::Pending {
+            id: 1,
+            cells: ["bad\n", "later\n"]
+                .map(|source| (source.into(), Vec::new()))
+                .into(),
+        });
+        editor.apply(EditorUpdate::Queued {
+            id: 2,
+            cells: vec![("queued\n".into(), Vec::new())],
+        });
+        editor.apply(EditorUpdate::Incomplete {
+            source: "tail(\n".into(),
+            spans: Vec::new(),
+            reason: "`)`".into(),
+        });
+        editor.paste("draft");
+
+        editor.apply(EditorUpdate::CellFailed {
+            id: 1,
+            index: 0,
+            number: 1,
+            outputs: Vec::new(),
+            message: "failed".into(),
+        });
+        editor.apply(EditorUpdate::Started { id: 1 });
+
+        assert_eq!(editor.submission(), "draft");
+        assert_eq!(editor.feed.len(), 4);
+        assert_eq!(editor.take_incomplete().as_deref(), Some("tail(\n"));
     }
 
     #[test]
@@ -3023,7 +3303,7 @@ mod tests {
             .unwrap() as u16;
         assert_eq!(select(&mut editor, row), "CODE_TEXT");
 
-        editor.feed = Feed::new(Box::new(crate::ui::block::OutputBlock::value(
+        editor.feed = Feed::new(Box::new(crate::ui::cell::OutputBlock::value(
             "VALUE_TEXT".to_string(),
             None,
         )));
@@ -3039,23 +3319,22 @@ mod tests {
 
     #[test]
     fn output_preview_cycles_the_three_structured_filters() {
-        use crate::ui::block::{OutputBlock, SubmissionBlock};
+        use crate::ui::cell::{EvaluationBlock, OutputBlock};
 
-        let mut submission = SubmissionBlock::new(0, [("x".to_string(), Vec::new())]);
+        let mut submission = EvaluationBlock::new(0, [("x".to_string(), Vec::new())]);
         submission.succeed(
             0,
             1,
             CellState::Value,
-            vec![
-                Box::new(TextBlock::printed("PRINTED_ONLY")),
-                Box::new(
-                    OutputBlock::value("VALUE_ONLY".to_string(), Some("TYPE_ONLY".to_string()))
-                        .numbered(1),
-                ),
-            ],
+            vec![Box::new(TextBlock::printed("PRINTED_ONLY"))],
+            Some(
+                OutputBlock::value("VALUE_ONLY".to_string(), Some("TYPE_ONLY".to_string()))
+                    .numbered(1),
+            ),
         );
         let mut editor = Editor::new(String::new());
-        editor.feed = Feed::new(Box::new(submission));
+        editor.feed.clear();
+        editor.feed.push_evaluation(submission);
         let mut viewport = Viewport::default();
 
         let evaluation =

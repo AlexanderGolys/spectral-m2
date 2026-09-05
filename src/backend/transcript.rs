@@ -6,26 +6,31 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 /// Printed text, an optional returned value, and warnings from one evaluation.
-pub struct CapturedOutput {
-    pub printed: String,
-    pub value: Option<CapturedValue>,
-    pub warnings: Vec<String>,
+pub(crate) struct CapturedOutput {
+    pub(crate) printed: String,
+    pub(crate) value: Option<CapturedValue>,
+    pub(crate) warnings: Vec<String>,
 }
 
 /// The rendered value and optional M2 type annotation of an output cell.
-pub struct CapturedValue {
-    pub text: String,
-    pub type_info: Option<String>,
+pub(crate) struct CapturedValue {
+    pub(crate) text: String,
+    pub(crate) type_info: Option<String>,
 }
 
-/// Lines a successful cell's transcript carries that are diagnostics rather than
-/// printed text. Errors are not among them: an errored cell never reaches here,
-/// its message travelling through [`captured_error`] instead.
-/// A line of M2 diagnostic rather than printed text. Errors are not among them:
-/// an errored cell never reaches here, its message travelling through
-/// [`captured_error`] instead.
-static DIAGNOSTIC: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r": warning:|--backtrace:").expect("valid pattern"));
+/// Ordinary output emitted before a failed evaluation and its diagnostic.
+pub(crate) struct CapturedError {
+    pub(crate) printed: String,
+    pub(crate) diagnostic: String,
+}
+
+/// Warning lines carried beside otherwise successful output.
+static WARNING: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r": warning:").expect("valid pattern"));
+
+/// Debugger trace markers emitted after the useful error diagnostic.
+static BACKTRACE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^--back ?trace(?:--|:)").expect("valid pattern"));
 
 /// The position M2 stamps on a diagnostic, as in
 /// `currentString:1:6:(3):[8]: warning: …`. The leading name is sometimes
@@ -38,15 +43,11 @@ static LOCATION_PREFIX: LazyLock<Regex> =
 static DIAGNOSTIC_KEYWORD: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z]+: ").expect("valid pattern"));
 
-fn is_diagnostic(s: &str) -> bool {
-    DIAGNOSTIC.is_match(s)
-}
-
 /// Strip M2's cryptic source-location prefix (`currentString:1:6:(3):[8]: `),
 /// keeping only the message (`warning: …` / `error: …`). The prefix is slated
 /// for removal upstream, so we drop it rather than render it. Returns the input
 /// unchanged when no such prefix is present (e.g. an ordinary value line).
-pub fn strip_m2_location(s: &str) -> &str {
+pub(crate) fn strip_m2_location(s: &str) -> &str {
     LOCATION_PREFIX
         .find(s)
         .map_or(s, |location| &s[location.end()..])
@@ -67,14 +68,14 @@ fn diagnostic_message(s: &str) -> &str {
 /// printed text, errors, stderr, `<<` without its own newline, and empty input.
 /// Anything not of that shape is handed back untouched rather than guessed at.
 fn captured_text<'a>(raw: &'a str, code: &str) -> &'a str {
-    raw.strip_prefix(code)
+    raw.strip_prefix(code.trim_end())
         .and_then(|text| text.strip_prefix('\n'))
         .and_then(|text| text.strip_suffix('\n'))
         .unwrap_or(raw)
 }
 
 /// Separate the printed text, value, and type annotation in a successful capture.
-pub fn captured_output(
+pub(crate) fn captured_output(
     raw: &str,
     code: &str,
     value: Option<&str>,
@@ -95,7 +96,10 @@ pub fn captured_output(
 fn take_warnings(text: &str, warnings: &mut Vec<String>) -> String {
     text.split('\n')
         .filter(|line| {
-            if !is_diagnostic(line) {
+            if BACKTRACE.is_match(line.trim()) {
+                return false;
+            }
+            if !WARNING.is_match(line) {
                 return true;
             }
             let warning = diagnostic_message(strip_m2_location(line)).to_string();
@@ -108,9 +112,20 @@ fn take_warnings(text: &str, warnings: &mut Vec<String>) -> String {
         .join("\n")
 }
 
-/// Remove the echoed input from a failed capture while preserving its diagnostic.
-pub fn captured_error(raw: &str, code: &str) -> String {
-    captured_text(raw, code).to_string()
+/// Remove the echoed input and keep pre-error output out of the diagnostic.
+pub(crate) fn captured_error(raw: &str, code: &str) -> CapturedError {
+    let lines = captured_text(raw, code)
+        .lines()
+        .filter(|line| !BACKTRACE.is_match(line.trim()))
+        .collect::<Vec<_>>();
+    let diagnostic = lines
+        .iter()
+        .position(|line| strip_m2_location(line).starts_with("error: "))
+        .unwrap_or_default();
+    CapturedError {
+        printed: lines[..diagnostic].join("\n"),
+        diagnostic: lines[diagnostic..].join("\n"),
+    }
 }
 
 #[cfg(test)]
@@ -211,6 +226,18 @@ mod tests {
     }
 
     #[test]
+    fn terminal_source_whitespace_does_not_defeat_echo_removal() {
+        let output = captured_output(
+            "print \"hello\"\nhello\n\n",
+            "print \"hello\"  \n",
+            Some("null"),
+            Some("Nothing"),
+        );
+
+        assert_eq!(output.printed, "hello\n");
+    }
+
+    #[test]
     fn printed_output_marker_does_not_become_a_value() {
         let code = "print \"\\no184 = 11\"";
         let raw = "print \"\\no184 = 11\"\n\no184 = 11\n\n";
@@ -242,12 +269,38 @@ mod tests {
     fn error_keeps_message_drops_echo() {
         let raw = "1/0\ncurrentString:1:1:(0):[4]: error: division by zero\n";
         let output = captured_error(raw, "1/0");
-        assert_eq!(output, "currentString:1:1:(0):[4]: error: division by zero");
+        assert_eq!(output.printed, "");
+        assert_eq!(
+            output.diagnostic,
+            "currentString:1:1:(0):[4]: error: division by zero"
+        );
+    }
+
+    #[test]
+    fn error_drops_every_backtrace_marker() {
+        let raw = "bad\nerror: expected strings, integers, or symbols\n--back trace--\n--backtrace: frame\n--back trace--\n";
+
+        assert_eq!(
+            captured_error(raw, "bad").diagnostic,
+            "error: expected strings, integers, or symbols"
+        );
+    }
+
+    #[test]
+    fn error_separates_output_printed_before_the_diagnostic() {
+        let raw = "(print 1; 1/0)\n1\ncurrentString:1:1:(0):[4]: error: division by zero\n";
+        let output = captured_error(raw, "(print 1; 1/0)");
+
+        assert_eq!(output.printed, "1");
+        assert_eq!(
+            output.diagnostic,
+            "currentString:1:1:(0):[4]: error: division by zero"
+        );
     }
 
     #[test]
     fn extracts_distinct_warnings_without_changing_other_lines() {
-        let raw = "currentString:1:1:(3):[8]: warning: first\nvalue\ncurrentString:1:1:(3):[8]: warning: first\ncurrentString:1:1:(3):[8]: warning: second";
+        let raw = "currentString:1:1:(3):[8]: warning: first\n--back trace--\nvalue\n--backtrace: frame\ncurrentString:1:1:(3):[8]: warning: first\ncurrentString:1:1:(3):[8]: warning: second";
         let output = captured_output(raw, "code", None, None);
         assert_eq!(output.printed, "value");
         assert!(output.value.is_none());

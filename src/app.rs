@@ -1,6 +1,6 @@
 //! Application workspaces, panes, and the terminal event loop.
 
-pub mod session;
+pub(crate) mod session;
 
 use std::io;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -288,6 +288,13 @@ impl App {
                     .session
                     .submit(workspace.editor.submission(), &mut workspace.highlighter);
                 workspace.editor.apply(update)
+            }
+            Reaction::ResumeIncomplete => {
+                let workspace = self.workspaces[workspace].as_mut().unwrap();
+                if workspace.editor.take_incomplete().is_some() {
+                    workspace.session.reset_incomplete();
+                }
+                true
             }
             Reaction::Post(source) => {
                 let workspace = self.workspaces[workspace].as_mut().unwrap();
@@ -605,7 +612,7 @@ fn welcome_message(m2_version: &str) -> String {
 }
 
 /// Run the terminal event loop until any workspace requests exit.
-pub fn run(backend: M2Backend) -> Result<()> {
+pub(crate) fn run(backend: M2Backend) -> Result<()> {
     let mut terminal = ReplTerminal::enter()?;
     let mut app = App::new(backend);
     let mut dirty = true;
@@ -622,10 +629,15 @@ pub fn run(backend: M2Backend) -> Result<()> {
             dirty = true;
             continue;
         }
-        let Some(event) = terminal.next_event(EVENT_POLL_INTERVAL)? else {
+        let events = terminal.next_events(EVENT_POLL_INTERVAL)?;
+        if events.is_empty() {
             continue;
-        };
-        if !app.handle_event(event) {
+        }
+        let mut running = true;
+        for event in events {
+            running &= app.handle_event(event);
+        }
+        if !running {
             break;
         }
         dirty = true;

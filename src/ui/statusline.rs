@@ -6,12 +6,12 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget};
 
+use super::block::{Element, Text, TextSpan};
 use super::config::UI;
 use super::controller::settings::theme::groups::{Groups, HLGroup};
-use super::element::{Element, Text, TextSpan};
 
 /// A request to replace or clear the status line.
-pub enum StatusLineEvent {
+pub(crate) enum StatusLineEvent {
     Show {
         alignment: Alignment,
         spans: Vec<TextSpan>,
@@ -26,20 +26,20 @@ struct StatusMessage {
 
 /// The current status message and its left, centered, and right composition.
 #[derive(Default)]
-pub struct StatusLine {
+pub(crate) struct StatusLine {
     message: Option<StatusMessage>,
 }
 
 /// Content supplied while the status line is rendered.
-pub struct StatusLineContext {
-    pub groups: Groups,
-    pub idle_left: Option<TextSpan>,
-    pub center: Option<Vec<TextSpan>>,
-    pub right: Vec<TextSpan>,
+pub(crate) struct StatusLineContext {
+    pub(crate) groups: Groups,
+    pub(crate) idle_left: Option<TextSpan>,
+    pub(crate) center: Option<Vec<TextSpan>>,
+    pub(crate) right: Vec<TextSpan>,
 }
 
 impl StatusLineContext {
-    pub fn new(groups: Groups) -> Self {
+    pub(crate) fn new(groups: Groups) -> Self {
         Self {
             groups,
             idle_left: None,
@@ -50,7 +50,7 @@ impl StatusLineContext {
 }
 
 impl StatusLine {
-    pub fn handle(&mut self, event: StatusLineEvent) {
+    pub(crate) fn handle(&mut self, event: StatusLineEvent) {
         self.message = match event {
             StatusLineEvent::Show { alignment, spans } => Some(StatusMessage { alignment, spans }),
         };

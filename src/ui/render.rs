@@ -1,12 +1,12 @@
-//! Shared shape renderers behind every [`Block`](super::Block). Two shapes cover
+//! Shared rendering context and helpers for terminal UI elements. Two shapes cover
 //! the feed: a full-width *code band* and an inset bordered *box*. Each block's
 //! `render` is a thin call into here, so no block re-implements drawing. Measurement
 //! and rendering consume the same visual-line ranges produced by the shared layout
 //! policies.
 
+use crate::ui::block::{Element, HLSpan, Text};
 use crate::ui::config::UI;
 use crate::ui::controller::settings::theme::groups::Groups;
-use crate::ui::element::{Element, HLSpan, Text};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -21,14 +21,14 @@ enum BorderPlacement {
 }
 
 /// Runtime rendering inputs shared by every block without owning application state.
-pub struct RenderContext {
+pub(crate) struct RenderContext {
     width: u16,
     prefix: u16,
     groups: Groups,
 }
 
 impl RenderContext {
-    pub fn new(width: u16, prefix: u16, groups: &Groups) -> Self {
+    pub(crate) fn new(width: u16, prefix: u16, groups: &Groups) -> Self {
         Self {
             width,
             prefix,
@@ -36,27 +36,32 @@ impl RenderContext {
         }
     }
 
-    pub fn width(&self) -> u16 {
+    pub(crate) fn width(&self) -> u16 {
         self.width
     }
 
-    pub fn prefix(&self) -> u16 {
+    /// Retain rendering services at a nested element's local width.
+    pub(crate) fn with_width(&self, width: u16) -> Self {
+        Self::new(width, self.prefix, &self.groups)
+    }
+
+    pub(crate) fn prefix(&self) -> u16 {
         self.prefix
     }
 
-    pub fn groups(&self) -> &Groups {
+    pub(crate) fn groups(&self) -> &Groups {
         &self.groups
     }
 }
 
 /// Styled prefix containing the live input prompt.
-pub struct Prompt {
+pub(crate) struct Prompt {
     label: String,
     style: Style,
 }
 
 impl Prompt {
-    pub fn new(label: impl Into<String>, style: Style) -> Self {
+    pub(crate) fn new(label: impl Into<String>, style: Style) -> Self {
         Self {
             label: label.into(),
             style,
@@ -81,7 +86,7 @@ impl Text for Prompt {
 }
 
 /// Semantic highlight ranges that paint source text into styled spans.
-pub trait Highlights {
+pub(crate) trait Highlights {
     fn paint(
         &self,
         abs_start: usize,
@@ -130,43 +135,26 @@ impl Highlights for [HLSpan] {
     }
 }
 
-/// Geometry shared by result, warning, and error borders.
+/// Content geometry for a generic bordered element.
 #[derive(Clone, Copy)]
-pub struct BorderLayout {
+pub(crate) struct FrameLayout {
     prefix: u16,
     inset: u16,
     placement: BorderPlacement,
 }
 
-impl BorderLayout {
-    /// Align a border and its body to a possible `oN` marker.
-    pub const fn numbered(number: u32) -> Self {
-        let digits = if number == 0 {
-            1
-        } else {
-            number.ilog10() as u16 + 1
-        };
+impl FrameLayout {
+    /// Place a frame at an explicit inset with independent content padding.
+    pub(crate) const fn gutter(prefix: u16, inset: u16) -> Self {
         Self {
-            prefix: UI.cell_margin + digits + UI.cell_gap,
-            inset: UI.cell_margin + digits,
+            prefix,
+            inset,
             placement: BorderPlacement::Gutter,
         }
     }
 
-    /// Cross only the penultimate digit of a multi-digit `oN` marker.
-    pub const fn output(number: u32) -> Self {
-        let mut layout = Self::numbered(number);
-        layout.inset -= if number >= 10 { 1 } else { 0 };
-        layout
-    }
-
-    /// Align an unnumbered border with an ordinary one-digit result.
-    pub const fn plain() -> Self {
-        Self::numbered(1)
-    }
-
     /// Place a box between one-third and two-thirds of its available width.
-    pub const fn middle_third() -> Self {
+    pub(crate) const fn middle_third() -> Self {
         Self {
             prefix: 0,
             inset: 0,
@@ -175,24 +163,18 @@ impl BorderLayout {
     }
 
     /// Width reserved before bordered content.
-    pub const fn prefix(self) -> u16 {
+    pub(crate) const fn prefix(self) -> u16 {
         self.prefix
     }
 
-    /// Draw the line separating a feed marker from its content.
-    pub fn render_separator(self, area: Rect, style: Style, buf: &mut Buffer) {
-        if matches!(self.placement, BorderPlacement::MiddleThird) {
-            return;
-        }
-        let x = area.x + self.inset;
-        for y in area.y..area.bottom() {
-            buf[(x, y)].set_symbol("▏").set_style(style);
-        }
+    /// Horizontal coordinate of the frame's left edge.
+    pub(crate) const fn inset(self) -> u16 {
+        self.inset
     }
 }
 
 impl Bordered {
-    fn area(area: Rect, layout: BorderLayout) -> Rect {
+    fn area(area: Rect, layout: FrameLayout) -> Rect {
         if matches!(layout.placement, BorderPlacement::MiddleThird) {
             let left = area.width / 3;
             let right = area.width.saturating_mul(2) / 3;
@@ -210,7 +192,7 @@ impl Bordered {
         Rect::new(area.x + layout.inset, area.y, width, area.height)
     }
 
-    pub fn inner(area: Rect, layout: BorderLayout) -> Rect {
+    pub(crate) fn inner(area: Rect, layout: FrameLayout) -> Rect {
         TuiBlock::bordered()
             .padding(Padding::new(
                 layout.prefix.saturating_sub(layout.inset + 1),
@@ -221,14 +203,14 @@ impl Bordered {
             .inner(Self::area(area, layout))
     }
 
-    pub fn text_width(context: &RenderContext, layout: BorderLayout) -> u16 {
+    pub(crate) fn text_width(context: &RenderContext, layout: FrameLayout) -> u16 {
         Self::inner(Rect::new(0, 0, context.width(), 0), layout).width
     }
 }
 
 /// Styled text decorated by the shared rounded feed border.
-pub struct Bordered {
-    layout: BorderLayout,
+pub(crate) struct Bordered {
+    layout: FrameLayout,
     surface: Style,
     border_style: Style,
     title: Option<Line<'static>>,
@@ -236,8 +218,8 @@ pub struct Bordered {
 }
 
 impl Bordered {
-    pub fn new(
-        layout: BorderLayout,
+    pub(crate) fn new(
+        layout: FrameLayout,
         surface: Style,
         border_style: Style,
         title: Option<Line<'static>>,

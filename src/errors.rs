@@ -2,9 +2,9 @@ use std::io;
 
 /// An operational failure while communicating with M2 or driving the terminal.
 /// Syntax failures are not here: they are a verdict about the user's input
-/// ([`crate::code::parser::ParseVerdict`]), not a fault in the session.
+/// (a parser verdict), not a fault in the session.
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error(transparent)]
     System(#[from] io::Error),
     #[error(transparent)]
@@ -20,4 +20,4 @@ pub enum Error {
 }
 
 /// The result type shared by Spectral's fallible operations.
-pub type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T> = std::result::Result<T, Error>;

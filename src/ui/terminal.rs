@@ -1,7 +1,7 @@
 //! Crossterm terminal lifecycle and event input.
 
 use std::io::{self, Stdout};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -17,13 +17,15 @@ use ratatui::{Frame, Terminal};
 use crate::errors::Result;
 
 /// A raw-mode alternate-screen terminal restored automatically on drop.
-pub struct ReplTerminal {
+pub(crate) struct ReplTerminal {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     active: bool,
 }
 
 impl ReplTerminal {
-    pub fn enter() -> Result<Self> {
+    const SCROLL_BUFFER: Duration = Duration::from_millis(8);
+
+    pub(crate) fn enter() -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(
@@ -48,20 +50,36 @@ impl ReplTerminal {
         })
     }
 
-    pub fn draw(&mut self, render: impl FnOnce(&mut Frame)) -> Result<()> {
+    pub(crate) fn draw(&mut self, render: impl FnOnce(&mut Frame)) -> Result<()> {
         self.terminal.draw(render)?;
         Ok(())
     }
 
-    pub fn next_event(&self, timeout: Duration) -> Result<Option<Event>> {
-        if event::poll(timeout)? {
-            Ok(Some(event::read()?))
-        } else {
-            Ok(None)
+    /// Read one event, coalescing a burst of wheel reports before the next frame.
+    pub(crate) fn next_events(&self, timeout: Duration) -> Result<Vec<Event>> {
+        if !event::poll(timeout)? {
+            return Ok(Vec::new());
         }
+        let first = event::read()?;
+        let scroll = matches!(
+            first,
+            Event::Mouse(mouse)
+                if matches!(mouse.kind, event::MouseEventKind::ScrollUp | event::MouseEventKind::ScrollDown)
+        );
+        let mut events = vec![first];
+        if scroll {
+            let deadline = Instant::now() + Self::SCROLL_BUFFER;
+            while let Some(timeout) = deadline.checked_duration_since(Instant::now()) {
+                if !event::poll(timeout)? {
+                    break;
+                }
+                events.push(event::read()?);
+            }
+        }
+        Ok(events)
     }
 
-    pub fn leave(&mut self) -> Result<()> {
+    pub(crate) fn leave(&mut self) -> Result<()> {
         self.restore()
     }
 

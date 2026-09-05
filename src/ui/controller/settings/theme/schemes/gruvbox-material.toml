@@ -452,9 +452,10 @@ ShellError = { fg = "red", sp = "red" }
 HintText = { fg = "grey0" }
 Normal = { bg = "bg0" }
 CodeBlock = { bg = "bg_dim" }
+PendingBlock = { bg = "bg1" }
 Separator = { fg = "bg0" }
 ValueBorder = { fg = "bg3", sp = "bg3" }
-OutputNumber = { fg = "green" }
+OutputNumber = { fg = "aqua", bold = true }
 ErrorBorder = { fg = "red", sp = "red" }
 WarningBorder = { fg = "yellow", sp = "yellow" }
 InfoBorder = { fg = "blue", sp = "blue" }
@@ -467,8 +468,8 @@ StatuslineError = { fg = "red", sp = "red" }
 StatuslineWarning = { fg = "yellow", sp = "yellow" }
 KeymapHint = { fg = "aqua" }
 PickerText = { fg = "fg0" }
-Picker = { bg = "bg_diff_green" }
-PickerSelected = { fg = "bg0", bg = "green" }
+Picker = { bg = "bg1" }
+PickerSelected = { bg = "bg_diff_green" }
 PickerBorder = { fg = "bg4", sp = "bg4" }
 
 Accent1 = { fg = "red" }

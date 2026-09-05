@@ -1,27 +1,28 @@
 //! One independently evaluated Macaulay2 workspace.
 
+use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use m2_syn::PrettyNode;
+use m2_syn::{NativeCellParser, NativeCellState, PrettyNode, PrettyTree};
 
 use crate::backend::transcript::{captured_error, captured_output};
 use crate::backend::{M2Backend, M2Response};
 use crate::code::highlight::Highlighter;
-use crate::code::parser::{self, ParseVerdict};
 use crate::errors::Result;
-use crate::ui::block::{Block, CellState, OutputBlock, TextBlock, WarningBlock};
+use crate::ui::block::Block;
+use crate::ui::cell::{CellState, OutputBlock, TextBlock, WarningBlock};
 use crate::ui::controller::commands::{submitted_command, SubmittedCommand};
 use crate::ui::controller::EditorUpdate;
 
 /// One successfully evaluated input cell retained by its workspace.
 #[derive(Clone)]
 #[cfg_attr(not(test), allow(dead_code))]
-pub struct CommittedCell {
-    pub number: u32,
-    pub state: CellState,
-    pub code: String,
-    pub tree: PrettyNode,
+pub(crate) struct CommittedCell {
+    pub(crate) number: u32,
+    pub(crate) state: CellState,
+    pub(crate) code: String,
+    pub(crate) tree: PrettyNode,
 }
 
 /// A parsed cell waiting for its worker to evaluate it.
@@ -31,8 +32,8 @@ struct SubmittedCell {
     tree: PrettyNode,
 }
 
-/// The ordered cells belonging to the workspace's active submission.
-struct PendingSubmission {
+/// One submitted evaluation, active at the queue front and queued otherwise.
+struct Evaluation {
     id: u64,
     cells: Vec<SubmittedCell>,
 }
@@ -41,6 +42,7 @@ struct PendingSubmission {
 enum WorkerRequest {
     Evaluate {
         id: u64,
+        first_index: usize,
         first_number: u32,
         cells: Vec<String>,
     },
@@ -60,7 +62,7 @@ enum WorkerEvent {
 }
 
 /// A live M2 worker and the source state committed through it.
-pub struct Session {
+pub(crate) struct Session {
     requests: Sender<WorkerRequest>,
     events: Receiver<WorkerEvent>,
     version: String,
@@ -69,12 +71,14 @@ pub struct Session {
     next_submission_id: u64,
     committed: Vec<CommittedCell>,
     committed_revision: u64,
-    pending: Option<PendingSubmission>,
+    leading_whitespace: String,
+    parser: NativeCellParser,
+    evaluations: VecDeque<Evaluation>,
     restarting: bool,
 }
 
 impl Session {
-    pub fn new(backend: M2Backend) -> Self {
+    pub(crate) fn new(backend: M2Backend) -> Self {
         let version = backend.version().unwrap_or_else(|_| "unknown".to_string());
         let (request_tx, request_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
@@ -88,38 +92,40 @@ impl Session {
             next_submission_id: 0,
             committed: Vec::new(),
             committed_revision: 0,
-            pending: None,
+            leading_whitespace: String::new(),
+            parser: NativeCellParser::new(),
+            evaluations: VecDeque::new(),
             restarting: false,
         }
     }
 
-    pub fn version(&self) -> Result<String> {
+    pub(crate) fn version(&self) -> Result<String> {
         Ok(self.version.clone())
     }
 
     #[cfg(test)]
-    pub fn next_input_number(&self) -> u32 {
+    pub(crate) fn next_input_number(&self) -> u32 {
         self.next_input_number
     }
 
-    pub fn in_debugger(&self) -> bool {
+    pub(crate) fn in_debugger(&self) -> bool {
         self.in_debugger
     }
 
-    pub fn committed(&self) -> &[CommittedCell] {
+    pub(crate) fn committed(&self) -> &[CommittedCell] {
         &self.committed
     }
 
     /// Revision of the immutable committed-cell sequence.
-    pub const fn committed_revision(&self) -> u64 {
+    pub(crate) const fn committed_revision(&self) -> u64 {
         self.committed_revision
     }
 
-    pub fn busy(&self) -> bool {
-        self.pending.is_some() || self.restarting
+    pub(crate) fn busy(&self) -> bool {
+        !self.evaluations.is_empty() || self.restarting
     }
 
-    pub fn restart(&mut self) -> EditorUpdate {
+    pub(crate) fn restart(&mut self) -> EditorUpdate {
         if self.busy() {
             return EditorUpdate::Diagnostic("workspace is still evaluating".to_string());
         }
@@ -130,63 +136,198 @@ impl Session {
         EditorUpdate::Ignore
     }
 
-    pub fn submit(&mut self, source: &str, highlighter: &mut dyn Highlighter) -> EditorUpdate {
+    pub(crate) fn submit(
+        &mut self,
+        source: &str,
+        highlighter: &mut dyn Highlighter,
+    ) -> EditorUpdate {
         if source.is_empty() {
             return EditorUpdate::Ignore;
         }
-        if let Some(command) = submitted_command(source) {
-            return match command {
-                SubmittedCommand::Quit => EditorUpdate::Quit,
-                SubmittedCommand::Restart => self.restart(),
-            };
-        }
-        if self.busy() {
-            return EditorUpdate::Diagnostic("workspace is still evaluating".to_string());
-        }
-
-        let source = source.trim();
-        let parsed = match parser::check(source) {
-            ParseVerdict::Incomplete(reason) => {
-                return EditorUpdate::ContinueSubmission(reason);
-            }
-            ParseVerdict::SyntaxError(diagnostic) => {
-                return EditorUpdate::SyntaxDiagnostic {
-                    message: diagnostic.message,
-                    range: diagnostic.range,
+        if self.parser.active_source().is_empty() {
+            if let Some(command) = submitted_command(source) {
+                return match command {
+                    SubmittedCommand::Quit => EditorUpdate::Quit,
+                    SubmittedCommand::Restart => self.restart(),
                 };
             }
-            ParseVerdict::Complete(cells) if cells.is_empty() => return EditorUpdate::Ignore,
-            ParseVerdict::Complete(cells) => cells,
-        };
-        let cells: Vec<_> = parsed
+        }
+        if self.restarting {
+            return EditorUpdate::Diagnostic("workspace is restarting".to_string());
+        }
+        if self.parser.active_source().is_empty() && source.chars().all(char::is_whitespace) {
+            return self.append_whitespace(source);
+        }
+
+        let state = self.parser.push_line(source);
+        let mut cells: Vec<_> = self
+            .parser
+            .take_completed()
             .into_iter()
-            .map(|cell| SubmittedCell {
-                code: source[cell.range].to_string(),
-                tree: cell.tree,
+            .enumerate()
+            .map(|(index, cell)| SubmittedCell {
+                code: match index {
+                    0 => cell.source().trim_end(),
+                    _ => cell
+                        .source()
+                        .trim_end()
+                        .strip_prefix('\n')
+                        .unwrap_or_else(|| cell.source().trim_end()),
+                }
+                .to_string(),
+                tree: cell.syntax().pretty_tree(),
             })
             .collect();
+        if let Some(first) = cells.first_mut() {
+            first.code.insert_str(0, &self.leading_whitespace);
+        }
+        let mut updates = Vec::new();
+        if !cells.is_empty() {
+            updates.push(self.enqueue(cells, highlighter));
+            self.leading_whitespace.clear();
+        }
+        match state {
+            NativeCellState::Incomplete => {
+                let mut source = self.leading_whitespace.clone();
+                source.push_str(self.parser.active_source().trim_end());
+                let reason = self.incomplete_reason();
+                updates.push(EditorUpdate::Incomplete {
+                    spans: highlighter.highlight(&source),
+                    source,
+                    reason,
+                });
+            }
+            NativeCellState::Invalid => {
+                let mut source = self.parser.active_source().to_string();
+                source.insert_str(0, &self.leading_whitespace);
+                source.truncate(source.trim_end().len());
+                self.leading_whitespace.clear();
+                let message = self.invalid_diagnostic();
+                let spans = highlighter.highlight(&source);
+                let id = self.next_id();
+                self.parser.reset_active();
+                updates.push(EditorUpdate::SyntaxFailed {
+                    id,
+                    source,
+                    spans,
+                    message,
+                });
+            }
+            NativeCellState::Empty if !self.parser.active_source().is_empty() => {
+                let source = self.parser.active_source().to_string();
+                self.parser.reset_active();
+                updates.push(self.append_whitespace(&source));
+            }
+            NativeCellState::Empty | NativeCellState::Complete => {}
+        }
+        Self::batch(updates)
+    }
+
+    /// Discard parser state after the feed transfers its unfinished block back.
+    pub(crate) fn reset_incomplete(&mut self) {
+        self.parser.reset_active();
+        self.leading_whitespace.clear();
+    }
+
+    fn enqueue(
+        &mut self,
+        cells: Vec<SubmittedCell>,
+        highlighter: &mut dyn Highlighter,
+    ) -> EditorUpdate {
         let displayed = cells
             .iter()
-            .map(|cell| (cell.code.clone(), highlighter.highlight(&cell.code)))
+            .map(|cell| {
+                let code = cell.code.trim_end().to_string();
+                let spans = highlighter.highlight(&code);
+                (code, spans)
+            })
             .collect();
-        let id = self.next_submission_id;
-        self.next_submission_id += 1;
-        let request = WorkerRequest::Evaluate {
-            id,
-            first_number: self.next_input_number,
-            cells: cells.iter().map(|cell| cell.code.clone()).collect(),
-        };
-        if self.requests.send(request).is_err() {
+        let id = self.next_id();
+        let evaluation = Evaluation { id, cells };
+        let pending = self.evaluations.is_empty();
+        if pending && !self.dispatch(&evaluation, 0) {
             return EditorUpdate::Diagnostic("Macaulay2 worker stopped".to_string());
         }
-        self.pending = Some(PendingSubmission { id, cells });
-        EditorUpdate::Pending {
-            id,
-            cells: displayed,
+        self.evaluations.push_back(evaluation);
+        match pending {
+            true => EditorUpdate::Pending {
+                id,
+                cells: displayed,
+            },
+            false => EditorUpdate::Queued {
+                id,
+                cells: displayed,
+            },
         }
     }
 
-    pub fn poll(&mut self) -> Vec<EditorUpdate> {
+    fn incomplete_reason(&self) -> String {
+        self.parser.parse_error().map_or_else(
+            || {
+                self.parser
+                    .lexer_diagnostics()
+                    .last()
+                    .map_or_else(|| "more input".to_string(), ToString::to_string)
+                    .replace("unterminated", "unclosed")
+            },
+            |error| {
+                let message = error.to_string().replace("unterminated", "unclosed");
+                message
+                    .split_once(": expected")
+                    .or_else(|| message.split_once(", found"))
+                    .map_or(message.as_str(), |(reason, _)| reason)
+                    .to_string()
+            },
+        )
+    }
+
+    fn invalid_diagnostic(&self) -> String {
+        match self.parser.parse_error() {
+            Some(error) => error.to_string(),
+            None => self
+                .parser
+                .lexer_diagnostics()
+                .last()
+                .map_or_else(|| "invalid syntax".to_string(), ToString::to_string),
+        }
+    }
+
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_submission_id;
+        self.next_submission_id += 1;
+        id
+    }
+
+    fn batch(mut updates: Vec<EditorUpdate>) -> EditorUpdate {
+        match updates.len() {
+            0 => EditorUpdate::Ignore,
+            1 => updates.pop().unwrap(),
+            _ => EditorUpdate::Batch(updates),
+        }
+    }
+
+    fn dispatch(&self, evaluation: &Evaluation, first_index: usize) -> bool {
+        self.requests
+            .send(WorkerRequest::Evaluate {
+                id: evaluation.id,
+                first_index,
+                first_number: self.next_input_number,
+                cells: evaluation
+                    .cells
+                    .iter()
+                    .skip(first_index)
+                    .map(|cell| cell.code.clone())
+                    .collect(),
+            })
+            .is_ok()
+    }
+
+    fn append_whitespace(&mut self, source: &str) -> EditorUpdate {
+        self.leading_whitespace.push_str(source);
+        EditorUpdate::WhitespaceAccepted
+    }
+
+    pub(crate) fn poll(&mut self) -> Vec<EditorUpdate> {
         let mut updates = Vec::new();
         while let Ok(event) = self.events.try_recv() {
             match event {
@@ -210,10 +351,10 @@ impl Session {
         result: std::result::Result<M2Response, String>,
     ) -> EditorUpdate {
         let Some(cell) = self
-            .pending
-            .as_ref()
-            .filter(|pending| pending.id == id)
-            .and_then(|pending| pending.cells.get(index))
+            .evaluations
+            .front()
+            .filter(|evaluation| evaluation.id == id)
+            .and_then(|evaluation| evaluation.cells.get(index))
             .cloned()
         else {
             return EditorUpdate::Ignore;
@@ -235,38 +376,96 @@ impl Session {
                 });
                 self.committed_revision = self.committed_revision.wrapping_add(1);
                 let finished = self
-                    .pending
-                    .as_ref()
-                    .is_some_and(|pending| index + 1 == pending.cells.len());
-                if finished {
-                    self.pending = None;
-                }
-                EditorUpdate::CellSucceeded {
+                    .evaluations
+                    .front()
+                    .is_some_and(|evaluation| index + 1 == evaluation.cells.len());
+                let (outputs, value) = response_blocks(&response, &cell.code, number);
+                let resolved = EditorUpdate::CellSucceeded {
                     id,
                     index,
                     number,
                     state,
-                    outputs: response_blocks(&response, &cell.code, number),
+                    outputs,
+                    value,
+                };
+                match finished {
+                    true => {
+                        self.evaluations.pop_front();
+                        Self::batch(
+                            [Some(resolved), self.start_next()]
+                                .into_iter()
+                                .flatten()
+                                .collect(),
+                        )
+                    }
+                    false => resolved,
                 }
             }
             Ok(response) => {
                 self.in_debugger = response.depth > 1;
-                self.pending = None;
-                EditorUpdate::CellFailed {
+                let error = captured_error(&response.transcript, &cell.code);
+                let outputs = (!error.printed.is_empty())
+                    .then(|| Box::new(TextBlock::printed(error.printed)) as Box<dyn Block>)
+                    .into_iter()
+                    .collect();
+                let failed = EditorUpdate::CellFailed {
                     id,
                     index,
                     number,
-                    message: captured_error(&response.transcript, &cell.code),
-                }
+                    outputs,
+                    message: error.diagnostic,
+                };
+                Self::batch(
+                    [Some(failed), self.continue_after(id, index)]
+                        .into_iter()
+                        .flatten()
+                        .collect(),
+                )
             }
             Err(message) => {
-                self.pending = None;
-                EditorUpdate::CellFailed {
+                let failed = EditorUpdate::CellFailed {
                     id,
                     index,
                     number,
+                    outputs: Vec::new(),
                     message: format!("Communication error: {message}"),
-                }
+                };
+                Self::batch(
+                    [Some(failed), self.continue_after(id, index)]
+                        .into_iter()
+                        .flatten()
+                        .collect(),
+                )
+            }
+        }
+    }
+
+    fn continue_after(&mut self, id: u64, index: usize) -> Option<EditorUpdate> {
+        let evaluation = self.evaluations.front()?;
+        match index + 1 < evaluation.cells.len() {
+            true => match self.dispatch(evaluation, index + 1) {
+                true => Some(EditorUpdate::Started { id }),
+                false => Some(EditorUpdate::Diagnostic(
+                    "Macaulay2 worker stopped".to_string(),
+                )),
+            },
+            false => {
+                self.evaluations.pop_front();
+                self.start_next()
+            }
+        }
+    }
+
+    fn start_next(&mut self) -> Option<EditorUpdate> {
+        let evaluation = self.evaluations.front()?;
+        let id = evaluation.id;
+        match self.dispatch(evaluation, 0) {
+            true => Some(EditorUpdate::Started { id }),
+            false => {
+                self.evaluations.clear();
+                Some(EditorUpdate::Diagnostic(
+                    "Macaulay2 worker stopped".to_string(),
+                ))
             }
         }
     }
@@ -280,6 +479,8 @@ impl Session {
                 self.next_input_number = 1;
                 self.committed.clear();
                 self.committed_revision = self.committed_revision.wrapping_add(1);
+                self.leading_whitespace.clear();
+                self.parser.reset_active();
                 EditorUpdate::Message(Box::new(TextBlock::system(
                     "Macaulay2 restarted -- the session is empty and numbering begins again",
                 )))
@@ -300,11 +501,13 @@ fn worker(mut backend: M2Backend, requests: Receiver<WorkerRequest>, events: Sen
         match request {
             WorkerRequest::Evaluate {
                 id,
+                first_index,
                 first_number,
                 cells,
             } => {
-                for (index, code) in cells.iter().enumerate() {
-                    let number = first_number + index as u32;
+                for (offset, code) in cells.iter().enumerate() {
+                    let index = first_index + offset;
+                    let number = first_number + offset as u32;
                     let result = backend
                         .evaluate(code, Some(number))
                         .map_err(|error| error.to_string());
@@ -345,7 +548,11 @@ fn worker(mut backend: M2Backend, requests: Receiver<WorkerRequest>, events: Sen
     }
 }
 
-fn response_blocks(response: &M2Response, code: &str, number: u32) -> Vec<Box<dyn Block>> {
+fn response_blocks(
+    response: &M2Response,
+    code: &str,
+    number: u32,
+) -> (Vec<Box<dyn Block>>, Option<OutputBlock>) {
     let output = captured_output(
         &response.transcript,
         code,
@@ -360,12 +567,13 @@ fn response_blocks(response: &M2Response, code: &str, number: u32) -> Vec<Box<dy
     if !output.printed.is_empty() {
         blocks.push(Box::new(TextBlock::printed(output.printed)));
     }
-    if let (Some(value), true) = (output.value, response.has_value) {
-        blocks.push(Box::new(
-            OutputBlock::value(value.text, value.type_info).numbered(number),
-        ));
-    }
-    blocks
+    let value = match (output.value, response.has_value) {
+        (Some(value), true) => {
+            Some(OutputBlock::value(value.text, value.type_info).numbered(number))
+        }
+        _ => None,
+    };
+    (blocks, value)
 }
 
 #[cfg(test)]
@@ -401,7 +609,9 @@ mod tests {
                 has_value,
                 depth: 1,
             };
-            assert!(response_blocks(&response, "x", 1).is_empty());
+            let (outputs, value) = response_blocks(&response, "x", 1);
+            assert!(outputs.is_empty());
+            assert!(value.is_none());
         }
     }
 
@@ -412,9 +622,19 @@ mod tests {
         let mut highlighter = SyntaxHighlighter::new();
 
         assert!(matches!(
-            session.submit("1 + 1\n2 + 2", &mut highlighter),
-            EditorUpdate::Pending { .. }
+            session.submit(" \n\t", &mut highlighter),
+            EditorUpdate::WhitespaceAccepted
         ));
+        assert!(!session.busy());
+        assert_eq!(session.next_input_number(), 1);
+
+        let submitted = "  1 + 1  \n\n2 + 2  ";
+        let pending = session.submit(submitted, &mut highlighter);
+        let EditorUpdate::Pending { cells, .. } = &pending else {
+            panic!("expected pending submission");
+        };
+        assert_eq!(cells[0].0, " \n\t  1 + 1");
+        assert_eq!(cells[1].0, "2 + 2");
         let updates = updates_until_idle(&mut session);
         assert_eq!(
             updates
@@ -430,8 +650,65 @@ mod tests {
                 .iter()
                 .map(|cell| cell.code.as_str())
                 .collect::<Vec<_>>(),
-            ["1 + 1", "2 + 2"]
+            [" \n\t  1 + 1", "2 + 2"]
         );
+
+        assert!(matches!(
+            session.submit("\n  \t", &mut highlighter),
+            EditorUpdate::WhitespaceAccepted
+        ));
+        assert!(!session.busy());
+        assert_eq!(session.next_input_number(), 3);
+        assert_eq!(session.committed()[1].code, "2 + 2");
+    }
+
+    #[test]
+    fn complete_prefix_runs_while_its_incomplete_tail_waits() {
+        let backend = M2Backend::spawn().expect("spawn M2");
+        let mut session = Session::new(backend);
+        let mut highlighter = SyntaxHighlighter::new();
+
+        let EditorUpdate::Batch(updates) = session.submit("a = 1; (1", &mut highlighter) else {
+            panic!("expected a complete prefix and incomplete tail");
+        };
+        assert!(matches!(updates[0], EditorUpdate::Pending { .. }));
+        assert!(matches!(
+            &updates[1],
+            EditorUpdate::Incomplete { source, .. } if source == " (1"
+        ));
+
+        assert!(matches!(
+            session.submit(")", &mut highlighter),
+            EditorUpdate::Queued { .. }
+        ));
+        let updates = updates_until_idle(&mut session);
+        assert!(updates.iter().any(|update| matches!(
+            update,
+            EditorUpdate::Batch(updates)
+                if updates.iter().any(|update| matches!(update, EditorUpdate::Started { .. }))
+        )));
+        assert_eq!(session.committed().len(), 2);
+        assert_eq!(session.committed()[0].number, 1);
+        assert_eq!(session.committed()[1].number, 2);
+    }
+
+    #[test]
+    fn illegal_continuation_becomes_a_local_feed_error() {
+        let backend = M2Backend::spawn().expect("spawn M2");
+        let mut session = Session::new(backend);
+        let mut highlighter = SyntaxHighlighter::new();
+
+        assert!(matches!(
+            session.submit("f(", &mut highlighter),
+            EditorUpdate::Incomplete { .. }
+        ));
+        assert!(matches!(
+            session.submit("]", &mut highlighter),
+            EditorUpdate::SyntaxFailed { source, .. } if source == "f(\n]"
+        ));
+        assert_eq!(session.next_input_number(), 1);
+        assert!(session.committed().is_empty());
+        assert!(!session.busy());
     }
 
     #[test]
@@ -458,21 +735,67 @@ mod tests {
     }
 
     #[test]
-    fn a_runtime_failure_reuses_its_number() {
+    fn a_runtime_failure_reuses_its_number_for_the_next_cell() {
         let backend = M2Backend::spawn().expect("spawn M2");
         let mut session = Session::new(backend);
         let mut highlighter = SyntaxHighlighter::new();
 
         session.submit("1/0\n2 + 2", &mut highlighter);
         let updates = updates_until_idle(&mut session);
-        assert!(updates
-            .iter()
-            .any(|update| matches!(update, EditorUpdate::CellFailed { index: 0, .. })));
-        assert_eq!(session.next_input_number(), 1);
-        assert!(session.committed().is_empty());
-
-        session.submit("2 + 2", &mut highlighter);
-        updates_until_idle(&mut session);
+        assert!(updates.iter().any(|update| match update {
+            EditorUpdate::CellFailed { index: 0, .. } => true,
+            EditorUpdate::Batch(updates) => updates
+                .iter()
+                .any(|update| matches!(update, EditorUpdate::CellFailed { index: 0, .. })),
+            _ => false,
+        }));
+        assert_eq!(session.next_input_number(), 2);
         assert_eq!(session.committed()[0].number, 1);
+
+        session.submit("3 + 3", &mut highlighter);
+        updates_until_idle(&mut session);
+        assert_eq!(session.committed()[1].number, 2);
+    }
+
+    #[test]
+    fn a_runtime_failure_continues_with_queued_cells() {
+        let backend = M2Backend::spawn().expect("spawn M2");
+        let mut session = Session::new(backend);
+        let mut highlighter = SyntaxHighlighter::new();
+
+        session.submit("1/0\n2 + 2", &mut highlighter);
+        assert!(matches!(
+            session.submit("3 + 3; (4", &mut highlighter),
+            EditorUpdate::Batch(_)
+        ));
+        updates_until_idle(&mut session);
+
+        assert_eq!(session.committed().len(), 2);
+        assert_eq!(session.committed()[0].code, "2 + 2");
+        assert_eq!(session.committed()[0].number, 1);
+        assert_eq!(session.committed()[1].code, "3 + 3;");
+        assert_eq!(session.committed()[1].number, 2);
+        assert_eq!(session.parser.active_source(), " (4\n");
+        assert!(!session.busy());
+    }
+
+    #[test]
+    fn output_before_a_runtime_error_remains_an_ordinary_block() {
+        let backend = M2Backend::spawn().expect("spawn M2");
+        let mut session = Session::new(backend);
+        let mut highlighter = SyntaxHighlighter::new();
+
+        session.submit("(print 1; 1/0)", &mut highlighter);
+        let updates = updates_until_idle(&mut session);
+        let Some(EditorUpdate::CellFailed {
+            outputs, message, ..
+        }) = updates.into_iter().next()
+        else {
+            panic!("expected a failed cell");
+        };
+
+        assert_eq!(outputs.len(), 1);
+        assert!(!message.lines().any(|line| line == "1"));
+        assert!(message.contains("division by zero"));
     }
 }

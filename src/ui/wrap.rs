@@ -4,9 +4,9 @@ use std::iter;
 use std::ops::Range;
 
 /// A visual row represented as a byte range into its source text.
-pub struct VisualLine {
-    pub range: Range<usize>,
-    pub hard_continuation: bool,
+pub(crate) struct VisualLine {
+    pub(crate) range: Range<usize>,
+    pub(crate) hard_continuation: bool,
 }
 
 impl VisualLine {
@@ -16,7 +16,7 @@ impl VisualLine {
     }
 }
 /// A strategy for projecting one logical line into byte ranges for visual rows.
-pub trait WrapPolicy {
+pub(crate) trait WrapPolicy {
     fn wrap_logical_line(&self, line: &str, width: u16, offset: usize) -> Vec<VisualLine>;
 
     fn wrap(&self, text: &str, width: u16) -> Vec<VisualLine> {
@@ -31,7 +31,7 @@ pub trait WrapPolicy {
 }
 
 /// Text that can be projected into visual rows by an associated wrapping policy.
-pub trait TextLayout {
+pub(crate) trait TextLayout {
     type Wrapping: Default + WrapPolicy;
 
     fn text(&self) -> &str;
@@ -49,19 +49,19 @@ struct Projection {
 
 /// Contiguous display text produced by wrapping, together with enough mapping
 /// information to relocate byte ranges from the source.
-pub struct WrappedText {
+pub(crate) struct WrappedText {
     text: String,
     projections: Vec<Projection>,
 }
 
 impl WrappedText {
     /// Wrap ordinary text using word-like boundaries.
-    pub fn word(source: &str, width: u16) -> Self {
+    pub(crate) fn word(source: &str, width: u16) -> Self {
         Self::from_lines(source, WordWrap.wrap(source, width))
     }
 
     /// Wrap code at whitespace and parsed span boundaries.
-    pub fn code(source: &str, width: u16, spans: &[Range<usize>]) -> Self {
+    pub(crate) fn code(source: &str, width: u16, spans: &[Range<usize>]) -> Self {
         Self::from_lines(source, SpanWrap(spans).wrap(source, width))
     }
 
@@ -82,17 +82,17 @@ impl WrappedText {
     }
 
     /// Return the complete wrapped text, with visual rows separated by newlines.
-    pub fn text(&self) -> &str {
+    pub(crate) fn text(&self) -> &str {
         &self.text
     }
 
     /// Return the number of visual rows in the wrapped text.
-    pub fn height(&self) -> u16 {
-        self.text.matches('\n').count() as u16 + 1
+    pub(crate) fn height(&self) -> u16 {
+        self.projections.len().try_into().unwrap_or(u16::MAX)
     }
 
     /// Return the source byte range behind each visual row.
-    pub fn source_lines(&self) -> impl Iterator<Item = (&Range<usize>, bool)> {
+    pub(crate) fn source_lines(&self) -> impl Iterator<Item = (&Range<usize>, bool)> {
         self.projections
             .iter()
             .map(|projection| (&projection.source, projection.hard_continuation))
@@ -103,7 +103,7 @@ impl WrappedText {
 /// Code has no reliable word boundaries to break on and the caller needs the
 /// cursor to map onto a predictable column, so every row but the last is full.
 #[derive(Default)]
-pub struct HardWrap;
+pub(crate) struct HardWrap;
 
 impl WrapPolicy for HardWrap {
     fn wrap_logical_line(&self, line: &str, width: u16, offset: usize) -> Vec<VisualLine> {
@@ -206,7 +206,7 @@ impl WrapPolicy for WordWrap {
 }
 
 /// Parsed-span wrapping that never guesses syntax boundaries.
-struct SpanWrap<'a>(pub &'a [Range<usize>]);
+struct SpanWrap<'a>(pub(crate) &'a [Range<usize>]);
 
 impl WrapPolicy for SpanWrap<'_> {
     fn wrap_logical_line(

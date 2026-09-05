@@ -1,23 +1,23 @@
 //! Compile-time presentation configuration for the complete interface.
 
 /// Geometry values shared by UI elements.
-pub struct UiConfig {
-    pub feed_margin: u16,
-    pub prompt_margin: u16,
-    pub cell_margin: u16,
-    pub cell_gap: u16,
-    pub prompt_text_gap: u16,
-    pub right_margin: u16,
-    pub min_box_width: u16,
-    pub min_input_height: u16,
-    pub picker_min_rows: u16,
-    pub picker_tab_width: usize,
-    pub picker_right_margin: usize,
-    pub statusline_margin: u16,
+pub(crate) struct UiConfig {
+    pub(crate) feed_margin: u16,
+    pub(crate) prompt_margin: u16,
+    pub(crate) cell_margin: u16,
+    pub(crate) cell_gap: u16,
+    pub(crate) prompt_text_gap: u16,
+    pub(crate) right_margin: u16,
+    pub(crate) min_box_width: u16,
+    pub(crate) min_input_height: u16,
+    pub(crate) picker_min_rows: u16,
+    pub(crate) picker_tab_width: usize,
+    pub(crate) picker_right_margin: usize,
+    pub(crate) statusline_margin: u16,
 }
 
 /// Presentation configuration used by every UI element.
-pub const UI: UiConfig = UiConfig {
+pub(crate) const UI: UiConfig = UiConfig {
     feed_margin: 1,
     prompt_margin: 2,
     cell_margin: 1,
@@ -33,7 +33,7 @@ pub const UI: UiConfig = UiConfig {
 };
 
 impl UiConfig {
-    pub const fn prompt_width(&self) -> u16 {
+    pub(crate) const fn prompt_width(&self) -> u16 {
         self.prompt_margin + 1 + self.prompt_text_gap
     }
 }

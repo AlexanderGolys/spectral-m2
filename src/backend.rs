@@ -1,6 +1,6 @@
 //! Macaulay2 process management, protocol types, and transcript decoding.
 
-pub mod transcript;
+pub(crate) mod transcript;
 
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
@@ -15,6 +15,8 @@ use jsonrpc::Client;
 use serde::{Deserialize, Serialize};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+const STARTUP_SCRIPT: &str = include_str!("backend/m2_startup.m2");
+const STARTUP_FILE: &str = "backend.m2";
 
 /// Code submitted for evaluation, tagged with the input number it was entered
 /// under. `number` is `None` for code the session runs on its own behalf, whose
@@ -28,46 +30,53 @@ struct EvaluateParams<'a> {
 /// The output and status returned by one M2 evaluation.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct M2Response {
+pub(crate) struct M2Response {
     #[serde(rename = "error")]
-    pub is_error: bool,
-    pub transcript: String,
+    pub(crate) is_error: bool,
+    pub(crate) transcript: String,
     /// The rendered result, present only when M2 displayed it. A `;`-suppressed
     /// result is `None` here -- deliberately never rendered -- yet still bound.
-    pub value: Option<String>,
-    pub type_info: Option<String>,
+    pub(crate) value: Option<String>,
+    pub(crate) type_info: Option<String>,
     /// Whether M2 bound an `oN` for this input. Not implied by `value`: a
     /// suppressed result binds one without producing rendered text.
-    pub has_value: bool,
+    pub(crate) has_value: bool,
     /// M2's interpreter depth after the evaluation. Anything above 1 means a
     /// nested interpreter, which is what being in the debugger looks like.
-    pub depth: u32,
+    pub(crate) depth: u32,
 }
 
 /// The live Macaulay2 child and its JSON-RPC client.
-pub struct M2Backend {
+pub(crate) struct M2Backend {
     process: Child,
     client: Client,
 }
 
 impl M2Backend {
-    pub fn spawn() -> Result<Self> {
-        Self::spawn_with_init_file(Self::init_file_path())
+    pub(crate) fn spawn() -> Result<Self> {
+        let config = Self::config_dir()?;
+        Self::spawn_in(&config, Some(config.join("init.m2")))
     }
 
+    #[cfg(test)]
     fn spawn_with_init_file(init_file: Option<PathBuf>) -> Result<Self> {
-        let startup_script = include_str!("backend/m2_startup.m2");
+        let config = match init_file.as_deref().and_then(Path::parent) {
+            Some(config) => config.to_path_buf(),
+            None => Self::config_dir()?,
+        };
+        Self::spawn_in(&config, init_file)
+    }
 
+    fn spawn_in(config: &Path, init_file: Option<PathBuf>) -> Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         let port = listener.local_addr()?.port();
         drop(listener);
 
-        let script_path = env::temp_dir().join(format!("spectral-m2_startup-{port}.m2"));
-        fs::write(&script_path, startup_script)?;
+        let script_path = Self::sync_startup_script(config, port)?;
 
         // The port is passed as the script's sole argument (M2 exposes it as
-        // `scriptCommandLine#1`), so the two processes can never disagree on a
-        // shared file path the way a `/tmp` rendezvous file could.
+        // `scriptCommandLine#1`), so it remains independent of the persistent
+        // source file shared by Spectral processes.
         let process = Command::new("M2")
             .arg("--script")
             .arg(&script_path)
@@ -83,22 +92,46 @@ impl M2Backend {
         });
         let mut backend = Self { process, client };
         let ready = backend.wait_for_ready();
-        let _ = fs::remove_file(script_path);
         ready?;
         backend.drain_output();
         backend.load_init_file(init_file.as_deref())?;
         Ok(backend)
     }
 
-    /// The optional user init file, evaluated once at startup so personal
-    /// definitions are in scope before the first prompt:
-    /// `$XDG_CONFIG_HOME/spectral-m2/init.m2` (falling back to
-    /// `~/.config/spectral-m2/init.m2`). `None` when neither var is set.
-    fn init_file_path() -> Option<PathBuf> {
-        let config_dir = env::var_os("XDG_CONFIG_HOME")
+    /// Spectral's persistent configuration directory.
+    fn config_dir() -> Result<PathBuf> {
+        #[cfg(test)]
+        return Ok(env::temp_dir().join(format!("spectral-m2-test-{}", std::process::id())));
+
+        #[cfg(not(test))]
+        env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
-            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-        Some(config_dir.join("spectral-m2").join("init.m2"))
+            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+            .map(|config| config.join("spectral-m2"))
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "no configuration directory")
+                    .into()
+            })
+    }
+
+    /// Materialize the embedded M2 backend at a stable source path. Replacement
+    /// through a same-directory staging file keeps parallel launches atomic.
+    fn sync_startup_script(config: &Path, port: u16) -> Result<PathBuf> {
+        fs::create_dir_all(config)?;
+        let path = config.join(STARTUP_FILE);
+        match fs::read(&path) {
+            Ok(contents) if contents == STARTUP_SCRIPT.as_bytes() => return Ok(path),
+            _ => {}
+        }
+        let staged = config.join(format!(".{STARTUP_FILE}-{port}"));
+        fs::write(&staged, STARTUP_SCRIPT)?;
+        match fs::rename(&staged, &path) {
+            Ok(()) => Ok(path),
+            Err(error) => {
+                let _ = fs::remove_file(staged);
+                Err(error.into())
+            }
+        }
     }
 
     /// Evaluate the user init file if one exists. A missing or unreadable file is
@@ -167,13 +200,13 @@ impl M2Backend {
 
     /// Evaluate `code` (executes it) as input `number`, under which M2 binds the
     /// result's `oN`. Synchronous and blocking (300s read timeout).
-    pub fn evaluate(&self, code: &str, number: Option<u32>) -> Result<M2Response> {
+    pub(crate) fn evaluate(&self, code: &str, number: Option<u32>) -> Result<M2Response> {
         let params = jsonrpc::try_arg(EvaluateParams { code, number })?;
         Ok(self.client.call("evaluate", Some(&params))?)
     }
 
     /// Query the M2 version string.
-    pub fn version(&self) -> Result<String> {
+    pub(crate) fn version(&self) -> Result<String> {
         Ok(self.client.call("version", None)?)
     }
 }
@@ -204,6 +237,16 @@ mod tests {
         assert_eq!(printed.value.as_deref(), Some("null"));
         assert_eq!(printed.type_info.as_deref(), Some("Nothing"));
         assert!(!printed.has_value, "a null result binds no oN");
+        assert_eq!(
+            transcript::captured_output(
+                &printed.transcript,
+                "print \"hello\"",
+                printed.value.as_deref(),
+                printed.type_info.as_deref(),
+            )
+            .printed,
+            "hello\n"
+        );
 
         let returned = backend
             .evaluate("2 + 2", Some(2))
@@ -313,14 +356,49 @@ mod tests {
 
         let message = crate::backend::transcript::captured_error(&failed.transcript, "1/0");
         assert!(
-            message.contains("division by zero"),
-            "diagnostic lost while cleaning: {message:?}"
+            message.diagnostic.contains("division by zero"),
+            "diagnostic lost while cleaning: {:?}",
+            message.diagnostic
+        );
+        assert!(!message.diagnostic.contains("back trace"));
+    }
+
+    #[test]
+    fn type_info_preserves_multiline_nets() {
+        let backend = M2Backend::spawn().expect("spawn M2");
+
+        backend
+            .evaluate("ZZ[x]/ideal(x-1)", Some(1))
+            .expect("create quotient ring");
+        backend
+            .evaluate("use oo", Some(2))
+            .expect("use quotient ring");
+        let result = backend.evaluate("x+1", Some(3)).expect("evaluate element");
+
+        assert_eq!(result.value.as_deref(), Some("2"));
+        assert!(
+            result
+                .type_info
+                .as_deref()
+                .is_some_and(|ty| ty.lines().count() > 1),
+            "expected multiline type, got {:?}",
+            result.type_info
         );
     }
 
     #[test]
+    fn inexact_values_render_without_private_core_helpers() {
+        let backend = M2Backend::spawn().expect("spawn M2");
+        let result = backend.evaluate("1.3", Some(1)).expect("evaluate real");
+
+        assert!(!result.is_error, "{}", result.transcript);
+        assert_eq!(result.value.as_deref(), Some("1.3"));
+        assert!(result.has_value);
+    }
+
+    #[test]
     fn init_file_is_loaded() {
-        let base = env::temp_dir().join(format!("spectral-m2-test-{}", std::process::id()));
+        let base = env::temp_dir().join(format!("spectral-m2-init-test-{}", std::process::id()));
         let config = base.join("spectral-m2");
         fs::create_dir_all(&config).expect("create temp config dir");
         let init_file = config.join("init.m2");
@@ -339,5 +417,22 @@ mod tests {
             "expected 1729 in {:?}",
             out.value
         );
+    }
+
+    #[test]
+    fn startup_source_remains_inspectable() {
+        let backend = M2Backend::spawn().expect("spawn M2");
+        let path = M2Backend::config_dir()
+            .expect("config directory")
+            .join(STARTUP_FILE);
+        assert_eq!(
+            fs::read_to_string(path).expect("read backend.m2"),
+            STARTUP_SCRIPT
+        );
+
+        let inspected = backend
+            .evaluate("code Thing#{SpectralTopLevelMode, BeforePrint}", None)
+            .expect("inspect hook source");
+        assert!(!inspected.is_error, "{}", inspected.transcript);
     }
 }

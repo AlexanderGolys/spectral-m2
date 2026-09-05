@@ -642,9 +642,10 @@ ShellError = { fg = "accent_red", sp = "accent_red", bold = true, reverse = true
 HintText = { fg = "gray_244" }
 Normal = { bg = "background" }
 CodeBlock = { bg = "code_background" }
+PendingBlock = { bg = "printed_background" }
 Separator = { fg = "border_background" }
 ValueBorder = { fg = "selection", sp = "selection" }
-OutputNumber = { fg = "accent_green" }
+OutputNumber = { fg = "accent_aqua", bold = true }
 ErrorBorder = { fg = "accent_red", sp = "accent_red" }
 WarningBorder = { fg = "accent_yellow", sp = "accent_yellow" }
 InfoBorder = { fg = "accent_blue", sp = "accent_blue" }
@@ -657,8 +658,8 @@ StatuslineError = { fg = "accent_red", sp = "accent_red" }
 StatuslineWarning = { fg = "accent_yellow", sp = "accent_yellow" }
 KeymapHint = { fg = "accent_aqua" }
 PickerText = { fg = "text" }
-Picker = { bg = "dark1" }
-PickerSelected = { fg = "background", bg = "accent_green" }
+Picker = { bg = "printed_background" }
+PickerSelected = { bg = "dark1" }
 PickerBorder = { fg = "selection", sp = "selection" }
 
 Accent1 = { fg = "accent_red" }

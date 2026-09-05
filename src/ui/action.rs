@@ -6,7 +6,7 @@ use these_macros_should_be_illegal::enum_fn;
 #[enum_fn(description: &'static str)]
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Action {
+pub(crate) enum Action {
     FocusPaneLeft = "focus the left pane",
     FocusPaneRight = "focus the right pane",
     ResizePaneLeft = "move the pane divider left",
@@ -32,7 +32,7 @@ pub enum Action {
 
 impl Action {
     /// Actions whose user binding may be replaced.
-    pub const REMAPPABLE: &'static [Self] = &[
+    pub(crate) const REMAPPABLE: &'static [Self] = &[
         Self::OpenCommands,
         Self::OpenSettings,
         Self::OpenStyle,
@@ -49,7 +49,7 @@ impl Action {
         Self::CopySelection,
     ];
 
-    pub fn is_remappable(self) -> bool {
+    pub(crate) fn is_remappable(self) -> bool {
         Self::REMAPPABLE.contains(&self)
     }
 }

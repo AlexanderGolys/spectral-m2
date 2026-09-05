@@ -6,19 +6,19 @@ use super::picker::{Line, LineContext, Picker, PickerInput, PickerItem};
 use super::settings::keymap::Keymaps;
 use super::{Editor, EditorEvent, OpenTarget, Reaction, ViewKind};
 use crate::ui::action::Action;
-use crate::ui::element::Text;
+use crate::ui::block::Text;
 use crate::ui::key::KeyMod::Alt;
 
 /// Prefix that turns input text into a live command query.
-pub const PREFIX: &str = "/";
+pub(crate) const PREFIX: &str = "/";
 
 /// A bare input that must be handled without sending it through the M2 socket.
-pub enum SubmittedCommand {
+pub(crate) enum SubmittedCommand {
     Quit,
     Restart,
 }
 
-pub fn submitted_command(input: &str) -> Option<SubmittedCommand> {
+pub(crate) fn submitted_command(input: &str) -> Option<SubmittedCommand> {
     // @##Issue nothing special about this char in particular
     if input.contains('\n') {
         return None;
@@ -38,7 +38,7 @@ type CommandCallback = fn(&mut Editor, OpenTarget) -> Reaction;
 
 /// One command-picker entry and the callback run when it is selected.
 #[derive(Clone, Copy)]
-pub struct Command {
+pub(crate) struct Command {
     label: &'static str,
     shortcut: Action,
     splittable: bool,
@@ -70,24 +70,22 @@ impl Command {
 
     fn item(self, keymaps: &Keymaps, split: bool) -> Box<dyn PickerItem> {
         let can_split = self.splittable && !split;
-        let mut hint = keymaps
+        let shortcut = keymaps
             .key_for(self.shortcut)
             .unwrap_or_else(|| "unbound".to_string());
-        if can_split {
-            hint.push_str(&format!(" · {} alternative view", KeyCode::Char('v') + Alt));
-        }
         Box::new(CommandItem {
             command: self,
-            hint,
+            shortcut,
             can_split,
         })
     }
 
-    pub fn run(self, editor: &mut Editor, target: OpenTarget) -> Reaction {
+    pub(crate) fn run(self, editor: &mut Editor, target: OpenTarget) -> Reaction {
         (self.callback)(editor, target)
     }
 
-    pub const fn label(self) -> &'static str {
+    #[cfg(test)]
+    pub(crate) const fn label(self) -> &'static str {
         self.label
     }
 
@@ -99,7 +97,7 @@ impl Command {
 /// A command rendered as one picker line and invoked by Enter.
 struct CommandItem {
     command: Command,
-    hint: String,
+    shortcut: String,
     can_split: bool,
 }
 
@@ -107,21 +105,40 @@ impl Text for CommandItem {
     type Context = LineContext;
 
     fn spans(&self, context: &LineContext) -> Vec<ratatui::text::Span<'static>> {
+        use ratatui::text::Span;
+
         let literal = self.command.literal();
+        let mut hint = vec![Span::styled(self.shortcut.clone(), context.groups.prompt())];
+        if self.can_split {
+            hint.extend([
+                Span::styled(" · ", context.groups.muted()),
+                Span::styled(
+                    (KeyCode::Char('v') + Alt).to_string(),
+                    context.groups.prompt(),
+                ),
+                Span::styled(" alternative view", context.groups.muted()),
+            ]);
+        }
         context.columns([
-            (&literal, context.groups.prompt()),
-            (self.command.shortcut.description(), context.groups.value()),
-            (&self.hint, context.groups.value()),
+            vec![Span::styled(literal, context.groups.prompt())],
+            vec![Span::styled(
+                self.command.shortcut.description(),
+                context.groups.value(),
+            )],
+            hint,
         ])
     }
 }
 
 impl Line for CommandItem {
     fn column_widths(&self) -> [usize; 3] {
+        let alternative = (KeyCode::Char('v') + Alt).to_string();
         [
             self.command.label.len() + 1,
             self.command.shortcut.description().len(),
-            self.hint.len(),
+            self.shortcut.chars().count()
+                + usize::from(self.can_split)
+                    * (3 + alternative.chars().count() + " alternative view".len()),
         ]
     }
 }
@@ -152,7 +169,7 @@ const COMMANDS: [Command; 11] = [
 ];
 const CLOSE: Command = Command::new("close focused window", Action::ClosePane, false, close);
 
-pub fn shortcut(action: Action) -> Option<Command> {
+pub(crate) fn shortcut(action: Action) -> Option<Command> {
     COMMANDS
         .iter()
         .chain([&CLOSE])
@@ -160,7 +177,7 @@ pub fn shortcut(action: Action) -> Option<Command> {
         .copied()
 }
 
-pub fn matching(query: &str, split: bool) -> Vec<Command> {
+pub(crate) fn matching(query: &str, split: bool) -> Vec<Command> {
     let query = query.to_lowercase();
     COMMANDS
         .iter()
@@ -170,19 +187,19 @@ pub fn matching(query: &str, split: bool) -> Vec<Command> {
         .collect()
 }
 
-pub fn query(input: &str) -> Option<&str> {
+pub(crate) fn query(input: &str) -> Option<&str> {
     let query = input.strip_prefix(PREFIX)?;
-    (!query.contains('\n')).then(|| query.trim())
+    (!query.chars().any(char::is_whitespace)).then_some(query)
 }
 
-pub fn exact(input: &str, split: bool) -> Option<Command> {
+pub(crate) fn exact(input: &str, split: bool) -> Option<Command> {
     let label = query(input)?;
     matching(label, split)
         .into_iter()
         .find(|command| command.label == label)
 }
 
-pub fn picker(commands: &[Command], keymaps: &Keymaps, split: bool) -> Picker {
+pub(crate) fn picker(commands: &[Command], keymaps: &Keymaps, split: bool) -> Picker {
     Picker::new(
         "commands",
         commands
@@ -214,19 +231,19 @@ fn clear(editor: &mut Editor, _: OpenTarget) -> Reaction {
 }
 
 fn debug(editor: &mut Editor, _: OpenTarget) -> Reaction {
-    editor.finish_command();
+    editor.close_pickers();
     editor.toggle_highlight_debug()
 }
 
 fn split(editor: &mut Editor, _: OpenTarget) -> Reaction {
-    editor.finish_command();
+    editor.close_pickers();
     Reaction::New(OpenTarget::Split)
 }
 
 macro_rules! views {
     ($($name:ident: $view:ident),+ $(,)?) => {$(
         fn $name(editor: &mut Editor, target: OpenTarget) -> Reaction {
-            editor.finish_command();
+            editor.close_pickers();
             Reaction::Open(ViewKind::$view, target)
         }
     )+};
@@ -235,7 +252,7 @@ macro_rules! views {
 macro_rules! finished {
     ($($name:ident: $action:ident),+ $(,)?) => {$(
         fn $name(editor: &mut Editor, _: OpenTarget) -> Reaction {
-            editor.finish_command();
+            editor.close_pickers();
             Reaction::$action
         }
     )+};

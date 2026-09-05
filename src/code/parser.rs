@@ -15,16 +15,16 @@ use m2_syn::{LexErrorKind, PrettyNode, PrettyTree, Spanned};
 
 /// One parsed evaluation unit and its rendered syntax tree.
 #[derive(Debug, PartialEq, Eq)]
-pub struct ParsedCell {
-    pub range: Range<usize>,
-    pub tree: PrettyNode,
+pub(crate) struct ParsedCell {
+    pub(crate) range: Range<usize>,
+    pub(crate) tree: PrettyNode,
 }
 
 /// A syntax error message paired with its exact source range when available.
 #[derive(Debug, PartialEq, Eq)]
-pub struct SyntaxDiagnostic {
-    pub message: String,
-    pub range: Option<Range<usize>>,
+pub(crate) struct SyntaxDiagnostic {
+    pub(crate) message: String,
+    pub(crate) range: Option<Range<usize>>,
 }
 
 /// How a submitted buffer classifies.
@@ -33,7 +33,7 @@ pub struct SyntaxDiagnostic {
 /// parse already did: splitting them out separately would parse the source a
 /// second time and leave the two answers free to disagree.
 #[derive(Debug, PartialEq)]
-pub enum ParseVerdict {
+pub(crate) enum ParseVerdict {
     Complete(Vec<ParsedCell>),
     Incomplete(String),
     SyntaxError(SyntaxDiagnostic),
@@ -70,7 +70,7 @@ fn ran_out_of_input(error: &NativeParseError, source: &str) -> bool {
     }
 }
 
-fn incomplete_reason(error: &NativeParseError) -> String {
+pub(crate) fn incomplete_reason(error: &NativeParseError) -> String {
     let message = error.to_string().replace("unterminated", "unclosed");
     message
         .split_once(": expected")
@@ -80,9 +80,9 @@ fn incomplete_reason(error: &NativeParseError) -> String {
 }
 
 /// Classify a buffer without evaluating it.
-pub fn check(source: &str) -> ParseVerdict {
+pub(crate) fn check(source: &str) -> ParseVerdict {
     match parse_native(source) {
-        Ok(file) => ParseVerdict::Complete(parsed_cells(&file)),
+        Ok(file) => ParseVerdict::Complete(parsed_cells(&file, source.len())),
         Err(error) if ran_out_of_input(&error, source) => {
             ParseVerdict::Incomplete(incomplete_reason(&error))
         }
@@ -99,13 +99,12 @@ pub fn check(source: &str) -> ParseVerdict {
     }
 }
 
-/// The byte ranges of a parsed file's top-level cells.
-///
-/// A cell's range covers its content and its terminating `;` when it has one --
-/// the semicolon changes what M2 does with the result, so it travels with the
-/// code -- but not the newline that ends the cell.
-fn parsed_cells(file: &SourceFile) -> Vec<ParsedCell> {
-    file.cells
+/// The byte ranges of a parsed file's top-level cells. Together they partition
+/// the complete source: the first owns leading whitespace and each cell owns the
+/// whitespace following it, while its syntax tree still describes its content.
+fn parsed_cells(file: &SourceFile, source_len: usize) -> Vec<ParsedCell> {
+    let mut cells = file
+        .cells
         .iter()
         .map(|cell| {
             let start = cell.content.span().start()?;
@@ -119,7 +118,16 @@ fn parsed_cells(file: &SourceFile) -> Vec<ParsedCell> {
             })
         })
         .collect::<Option<Vec<_>>>()
-        .unwrap_or_default()
+        .unwrap_or_default();
+    for index in 0..cells.len() {
+        cells[index].range.end = cells
+            .get(index + 1)
+            .map_or(source_len, |next| next.range.start);
+    }
+    if let Some(first) = cells.first_mut() {
+        first.range.start = 0;
+    }
+    cells
 }
 
 #[cfg(test)]
@@ -198,7 +206,7 @@ mod tests {
     fn splits_newline_delimited_cells() {
         let source = "a = 5\nb = 6";
         let cells = cells_of(source);
-        assert_eq!(cells, vec!["a = 5", "b = 6"]);
+        assert_eq!(cells, vec!["a = 5\n", "b = 6"]);
     }
 
     #[test]
@@ -229,7 +237,15 @@ mod tests {
     fn a_semicolon_travels_with_its_cell() {
         let source = "z = 7;\n1 + 1";
         let cells = cells_of(source);
-        assert_eq!(cells, vec!["z = 7;", "1 + 1"]);
+        assert_eq!(cells, vec!["z = 7;\n", "1 + 1"]);
+    }
+
+    #[test]
+    fn cell_ranges_preserve_every_source_byte() {
+        let source = "  a = 5  \n\n\tb = 6  ";
+        let cells = cells_of(source);
+        assert_eq!(cells, ["  a = 5  \n\n\t", "b = 6  "]);
+        assert_eq!(cells.concat(), source);
     }
 
     #[test]

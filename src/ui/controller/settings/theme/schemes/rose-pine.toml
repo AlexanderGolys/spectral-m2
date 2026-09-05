@@ -231,9 +231,10 @@ ShellError = { fg = "love", sp = "love" }
 HintText = { fg = "subtle" }
 Normal = { bg = "base" }
 CodeBlock = { bg = "_nc" }
+PendingBlock = { bg = "surface" }
 Separator = { fg = "base" }
 ValueBorder = { fg = "highlight_low", sp = "highlight_low" }
-OutputNumber = { fg = "leaf" }
+OutputNumber = { fg = "foam", bold = true }
 ErrorBorder = { fg = "love", sp = "love" }
 WarningBorder = { fg = "gold", sp = "gold" }
 InfoBorder = { fg = "foam", sp = "foam" }
@@ -246,8 +247,8 @@ StatuslineError = { fg = "love", sp = "love" }
 StatuslineWarning = { fg = "gold", sp = "gold" }
 KeymapHint = { fg = "foam" }
 PickerText = { fg = "text" }
-Picker = { bg = "highlight_low" }
-PickerSelected = { fg = "base", bg = "leaf" }
+Picker = { bg = "surface" }
+PickerSelected = { bg = "highlight_low" }
 PickerBorder = { fg = "highlight_low", sp = "highlight_low" }
 
 Accent1 = { fg = "love" }

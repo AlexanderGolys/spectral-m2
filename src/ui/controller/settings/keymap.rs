@@ -37,7 +37,7 @@ impl Keymap {
 
 /// The editor's exact normalized-key bindings.
 #[derive(Clone)]
-pub struct Keymaps {
+pub(crate) struct Keymaps {
     bindings: HashMap<KeyEvent, Keymap>,
     preview: HashMap<KeyEvent, Keymap>,
     reserved: HashSet<KeyEvent>,
@@ -45,7 +45,7 @@ pub struct Keymaps {
 
 impl Keymaps {
     /// Resolve a terminal key to an action, after which the key is discarded.
-    pub fn action(&self, key: KeyEvent, remapping: bool) -> Option<Action> {
+    pub(crate) fn action(&self, key: KeyEvent, remapping: bool) -> Option<Action> {
         self.bindings
             .get(&key.binding())
             .filter(|binding| {
@@ -55,20 +55,20 @@ impl Keymaps {
     }
 
     /// Resolve a fixed key owned by preview panes.
-    pub fn preview_action(&self, key: KeyEvent) -> Option<Action> {
+    pub(crate) fn preview_action(&self, key: KeyEvent) -> Option<Action> {
         self.preview
             .get(&key.binding())
             .map(|binding| binding.action)
     }
 
     /// The key that triggers `action`, for hints and help.
-    pub fn key_for(&self, action: Action) -> Option<String> {
+    pub(crate) fn key_for(&self, action: Action) -> Option<String> {
         self.bindings
             .iter()
             .find_map(|(key, binding)| (binding.action == action).then(|| key.to_string()))
     }
 
-    pub fn rebind(&mut self, action: Action, key: KeyEvent) -> bool {
+    pub(crate) fn rebind(&mut self, action: Action, key: KeyEvent) -> bool {
         let key = key.binding();
         if !action.is_remappable()
             || self.reserved.contains(&key)

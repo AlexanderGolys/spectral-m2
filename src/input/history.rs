@@ -1,6 +1,5 @@
-//! Submitted-input history with a browse cursor. Recorded on every submission, browsed
-//! with up/down; the in-progress draft is stashed on first browse and restored when you
-//! step back past the newest entry.
+//! Evaluated source history with a browse cursor. The in-progress draft is stashed on
+//! first browse and restored when you step back past the newest entry.
 
 use std::env;
 use std::fs::{self, OpenOptions};
@@ -10,9 +9,9 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 /// Input text and cursor position restored from history.
-pub struct HistoryBuffer {
-    pub text: String,
-    pub cursor: usize,
+pub(crate) struct HistoryBuffer {
+    pub(crate) text: String,
+    pub(crate) cursor: usize,
 }
 
 impl HistoryBuffer {
@@ -24,7 +23,7 @@ impl HistoryBuffer {
 
 /// The recorded submissions, the browse position (`None` = editing the live draft), and
 /// the draft stashed when browsing began.
-pub struct History {
+pub(crate) struct History {
     entries: Vec<String>,
     pos: Option<usize>,
     draft: Option<HistoryBuffer>,
@@ -32,12 +31,12 @@ pub struct History {
 }
 
 impl History {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::from_path(history_file_path())
     }
 
     #[cfg(test)]
-    pub fn in_memory() -> Self {
+    pub(crate) fn in_memory() -> Self {
         Self::from_path(None)
     }
 
@@ -51,9 +50,9 @@ impl History {
         }
     }
 
-    pub fn record(&mut self, entry: &str) {
-        let entry = entry.trim();
-        if !entry.is_empty() && self.entries.last().map(String::as_str) != Some(entry) {
+    pub(crate) fn record(&mut self, entry: &str) {
+        let entry = entry.trim_end();
+        if Self::keeps(entry) && self.entries.last().map(String::as_str) != Some(entry) {
             self.entries.push(entry.to_string());
             self.append(entry);
         }
@@ -61,7 +60,11 @@ impl History {
         self.draft = None;
     }
 
-    pub fn prev(&mut self, current: &str, cursor: usize) -> Option<HistoryBuffer> {
+    fn keeps(entry: &str) -> bool {
+        !entry.trim().is_empty() && (!entry.starts_with('/') || entry.contains('\n'))
+    }
+
+    pub(crate) fn prev(&mut self, current: &str, cursor: usize) -> Option<HistoryBuffer> {
         if self.entries.is_empty() {
             return None;
         }
@@ -80,7 +83,7 @@ impl History {
         Some(HistoryBuffer::at_end(self.entries[idx].clone()))
     }
 
-    pub fn next(&mut self) -> Option<HistoryBuffer> {
+    pub(crate) fn next(&mut self) -> Option<HistoryBuffer> {
         let idx = match self.pos {
             None => return None,
             Some(i) if i + 1 < self.entries.len() => i + 1,
@@ -133,9 +136,9 @@ fn load_entries(path: &Path) -> Vec<String> {
         let Ok(entry) = serde_json::from_str::<String>(line) else {
             continue;
         };
-        let entry = entry.trim();
-        if !entry.is_empty() && entries.last().map(String::as_str) != Some(entry) {
-            entries.push(entry.to_string());
+        let entry = entry.trim_end().to_string();
+        if History::keeps(&entry) && entries.last().map(String::as_str) != Some(entry.as_str()) {
+            entries.push(entry);
         }
     }
     entries
@@ -162,12 +165,14 @@ mod tests {
         let path = temporary_history_path();
         let mut history = History::from_path(Some(path.clone()));
         history.record("R = QQ[x]");
-        history.record("f = i -> (\n  i + 1\n)");
+        history.record("  f = i -> (\n  i + 1\n)  \n");
+        history.record(" \t");
+        history.record("/ast");
 
         let mut reloaded = History::from_path(Some(path.clone()));
         assert_eq!(
             reloaded.prev("", 0).map(|buffer| buffer.text),
-            Some("f = i -> (\n  i + 1\n)".to_string())
+            Some("  f = i -> (\n  i + 1\n)".to_string())
         );
         assert_eq!(
             reloaded.prev("", 0).map(|buffer| buffer.text),
@@ -180,7 +185,8 @@ mod tests {
     #[test]
     fn malformed_records_do_not_hide_valid_history() {
         let path = temporary_history_path();
-        fs::write(&path, "not json\n\"valid entry\"\n").expect("write test history");
+        fs::write(&path, "not json\n\" \\t\"\n\"/debug\"\n\"valid entry\"\n")
+            .expect("write test history");
 
         let mut history = History::from_path(Some(path.clone()));
         assert_eq!(

@@ -12,14 +12,14 @@ use std::{env, path::PathBuf};
 use ratatui::style::{Color, Style};
 use serde::{Deserialize, Serialize};
 
-pub mod groups;
+pub(crate) mod groups;
 mod palette;
 
 use self::groups::{Groups, StyleSpec};
 use self::palette::Palette;
 
 /// One palette leaf exposed by the flat appearance picker.
-pub struct Variant {
+pub(crate) struct Variant {
     name: String,
     #[cfg(test)]
     palette: Palette,
@@ -27,7 +27,7 @@ pub struct Variant {
 }
 
 /// A named palette variant with its canonical brightness.
-pub enum ColorVariant {
+pub(crate) enum ColorVariant {
     Dark(Variant),
     Light(Variant),
 }
@@ -39,11 +39,11 @@ impl ColorVariant {
         }
     }
 
-    pub fn label(&self) -> &str {
+    pub(crate) fn label(&self) -> &str {
         &self.variant().name
     }
 
-    pub const fn brightness(&self) -> Brightness {
+    pub(crate) const fn brightness(&self) -> Brightness {
         match self {
             Self::Dark(_) => Brightness::Dark,
             Self::Light(_) => Brightness::Light,
@@ -51,7 +51,7 @@ impl ColorVariant {
     }
 
     #[cfg(test)]
-    pub fn palette(&self) -> &Palette {
+    pub(crate) fn palette(&self) -> &Palette {
         &self.variant().palette
     }
 
@@ -61,7 +61,7 @@ impl ColorVariant {
 }
 
 /// A named colour scheme and the variants actually supplied for it.
-pub struct Scheme {
+pub(crate) struct Scheme {
     name: String,
     variants: Vec<ColorVariant>,
 }
@@ -74,11 +74,11 @@ impl Scheme {
             .expect("embedded colour scheme references must be valid")
     }
 
-    pub fn label(&self) -> &str {
+    pub(crate) fn label(&self) -> &str {
         &self.name
     }
 
-    pub fn variants(&self) -> &[ColorVariant] {
+    pub(crate) fn variants(&self) -> &[ColorVariant] {
         &self.variants
     }
 }
@@ -86,7 +86,7 @@ impl Scheme {
 /// Canonical terminal background brightness supplied by a scheme variant.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Brightness {
+pub(crate) enum Brightness {
     Dark,
     Light,
 }
@@ -230,10 +230,10 @@ impl VariantIndex {
 
 /// A selected scheme variant and its terminal-background treatment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Appearance {
+pub(crate) struct Appearance {
     scheme: SchemeIndex,
     variant: VariantIndex,
-    pub transparent_background: bool,
+    pub(crate) transparent_background: bool,
 }
 
 /// Stable appearance names stored independently of in-memory picker indices.
@@ -269,7 +269,7 @@ impl Default for Appearance {
 impl Appearance {
     /// Load the last selected appearance, falling back to Everforest medium.
     #[cfg(not(test))]
-    pub fn load() -> Self {
+    pub(crate) fn load() -> Self {
         appearance_file_path()
             .as_deref()
             .and_then(Self::read)
@@ -278,13 +278,13 @@ impl Appearance {
 
     /// Keep tests independent of a developer's saved appearance.
     #[cfg(test)]
-    pub fn load() -> Self {
+    pub(crate) fn load() -> Self {
         Self::default()
     }
 
     /// Persist this appearance for the next process.
     #[cfg(not(test))]
-    pub fn save(self) {
+    pub(crate) fn save(self) {
         if let Some(path) = appearance_file_path() {
             let _ = self.write(&path);
         }
@@ -292,7 +292,7 @@ impl Appearance {
 
     /// Keep tests from modifying the developer's saved appearance.
     #[cfg(test)]
-    pub fn save(self) {}
+    pub(crate) fn save(self) {}
 
     fn read(path: &Path) -> Option<Self> {
         let stored: StoredAppearance =
@@ -325,19 +325,19 @@ impl Appearance {
         )
     }
 
-    pub fn scheme(self) -> &'static Scheme {
+    pub(crate) fn scheme(self) -> &'static Scheme {
         &SCHEMES[self.scheme.get()]
     }
 
-    pub fn variant(self) -> &'static ColorVariant {
+    pub(crate) fn variant(self) -> &'static ColorVariant {
         &self.scheme().variants()[self.variant.get()]
     }
 
-    pub fn colorscheme_label(self) -> String {
+    pub(crate) fn colorscheme_label(self) -> String {
         format!("{} {}", self.scheme().label(), self.variant().label())
     }
 
-    pub fn cycle_colorscheme(self, delta: i8) -> Self {
+    pub(crate) fn cycle_colorscheme(self, delta: i8) -> Self {
         let brightness = self.variant().brightness();
         let choices = SCHEMES
             .iter()
@@ -363,7 +363,7 @@ impl Appearance {
         }
     }
 
-    pub fn cycle_brightness(self, delta: i8) -> Self {
+    pub(crate) fn cycle_brightness(self, delta: i8) -> Self {
         let variants = self.scheme().variants();
         let mut choices = Vec::new();
         for variant in variants {
@@ -395,14 +395,14 @@ impl Appearance {
         }
     }
 
-    pub fn cycle_background(self) -> Self {
+    pub(crate) fn cycle_background(self) -> Self {
         Self {
             transparent_background: !self.transparent_background,
             ..self
         }
     }
 
-    pub const fn background_label(self) -> &'static str {
+    pub(crate) const fn background_label(self) -> &'static str {
         if self.transparent_background {
             "transparent"
         } else {
@@ -410,11 +410,11 @@ impl Appearance {
         }
     }
 
-    pub fn groups(self) -> Groups {
+    pub(crate) fn groups(self) -> Groups {
         self.variant().groups()
     }
 
-    pub fn canvas(self, opaque: Style) -> Style {
+    pub(crate) fn canvas(self, opaque: Style) -> Style {
         if self.transparent_background {
             Style::default()
         } else {
@@ -446,7 +446,7 @@ mod tests {
                 assert!(groups.transcript().bg.is_some());
                 assert!(groups.code().bg.is_some());
                 assert!(groups.picker().bg.is_some());
-                assert!(groups.picker_selected().fg.is_some());
+                assert!(groups.picker_selected().fg.is_none());
                 assert!(groups.picker_selected().bg.is_some());
                 assert!(groups.value().fg.is_some());
                 assert!(groups.error().fg.is_some());

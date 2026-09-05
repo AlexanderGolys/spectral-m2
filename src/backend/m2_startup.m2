@@ -49,6 +49,15 @@ rpcServer = new JSONRPCServer;
     -- exists to avoid on large objects. The type is read either way, so the shell
     -- can say what a suppressed result is without paying to render it.
     recordValue := value -> output.value = "" | toString net value;
+    recordInexactValue := value -> (
+        savedPrecision := printingPrecision;
+        savedAccuracy := printingAccuracy;
+        printingPrecision = 0;
+        printingAccuracy = -1;
+        recordValue value;
+        printingPrecision = savedPrecision;
+        printingAccuracy = savedAccuracy;
+    );
     recordTypeInfo := value -> (
         lookupMethod := lookup(AfterPrint, class value);
         typeInfo := lookupMethod value;
@@ -62,7 +71,7 @@ rpcServer = new JSONRPCServer;
     -- still silences it, since NoPrint stays identity for every class.
     Thing#{mode, Print} = recordValue;
     Thing#{mode, NoPrint} = identity;
-    InexactNumber#{mode, Print} = value -> withFullPrecision(() -> recordValue value);
+    InexactNumber#{mode, Print} = recordInexactValue;
     -- Deliberately AfterPrint in both branches: stock M2 reads AfterNoPrint under
     -- a `;`, which only some classes define, so the type would appear or vanish
     -- with the punctuation. Reading AfterPrint always gives every class its type.

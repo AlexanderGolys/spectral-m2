@@ -496,9 +496,10 @@ ShellError = { fg = "error", sp = "error" }
 HintText = { fg = "fg_dark" }
 Normal = { bg = "bg" }
 CodeBlock = { bg = "bg_dark1" }
+PendingBlock = { bg = "bg_highlight" }
 Separator = { fg = "bg_dark" }
 ValueBorder = { fg = "terminal_black", sp = "terminal_black" }
-OutputNumber = { fg = "green" }
+OutputNumber = { fg = "cyan", bold = true }
 ErrorBorder = { fg = "error", sp = "error" }
 WarningBorder = { fg = "warning", sp = "warning" }
 InfoBorder = { fg = "blue", sp = "blue" }
@@ -511,8 +512,8 @@ StatuslineError = { fg = "error", sp = "error" }
 StatuslineWarning = { fg = "warning", sp = "warning" }
 KeymapHint = { fg = "cyan" }
 PickerText = { fg = "fg" }
-Picker = { bg = "bg_visual" }
-PickerSelected = { fg = "bg", bg = "green" }
+Picker = { bg = "bg_dark" }
+PickerSelected = { bg = "bg_visual" }
 PickerBorder = { fg = "terminal_black", sp = "terminal_black" }
 
 Accent1 = { fg = "red" }

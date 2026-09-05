@@ -11,7 +11,7 @@ macro_rules! style_spec {
         /// A serialized style whose colors name entries in its scheme palette.
         #[derive(Default, Deserialize)]
         #[serde(default, deny_unknown_fields)]
-        pub struct StyleSpec {
+        pub(crate) struct StyleSpec {
             fg: Option<String>,
             bg: Option<String>,
             sp: Option<String>,
@@ -55,7 +55,7 @@ macro_rules! highlight_groups {
         /// The complete scheme-independent space of syntax and interface styles.
         #[enum_fn(description: &'static str = stringify)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        pub enum HLGroup {
+        pub(crate) enum HLGroup {
             $($name),+
         }
 
@@ -63,20 +63,20 @@ macro_rules! highlight_groups {
         #[allow(non_snake_case)]
         #[derive(Clone, Copy, Deserialize)]
         #[serde(deny_unknown_fields)]
-        pub struct Groups<S = Style> {$(
+        pub(crate) struct Groups<S = Style> {$(
             #[doc = concat!("Style for `", stringify!($name), "` content.")]
-            pub $name: S,
+            pub(crate) $name: S,
         )+}
 
         impl Groups<StyleSpec> {
-            pub fn resolve(&self, palette: &Palette) -> Result<Groups, String> {
+            pub(crate) fn resolve(&self, palette: &Palette) -> Result<Groups, String> {
                 Ok(Groups {$($name: self.$name.resolve(palette)
                     .map_err(|error| format!("{}: {error}", stringify!($name)))?),+})
             }
         }
 
         impl Groups {
-            pub fn highlight_groups(&self) -> Vec<(&'static str, Style)> {
+            pub(crate) fn highlight_groups(&self) -> Vec<(&'static str, Style)> {
                 vec![$((HLGroup::$name.description(), self.$name)),+]
             }
         }
@@ -193,6 +193,7 @@ highlight_groups! {
     HintText,
     Normal,
     CodeBlock,
+    PendingBlock,
     Separator,
     ValueBorder,
     OutputNumber,
@@ -225,11 +226,11 @@ highlight_groups! {
 }
 
 impl Groups {
-    pub fn style(&self, group: HLGroup) -> Style {
+    pub(crate) fn style(&self, group: HLGroup) -> Style {
         self[group]
     }
 
-    pub fn diagnostic(&self) -> Style {
+    pub(crate) fn diagnostic(&self) -> Style {
         self.DiagnosticError
     }
 }
@@ -237,7 +238,7 @@ impl Groups {
 macro_rules! accessors {
     ($($name:ident: $group:ident),+ $(,)?) => {
         impl Groups {$(
-            pub fn $name(&self) -> Style {
+            pub(crate) fn $name(&self) -> Style {
                 self.$group
             }
         )+}
@@ -247,6 +248,7 @@ macro_rules! accessors {
 accessors! {
     transcript: Normal,
     code: CodeBlock,
+    pending: PendingBlock,
     separator: Separator,
     picker: Picker,
     picker_selected: PickerSelected,
@@ -263,6 +265,7 @@ accessors! {
     selection: Visual,
     muted: Muted,
     printed: Printed,
+    hint_text: HintText,
     error_border: ErrorBorder,
     warning_border: WarningBorder,
     info_border: InfoBorder,
@@ -340,6 +343,18 @@ mod tests {
             .map(|variant| variant.groups())
         {
             assert_ne!(groups.border().fg, groups.separator().fg);
+        }
+    }
+
+    #[test]
+    fn output_numbers_match_the_prompt_colour_with_bold_emphasis() {
+        for groups in SCHEMES
+            .iter()
+            .flat_map(|scheme| scheme.variants())
+            .map(|variant| variant.groups())
+        {
+            assert_eq!(groups.output_number().fg, groups.prompt().fg);
+            assert!(groups.output_number().add_modifier.contains(Modifier::BOLD));
         }
     }
 
@@ -434,13 +449,15 @@ mod tests {
     }
 
     #[test]
-    fn every_picker_has_its_own_background() {
+    fn pickers_reuse_printed_backgrounds_and_keep_their_old_selection_surface() {
         for groups in SCHEMES
             .iter()
             .flat_map(|scheme| scheme.variants())
             .map(|variant| variant.groups())
         {
-            assert_ne!(groups.picker().bg, groups.transcript().bg);
+            assert_eq!(groups.picker().bg, groups.printed().bg);
+            assert!(groups.picker_selected().bg.is_some());
+            assert!(groups.picker_selected().fg.is_none());
         }
     }
 }

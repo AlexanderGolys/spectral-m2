@@ -1,4 +1,4 @@
-//! Syntax-tree preview block.
+//! Syntax-tree preview element.
 
 use m2_syn::{PrettyDetailRole, PrettyNode, PrettyNodeRole};
 use ratatui::buffer::Buffer;
@@ -6,13 +6,13 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
+use super::block::{Block, HLSpan};
+use super::cell::{Cell, CodeBlock};
 use super::render::RenderContext;
-use super::{Block, Cell, CodeBlock};
 use crate::ui::controller::settings::theme::groups::HLGroup;
-use crate::ui::element::{Element, HLSpan};
 
 /// One committed cell followed by its typed syntax presentation.
-pub struct SyntaxTreeBlock {
+pub(crate) struct SyntaxTreeBlock {
     code: CodeBlock,
     tree: PrettyNode,
 }
@@ -104,7 +104,7 @@ fn delimiter_text(node: &PrettyNode) -> &str {
 
 impl SyntaxTreeBlock {
     /// Create a highlighted committed cell and its `m2-syn` pretty tree.
-    pub fn new(text: String, spans: Vec<HLSpan>, tree: PrettyNode) -> Self {
+    pub(crate) fn new(text: String, spans: Vec<HLSpan>, tree: PrettyNode) -> Self {
         Self {
             code: CodeBlock::new([Cell::new(text, None, spans)]),
             tree,
@@ -112,7 +112,7 @@ impl SyntaxTreeBlock {
     }
 
     /// Resolve the tree into styled display rows.
-    pub fn tree_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
+    pub(crate) fn tree_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
         fn line(
             node: &PrettyNode,
             label: Option<&str>,
@@ -278,30 +278,34 @@ impl SyntaxTreeBlock {
     }
 }
 
-impl Element for SyntaxTreeBlock {
-    type Context = RenderContext;
-
+impl Block for SyntaxTreeBlock {
     fn height(&self, context: &RenderContext) -> u16 {
         let (source, tree) = self.lines(context);
-        1 + source.len() as u16 + tree.len() as u16
+        u16::try_from(
+            1usize
+                .saturating_add(source.len())
+                .saturating_add(tree.len()),
+        )
+        .unwrap_or(u16::MAX)
     }
 
-    fn render(&self, context: &RenderContext, area: Rect, buf: &mut Buffer) {
+    fn render_local(&self, context: &RenderContext, buf: &mut Buffer) {
+        let area = *buf.area();
         let groups = context.groups();
         let (source, tree) = self.lines(context);
         let separator = Line::from(Span::styled("─".repeat(area.width.into()), groups.border()));
         Paragraph::new(vec![separator])
             .style(groups.code())
             .render(Rect::new(area.x, area.y, area.width, 1), buf);
-        let source_height = source.len() as u16;
+        let source_height = u16::try_from(source.len()).unwrap_or(u16::MAX);
         Paragraph::new(source).style(groups.transcript()).render(
-            Rect::new(area.x, area.y + 1, area.width, source_height),
+            Rect::new(area.x, area.y.saturating_add(1), area.width, source_height),
             buf,
         );
         Paragraph::new(tree).style(groups.code()).render(
             Rect::new(
                 area.x,
-                area.y + 1 + source_height,
+                area.y.saturating_add(1).saturating_add(source_height),
                 area.width,
                 area.height.saturating_sub(1 + source_height),
             ),
@@ -309,5 +313,3 @@ impl Element for SyntaxTreeBlock {
         );
     }
 }
-
-impl Block for SyntaxTreeBlock {}

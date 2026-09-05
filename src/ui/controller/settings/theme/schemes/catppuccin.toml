@@ -320,9 +320,10 @@ ShellError = { fg = "red", sp = "red" }
 HintText = { fg = "overlay0" }
 Normal = { bg = "base" }
 CodeBlock = { bg = "crust" }
+PendingBlock = { bg = "surface0" }
 Separator = { fg = "mantle" }
 ValueBorder = { fg = "surface2", sp = "surface2" }
-OutputNumber = { fg = "green" }
+OutputNumber = { fg = "teal", bold = true }
 ErrorBorder = { fg = "red", sp = "red" }
 WarningBorder = { fg = "yellow", sp = "yellow" }
 InfoBorder = { fg = "blue", sp = "blue" }
@@ -335,8 +336,8 @@ StatuslineError = { fg = "red", sp = "red" }
 StatuslineWarning = { fg = "yellow", sp = "yellow" }
 KeymapHint = { fg = "teal" }
 PickerText = { fg = "text" }
-Picker = { bg = "crust" }
-PickerSelected = { fg = "base", bg = "green" }
+Picker = { bg = "mantle" }
+PickerSelected = { bg = "crust" }
 PickerBorder = { fg = "surface2", sp = "surface2" }
 
 Accent1 = { fg = "red" }

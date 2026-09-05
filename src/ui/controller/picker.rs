@@ -6,32 +6,32 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line as TuiLine, Span};
 use ratatui::widgets::{Block as TuiBlock, BorderType, Borders, Paragraph, Widget};
 
-use super::settings::theme::groups::Groups;
+use super::settings::theme::groups::{Groups, HLGroup};
 use super::EditorEvent;
 use crate::ui::action::Action;
+use crate::ui::block::{Element, Text};
 use crate::ui::config::UI;
-use crate::ui::element::{Element, Text};
 use crate::ui::key::KeyEvent;
 
 /// A single unwrapped text component.
-pub trait Line: Text<Context = LineContext> {
+pub(crate) trait Line: Text<Context = LineContext> {
     fn column_widths(&self) -> [usize; 3] {
         [0; 3]
     }
 }
 
 /// Local layout and selection state supplied while a picker line renders.
-pub struct LineContext {
-    pub width: usize,
-    pub value_column: usize,
-    pub columns: Option<[usize; 2]>,
-    pub selected: bool,
-    pub groups: Groups,
+pub(crate) struct LineContext {
+    pub(crate) width: usize,
+    pub(crate) value_column: usize,
+    pub(crate) columns: Option<[usize; 2]>,
+    pub(crate) selected: bool,
+    pub(crate) groups: Groups,
 }
 
 impl LineContext {
     /// Finish spans with the selected or ordinary full-row background.
-    pub fn finish(&self, mut spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    pub(crate) fn finish(&self, mut spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
         let used = spans.iter().map(Span::width).sum::<usize>();
         spans.push(Span::raw(" ".repeat(self.width.saturating_sub(used))));
         let background = self.groups.picker();
@@ -45,7 +45,13 @@ impl LineContext {
     }
 
     /// Generate the shared label/value presentation for one picker row.
-    pub fn value(&self, label: &str, value: &str, trailing: bool) -> Vec<Span<'static>> {
+    pub(crate) fn value(
+        &self,
+        label: &str,
+        value: &str,
+        trailing: bool,
+        value_group: HLGroup,
+    ) -> Vec<Span<'static>> {
         let marker = if self.selected { " > " } else { "   " };
         let label = format!("{marker}{label}");
         let gap = if trailing {
@@ -65,14 +71,16 @@ impl LineContext {
                 },
             ),
             Span::raw(" ".repeat(gap)),
-            Span::styled(value.to_string(), self.groups.value()),
+            Span::styled(value.to_string(), self.groups.style(value_group)),
         ])
     }
 
     /// Render three left-aligned fields at shared tab stops when they fit.
-    pub fn columns(&self, columns: [(&str, ratatui::style::Style); 3]) -> Vec<Span<'static>> {
+    pub(crate) fn columns(&self, columns: [Vec<Span<'static>>; 3]) -> Vec<Span<'static>> {
         let marker = if self.selected { " > " } else { "   " };
-        let widths = columns.map(|(text, _)| text.chars().count());
+        let widths = columns
+            .each_ref()
+            .map(|column| column.iter().map(Span::width).sum::<usize>());
         let starts = self
             .columns
             .unwrap_or([widths[0] + 2, widths[0] + widths[1] + 4]);
@@ -85,13 +93,13 @@ impl LineContext {
                 self.groups.muted()
             },
         )];
-        for (index, (text, style)) in columns.into_iter().enumerate() {
+        for (index, column) in columns.into_iter().enumerate() {
             if index > 0 {
                 let gap = starts[index - 1].saturating_sub(used).max(1);
                 spans.push(Span::raw(" ".repeat(gap)));
                 used += gap;
             }
-            spans.push(Span::styled(text.to_string(), style));
+            spans.extend(column);
             used += widths[index];
         }
         self.finish(spans)
@@ -100,7 +108,7 @@ impl LineContext {
 
 /// Input delivered to the selected picker row after command lookup.
 #[derive(Clone, Copy)]
-pub enum PickerInput {
+pub(crate) enum PickerInput {
     /// A mapped application action whose physical key was discarded.
     Action(Action),
     /// Unmapped input interpreted privately by the picker.
@@ -108,36 +116,57 @@ pub enum PickerInput {
 }
 
 /// A line that owns its behavior and may request an editor state change.
-pub trait PickerItem: Line {
+pub(crate) trait PickerItem: Line {
     fn handle(&mut self, input: PickerInput) -> Option<EditorEvent>;
 }
 
 /// Label/value picker row with component-owned key behavior.
-pub struct ValueItem {
+pub(crate) struct ValueItem {
     label: String,
     value: String,
     trailing: bool,
+    value_group: HLGroup,
     handle: Box<dyn FnMut(PickerInput) -> Option<EditorEvent> + Send>,
 }
 
 impl ValueItem {
     /// Create a boxed row with arbitrary key handling.
-    pub fn custom(
+    pub(crate) fn custom(
         label: impl Into<String>,
         value: impl Into<String>,
         trailing: bool,
+        handle: impl FnMut(PickerInput) -> Option<EditorEvent> + Send + 'static,
+    ) -> Box<dyn PickerItem> {
+        Self::styled(label, value, trailing, HLGroup::Value, handle)
+    }
+
+    /// Create a boxed row whose value is a keymap hint.
+    pub(crate) fn keymap(
+        label: impl Into<String>,
+        value: impl Into<String>,
+        handle: impl FnMut(PickerInput) -> Option<EditorEvent> + Send + 'static,
+    ) -> Box<dyn PickerItem> {
+        Self::styled(label, value, false, HLGroup::KeymapHint, handle)
+    }
+
+    fn styled(
+        label: impl Into<String>,
+        value: impl Into<String>,
+        trailing: bool,
+        value_group: HLGroup,
         handle: impl FnMut(PickerInput) -> Option<EditorEvent> + Send + 'static,
     ) -> Box<dyn PickerItem> {
         Box::new(Self {
             label: label.into(),
             value: value.into(),
             trailing,
+            value_group,
             handle: Box::new(handle),
         })
     }
 
     /// Create a row adjusted by horizontal arrow keys.
-    pub fn adjust(
+    pub(crate) fn adjust(
         label: impl Into<String>,
         value: impl Into<String>,
         mut adjust: impl FnMut(i8) -> EditorEvent + Send + 'static,
@@ -157,7 +186,7 @@ impl ValueItem {
     }
 
     /// Create a row activated by Enter.
-    pub fn enter(
+    pub(crate) fn enter(
         label: impl Into<String>,
         value: impl Into<String>,
         trailing: bool,
@@ -173,7 +202,7 @@ impl Text for ValueItem {
     type Context = LineContext;
 
     fn spans(&self, context: &LineContext) -> Vec<Span<'static>> {
-        context.value(&self.label, &self.value, self.trailing)
+        context.value(&self.label, &self.value, self.trailing, self.value_group)
     }
 }
 
@@ -198,11 +227,11 @@ impl PickerItem for ValueItem {
 }
 
 /// Heterogeneous picker rows in display order.
-pub type PickerItems = Vec<Box<dyn PickerItem>>;
+pub(crate) type PickerItems = Vec<Box<dyn PickerItem>>;
 
 /// Keyboard behavior attached to a picker presentation.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum PickerMode {
+pub(crate) enum PickerMode {
     /// Slash-prefixed live command filtering.
     FilteredCommands,
     /// Complete command list.
@@ -216,37 +245,32 @@ pub enum PickerMode {
 }
 
 /// A picker paired with its component-owned unhandled-key policy.
-pub struct PickerController {
+pub(crate) struct PickerController {
     /// Active picker behavior.
-    pub mode: PickerMode,
+    pub(crate) mode: PickerMode,
     /// Rendered and selected rows.
-    pub picker: Picker,
+    pub(crate) picker: Picker,
 }
 
 impl PickerController {
     /// Handle navigation, row behavior, or mode-specific fallback behavior.
-    pub fn handle_key(&mut self, key: KeyEvent) -> Option<EditorEvent> {
+    pub(crate) fn handle_key(&mut self, key: KeyEvent) -> Option<EditorEvent> {
         self.handle(PickerInput::Key(key))
     }
 
     /// Handle a mapped action without retaining its originating key.
-    pub fn handle_action(&mut self, action: Action) -> Option<EditorEvent> {
+    pub(crate) fn handle_action(&mut self, action: Action) -> Option<EditorEvent> {
         self.handle(PickerInput::Action(action))
     }
 
     fn handle(&mut self, input: PickerInput) -> Option<EditorEvent> {
-        if matches!(
-            input,
-            PickerInput::Key(KeyEvent {
-                code: KeyCode::Esc,
-                ..
-            })
-        ) {
-            return Some(if self.mode == PickerMode::FilteredCommands {
-                EditorEvent::FinishCommand
-            } else {
-                EditorEvent::ClosePicker
-            });
+        if let PickerInput::Key(KeyEvent { code, .. }) = input {
+            match (self.mode, code) {
+                (_, KeyCode::Esc) => return Some(EditorEvent::ClosePickers),
+                (PickerMode::FilteredCommands, _) => {}
+                (_, KeyCode::Backspace) => return Some(EditorEvent::ClosePicker),
+                _ => {}
+            }
         }
         let (handled, event) = self.picker.handle(input);
         if handled {
@@ -272,14 +296,14 @@ impl PickerController {
 }
 
 /// Presentation and selection state for a list of picker items.
-pub struct Picker {
+pub(crate) struct Picker {
     title: &'static str,
     items: PickerItems,
     selected: usize,
 }
 
 impl Picker {
-    pub fn new(title: &'static str, items: PickerItems) -> Self {
+    pub(crate) fn new(title: &'static str, items: PickerItems) -> Self {
         let mut picker = Self {
             title,
             items,
@@ -290,25 +314,29 @@ impl Picker {
     }
 
     #[cfg(test)]
-    pub const fn title(&self) -> &'static str {
+    pub(crate) const fn title(&self) -> &'static str {
         self.title
     }
 
     #[cfg(test)]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.items.len()
     }
 
-    pub fn selected(&self) -> usize {
+    pub(crate) fn selected(&self) -> usize {
         self.selected
     }
 
+    pub(crate) fn height(&self) -> u16 {
+        (self.items.len() as u16).max(UI.picker_min_rows) + 2
+    }
+
     /// Select an item, or zero when the picker has no items.
-    pub fn select(&mut self, index: usize) {
+    pub(crate) fn select(&mut self, index: usize) {
         self.selected = index.min(self.items.len().saturating_sub(1));
     }
 
-    pub fn move_selection(&mut self, delta: isize) {
+    pub(crate) fn move_selection(&mut self, delta: isize) {
         if !self.items.is_empty() {
             let selected =
                 (self.selected as isize + delta).rem_euclid(self.items.len() as isize) as usize;
@@ -317,12 +345,12 @@ impl Picker {
     }
 
     /// Replace the items while retaining the selection where possible.
-    pub fn set_items(&mut self, items: PickerItems) {
+    pub(crate) fn set_items(&mut self, items: PickerItems) {
         self.items = items;
         self.select(self.selected);
     }
 
-    pub fn selected_item_mut(&mut self) -> Option<&mut (dyn PickerItem + '_)> {
+    pub(crate) fn selected_item_mut(&mut self) -> Option<&mut (dyn PickerItem + '_)> {
         match self.items.get_mut(self.selected) {
             Some(item) => Some(item.as_mut()),
             None => None,
@@ -330,7 +358,7 @@ impl Picker {
     }
 
     /// Handle picker navigation or forward input to the selected row.
-    pub fn handle(&mut self, input: PickerInput) -> (bool, Option<EditorEvent>) {
+    pub(crate) fn handle(&mut self, input: PickerInput) -> (bool, Option<EditorEvent>) {
         match input {
             PickerInput::Key(KeyEvent {
                 code: KeyCode::Up, ..
@@ -396,10 +424,6 @@ impl Picker {
 impl Element for Picker {
     type Context = Groups;
 
-    fn height(&self, _groups: &Groups) -> u16 {
-        (self.items.len() as u16).max(UI.picker_min_rows) + 2
-    }
-
     fn render(&self, groups: &Groups, area: Rect, buf: &mut Buffer) {
         let title = TuiLine::from(Span::styled(format!(" {} ", self.title), groups.prompt()));
         let block = TuiBlock::default()
@@ -432,7 +456,7 @@ mod tests {
         type Context = LineContext;
 
         fn spans(&self, context: &LineContext) -> Vec<Span<'static>> {
-            context.value(self.label, self.value, self.trailing)
+            context.value(self.label, self.value, self.trailing, HLGroup::Value)
         }
     }
 
@@ -462,7 +486,7 @@ mod tests {
                 return None;
             }
             self.value = "two";
-            Some(EditorEvent::FinishCommand)
+            Some(EditorEvent::ClosePickers)
         }
     }
 
@@ -480,7 +504,7 @@ mod tests {
 
     fn rendered(picker: &Picker, width: u16) -> Buffer {
         let groups = Groups::default();
-        rendered_in(picker, width, picker.height(&groups), &groups)
+        rendered_in(picker, width, picker.height(), &groups)
     }
 
     fn rendered_in(picker: &Picker, width: u16, height: u16, groups: &Groups) -> Buffer {
@@ -533,7 +557,7 @@ mod tests {
             .handle(PickerInput::Key(KeyEvent::from(KeyCode::Right)));
 
         assert!(row(&rendered(&picker, 32), 1).contains("two"));
-        assert!(matches!(event, Some(EditorEvent::FinishCommand)));
+        assert!(matches!(event, Some(EditorEvent::ClosePickers)));
     }
 
     #[test]
@@ -549,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn picker_has_horizontal_borders_and_distinct_row_backgrounds() {
+    fn picker_uses_printed_and_previous_picker_row_backgrounds() {
         let picker = picker(vec![item("one", "1"), item("two", "2")]);
         let buffer = rendered(&picker, 32);
         let groups = Groups::default();
@@ -560,9 +584,25 @@ mod tests {
         assert_eq!(buffer[(0, 1)].symbol(), " ");
         assert_eq!(buffer[(1, 1)].symbol(), ">");
         assert_eq!(buffer[(16, 1)].bg, groups.picker_selected().bg.unwrap());
-        assert_eq!(buffer[(16, 1)].fg, groups.picker_selected().fg.unwrap());
+        let value = column(&row(&buffer, 1), "1").unwrap() as u16;
+        assert_eq!(buffer[(value, 1)].fg, groups.value().fg.unwrap());
         assert_eq!(buffer[(16, 2)].bg, groups.picker().bg.unwrap());
-        assert_ne!(groups.picker().bg, groups.code().bg);
+        assert_eq!(groups.picker().bg, groups.printed().bg);
+        assert!(groups.picker_selected().fg.is_none());
         assert_eq!(buffer.area().height, UI.picker_min_rows + 2);
+    }
+
+    #[test]
+    fn keymap_values_keep_the_statusline_accent_when_selected() {
+        let picker = Picker::new(
+            "keymaps",
+            vec![ValueItem::keymap("submit", "enter", |_| None)],
+        );
+        let buffer = rendered(&picker, 32);
+        let groups = Groups::default();
+        let key = column(&row(&buffer, 1), "enter").unwrap() as u16;
+
+        assert_eq!(buffer[(key, 1)].fg, groups.prompt().fg.unwrap());
+        assert_eq!(buffer[(key, 1)].bg, groups.picker_selected().bg.unwrap());
     }
 }
