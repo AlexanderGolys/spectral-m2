@@ -24,13 +24,15 @@ needsPackage "JSON"
 
 (() -> (
     mode := global SpectralTopLevelMode;
-    -- The rendered value and type annotation of the statement in flight, filled
-    -- by the hooks below and read once by the frame that closes the input.
-    output := new MutableHashTable from {
-        symbol value => null,
-        symbol typeInfo => null
-    };
+
+    -- The rendered value and type annotation of the statement in flight. The
+    -- hooks below only record them; the terminator sends them, because a
+    -- statement that throws or ends in `;` never reaches Print, and the frame
+    -- must leave exactly once per cell all the same.
+    renderedValue := null;
+    typeInfo := null;
     hypertextType := value Core#"private dictionary"#"Hypertext";
+
     -- Whether the statement in flight ran to completion: the hooks below are the
     -- last thing a statement does, and one that throws runs none of them.
     --
@@ -41,64 +43,115 @@ needsPackage "JSON"
     -- guess. This flag is only ever allowed to make a frame say the wrong thing,
     -- never to decide whether a frame is sent.
     completed := false;
-    -- Set by the terminator and cleared by the hook pass that immediately follows
-    -- it, so the shell's own statement never reports itself as a result. It spans
-    -- one statement boundary and is read nowhere else.
-    ownStatement := false;
+
+    -- What the terminator evaluates to, so the shell's own statement is told
+    -- apart by its type rather than by state carried across a statement
+    -- boundary. Its hooks are inert: the statement reports nothing, binds no
+    -- `oN`, and leaves `oo`/`ooo`/`oooo` alone. The stock AfterEval rotates that
+    -- history on every statement, a null one included, so a terminator valued
+    -- `null` duplicated `oo` into `ooo` after every cell.
+    cellEnd := new Type of BasicList;
+    cellEnd#AfterEval = identity;
+    cellEnd#{mode, BeforePrint} = identity;
+    cellEnd#{mode, NoPrint} = identity;
+    cellEnd#{mode, AfterNoPrint} = identity;
     renderAfterPrint := value -> "" | concatenate apply(
         select(deepSplice sequence value, item -> item =!= null),
         item -> toString net item
     );
 
     Thing#{mode, BeforePrint} = value -> (
-        lookupMethod := lookup({Standard, BeforePrint}, class value);
-        if lookupMethod === null then
-            value
-        else lookupMethod value
+        lookupMethod := lookup({Standard, BeforePrint}, class value) ?? identity;
+        lookupMethod value
     );
-    -- Recording rather than printing keeps the channel free of everything but
-    -- genuinely printed text. A `;` still suppresses the value: NoPrint
-    -- deliberately skips `net value`, which is the render the punctuation exists
-    -- to avoid on large objects. The type is read either way, so the shell can
-    -- say what a suppressed result is without paying to render it.
-    renderAtom := value -> (
-        netValue := "" | toString net value;
-        if instance(value, FunctionClosure) or instance(value, CompiledFunctionClosure) then
-            hashTable {"net" => netValue}
+    -- What a value is drawn as, chosen by class. A frame's "value" is the
+    -- shell's M2Value (src/backend.rs) in serde's spelling of an enum, a one-key
+    -- table naming the variant:
+    --
+    --     net => text                   tex => {source, fallback}
+    --     markup => {html, fallback}    hashtable => {{key, value}, ...}
+    --     collection => {kind, items}   token => {text, role}
+    --
+    -- A value is either drawn whole by one of M2's own formatters, or it is a
+    -- container whose entries are rendered one by one, so the shell can set
+    -- each in its own colour. Dispatch takes the whole argument: a Sequence
+    -- would otherwise be spread into separate arguments.
+    render := method(Dispatch => Thing);
+    asNet := value -> hashTable {symbol net => toString net value};
+    -- Every class answers `tex`, most of them with their Net in a typewriter
+    -- font; one with a `texMath` of its own has a real TeX form. A formatter
+    -- that throws costs the value its TeX, never the statement its result.
+    drawnWhole := value -> (
+        if lookup(texMath, class value) === lookup(texMath, Thing) then asNet value
         else try hashTable {
-                "tex" => hashTable {
-                    "source" => tex value,
-                    "fallback" => netValue
-                }
-            } else hashTable {"net" => netValue}
+            symbol tex => hashTable {symbol source => tex value, symbol fallback => toString net value}
+        } else asNet value
     );
-    renderValue := value -> (
-        if instance(value, hypertextType) then hashTable {
-            "markup" => hashTable {
-                "html" => html value,
-                "fallback" => "" | toString net value
-            }
-        }
-        else if class value === HashTable then hashTable {
-            "hashtable" => apply(pairs value, pair -> apply(toList pair, renderAtom))
-        }
-        else if class value === VerticalList then hashTable {
-            "verticallist" => apply(toList value, renderAtom)
-        }
-        else renderAtom value
+    render Thing := HashTable => drawnWhole;
+    -- A value that is one word with a role in code -- null, true, a string, a
+    -- function's name -- so the shell can colour it as code colours that role.
+    token := (text, role) -> hashTable {
+        symbol token => hashTable {symbol text => text, symbol role => role}
+    };
+    render Nothing := HashTable => value -> token("null", "null");
+    render Boolean := HashTable => value -> token(toString value, "boolean");
+    render String := HashTable => value -> token(value, "string");
+    -- M2's own test for whether a function was ever bound to a name.
+    hasAttribute := value Core#"private dictionary"#"hasAttribute";
+    reverseDictionary := value Core#"private dictionary"#"ReverseDictionary";
+    -- A function's TeX is its Net in a typewriter font, and nothing more. A
+    -- named one is drawn by its name; an anonymous one's Net only says where it
+    -- was written (`FunctionClosure[stdio:2:36-2:42]`), so it is drawn by its
+    -- class instead.
+    render Function := HashTable => value -> token(
+        if hasAttribute(value, reverseDictionary) then toString value else toString class value,
+        "function"
     );
-    recordValue := value -> (
-        output.value = renderValue value;
+    -- Every documentation node at once: DIV, TABLE, UL and the rest all descend
+    -- from Hypertext.
+    render hypertextType := HashTable => value -> hashTable {
+        symbol markup => hashTable {symbol html => html value, symbol fallback => toString net value}
+    };
+    -- Only what M2 itself draws as a plain table: a class that still uses
+    -- HashTable's own `net`. Inheritance alone says far too much -- matrices,
+    -- modules, ideals, rings and some fifty more are HashTables that draw
+    -- themselves -- and reading M2's `net` dispatch covers every package's
+    -- types without listing them.
+    table := value -> hashTable {
+        symbol hashtable => apply(pairs value, pair -> apply(toList pair, render))
+    };
+    render HashTable := HashTable => value -> (
+        if lookup(net, class value) === lookup(net, HashTable) then table value
+        else drawnWhole value
     );
-    recordInexactValue := value -> (
-        savedPrecision := printingPrecision;
-        savedAccuracy := printingAccuracy;
-        printingPrecision = 0;
-        printingAccuracy = -1;
-        recordValue value;
-        printingPrecision = savedPrecision;
-        printingAccuracy = savedAccuracy;
+    -- The kind names the nearest of the shell's collection kinds, so a list
+    -- subclass such as Hybrid arrives as the List it is drawn as.
+    collection := (kind, value) -> hashTable {
+        symbol collection => hashTable {symbol kind => kind, symbol items => apply(toList value, render)}
+    };
+    render List := HashTable => value -> collection("List", value);
+    render Array := HashTable => value -> collection("Array", value);
+    render Sequence := HashTable => value -> collection("Sequence", value);
+    render AngleBarList := HashTable => value -> collection("AngleBarList", value);
+    render VerticalList := HashTable => value -> collection("VerticalList", value);
+    -- A mutable container may hold itself, which is why M2 draws one only as a
+    -- summary (`MutableHashTable{...3...}`). The first one met is opened anyway;
+    -- any met while it is open stays folded, so nesting -- and with it any
+    -- self-loop -- ends at the first repeat. Reset with each result as well, so a
+    -- render that threw part-way cannot leave every later one folded.
+    openingMutable := false;
+    openMutable := (value, open) -> (
+        if openingMutable then return drawnWhole value;
+        openingMutable = true;
+        rendered := open value;
+        openingMutable = false;
+        rendered
     );
+    render MutableHashTable := HashTable => value -> (
+        if lookup(net, class value) === lookup(net, MutableHashTable) then openMutable(value, table)
+        else drawnWhole value
+    );
+    render MutableList := HashTable => value -> openMutable(value, entries -> collection("List", entries));
 
     -- One frame closes one input. Marked with a control character no diagnostic
     -- and no prompt can begin with, so the shell can pick frames out of the
@@ -111,43 +164,37 @@ needsPackage "JSON"
     );
     sendResult := () -> emitFrame hashTable {
         "number" => lineNumber,
-        "value" => output.value,
-        "typeInfo" => output.typeInfo,
-        -- Read from M2's own record rather than tracked separately: `oN` exists
-        -- exactly when the result was bound, which is what the shell is asking.
-        -- It is not implied by `value`, a `;`-suppressed result being bound
-        -- without ever being rendered.
+        "value" => renderedValue,
+        "typeInfo" => typeInfo,
         "hasValue" => OutputDictionary#?("o" | toString lineNumber),
-        -- Nested interpreters are how M2 says it is sitting in the debugger;
-        -- the shell paints itself differently when it is.
         "depth" => interpreterDepth,
         "error" => not completed
     };
     forgetResult := () -> (
-        output.value = null;
-        output.typeInfo = null;
+        renderedValue = null;
+        typeInfo = null;
         completed = false;
+        openingMutable = false;
     );
     recordTypeInfo := value -> (
-        -- The terminator's own pass through here, cleared as it is recognised.
-        if ownStatement then (
-            ownStatement = false;
-            return;
-        );
-        lookupMethod := lookup(AfterPrint, class value);
-        typeInfo := lookupMethod value;
-        if typeInfo === null then
-            typeInfo = class value;
-        output.typeInfo = renderAfterPrint typeInfo;
+        annotation := (lookup(AfterPrint, class value)) value;
+        typeInfo = renderAfterPrint(annotation ?? class value );
         completed = true;
     );
 
+    -- Recording rather than printing keeps the channel free of everything but
+    -- genuinely printed text. A `;` still suppresses the value: NoPrint
+    -- deliberately skips `net value`, which is the render the punctuation exists
+    -- to avoid on large objects. The type is read either way, so the shell can
+    -- say what a suppressed result is without paying to render it.
+    --
     -- Nothing deliberately has no Print override: an unterminated statement
     -- reports its result whatever it is, and `net null` is already "null". A `;`
     -- still silences it, since NoPrint stays identity for every class.
-    Thing#{mode, Print} = recordValue;
+    Thing#{mode, Print} = value -> (
+        renderedValue = render value;
+    );
     Thing#{mode, NoPrint} = identity;
-    InexactNumber#{mode, Print} = recordInexactValue;
     -- Deliberately AfterPrint in both branches: stock M2 reads AfterNoPrint under
     -- a `;`, which only some classes define, so the type would appear or vanish
     -- with the punctuation. Reading AfterPrint always gives every class its type.
@@ -155,7 +202,6 @@ needsPackage "JSON"
     -- them the definition of having completed.
     Thing#{mode, AfterPrint} = recordTypeInfo;
     Thing#{mode, AfterNoPrint} = recordTypeInfo;
-    protect mode;
 
     -- Sent by the shell after every cell, and the only part of a submission the
     -- user did not write. It is the sole thing that closes an input.
@@ -181,7 +227,7 @@ needsPackage "JSON"
         if not completed then
             lineNumber = lineNumber - 1;
         forgetResult();
-        ownStatement = true;
+        new cellEnd
     );
 
     -- Announced once the hooks are installed and before the first cell can be

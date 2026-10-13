@@ -1528,6 +1528,7 @@ dependencies = [
  "toml",
  "tree-sitter-highlight",
  "tree-sitter-macaulay2",
+ "unicode-width",
 ]
 
 [[package]]

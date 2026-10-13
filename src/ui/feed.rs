@@ -5,9 +5,11 @@ use ratatui::layout::{Alignment, Offset, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{Block as TuiBlock, Paragraph, Widget};
 
-use super::block::{Block, Exclusions};
+use super::block::{Block, Reformatted, Resized, Rethemed};
 use super::cell::{EvaluationBlock, IncompleteBlock};
 use super::config::UI;
+use super::element::{paste, EventListener};
+use super::render::selection::Exclusions;
 use super::render::RenderContext;
 
 /// Retained position metadata for one feed viewport.
@@ -15,13 +17,6 @@ struct ViewportState {
     area: Rect,
     scroll: usize,
     anchor: Option<(usize, u16)>,
-}
-
-/// One feed element with its retained local layout and cells.
-struct RetainedBlock {
-    content: FeedContent,
-    layout: Option<(u16, u16)>,
-    buffer: Option<BlockBuffer>,
 }
 
 /// Storage for an open-ended block or the one block the feed must mutate in place.
@@ -48,10 +43,16 @@ impl FeedContent {
     }
 }
 
-/// Rendered cells and selection metadata local to one feed block.
-struct BlockBuffer {
-    cells: Buffer,
-    exclusions: Exclusions,
+/// One feed element with its retained local layout, cells, and selection geometry.
+///
+/// The two retentions go stale on different events and so are held apart: a width
+/// changes every wrap boundary and invalidates both, while a scheme only changes which
+/// style a highlight group resolves to, leaving the geometry exactly where it was.
+struct RetainedBlock {
+    content: FeedContent,
+    layout: Option<(u16, u16)>,
+    cells: Option<Buffer>,
+    exclusions: Option<Exclusions>,
 }
 
 impl RetainedBlock {
@@ -59,36 +60,46 @@ impl RetainedBlock {
         Self {
             content,
             layout: None,
-            buffer: None,
+            cells: None,
+            exclusions: None,
         }
     }
 
     fn height(&mut self, context: &RenderContext) -> u16 {
-        if self
-            .layout
-            .is_none_or(|(width, _)| width != context.width())
-        {
+        self.on_event(&Resized {
+            width: context.width(),
+        });
+        if self.layout.is_none() {
             self.layout = Some((context.width(), self.content.block().height(context).max(1)));
-            self.buffer = None;
         }
         self.layout.unwrap().1
     }
 
-    fn render(&mut self, context: &RenderContext, canvas: Style) -> &BlockBuffer {
+    fn render(&mut self, context: &RenderContext, canvas: Style) -> (&Buffer, &Exclusions) {
         let height = self.height(context);
-        self.buffer.get_or_insert_with(|| {
+        if self.cells.is_none() {
             let mut cells = Feed::buffer(Rect::new(0, 0, context.width(), height), canvas);
             self.content.block().render_local(context, &mut cells);
+            self.cells = Some(cells);
+        }
+        if self.exclusions.is_none() {
             let mut exclusions = Exclusions::default();
             self.content
                 .block()
                 .local_selection_exclusions(context, &mut exclusions);
-            BlockBuffer { cells, exclusions }
-        })
+            self.exclusions = Some(exclusions);
+        }
+        (
+            self.cells.as_ref().expect("cells were just settled"),
+            self.exclusions
+                .as_ref()
+                .expect("exclusions were just settled"),
+        )
     }
 
     fn invalidate(&mut self) {
-        self.buffer = None;
+        self.cells = None;
+        self.exclusions = None;
     }
 
     fn invalidate_layout(&mut self) {
@@ -97,12 +108,30 @@ impl RetainedBlock {
     }
 }
 
-/// Transcript blocks with their scrolling and retained presentation state.
-pub(crate) struct Feed {
-    blocks: Vec<RetainedBlock>,
-    scroll: usize,
-    anchor: Option<(usize, u16)>,
-    surface: Option<ViewportState>,
+/// A width moves every wrap boundary, so both the geometry and the cells go with it.
+impl EventListener<Resized> for RetainedBlock {
+    fn on_event(&mut self, event: &Resized) {
+        if self
+            .layout
+            .is_none_or(|(settled, _)| settled != event.width)
+        {
+            self.invalidate_layout();
+        }
+    }
+}
+
+/// A scheme only changes which style a group resolves to, so the geometry survives.
+impl EventListener<Rethemed> for RetainedBlock {
+    fn on_event(&mut self, _: &Rethemed) {
+        self.cells = None;
+    }
+}
+
+/// Setting values differently moves their heights, so the geometry goes with the cells.
+impl EventListener<Reformatted> for RetainedBlock {
+    fn on_event(&mut self, _: &Reformatted) {
+        self.invalidate_layout();
+    }
 }
 
 /// A borrowed block list rendered through a scrollable rectangular viewport.
@@ -159,12 +188,11 @@ impl<'a> BlockView<'a> {
             let rows = (height - start).min(area.height - y);
             let mut rendered = Feed::buffer(Rect::new(0, 0, area.width, height), canvas);
             block.render_local(context, &mut rendered);
-            Feed::copy(
+            paste(
                 &rendered,
-                start,
-                target,
+                start..start + rows,
                 Rect::new(area.x, area.y + y, area.width, rows),
-                rows,
+                target,
             );
             let mut source = Exclusions::default();
             block.local_selection_exclusions(context, &mut source);
@@ -179,6 +207,14 @@ impl<'a> BlockView<'a> {
         }
         exclusions
     }
+}
+
+/// Transcript blocks with their scrolling and retained presentation state.
+pub(crate) struct Feed {
+    blocks: Vec<RetainedBlock>,
+    scroll: usize,
+    anchor: Option<(usize, u16)>,
+    surface: Option<ViewportState>,
 }
 
 impl Feed {
@@ -358,12 +394,6 @@ impl Feed {
         self.anchor = None;
     }
 
-    /// Discard retained presentation after a theme change.
-    pub(crate) fn invalidate(&mut self) {
-        self.surface = None;
-        self.blocks.iter_mut().for_each(RetainedBlock::invalidate);
-    }
-
     /// Return whether the current viewport has retained rendered cells.
     #[cfg(test)]
     pub(crate) fn retained(&self) -> bool {
@@ -388,7 +418,7 @@ impl Feed {
             area.width.saturating_sub(UI.feed_margin),
             area.height,
         );
-        let context = RenderContext::new(area.width, context.prefix(), context.groups());
+        let context = context.with_width(area.width);
         for block in &mut self.blocks {
             block.render(&context, canvas);
         }
@@ -462,19 +492,18 @@ impl Feed {
         let mut anchor = None;
         let mut exclusions = Exclusions::default();
         for (index, height, bottom) in visible.blocks.into_iter().rev() {
-            let rendered = blocks[index].render(context, canvas);
+            let (cells, block_exclusions) = blocks[index].render(context, canvas);
             let start = crop.min(height - bottom);
             crop -= start;
             let rows = height - bottom - start;
-            Self::copy(
-                &rendered.cells,
-                start,
-                target,
+            paste(
+                cells,
+                start..start + rows,
                 Rect::new(area.x, y, area.width, rows),
-                rows,
+                target,
             );
             exclusions.extend(
-                rendered.exclusions.project(start..start + rows)
+                block_exclusions.project(start..start + rows)
                     + Offset::new(i32::from(area.x), i32::from(y)),
             );
             anchor = anchor.or((rows > 0).then_some((index, start)));
@@ -549,14 +578,21 @@ impl Feed {
         TuiBlock::default().style(style).render(area, &mut buffer);
         buffer
     }
+}
 
-    fn copy(source: &Buffer, source_y: u16, target: &mut Buffer, area: Rect, rows: u16) {
-        let width = usize::from(area.width);
-        for row in 0..rows {
-            let source_index = source.index_of(source.area().x, source_y + row);
-            let target_index = target.index_of(area.x, area.y + row);
-            target.content[target_index..target_index + width]
-                .clone_from_slice(&source.content[source_index..source_index + width]);
+/// Fan any change the blocks understand across every one of them.
+///
+/// The container declares no event vocabulary of its own; it forwards whatever its
+/// children can receive, which is what a generic event parameter buys over an
+/// associated type — one impl covers every kind, present and future.
+impl<E> EventListener<E> for Feed
+where
+    RetainedBlock: EventListener<E>,
+{
+    fn on_event(&mut self, event: &E) {
+        self.surface = None;
+        for block in &mut self.blocks {
+            block.on_event(event);
         }
     }
 }
@@ -635,8 +671,7 @@ mod tests {
         let mut feed = Feed::new(Box::new(Counted(counts[0].clone())));
         feed.push(Box::new(Counted(counts[1].clone())));
         feed.push(Box::new(Counted(counts[2].clone())));
-        let groups = Groups::default();
-        let context = RenderContext::new(10, 0, &groups);
+        let context = RenderContext::new(10, 0);
         let area = Rect::new(0, 0, 10, 1);
         let mut target = Buffer::empty(area);
 
@@ -667,8 +702,7 @@ mod tests {
     fn scrolling_inside_a_tall_block_copies_only_its_visible_slice() {
         let renders = Arc::new(AtomicUsize::new(0));
         let mut feed = Feed::new(Box::new(Tall(renders.clone())));
-        let groups = Groups::default();
-        let context = RenderContext::new(10, 0, &groups);
+        let context = RenderContext::new(10, 0);
         let area = Rect::new(0, 0, 10, 3);
         let mut target = Buffer::empty(area);
 
@@ -682,12 +716,55 @@ mod tests {
         assert_eq!(renders.load(Ordering::Relaxed), 1);
     }
 
+    /// A block whose selection geometry counts how often it is derived.
+    struct Excluding(Arc<AtomicUsize>);
+
+    impl Block for Excluding {
+        fn height(&self, _: &RenderContext) -> u16 {
+            1
+        }
+
+        fn render_local(&self, _: &RenderContext, _: &mut Buffer) {}
+
+        fn local_selection_exclusions(&self, _: &RenderContext, exclusions: &mut Exclusions) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            exclusions.push(Rect::new(0, 0, 1, 1));
+        }
+    }
+
+    #[test]
+    fn a_retheme_repaints_without_rederiving_selection_geometry() {
+        let derivations = Arc::new(AtomicUsize::new(0));
+        let mut feed = Feed::new(Box::new(Excluding(derivations.clone())));
+        let context = RenderContext::new(10, 0);
+        let area = Rect::new(0, 0, 10, 1);
+        let mut target = Buffer::empty(area);
+
+        feed.render(&context, area, &mut target, Style::default());
+        assert_eq!(derivations.load(Ordering::Relaxed), 1);
+
+        feed.on_event(&Rethemed);
+        feed.render(&context, area, &mut target, Style::default());
+        assert_eq!(
+            derivations.load(Ordering::Relaxed),
+            1,
+            "a scheme cannot move a rectangle"
+        );
+
+        feed.on_event(&Resized { width: 4 });
+        feed.render(&context, area, &mut target, Style::default());
+        assert_eq!(
+            derivations.load(Ordering::Relaxed),
+            2,
+            "a width moves every wrap boundary"
+        );
+    }
+
     #[test]
     fn appending_keeps_rendered_block_buffers() {
         let counts = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
         let mut feed = Feed::new(Box::new(Counted(counts[0].clone())));
-        let groups = Groups::default();
-        let context = RenderContext::new(10, 0, &groups);
+        let context = RenderContext::new(10, 0);
         let area = Rect::new(0, 0, 10, 2);
         let mut target = Buffer::empty(area);
 
@@ -722,8 +799,7 @@ mod tests {
             feed.push(Box::new(Responsive(symbol)));
         }
         feed.push_evaluation(EvaluationBlock::new(7, [("x".to_string(), Vec::new())]));
-        let groups = Groups::default();
-        let context = RenderContext::new(12, 0, &groups);
+        let context = RenderContext::new(12, 0);
         let area = Rect::new(0, 0, 12, 3);
         let mut target = Buffer::empty(area);
         feed.scroll(1);
@@ -760,8 +836,7 @@ mod tests {
         for symbol in ['B', 'C', 'D', 'E', 'F'] {
             feed.push(Box::new(Responsive(symbol)));
         }
-        let groups = Groups::default();
-        let context = RenderContext::new(12, 0, &groups);
+        let context = RenderContext::new(12, 0);
         let wide = Rect::new(0, 0, 12, 3);
         let mut target = Buffer::empty(wide);
         feed.scroll(2);
@@ -783,8 +858,7 @@ mod tests {
         for symbol in ['B', 'C', 'D', 'E', 'F'] {
             feed.push(Box::new(Responsive(symbol)));
         }
-        let groups = Groups::default();
-        let context = RenderContext::new(8, 0, &groups);
+        let context = RenderContext::new(8, 0);
         let tall = Rect::new(0, 0, 8, 3);
         let mut target = Buffer::empty(tall);
         feed.scroll(2);
@@ -803,7 +877,7 @@ mod tests {
     #[test]
     fn feed_margin_keeps_a_full_width_block_background() {
         let groups = Groups::default();
-        let context = RenderContext::new(10, 0, &groups);
+        let context = RenderContext::new(10, 0);
         let mut feed = Feed::new(Box::new(TextBlock::printed("x")));
         let area = Rect::new(0, 0, 10, 3);
         let mut target = Buffer::empty(area);
@@ -826,7 +900,7 @@ mod tests {
             Some(OutputBlock::value("x".into(), None).numbered(1)),
         );
         let groups = Groups::default();
-        let context = RenderContext::new(20, 0, &groups);
+        let context = RenderContext::new(20, 0);
         let area = Rect::new(0, 0, 20, 6);
         let mut target = Buffer::empty(area);
         let mut feed = Feed::new(Box::new(evaluation));

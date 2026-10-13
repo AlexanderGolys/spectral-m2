@@ -18,19 +18,22 @@ use self::commands::Command;
 use self::picker::{LineContext, PickerItem};
 use self::picker::{Picker, PickerController, PickerInput, PickerItems, PickerMode, ValueItem};
 use self::settings::keymap::Keymaps;
-use self::settings::theme::groups::{Groups, HLGroup};
+use self::settings::theme::groups::{publish, Groups, HLGroup};
 use self::settings::theme::Appearance;
 use self::settings::{Settings, StatusLinePosition};
 use super::action::Action;
-use super::block::{Block, Element, Exclusions, HLSpan, TextSpan};
+use super::block::{Block, Element, HLSpan, Reformatted, Rethemed, TextSpan};
 use super::cell::{
     Cell, CellState, CodeBlock, ErrorMessageBlock, EvaluationBlock, IncompleteBlock, OutputBlock,
     TextBlock,
 };
 use super::config::UI;
 use super::debug::FrameStats;
+use super::element::EventListener;
 use super::feed::{BlockView, Feed};
 use super::key::{KeyEvent, KeyMod};
+use super::render::maths::FractionStyle;
+use super::render::selection::Exclusions;
 use super::render::RenderContext;
 use super::statusline::{StatusLine, StatusLineContext, StatusLineEvent};
 use super::syntax_tree::SyntaxTreeBlock;
@@ -331,6 +334,7 @@ const SHELL_ITEMS: &[ShellItem] = &[
     ShellItem::Input(InputSetting::MaxHeight),
     ShellItem::Input(InputSetting::Scrolloff),
     ShellItem::Statusline,
+    ShellItem::Fractions,
     ShellItem::Style,
     ShellItem::RestoreDefault,
 ];
@@ -340,6 +344,7 @@ const SHELL_ITEMS: &[ShellItem] = &[
 enum ShellItem {
     Input(InputSetting),
     Statusline,
+    Fractions,
     Style,
     RestoreDefault,
 }
@@ -392,6 +397,7 @@ pub(crate) struct Editor {
 impl Editor {
     pub(crate) fn new(welcome: String) -> Self {
         let appearance = Appearance::load();
+        publish(appearance.groups());
         let mut editor = Self {
             feed: Feed::new(Box::new(TextBlock::system(welcome))),
             input: InputCode::new(),
@@ -977,6 +983,13 @@ impl Editor {
                         EditorEvent::SetSettings(settings)
                     })
                 }
+                ShellItem::Fractions => {
+                    let mut settings = self.settings;
+                    ValueItem::adjust("fractions", settings.fractions.label(), move |delta| {
+                        settings.fractions = settings.fractions.cycle(delta);
+                        EditorEvent::SetSettings(settings)
+                    })
+                }
                 ShellItem::Style => {
                     ValueItem::enter("style", self.appearance.colorscheme_label(), false, || {
                         EditorEvent::OpenStyle
@@ -1149,6 +1162,9 @@ impl Editor {
             }
             EditorEvent::OpenStyle => self.open_style(),
             EditorEvent::RestoreDefaults => {
+                if self.settings.fractions != FractionStyle::default() {
+                    self.feed.on_event(&Reformatted);
+                }
                 self.settings = Settings::default();
                 self.input.set_settings(InputSettings::default());
                 self.keymaps = Keymaps::default();
@@ -1157,6 +1173,9 @@ impl Editor {
                 self.pickers.last_mut().unwrap().picker.set_items(items);
             }
             EditorEvent::SetSettings(settings) => {
+                if settings.fractions != self.settings.fractions {
+                    self.feed.on_event(&Reformatted);
+                }
                 self.settings = settings;
                 let items = self.shell_items();
                 self.pickers.last_mut().unwrap().picker.set_items(items);
@@ -1186,8 +1205,8 @@ impl Editor {
             return;
         }
         self.appearance = appearance;
-        self.groups = appearance.groups();
-        self.feed.invalidate();
+        publish(appearance.groups());
+        self.feed.on_event(&Rethemed);
         appearance.save();
     }
 
@@ -1436,8 +1455,9 @@ impl Editor {
             } else {
                 (sections[2], sections[3])
             };
-        let context = RenderContext::new(editor_area.width, 0, &theme);
-        let input_context = RenderContext::new(editor_area.width, input_prefix, &theme);
+        let context =
+            RenderContext::new(editor_area.width, 0).with_fractions(self.settings.fractions);
+        let input_context = RenderContext::new(editor_area.width, input_prefix);
 
         self.feed_area = sections[0];
         self.draw_feed(frame, sections[0], &context);
@@ -1529,7 +1549,7 @@ impl Editor {
             Constraint::Length(area.height.min(1)),
         ])
         .split(area);
-        let context = RenderContext::new(sections[0].width, 0, &theme);
+        let context = RenderContext::new(sections[0].width, 0);
         self.feed_area = sections[0];
 
         match view {
@@ -2177,10 +2197,9 @@ mod tests {
         editor.apply_appearance(editor.appearance.cycle_colorscheme(1));
         editor.open_settings_from_commands();
 
-        press(&mut editor, KeyCode::Down, KeyModifiers::NONE);
-        press(&mut editor, KeyCode::Down, KeyModifiers::NONE);
-        press(&mut editor, KeyCode::Down, KeyModifiers::NONE);
-        press(&mut editor, KeyCode::Down, KeyModifiers::NONE);
+        move_to_setting(&mut editor, |item| {
+            matches!(item, ShellItem::RestoreDefault)
+        });
         press(&mut editor, KeyCode::Enter, KeyModifiers::NONE);
 
         let defaults = InputSettings::default();
@@ -2224,6 +2243,19 @@ mod tests {
         assert_eq!(picker_title(editor), Some("commands"));
         press(editor, KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(picker_title(editor), Some("settings"));
+    }
+
+    /// Move the open settings picker onto the first row matching `target`, and say
+    /// which row that is.
+    fn move_to_setting(editor: &mut Editor, target: impl Fn(&ShellItem) -> bool) -> usize {
+        let row = SHELL_ITEMS
+            .iter()
+            .position(target)
+            .expect("the setting is listed");
+        for _ in 0..row {
+            press(editor, KeyCode::Down, KeyModifiers::NONE);
+        }
+        row
     }
 
     fn open_style(editor: &mut Editor) {
@@ -2337,14 +2369,12 @@ mod tests {
         let mut editor = Editor::new(String::new());
 
         open_settings(&mut editor);
-        press(&mut editor, KeyCode::Down, KeyModifiers::NONE);
-        press(&mut editor, KeyCode::Down, KeyModifiers::NONE);
-        press(&mut editor, KeyCode::Down, KeyModifiers::NONE);
+        let style_row = move_to_setting(&mut editor, |item| matches!(item, ShellItem::Style));
         press(&mut editor, KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(picker_title(&editor), Some("style"));
         press(&mut editor, KeyCode::Backspace, KeyModifiers::NONE);
         assert_eq!(picker_title(&editor), Some("settings"));
-        assert_eq!(editor.pickers.last().unwrap().picker.selected(), 3);
+        assert_eq!(editor.pickers.last().unwrap().picker.selected(), style_row);
 
         press(&mut editor, KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(picker_title(&editor), Some("style"));
@@ -2713,6 +2743,26 @@ mod tests {
         assert!(rendered_editor(&mut editor, 70, 12)
             .join("\n")
             .contains(" style "));
+    }
+
+    #[test]
+    fn fraction_setting_cycles_through_every_style_in_both_directions() {
+        let mut fractions = FractionStyle::default();
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            seen.push(fractions);
+            fractions = fractions.cycle(1);
+        }
+        assert_eq!(fractions, FractionStyle::default(), "three steps come back");
+        assert_eq!(
+            seen,
+            [
+                FractionStyle::Stacked,
+                FractionStyle::Overlined,
+                FractionStyle::Inline
+            ]
+        );
+        assert_eq!(FractionStyle::Stacked.cycle(-1), FractionStyle::Inline);
     }
 
     #[test]

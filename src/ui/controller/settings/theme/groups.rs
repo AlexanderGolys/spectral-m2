@@ -1,4 +1,5 @@
 use std::ops::Index;
+use std::sync::{LazyLock, RwLock};
 
 use ratatui::style::{Modifier, Style};
 use serde::Deserialize;
@@ -223,6 +224,30 @@ highlight_groups! {
     BgColor2,
     BgColor3,
     BgColor4,
+}
+
+/// The one scheme in effect, republished whenever the appearance changes.
+///
+/// A scheme is a mapping from [`HLGroup`] to [`Style`] — reflection over an enum, not
+/// state any element owns — so it is read from here rather than carried through render
+/// calls. Carrying it made every context a copy of 131 styles and made a repaint look
+/// like a rebuild. Each published table is leaked so a reader can hold `&'static
+/// Groups` without a guard; republishing happens only when a person changes the theme.
+static SCHEME: LazyLock<RwLock<&'static Groups>> =
+    LazyLock::new(|| RwLock::new(Box::leak(Box::new(Groups::default()))));
+
+/// Read the scheme currently in effect.
+pub(crate) fn scheme() -> &'static Groups {
+    *SCHEME
+        .read()
+        .expect("the scheme lock is never held across a panic")
+}
+
+/// Publish a newly resolved scheme for every later read.
+pub(crate) fn publish(groups: Groups) {
+    *SCHEME
+        .write()
+        .expect("the scheme lock is never held across a panic") = Box::leak(Box::new(groups));
 }
 
 impl Groups {

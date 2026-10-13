@@ -14,6 +14,7 @@ use std::{env, fs, thread};
 use crate::errors::{Error, Result};
 use regex::Regex;
 use serde::Deserialize;
+use term_maths::RenderedBlock;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const EVALUATION_TIMEOUT: Duration = Duration::from_secs(300);
@@ -23,15 +24,23 @@ const STARTUP_FILE: &str = "backend.m2";
 /// separator: no diagnostic, prompt or ordinary value begins with it, and the
 /// M2 side writes it immediately before the frame's JSON.
 const FRAME_MARK: u8 = 0x1D;
+
 /// Appended to every submission. The statement that closes an input -- see the
 /// M2 side for why the hooks cannot do it alone for a statement that errored.
 const CELL_TERMINATOR: &str = r#"(User#"spectral end of cell")();"#;
+
 static M2_ARRAY: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\\begin\{array\}\{[clr]+\}").expect("valid M2 array pattern"));
+
 static M2_MATH_FONT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\{\\(mathbb|mathbf|mathcal|mathrm|mathfrak|mathsf|mathtt)\s+([^{}]+)\}")
         .expect("valid M2 math font pattern")
 });
+/// `\mathit{…}`, which M2 puts around multi-character names only -- `x2` gets it,
+/// `x` does not. It is there to stop `x2` being read as *x^2*, so it says nothing
+/// the renderer needs and the braces come off with it.
+static M2_MATHIT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\\mathit\{([^{}]*)\}").expect("valid M2 mathit pattern"));
 
 /// One piece of the child's merged output stream, split on the frame mark.
 ///
@@ -74,15 +83,55 @@ pub(crate) enum M2Value {
     Net(String),
     /// Key/value parts composed into one brace-delimited row grid.
     HashTable(Vec<[M2Value; 2]>),
-    /// Elements composed into rows of one brace-delimited matrix.
-    VerticalList(Vec<M2Value>),
+    /// Entries M2 rendered one by one, set inside the delimiters of their kind.
+    Collection {
+        kind: CollectionKind,
+        items: Vec<M2Value>,
+    },
     /// Documentation retained as semantic HTML for width-aware rendering.
     Markup { html: String, fallback: String },
+    /// A value that is one word with a role in code: null, a Boolean, a string, a
+    /// function's name.
+    Token { text: String, role: Role },
+}
+
+/// What a token is in code, which decides how it is coloured.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Role {
+    Null,
+    Boolean,
+    String,
+    Function,
+}
+
+/// The M2 list class a collection was drawn as, named exactly as M2 names it.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+pub(crate) enum CollectionKind {
+    List,
+    Array,
+    Sequence,
+    AngleBarList,
+    /// A List set one entry per row rather than along one line.
+    VerticalList,
+}
+
+impl CollectionKind {
+    /// The opening and closing delimiters M2 draws this kind between.
+    pub(crate) const fn delimiters(self) -> (&'static str, &'static str) {
+        match self {
+            Self::List | Self::VerticalList => ("{", "}"),
+            Self::Array => ("[", "]"),
+            Self::Sequence => ("(", ")"),
+            Self::AngleBarList => ("<|", "|>"),
+        }
+    }
 }
 
 impl M2Value {
     fn normalize(source: &str) -> String {
         let source = M2_MATH_FONT.replace_all(source, r"\$1{$2}");
+        let source = M2_MATHIT.replace_all(&source, "$1");
         M2_ARRAY
             .replace_all(&source, r"\begin{matrix}")
             .replace(r"\end{array}", r"\end{matrix}")
@@ -92,27 +141,22 @@ impl M2Value {
             .replace(r"\right\}", r"\right}")
     }
 
-    fn text_block(text: &str) -> term_maths::RenderedBlock {
-        let block = Self::stack(text.lines().map(term_maths::RenderedBlock::from_text));
-        term_maths::RenderedBlock::new(block.cells().to_vec(), block.height() / 2)
+    fn text_block(text: &str) -> RenderedBlock {
+        let block = Self::stack(text.lines().map(RenderedBlock::from_text));
+        RenderedBlock::new(block.cells().to_vec(), block.height() / 2)
     }
 
-    fn stack(
-        rows: impl IntoIterator<Item = term_maths::RenderedBlock>,
-    ) -> term_maths::RenderedBlock {
-        let block = rows
-            .into_iter()
-            .fold(
-                term_maths::RenderedBlock::empty(),
-                |block, row| match block.is_empty() {
-                    true => row,
-                    false => term_maths::RenderedBlock::above(&block, &row, 0),
-                },
-            );
-        term_maths::RenderedBlock::new(block.cells().to_vec(), block.height() / 2)
+    fn stack(rows: impl IntoIterator<Item = RenderedBlock>) -> RenderedBlock {
+        let block = rows.into_iter().fold(RenderedBlock::empty(), |block, row| {
+            match block.is_empty() {
+                true => row,
+                false => RenderedBlock::above(&block, &row, 0),
+            }
+        });
+        RenderedBlock::new(block.cells().to_vec(), block.height() / 2)
     }
 
-    fn curly(height: usize, left: bool, baseline: usize) -> term_maths::RenderedBlock {
+    fn curly(height: usize, left: bool, baseline: usize) -> RenderedBlock {
         let glyphs = match left {
             true => ("{", "⎧", "⎨", "⎩"),
             false => ("}", "⎫", "⎬", "⎭"),
@@ -129,14 +173,14 @@ impl M2Value {
                 .to_string()]
             })
             .collect();
-        term_maths::RenderedBlock::new(cells, baseline)
+        RenderedBlock::new(cells, baseline)
     }
 
-    fn brace(block: term_maths::RenderedBlock) -> term_maths::RenderedBlock {
+    fn brace(block: RenderedBlock) -> RenderedBlock {
         match block.is_empty() {
-            true => term_maths::RenderedBlock::from_text("{}"),
+            true => RenderedBlock::from_text("{}"),
             false => {
-                let space = term_maths::RenderedBlock::from_text(" ");
+                let space = RenderedBlock::from_text(" ");
                 let body = space.beside(&block).beside(&space);
                 let left = Self::curly(body.height(), true, body.baseline());
                 let right = Self::curly(body.height(), false, body.baseline());
@@ -145,7 +189,7 @@ impl M2Value {
         }
     }
 
-    fn block(&self) -> term_maths::RenderedBlock {
+    fn block(&self) -> RenderedBlock {
         match self {
             Self::Tex { source, fallback } => {
                 let source = match source
@@ -161,14 +205,35 @@ impl M2Value {
                     false => rendered,
                 }
             }
-            Self::Net(text) | Self::Markup { fallback: text, .. } => Self::text_block(text),
+            Self::Net(text) | Self::Markup { fallback: text, .. } | Self::Token { text, .. } => {
+                Self::text_block(text)
+            }
             Self::HashTable(rows) => Self::brace(Self::stack(rows.iter().map(|row| {
                 row[0]
                     .block()
-                    .beside(&term_maths::RenderedBlock::from_text(" ⇒ "))
+                    .beside(&RenderedBlock::from_text(" ⇒ "))
                     .beside(&row[1].block())
             }))),
-            Self::VerticalList(rows) => Self::brace(Self::stack(rows.iter().map(Self::block))),
+            Self::Collection {
+                kind: CollectionKind::VerticalList,
+                items,
+            } => Self::brace(Self::stack(items.iter().map(Self::block))),
+            Self::Collection { kind, items } => {
+                let (open, close) = kind.delimiters();
+                let separator = RenderedBlock::from_text(", ");
+                items
+                    .iter()
+                    .map(Self::block)
+                    .reduce(|entries, item| entries.beside(&separator).beside(&item))
+                    .map_or_else(
+                        || RenderedBlock::from_text(&format!("{open}{close}")),
+                        |entries| {
+                            RenderedBlock::from_text(open)
+                                .beside(&entries)
+                                .beside(&RenderedBlock::from_text(close))
+                        },
+                    )
+            }
         }
     }
 
@@ -586,6 +651,60 @@ mod tests {
         }
     }
 
+    // In QQ[xx,yy,xxyy] M2's net collapses four distinct matrix entries into two
+    // -- `xx*yy` loses its `*` and reads as the variable `xxyy` -- so both columns
+    // print identically. The TeX keeps them apart, which is the whole reason the
+    // shell prefers it.
+    #[test]
+    fn colliding_monomial_names_stay_distinct_through_tex() {
+        let value = M2Value::Tex {
+            source: r"$\left(\!\begin{array}{cc}
+\mathit{xxyy}&\mathit{xx}\,\mathit{yy}\\
+\mathit{xxyy}^{2}&\mathit{xx}\,\mathit{yy}^{2}
+\end{array}\!\right)$"
+                .into(),
+            fallback: "| xxyy   xxyy   |\n| xxyy^2 xxyy^2 |".into(),
+        };
+        let rendered = value.render();
+
+        // The product keeps its separation, which the net cannot express at all;
+        // without it `xx*yy` and the variable `xxyy` are the same eight glyphs.
+        assert!(
+            rendered.contains("xx yy"),
+            "the product collapsed into the variable: {rendered}"
+        );
+        assert!(
+            !rendered.contains("xxyy   xxyy"),
+            "fell back to the ambiguous net: {rendered}"
+        );
+    }
+
+    // M2's own net for this matrix is `| x2+1 1/3x2 |`, which reads as the ring
+    // variable `x2` plus one -- a different element entirely. Its TeX keeps the
+    // two apart (`x^{2}+1` against `\mathit{x2}`), so rendering the TeX is what
+    // makes the value readable and falling back to the net is what loses it.
+    #[test]
+    fn a_matrix_renders_from_tex_rather_than_the_ambiguous_net() {
+        let value = M2Value::Tex {
+            source: r"$\left(\!\begin{array}{cc}
+1&x\\
+x^{2}+1&\frac{1}{3}\mathit{x2}
+\end{array}\!\right)$"
+                .into(),
+            fallback: "| 1    x     |\n| x2+1 1/3x2 |".into(),
+        };
+        let rendered = value.render();
+
+        assert!(
+            !rendered.contains("x2+1"),
+            "fell back to the ambiguous net: {rendered}"
+        );
+        assert!(
+            rendered.contains("x² + 1") && rendered.contains("x2"),
+            "the exponent and the variable must stay distinguishable: {rendered}"
+        );
+    }
+
     #[test]
     fn evaluation_distinguishes_printed_null_from_returned_value() {
         let mut backend = M2Backend::spawn().expect("spawn M2");
@@ -639,10 +758,19 @@ mod tests {
         let function = backend
             .evaluate("Thing#{SpectralTopLevelMode, Print}", Some(13))
             .expect("evaluate function closure");
-        assert!(matches!(function.value, Some(M2Value::Net(_))));
-        assert!(function
-            .rendered_value()
-            .is_some_and(|value| value.starts_with("FunctionClosure[")));
+        assert!(matches!(
+            function.value,
+            Some(M2Value::Token {
+                role: Role::Function,
+                ..
+            })
+        ));
+        // Anonymous, so drawn by its class: its Net would only say where it was
+        // written.
+        assert_eq!(
+            function.rendered_value().as_deref(),
+            Some("FunctionClosure")
+        );
 
         let command = backend
             .evaluate("print", Some(14))
@@ -757,6 +885,72 @@ mod tests {
             .evaluate(&format!("o{}", suppressed.number), Some(45))
             .expect("recall the suppressed binding");
         assert_eq!(recalled.rendered_value().as_deref(), Some("7"));
+    }
+
+    // M2 rotates `oo`/`ooo`/`oooo` after every statement, a null-valued one
+    // included, so the terminator appended to each submission must opt out or
+    // every cell's result lands in the history twice.
+    #[test]
+    fn output_history_advances_once_per_cell() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+
+        backend.evaluate("a = 2", Some(1)).expect("evaluate");
+        backend.evaluate("a = 3", Some(2)).expect("evaluate");
+        let history = backend
+            .evaluate("(oo, ooo)", Some(3))
+            .expect("recall the output history");
+        assert_eq!(history.rendered_value().as_deref(), Some("(3, 2)"));
+
+        let shifted = backend
+            .evaluate("(oo, ooo, oooo)", Some(4))
+            .expect("recall the shifted history");
+        assert_eq!(shifted.rendered_value().as_deref(), Some("((3, 2), 3, 2)"));
+    }
+
+    // Containers arrive entry by entry, so the shell can colour each entry by its
+    // own role. A list's own TeX is one string, which every entry's colour would
+    // be lost in.
+    #[test]
+    fn containers_arrive_entry_by_entry() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+
+        let list = backend
+            .evaluate("{1, [2], (3, 4)}", Some(1))
+            .expect("evaluate a nested list");
+        let Some(M2Value::Collection {
+            kind: CollectionKind::List,
+            items,
+        }) = &list.value
+        else {
+            panic!("a list arrived whole: {:?}", list.value);
+        };
+        assert!(matches!(items[0], M2Value::Tex { .. }));
+        assert!(matches!(
+            items[1],
+            M2Value::Collection {
+                kind: CollectionKind::Array,
+                ..
+            }
+        ));
+        assert!(matches!(
+            items[2],
+            M2Value::Collection {
+                kind: CollectionKind::Sequence,
+                ..
+            }
+        ));
+        assert_eq!(list.rendered_value().as_deref(), Some("{1, [2], (3, 4)}"));
+
+        // A table holding itself opens once and folds where it repeats, rather
+        // than recursing forever.
+        let looped = backend
+            .evaluate("m = new MutableHashTable; m#1 = m; m", Some(2))
+            .expect("evaluate a self-referencing table");
+        let Some(M2Value::HashTable(entries)) = &looped.value else {
+            panic!("the outer table was not opened: {:?}", looped.value);
+        };
+        assert!(matches!(&entries[0][1], M2Value::Tex { fallback, .. }
+            if fallback.starts_with("MutableHashTable{")));
     }
 
     // One reader holds one local dictionary for the whole session, exactly as an
@@ -917,6 +1111,29 @@ mod tests {
             "expected TeX-formatted 1 729 in {:?}",
             out.value
         );
+    }
+
+    /// A statement that throws must report itself as an error, because that flag is
+    /// the only thing stopping the cells queued behind it from running.
+    #[test]
+    fn a_throwing_statement_reports_an_error() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+
+        let suppressed = backend.evaluate("1/0;", None).expect("evaluate");
+        let bare = backend.evaluate("1/0", None).expect("evaluate");
+        let fine = backend.evaluate("1", None).expect("evaluate");
+
+        assert!(
+            suppressed.is_error,
+            "`1/0;` reported success: number {}, transcript {:?}",
+            suppressed.number, suppressed.transcript
+        );
+        assert!(
+            bare.is_error,
+            "`1/0` reported success: number {}, transcript {:?}",
+            bare.number, bare.transcript
+        );
+        assert!(!fine.is_error, "`1` reported an error");
     }
 
     #[test]

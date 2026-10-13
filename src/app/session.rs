@@ -418,7 +418,7 @@ impl Session {
                     message: error.diagnostic,
                 };
                 Self::batch(
-                    [Some(failed), self.continue_after(id, index)]
+                    [Some(failed), self.abandon(id)]
                         .into_iter()
                         .flatten()
                         .collect(),
@@ -433,7 +433,7 @@ impl Session {
                     message: format!("Communication error: {message}"),
                 };
                 Self::batch(
-                    [Some(failed), self.continue_after(id, index)]
+                    [Some(failed), self.abandon(id)]
                         .into_iter()
                         .flatten()
                         .collect(),
@@ -442,20 +442,19 @@ impl Session {
         }
     }
 
-    fn continue_after(&mut self, id: u64, index: usize) -> Option<EditorUpdate> {
-        let evaluation = self.evaluations.front()?;
-        match index + 1 < evaluation.cells.len() {
-            true => match self.dispatch(evaluation, index + 1) {
-                true => Some(EditorUpdate::Started { id }),
-                false => Some(EditorUpdate::Diagnostic(
-                    "Macaulay2 worker stopped".to_string(),
-                )),
-            },
-            false => {
-                self.evaluations.pop_front();
-                self.start_next()
-            }
-        }
+    /// Drop whatever remains of a submission whose cell failed.
+    ///
+    /// Cells queued behind a failure are never sent. A statement that threw may have
+    /// left the session part-way through what it was doing, and the cells after it
+    /// were written assuming it finished -- running them anyway compounds the error
+    /// instead of reporting it. The next *submission* still starts, having been typed
+    /// separately.
+    fn abandon(&mut self, id: u64) -> Option<EditorUpdate> {
+        self.evaluations
+            .front()
+            .filter(|evaluation| evaluation.id == id)?;
+        self.evaluations.pop_front();
+        self.start_next()
     }
 
     fn start_next(&mut self) -> Option<EditorUpdate> {
@@ -743,7 +742,7 @@ mod tests {
     }
 
     #[test]
-    fn a_runtime_failure_reuses_its_number_for_the_next_cell() {
+    fn a_runtime_failure_leaves_its_number_to_the_next_submission() {
         let backend = M2Backend::spawn().expect("spawn M2");
         let mut session = Session::new(backend);
         let mut highlighter = SyntaxHighlighter::new();
@@ -757,20 +756,25 @@ mod tests {
                 .any(|update| matches!(update, EditorUpdate::CellFailed { index: 0, .. })),
             _ => false,
         }));
-        assert_eq!(session.next_input_number(), 2);
-        assert_eq!(session.committed()[0].number, 1);
+        assert!(
+            session.committed().is_empty(),
+            "nothing behind the failure should have committed"
+        );
+        assert_eq!(session.next_input_number(), 1);
 
         session.submit("3 + 3", &mut highlighter);
         updates_until_idle(&mut session);
-        assert_eq!(session.committed()[1].number, 2);
+        assert_eq!(session.committed()[0].number, 1);
     }
 
     #[test]
-    fn a_runtime_failure_continues_with_queued_cells() {
+    fn a_runtime_failure_abandons_the_cells_queued_behind_it() {
         let backend = M2Backend::spawn().expect("spawn M2");
         let mut session = Session::new(backend);
         let mut highlighter = SyntaxHighlighter::new();
 
+        // `2 + 2` is queued behind a statement that throws, and must never be sent:
+        // it was written assuming the one before it finished.
         session.submit("1/0\n2 + 2", &mut highlighter);
         assert!(matches!(
             session.submit("3 + 3; (4", &mut highlighter),
@@ -778,11 +782,17 @@ mod tests {
         ));
         updates_until_idle(&mut session);
 
-        assert_eq!(session.committed().len(), 2);
-        assert_eq!(session.committed()[0].code, "2 + 2");
+        assert_eq!(
+            session
+                .committed()
+                .iter()
+                .map(|cell| cell.code.as_str())
+                .collect::<Vec<_>>(),
+            ["3 + 3;"],
+            "only the separately typed submission should have run"
+        );
+        // The failure bound no number, so the next submission takes the one it left.
         assert_eq!(session.committed()[0].number, 1);
-        assert_eq!(session.committed()[1].code, "3 + 3;");
-        assert_eq!(session.committed()[1].number, 2);
         assert_eq!(session.parser.active_source(), " (4\n");
         assert!(!session.busy());
     }

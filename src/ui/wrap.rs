@@ -151,7 +151,7 @@ impl WrapPolicy for HardWrap {
 
 /// Soft-wrap logical lines at word-like boundaries.
 #[derive(Default)]
-struct WordWrap;
+pub(crate) struct WordWrap;
 
 impl WrapPolicy for WordWrap {
     fn wrap_logical_line(&self, line: &str, width: u16, offset: usize) -> Vec<VisualLine> {
@@ -290,6 +290,49 @@ fn is_word_character(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Glyphs whose rendered width is the same under every terminal convention.
+    ///
+    /// `unicode-width` reports East Asian Ambiguous characters as one column, while a
+    /// terminal configured for CJK renders them as two. Neither answer is wrong, and
+    /// nothing portable can ask which applies, so a glyph that differs between the two
+    /// conventions will misalign a border on somebody's machine no matter how carefully
+    /// this crate measures. Choosing from the stable set is the only real defence.
+    fn width_is_stable(glyph: char) -> bool {
+        use unicode_width::UnicodeWidthChar;
+        glyph.width() == glyph.width_cjk()
+    }
+
+    /// Report each candidate as (glyph, western columns, CJK columns).
+    fn screen(candidates: &str) -> Vec<(char, Option<usize>, Option<usize>)> {
+        use unicode_width::UnicodeWidthChar;
+        candidates
+            .chars()
+            .map(|glyph| (glyph, glyph.width(), glyph.width_cjk()))
+            .collect()
+    }
+
+    #[test]
+    fn rendered_value_glyphs_keep_one_width_everywhere() {
+        // Safe to emit from the value renderer: matrix brackets, blackboard bold,
+        // and the elision mark all measure one column under both conventions.
+        for glyph in "ℤℚℝℂ⋯⋅∖⟵⟶⟼⎧⎨⎩⎪⎫⎬⎭⎛⎝⎞⎠".chars() {
+            assert!(width_is_stable(glyph), "{glyph} is ambiguous");
+        }
+    }
+
+    #[test]
+    fn the_ambiguous_glyphs_this_shell_already_draws_are_known() {
+        // Recorded rather than asserted away: these are in use today, and any terminal
+        // treating ambiguous as double columns will draw them two cells wide.
+        let ambiguous: String = screen("─⇒²³│╭╮╰╯┈×…")
+            .into_iter()
+            .filter(|(glyph, ..)| !width_is_stable(*glyph))
+            .map(|(glyph, ..)| glyph)
+            .collect();
+
+        assert_eq!(ambiguous, "─⇒²³│╭╮╰╯┈×…");
+    }
 
     #[test]
     fn token_wrapping_prefers_whitespace_then_token_boundaries() {

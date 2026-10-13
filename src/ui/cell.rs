@@ -11,7 +11,10 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
-use super::block::{Block, Element, Exclusions, HLSpan};
+use super::block::{Block, Element, HLSpan, Text};
+use super::element::paste;
+use super::render::maths;
+use super::render::selection::Exclusions;
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::wrap::WrappedText;
 use crate::backend::{transcript::strip_m2_location, M2Value};
@@ -234,7 +237,7 @@ impl CodeBlock {
     }
 
     pub(super) fn preview_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
-        let context = RenderContext::new(context.width(), 0, context.groups());
+        let context = RenderContext::new(context.width(), 0);
         let layout = CellLayout::plain();
         let mut rendered = Vec::new();
         for cell in &self.cells {
@@ -620,9 +623,18 @@ impl Block for EvaluationBlock {
         let mut y = area.y.saturating_add(code_area_height);
         for block in self.outputs() {
             let height = block.height(context);
-            Element::render(
-                block,
-                context,
+            let mut nested = Buffer::empty(Rect::new(0, 0, area.width, height));
+            // Outputs draw no background of their own, so they start from the surface
+            // this block has already painted beneath them.
+            for row in 0..height {
+                for x in 0..area.width {
+                    nested[(x, row)] = buf[(area.x + x, y + row)].clone();
+                }
+            }
+            block.render_local(context, &mut nested);
+            paste(
+                &nested,
+                0..height,
                 Rect::new(area.x, y, area.width, height),
                 buf,
             );
@@ -637,7 +649,7 @@ impl Block for EvaluationBlock {
         let mut y = code_area_height;
         for block in self.outputs() {
             let height = block.height(context);
-            Element::selection_exclusions(
+            Block::selection_exclusions(
                 block,
                 context,
                 Rect::new(0, y, context.width(), height),
@@ -834,9 +846,9 @@ impl OutputBlock {
             Vec::new()
         } else {
             match cell.value.as_ref() {
-                Some(M2Value::HashTable(_) | M2Value::VerticalList(_) | M2Value::Markup { .. }) => {
-                    text.lines().map(str::to_string).collect()
-                }
+                Some(
+                    M2Value::HashTable(_) | M2Value::Collection { .. } | M2Value::Markup { .. },
+                ) => text.lines().map(str::to_string).collect(),
                 _ => word_lines(&text, width),
             }
         }
@@ -844,11 +856,26 @@ impl OutputBlock {
 
     fn value_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
         let theme = context.groups();
-        let lines = self
-            .layout(cell, context)
-            .into_iter()
-            .map(|line| Line::from(Span::styled(line, theme.value())))
-            .collect();
+        // A value whose TeX parses is drawn from its own structure, so a numeral, a
+        // name and an operator each take their own colour. Anything else is flat text
+        // and keeps the single value colour it always had.
+        let width = usize::from(self.text_width(context));
+        let fractions = context.fractions();
+        let lines = match cell
+            .value
+            .as_ref()
+            .map(|value| maths::spans(value, width, fractions))
+        {
+            Some(Ok(rows)) => rows
+                .into_iter()
+                .map(|row| Line::from(row.spans(theme)))
+                .collect(),
+            _ => self
+                .layout(cell, context)
+                .into_iter()
+                .map(|line| Line::from(Span::styled(line, theme.value())))
+                .collect(),
+        };
         match context.output_limit() {
             Some(limit) => Self::fold(lines, limit, context),
             None => lines,
@@ -1120,16 +1147,16 @@ mod tests {
     use crate::ui::syntax_tree::SyntaxTreeBlock;
     use m2_syn::{DelimiterKind, DoubleSpan, PrettyNode, Span as M2Span};
 
-    fn rendered_buffer(block: &dyn Block, width: u16, groups: &Groups) -> Buffer {
-        let context = RenderContext::new(width, 0, groups);
+    fn rendered_buffer(block: &dyn Block, width: u16) -> Buffer {
+        let context = RenderContext::new(width, 0);
         let area = Rect::new(0, 0, width, block.height(&context));
         let mut buffer = Buffer::empty(area);
         block.render_local(&context, &mut buffer);
         buffer
     }
 
-    fn rendered_rows(block: &dyn Block, width: u16, groups: &Groups) -> Vec<String> {
-        let buffer = rendered_buffer(block, width, groups);
+    fn rendered_rows(block: &dyn Block, width: u16) -> Vec<String> {
+        let buffer = rendered_buffer(block, width);
         let area = *buffer.area();
         (0..area.height)
             .map(|y| {
@@ -1144,14 +1171,14 @@ mod tests {
     fn incomplete_source_has_an_inset_on_a_lighter_surface() {
         let groups = Groups::default();
         let block = IncompleteBlock::new("f(\nx\n".into(), Vec::new());
-        let rows = rendered_rows(&block, 50, &groups);
+        let rows = rendered_rows(&block, 50);
 
         assert!(rows.iter().all(|row| !row.contains('│')));
         assert_eq!(rows[1].find("f("), Some(4));
         assert_eq!(rows[2].find('x'), Some(4));
         assert!(rows[0].chars().all(|character| character == '┈'));
         assert!(!rows[1..].iter().any(|row| row.contains('┈')));
-        let buffer = rendered_buffer(&block, 50, &groups);
+        let buffer = rendered_buffer(&block, 50);
         assert_eq!(Some(buffer[(0, 1)].bg), groups.pending().bg);
         assert_eq!(Some(buffer[(0, 0)].fg), groups.muted().fg);
     }
@@ -1187,7 +1214,7 @@ mod tests {
     #[test]
     fn syntax_tree_labels_structures_after_types_and_encloses_delimited_content() {
         let groups = Groups::default();
-        let context = RenderContext::new(60, 0, &groups);
+        let context = RenderContext::new(60, 0);
         let lines = syntax_tree_fixture().tree_lines(&context);
         let rows: Vec<String> = lines
             .iter()
@@ -1249,8 +1276,7 @@ mod tests {
             panic!("example did not parse");
         };
         let tree = cells.remove(0).tree;
-        let groups = Groups::default();
-        let context = RenderContext::new(100, 0, &groups);
+        let context = RenderContext::new(100, 0);
         let block = SyntaxTreeBlock::new(source.to_string(), Vec::new(), tree);
         let screen = block
             .tree_lines(&context)
@@ -1283,7 +1309,7 @@ mod tests {
     fn syntax_tree_uses_the_full_width_and_inverts_the_source_band() {
         let groups = Groups::default();
         let width = 60;
-        let buffer = rendered_buffer(&syntax_tree_fixture(), width, &groups);
+        let buffer = rendered_buffer(&syntax_tree_fixture(), width);
         let rows: Vec<_> = (0..buffer.area().height)
             .map(|y| {
                 (0..width)
@@ -1301,8 +1327,7 @@ mod tests {
 
     #[test]
     fn syntax_tree_shows_virtual_token_types_without_fake_source_text() {
-        let groups = Groups::default();
-        let context = RenderContext::new(40, 0, &groups);
+        let context = RenderContext::new(40, 0);
         let span = M2Span::for_text("xy");
         let mut tree = PrettyNode::syntax("Root", Some(span.clone()));
         tree.push_node("operator", PrettyNode::token("Adj", "Adj", span.at(1)));
@@ -1321,8 +1346,7 @@ mod tests {
 
     #[test]
     fn syntax_tree_compacts_long_nonterminal_source_to_the_row() {
-        let groups = Groups::default();
-        let context = RenderContext::new(40, 0, &groups);
+        let context = RenderContext::new(40, 0);
         let source = (0..20).map(|_| "long").collect::<Vec<_>>().join(" \n");
         let tree = PrettyNode::syntax("Root", Some(M2Span::for_text(source.clone())));
         let block = SyntaxTreeBlock::new(source, Vec::new(), tree);
@@ -1334,13 +1358,12 @@ mod tests {
 
     #[test]
     fn code_and_output_reserve_the_cell_marker_margin() {
-        let theme = Groups::default();
         let width = 40;
         let input = CodeBlock::new([Cell::input("x".to_string(), Vec::new())]);
         let output = OutputBlock::value("x".to_string(), None);
 
-        let input = rendered_rows(&input, width, &theme);
-        let output = rendered_rows(&output, width, &theme);
+        let input = rendered_rows(&input, width);
+        let output = rendered_rows(&output, width);
         assert_eq!(
             input[1].chars().position(|character| character == 'x'),
             Some(4)
@@ -1355,8 +1378,8 @@ mod tests {
         let groups = Groups::default();
         let input = CodeBlock::new([Cell::resolved("x".into(), 7, CellState::Value, Vec::new())]);
         let output = OutputBlock::value("x".into(), None).numbered(7);
-        let input = rendered_buffer(&input, 20, &groups);
-        let output = rendered_buffer(&output, 20, &groups);
+        let input = rendered_buffer(&input, 20);
+        let output = rendered_buffer(&output, 20);
 
         assert_eq!(input[(1, 1)].symbol(), "7");
         assert_eq!(output[(1, 1)].symbol(), "o");
@@ -1374,16 +1397,14 @@ mod tests {
         let null = rendered_buffer(
             &CodeBlock::new([Cell::resolved("x".into(), 7, CellState::Null, Vec::new())]),
             20,
-            &groups,
         );
         assert_eq!(null[(1, 1)].fg, groups.muted().fg.unwrap());
     }
 
     #[test]
     fn multi_digit_output_opens_one_cell_in_the_shared_border() {
-        let groups = Groups::default();
         let output = OutputBlock::value("a\nb".into(), None).numbered(12);
-        let output = rendered_buffer(&output, 20, &groups);
+        let output = rendered_buffer(&output, 20);
 
         assert_eq!(output[(2, 0)].symbol(), "╭");
         assert_eq!(output[(1, 1)].symbol(), "o");
@@ -1395,10 +1416,9 @@ mod tests {
 
     #[test]
     fn hard_wrapped_code_keeps_its_prefix() {
-        let theme = Groups::default();
         let input = CodeBlock::new([Cell::input("abcdefgh".to_string(), Vec::new())]);
 
-        let rows = rendered_rows(&input, 8, &theme);
+        let rows = rendered_rows(&input, 8);
         assert_eq!(
             rows[1].chars().position(|character| character == 'a'),
             Some(4)
@@ -1416,7 +1436,7 @@ mod tests {
         submission.succeed(0, 9, CellState::Value, Vec::new(), None);
         submission.succeed(1, 10, CellState::Value, Vec::new(), None);
 
-        let rows = rendered_rows(&submission, 20, &Groups::default());
+        let rows = rendered_rows(&submission, 20);
         assert_eq!(rows[0].chars().nth(3), Some('│'));
         assert_eq!(rows[1].chars().nth(1), Some('9'));
         assert_eq!(rows[2].chars().nth(1), Some('1'));
@@ -1434,7 +1454,7 @@ mod tests {
 
     #[test]
     fn printed_text_is_one_compact_inset_row() {
-        let rows = rendered_rows(&TextBlock::printed("text"), 20, &Groups::default());
+        let rows = rendered_rows(&TextBlock::printed("text"), 20);
 
         assert_eq!(rows.len(), 1);
         assert!(rows.iter().all(|row| !row.contains('│')));
@@ -1448,13 +1468,12 @@ mod tests {
     fn blocks_drop_only_terminal_whitespace() {
         let text = TextBlock::printed("  text  \n\n");
         let value = OutputBlock::value("  value  \n\n".into(), Some("  Type  \n".into()));
-        let groups = Groups::default();
 
         assert_eq!(text.text, "  text");
         assert_eq!(value.cells[0].text, "  value");
         assert_eq!(value.cells[0].ty.as_deref(), Some("  Type"));
-        assert_eq!(text.height(&RenderContext::new(40, 0, &groups)), 1);
-        assert_eq!(value.height(&RenderContext::new(40, 0, &groups)), 3);
+        assert_eq!(text.height(&RenderContext::new(40, 0)), 1);
+        assert_eq!(value.height(&RenderContext::new(40, 0)), 3);
     }
 
     #[test]
@@ -1508,7 +1527,7 @@ mod tests {
         assert_eq!(code.cells[0].spans[0].content, 0..1);
         assert_eq!(code.cells[1].text, "y");
         assert_eq!(code.cells[1].spans[0].content, 0..1);
-        let rows = rendered_rows(&code, 20, &Groups::default());
+        let rows = rendered_rows(&code, 20);
         assert_eq!(
             rows[1].chars().position(|character| character == 'x'),
             Some(4)
@@ -1583,13 +1602,13 @@ mod tests {
         }
 
         let groups = Groups::default();
-        let rows = rendered_rows(&submission, 40, &groups);
+        let rows = rendered_rows(&submission, 40);
         assert_eq!(submission.outputs.len(), 1);
         assert!(rows[3]
             .chars()
             .all(|character| character == ' ' || character == '│'));
         assert_eq!(
-            rendered_buffer(&submission, 40, &groups)[(10, 3)].bg,
+            rendered_buffer(&submission, 40)[(10, 3)].bg,
             groups.code().bg.unwrap()
         );
         assert!(rows[5].contains('1'), "{rows:?}");
@@ -1603,11 +1622,10 @@ mod tests {
 
     #[test]
     fn one_line_output_keeps_its_value_and_type_inside_the_border() {
-        let theme = Groups::default();
         let width = 40;
         let block = OutputBlock::value("x + y".to_string(), Some("R".to_string()));
 
-        let rows = rendered_rows(&block, width, &theme);
+        let rows = rendered_rows(&block, width);
         assert_eq!(rows.len(), 3);
         assert!(rows[1].contains("x + y") && rows[1].contains('R'));
         let cells: Vec<_> = rows[1].chars().collect();
@@ -1629,14 +1647,12 @@ mod tests {
 
     #[test]
     fn output_has_a_rounded_inset_border() {
-        let theme = Groups::default();
         let block = OutputBlock::value("abc".to_string(), None);
 
-        let rows = rendered_rows(&block, 20, &theme);
+        let rows = rendered_rows(&block, 20);
         let input = rendered_rows(
             &CodeBlock::new([Cell::input("x".to_string(), Vec::new())]),
             20,
-            &theme,
         );
         assert_eq!(rows.len(), 3);
         assert!(rows[0].contains('╭') && rows[0].contains('╮'));
@@ -1650,8 +1666,7 @@ mod tests {
 
     #[test]
     fn every_box_shares_one_fixed_boundary() {
-        let theme = Groups::default();
-        let context = RenderContext::new(20, 0, &theme);
+        let context = RenderContext::new(20, 0);
         let boxes: [Box<dyn Block>; 3] = [
             Box::new(OutputBlock::value("x".into(), None)),
             Box::new(WarningBlock { text: "x".into() }),
@@ -1659,7 +1674,7 @@ mod tests {
         ];
 
         for block in boxes {
-            let buffer = rendered_buffer(block.as_ref(), 20, &theme);
+            let buffer = rendered_buffer(block.as_ref(), 20);
             assert_eq!(buffer[(2, 0)].symbol(), "╭");
             assert_eq!(buffer[(2, block.height(&context) - 1)].symbol(), "╰");
         }
@@ -1680,7 +1695,7 @@ mod tests {
                 theme.error(),
             ),
         ] {
-            let buffer = rendered_buffer(block.as_ref(), 20, &theme);
+            let buffer = rendered_buffer(block.as_ref(), 20);
             let cell = &buffer[(5, 1)];
             assert_eq!(cell.fg, text.fg.unwrap());
             assert_eq!(cell.bg, ratatui::style::Color::Reset);
@@ -1689,10 +1704,9 @@ mod tests {
 
     #[test]
     fn multiline_output_keeps_the_type_beside_its_last_value_row() {
-        let theme = Groups::default();
         let block = OutputBlock::value("x\ny".to_string(), Some("R".to_string()));
 
-        let rows = rendered_rows(&block, 40, &theme);
+        let rows = rendered_rows(&block, 40);
         assert_eq!(rows.len(), 4);
         assert!(rows[1].contains('x'));
         assert!(rows[2].contains('y') && rows[2].contains('R'));
@@ -1700,8 +1714,7 @@ mod tests {
 
     #[test]
     fn long_output_keeps_its_beginning_and_end_until_opened() {
-        let theme = Groups::default();
-        let context = RenderContext::new(40, 0, &theme);
+        let context = RenderContext::new(40, 0);
         let block = OutputBlock::value(
             (0..40)
                 .map(|row| format!("row {row:02}"))
@@ -1734,10 +1747,9 @@ mod tests {
 
     #[test]
     fn multiline_type_keeps_its_net_shape_beside_the_value() {
-        let theme = Groups::default();
         let block = OutputBlock::value("2".to_string(), Some("ZZ[x]\n-----\nx - 1".to_string()));
 
-        let rows = rendered_rows(&block, 40, &theme);
+        let rows = rendered_rows(&block, 40);
         assert_eq!(rows.len(), 5);
         assert!(rows[1].contains('2') && rows[1].contains("ZZ[x]"));
         assert!(rows[2].contains("-----"));
@@ -1748,13 +1760,12 @@ mod tests {
 
     #[test]
     fn overflowing_type_moves_below_a_full_value_row() {
-        let theme = Groups::default();
         let width = 20;
-        let context = RenderContext::new(width, 0, &theme);
+        let context = RenderContext::new(width, 0);
         let width = OutputBlock::value(String::new(), None).text_width(&context);
         let block = OutputBlock::value("x".repeat(width.into()), Some("R".into()));
 
-        let rows = rendered_rows(&block, 20, &theme);
+        let rows = rendered_rows(&block, 20);
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[1].matches('x').count(), usize::from(width));
         assert!(!rows[1].contains('R'));
@@ -1763,10 +1774,9 @@ mod tests {
 
     #[test]
     fn a_result_shows_its_type() {
-        let theme = Groups::default();
         let block = OutputBlock::value("x".to_string(), Some("R".to_string()));
 
-        let rows = rendered_rows(&block, 40, &theme);
+        let rows = rendered_rows(&block, 40);
         assert!(rows[1].contains('x'));
         assert!(rows[1].contains('R'));
     }
@@ -1783,8 +1793,7 @@ mod tests {
 
     #[test]
     fn system_block_height_includes_each_message_line_and_margin() {
-        let theme = Groups::default();
-        let context = RenderContext::new(80, 0, &theme);
+        let context = RenderContext::new(80, 0);
         let block = TextBlock::system("commands:\n  /settings\n  /code");
         assert_eq!(block.height(&context), 5);
     }
@@ -1792,7 +1801,7 @@ mod tests {
     #[test]
     fn system_block_is_a_centered_info_box() {
         let theme = Groups::default();
-        let buffer = rendered_buffer(&TextBlock::system("message"), 60, &theme);
+        let buffer = rendered_buffer(&TextBlock::system("message"), 60);
 
         assert_eq!(buffer[(20, 0)].symbol(), "╭");
         assert_eq!(buffer[(40, 0)].symbol(), "╮");

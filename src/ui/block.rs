@@ -1,108 +1,38 @@
 //! Renderable UI elements and full-width feed blocks.
 
-use std::iter::FromIterator;
-use std::ops::{Add, AddAssign, Range};
+use std::ops::Range;
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Offset, Position, Rect};
+use ratatui::layout::{Offset, Rect};
 use ratatui::text::{Line, Span};
 
 use super::controller::settings::theme::groups::{Groups, HLGroup};
+use super::render::selection::Exclusions;
 use super::render::RenderContext;
 
-/// Rectangular regions omitted from copied UI selections.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Exclusions(Vec<Rect>);
-
-impl Exclusions {
-    pub(crate) fn push(&mut self, exclusion: Rect) {
-        self.0.push(exclusion);
-    }
-
-    pub(crate) fn clear(&mut self) {
-        self.0.clear();
-    }
-
-    pub(crate) fn contains(&self, position: Position) -> bool {
-        self.0.iter().any(|area| area.contains(position))
-    }
-
-    /// Clip to source rows and make the first retained row local zero.
-    pub(crate) fn project(&self, rows: Range<u16>) -> Self {
-        self.0
-            .iter()
-            .filter_map(|area| {
-                let top = area.y.max(rows.start);
-                let bottom = area.bottom().min(rows.end);
-                (top < bottom)
-                    .then(|| Rect::new(area.x, top - rows.start, area.width, bottom - top))
-            })
-            .collect()
-    }
+/// The available width changed, moving every wrap boundary.
+pub(crate) struct Resized {
+    pub(crate) width: u16,
 }
 
-impl Add<Offset> for Exclusions {
-    type Output = Self;
+/// Highlight groups now resolve through a different scheme.
+///
+/// Carries nothing: a scheme is ambient, read at paint time rather than handed down.
+pub(crate) struct Rethemed;
 
-    fn add(mut self, offset: Offset) -> Self {
-        self += offset;
-        self
-    }
-}
-
-impl Add<Offset> for &Exclusions {
-    type Output = Exclusions;
-
-    fn add(self, offset: Offset) -> Exclusions {
-        self.0.iter().map(|area| *area + offset).collect()
-    }
-}
-
-impl AddAssign<Offset> for Exclusions {
-    fn add_assign(&mut self, offset: Offset) {
-        self.0.iter_mut().for_each(|area| *area += offset);
-    }
-}
-
-impl Extend<Rect> for Exclusions {
-    fn extend<T: IntoIterator<Item = Rect>>(&mut self, iter: T) {
-        self.0.extend(iter);
-    }
-}
-
-impl FromIterator<Rect> for Exclusions {
-    fn from_iter<T: IntoIterator<Item = Rect>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
-    }
-}
-
-impl IntoIterator for Exclusions {
-    type Item = Rect;
-    type IntoIter = std::vec::IntoIter<Rect>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
-impl<const N: usize> From<[Rect; N]> for Exclusions {
-    fn from(areas: [Rect; N]) -> Self {
-        Self(Vec::from(areas))
-    }
-}
+/// Returned values are set differently -- fractions in another style -- so their
+/// heights move as well as their cells.
+pub(crate) struct Reformatted;
 
 /// A renderable UI component with an explicit rendering context.
 pub(crate) trait Element: Send {
-    type Context: ?Sized;
+    type Context;
 
     fn render(&self, context: &Self::Context, area: Rect, buf: &mut Buffer);
-
-    /// Add visual regions that copied selections must omit.
-    fn selection_exclusions(&self, _: &Self::Context, _: Rect, _: &mut Exclusions) {}
 }
 
 /// A self-contained element rendered locally across a measured number of feed rows.
-pub(crate) trait Block: Element<Context = RenderContext> {
+pub(crate) trait Block {
     /// Number of consecutive feed rows occupied at the context width.
     fn height(&self, context: &RenderContext) -> u16;
 
@@ -111,23 +41,13 @@ pub(crate) trait Block: Element<Context = RenderContext> {
 
     /// Add zero-based regions that copied selections must omit.
     fn local_selection_exclusions(&self, _: &RenderContext, _: &mut Exclusions) {}
-}
 
-impl<T: Block + ?Sized> Element for T {
-    type Context = RenderContext;
-
-    fn render(&self, context: &RenderContext, area: Rect, buf: &mut Buffer) {
-        let mut local = Buffer::empty(Rect::new(0, 0, area.width, area.height));
-        for y in 0..area.height {
-            for x in 0..area.width {
-                local[(x, y)] = buf[(area.x + x, area.y + y)].clone();
-            }
-        }
-        self.render_local(&context.with_width(area.width), &mut local);
-        local.resize(area);
-        buf.merge(&local);
-    }
-
+    /// Restate this block's local exclusions in the coordinates of a placed `area`.
+    ///
+    /// The one shift applied to selection geometry, mirroring the one [`paste`] applies
+    /// to cells, so both leave a child's local frame at the same boundary.
+    ///
+    /// [`paste`]: super::element::paste
     fn selection_exclusions(
         &self,
         context: &RenderContext,
@@ -141,7 +61,7 @@ impl<T: Block + ?Sized> Element for T {
 }
 
 /// Semantic content whose style is resolved from a highlight group at render time.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HLSpan<T = Range<usize>> {
     pub(crate) content: T,
     pub(crate) kind: HLGroup,
@@ -202,8 +122,8 @@ mod tests {
     }
 
     #[test]
-    fn element_translates_block_coordinates_once_at_its_boundary() {
-        let context = RenderContext::new(8, 0, &Groups::default());
+    fn selection_geometry_is_translated_once_at_the_block_boundary() {
+        let context = RenderContext::new(8, 0);
         let area = Rect::new(3, 2, 2, 1);
         let mut buffer = Buffer::empty(Rect::new(0, 0, 8, 4));
         buffer.set_style(
@@ -212,22 +132,8 @@ mod tests {
         );
         let mut exclusions = Exclusions::default();
 
-        Element::render(&Local, &context, area, &mut buffer);
-        Element::selection_exclusions(&Local, &context, area, &mut exclusions);
+        Block::selection_exclusions(&Local, &context, area, &mut exclusions);
 
-        assert_eq!(buffer[(4, 2)].symbol(), "x");
-        assert_eq!(buffer[(3, 2)].bg, ratatui::style::Color::Blue);
-        assert_eq!(buffer[(4, 2)].bg, ratatui::style::Color::Blue);
         assert_eq!(exclusions, [Rect::new(4, 2, 1, 1)].into());
-    }
-
-    #[test]
-    fn exclusions_project_shift_and_test_points() {
-        let exclusions =
-            Exclusions::from([Rect::new(2, 3, 2, 3)]).project(4..6) + Offset::new(5, 7);
-
-        assert!(exclusions.contains(Position::new(8, 8)));
-        assert!(!exclusions.contains(Position::new(6, 8)));
-        assert_eq!(exclusions, [Rect::new(7, 7, 2, 2)].into());
     }
 }

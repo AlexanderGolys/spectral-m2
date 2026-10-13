@@ -1102,8 +1102,7 @@ mod tests {
     fn multiline_prompt_glyph_is_on_last_line() {
         let mut input = InputCode::new_in_memory();
         input.field_mut().insert_str("first\nsecond\nthird");
-        let theme = Groups::default();
-        let context = RenderContext::new(40, UI.prompt_width(), &theme);
+        let context = RenderContext::new(40, UI.prompt_width());
         let mut highlighter = SyntaxHighlighter::new();
 
         let lines = input.highlighted_lines(&context, &mut highlighter, false, None);
@@ -1116,8 +1115,7 @@ mod tests {
     #[test]
     fn empty_input_leaves_one_cell_between_the_prompt_and_hint() {
         let mut input = InputCode::new_in_memory();
-        let theme = Groups::default();
-        let context = RenderContext::new(40, UI.prompt_width(), &theme);
+        let context = RenderContext::new(40, UI.prompt_width());
         let mut highlighter = SyntaxHighlighter::new();
 
         let rendered: String = input.highlighted_lines(&context, &mut highlighter, false, None)[0]
@@ -1144,8 +1142,7 @@ mod tests {
         }
 
         let mut input = InputCode::new_in_memory();
-        let theme = Groups::default();
-        let context = RenderContext::new(40, UI.prompt_width(), &theme);
+        let context = RenderContext::new(40, UI.prompt_width());
         let mut highlighter = CountingHighlighter(0);
 
         input.highlighted_lines(&context, &mut highlighter, false, None);
@@ -1174,7 +1171,7 @@ mod tests {
         input.field_mut().insert_str("abc");
         input.set_diagnostic("bad b".to_string(), Some(1..2));
         let theme = Groups::default();
-        let context = RenderContext::new(40, UI.prompt_width(), &theme);
+        let context = RenderContext::new(40, UI.prompt_width());
         let lines = input.highlighted_lines(&context, &mut EmptyHighlighter, false, None);
         let text = &lines[0].spans[1..];
 

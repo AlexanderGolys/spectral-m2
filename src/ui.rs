@@ -6,8 +6,16 @@ pub(crate) mod cell;
 pub(crate) mod config;
 pub(crate) mod controller;
 mod debug;
+// Groundwork for the event-driven element hierarchy, not yet wired into the running
+// UI. Drop these allows as each module gains its first caller.
+#[allow(dead_code)]
+pub(crate) mod element;
 mod feed;
+#[allow(dead_code)]
+pub(crate) mod geometry;
 pub(crate) mod key;
+#[allow(dead_code)]
+pub(crate) mod present;
 pub(crate) mod render;
 mod statusline;
 mod syntax_tree;

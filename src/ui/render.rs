@@ -4,14 +4,21 @@
 //! and rendering consume the same visual-line ranges produced by the shared layout
 //! policies.
 
-use crate::ui::block::{Element, Exclusions, HLSpan, Text};
+use crate::ui::block::{Element, HLSpan, Text};
 use crate::ui::config::UI;
-use crate::ui::controller::settings::theme::groups::Groups;
+use crate::ui::controller::settings::theme::groups::{scheme, Groups};
+use crate::ui::render::maths::FractionStyle;
+use crate::ui::render::selection::Exclusions;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, BorderType, Padding, Paragraph, Widget};
+
+pub(crate) mod maths;
+pub(crate) mod selection;
+#[allow(dead_code)] // groundwork: not yet wired into the running UI
+mod spin;
 
 /// Horizontal placement of a bordered feed element.
 #[derive(Clone, Copy)]
@@ -24,18 +31,23 @@ enum BorderPlacement {
 pub(crate) struct RenderContext {
     width: u16,
     prefix: u16,
-    groups: Groups,
     output_limit: Option<usize>,
+    fractions: FractionStyle,
 }
 
 impl RenderContext {
-    pub(crate) fn new(width: u16, prefix: u16, groups: &Groups) -> Self {
+    pub(crate) fn new(width: u16, prefix: u16) -> Self {
         Self {
             width,
             prefix,
-            groups: *groups,
             output_limit: Some(UI.max_output_rows),
+            fractions: FractionStyle::default(),
         }
+    }
+
+    /// Set returned maths with fractions in `fractions`.
+    pub(crate) fn with_fractions(self, fractions: FractionStyle) -> Self {
+        Self { fractions, ..self }
     }
 
     pub(crate) fn width(&self) -> u16 {
@@ -47,9 +59,13 @@ impl RenderContext {
         Self {
             width,
             prefix: self.prefix,
-            groups: self.groups,
             output_limit: self.output_limit,
+            fractions: self.fractions,
         }
+    }
+
+    pub(crate) fn fractions(&self) -> FractionStyle {
+        self.fractions
     }
 
     /// Render returned values without the shell's row limit.
@@ -68,8 +84,9 @@ impl RenderContext {
         self.prefix
     }
 
-    pub(crate) fn groups(&self) -> &Groups {
-        &self.groups
+    /// The scheme in effect, read rather than retained.
+    pub(crate) fn groups(&self) -> &'static Groups {
+        scheme()
     }
 }
 

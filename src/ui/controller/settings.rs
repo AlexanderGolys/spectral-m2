@@ -6,10 +6,13 @@
 pub(crate) mod keymap;
 pub(crate) mod theme;
 
+use crate::ui::render::maths::FractionStyle;
+
 /// Presentation choices shared by the editor and its renderers.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Settings {
     pub(crate) statusline: StatusLinePosition,
+    pub(crate) fractions: FractionStyle,
 }
 
 /// Placement of the editor status line.
