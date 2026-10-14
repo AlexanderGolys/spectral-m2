@@ -953,9 +953,11 @@ mod tests {
 
         feed.render(&context, area, &mut target, Style::default());
 
+        // The bottom row is the block's inner margin, still on the printed band.
         assert_eq!(target[(0, 2)].symbol(), " ");
         assert_eq!(target[(0, 2)].bg, groups.printed().bg.unwrap());
-        assert_eq!(target[(5, 2)].symbol(), "x");
+        assert_eq!(target[(5, 2)].bg, groups.printed().bg.unwrap());
+        assert_eq!(target[(5, 1)].symbol(), "x");
     }
 
     #[test]

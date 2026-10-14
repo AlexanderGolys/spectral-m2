@@ -8,7 +8,7 @@ use ratatui::widgets::{Paragraph, Widget};
 
 use super::block::{Element, Text, TextSpan};
 use super::config::UI;
-use super::controller::settings::theme::groups::{Groups, HLGroup};
+use super::controller::settings::theme::groups::{scheme, Groups, HLGroup};
 
 /// A request to replace or clear the status line.
 pub(crate) enum StatusLineEvent {
@@ -30,23 +30,13 @@ pub(crate) struct StatusLine {
     message: Option<StatusMessage>,
 }
 
-/// Content supplied while the status line is rendered.
-pub(crate) struct StatusLineContext {
-    pub(crate) groups: Groups,
-    pub(crate) idle_left: Option<TextSpan>,
-    pub(crate) center: Option<Vec<TextSpan>>,
-    pub(crate) right: Vec<TextSpan>,
-}
-
-impl StatusLineContext {
-    pub(crate) fn new(groups: Groups) -> Self {
-        Self {
-            groups,
-            idle_left: None,
-            center: None,
-            right: Vec::new(),
-        }
-    }
+/// Content supplied while the status line is rendered, painted in the published
+/// scheme.
+#[derive(Default)]
+pub struct StatusLineContext {
+    pub idle_left: Option<TextSpan>,
+    pub center: Option<Vec<TextSpan>>,
+    pub right: Vec<TextSpan>,
 }
 
 impl StatusLine {
@@ -108,9 +98,10 @@ impl Element for StatusLine {
         if area.width == 0 {
             return;
         }
-        let left = Self::line(&left, &context.groups, HLGroup::Statusline1);
-        let center = center.map(|spans| Self::line(&spans, &context.groups, HLGroup::Statusline2));
-        let right = Self::line(&right, &context.groups, HLGroup::Statusline3);
+        let groups = scheme();
+        let left = Self::line(&left, groups, HLGroup::Statusline1);
+        let center = center.map(|spans| Self::line(&spans, groups, HLGroup::Statusline2));
+        let right = Self::line(&right, groups, HLGroup::Statusline3);
         let width = usize::from(area.width);
         let center_range = center.as_ref().map(|line| {
             let start = width.saturating_sub(line.width()) / 2;
@@ -150,10 +141,10 @@ mod tests {
 
     #[test]
     fn rendered_text_never_keeps_an_underline() {
-        let groups = Groups::default();
+        let groups = *scheme();
         let context = StatusLineContext {
             center: Some(vec![TextSpan::new("status", HLGroup::Documentation)]),
-            ..StatusLineContext::new(groups)
+            ..StatusLineContext::default()
         };
         let area = Rect::new(0, 0, 20, 1);
         let mut buffer = Buffer::empty(area);

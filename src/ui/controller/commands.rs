@@ -39,7 +39,7 @@ type CommandCallback = fn(&mut Editor, OpenTarget) -> Reaction;
 
 /// One command-picker entry and the callback run when it is selected.
 #[derive(Clone, Copy)]
-pub(crate) struct Command {
+pub struct Command {
     label: &'static str,
     shortcut: Action,
     /// Opens a view, beside the session unless asked to open it in place.
@@ -143,7 +143,7 @@ const COMMANDS: [Command; 9] = [
     Command::new("quit", Action::Quit, false, quit),
     Command::new("debug", Action::ToggleHighlightDebug, false, debug),
 ];
-const CLOSE: Command = Command::new("close split view", Action::ClosePane, false, close);
+const CLOSE: Command = Command::new("close view", Action::ClosePane, false, close);
 
 pub(crate) fn shortcut(action: Action) -> Option<Command> {
     COMMANDS

@@ -31,6 +31,7 @@ needsPackage "JSON"
     -- must leave exactly once per cell all the same.
     renderedValue := null;
     typeInfo := null;
+    typeParts := null;
     hypertextType := value Core#"private dictionary"#"Hypertext";
 
     -- Whether the statement in flight ran to completion: the hooks below are the
@@ -55,10 +56,10 @@ needsPackage "JSON"
     cellEnd#{mode, BeforePrint} = identity;
     cellEnd#{mode, NoPrint} = identity;
     cellEnd#{mode, AfterNoPrint} = identity;
-    renderAfterPrint := value -> "" | concatenate apply(
-        select(deepSplice sequence value, item -> item =!= null),
-        item -> toString net item
-    );
+    -- An annotation is a sequence of pieces -- a type, a ring, a map's shape --
+    -- each of which may be drawn over several rows: `QQ^2` raises its exponent.
+    -- Its text joins the pieces' nets along their baselines, as M2 prints it.
+    annotationPieces := value -> select(deepSplice sequence value, item -> item =!= null);
 
     Thing#{mode, BeforePrint} = value -> (
         lookupMethod := lookup({Standard, BeforePrint}, class value) ?? identity;
@@ -94,14 +95,23 @@ needsPackage "JSON"
     hasAttribute := value Core#"private dictionary"#"hasAttribute";
     reverseDictionary := value Core#"private dictionary"#"ReverseDictionary";
 
+    -- A value that is one word with a role in code -- null, a Boolean, a
+    -- string, a function -- is sent with that role, so the shell colours it as
+    -- code colours the same word.
+    asToken := (text, role) -> hashTable {
+        symbol token => hashTable {symbol text => text, symbol role => role}
+    };
+    render Nothing := HashTable => value -> asToken("null", "null");
+    render Boolean := HashTable => value -> asToken(toString value, "boolean");
+    render String := HashTable => value -> asToken(value, "string");
     -- A function's TeX is its Net in a typewriter font, and nothing more. A
     -- named one is drawn by its name; an anonymous one's Net only says where it
     -- was written (`FunctionClosure[stdio:2:36-2:42]`), so it is drawn by its
     -- class instead.
-    render Function := HashTable => value -> (
-        if hasAttribute(value, reverseDictionary) then
-            asNet value
-        else hashTable {symbol net => toString class value}
+    render Function := HashTable => value -> asToken(
+        if hasAttribute(value, reverseDictionary) then toString value
+        else toString class value,
+        "function"
     );
     -- Every documentation node at once: DIV, TABLE, UL and the rest all descend
     -- from Hypertext.
@@ -168,6 +178,7 @@ needsPackage "JSON"
         "number" => lineNumber,
         "value" => renderedValue,
         "typeInfo" => typeInfo,
+        "typeParts" => typeParts,
         "hasValue" => OutputDictionary#?("o" | toString lineNumber),
         "depth" => interpreterDepth,
         "error" => not completed
@@ -175,12 +186,16 @@ needsPackage "JSON"
     forgetResult := () -> (
         renderedValue = null;
         typeInfo = null;
+        typeParts = null;
         completed = false;
         openingMutable = false;
     );
     recordTypeInfo := value -> (
-        annotation := (lookup(AfterPrint, class value)) value;
-        typeInfo = renderAfterPrint(annotation ?? class value );
+        annotation := annotationPieces((lookup(AfterPrint, class value)) value ?? class value);
+        typeInfo = toString horizontalJoin apply(annotation, net);
+        -- Each piece as the shell renders a value, so the annotation is set from
+        -- its structure rather than as the text of its nets.
+        typeParts = apply(annotation, render);
         completed = true;
     );
 

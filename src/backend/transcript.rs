@@ -14,6 +14,7 @@ pub struct CapturedOutput {
 
 /// The rendered value and optional M2 type annotation of an output cell.
 pub struct CapturedValue {
+    #[cfg(test)]
     pub text: String,
     pub type_info: Option<String>,
 }
@@ -24,9 +25,11 @@ pub struct CapturedError {
     pub diagnostic: String,
 }
 
-/// Warning lines carried beside otherwise successful output.
-static WARNING: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r": warning:").expect("valid pattern"));
+/// Warning lines carried beside otherwise successful output: only ones M2 stamped
+/// with its location, so printed text that merely mentions a warning stays printed.
+static WARNING: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!("^{LOCATION}warning: ")).expect("valid pattern")
+});
 
 /// Debugger trace markers emitted after the useful error diagnostic.
 static BACKTRACE: LazyLock<Regex> =
@@ -37,7 +40,8 @@ static BACKTRACE: LazyLock<Regex> =
 /// truncated by M2 itself, so it is matched loosely; the digits and brackets
 /// after it are what identify the prefix.
 static LOCATION_PREFIX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[^\s:]*:\d+:\d+:\(\d+\):\[\d+\]: ").expect("valid pattern"));
+    LazyLock::new(|| Regex::new(&format!("^{LOCATION}")).expect("valid pattern"));
+const LOCATION: &str = r"[^\s:]*:\d+:\d+:\(\d+\):\[\d+\]: ";
 
 /// The `warning: ` / `error: ` keyword introducing a diagnostic's message.
 static DIAGNOSTIC_KEYWORD: LazyLock<Regex> =
@@ -85,8 +89,9 @@ pub fn captured_output(
     let mut warnings = Vec::new();
     CapturedOutput {
         printed: take_warnings(printed, &mut warnings),
-        value: value.map(|text| CapturedValue {
-            text: text.to_string(),
+        value: value.map(|_text| CapturedValue {
+            #[cfg(test)]
+            text: _text.to_string(),
             type_info: type_info.map(str::to_string),
         }),
         warnings,
@@ -296,6 +301,14 @@ mod tests {
             output.diagnostic,
             "currentString:1:1:(0):[4]: error: division by zero"
         );
+    }
+
+    #[test]
+    fn printed_text_mentioning_a_warning_stays_printed() {
+        let output = captured_output("x: warning: not really\n", "", None, None);
+
+        assert_eq!(output.printed, "x: warning: not really\n");
+        assert!(output.warnings.is_empty());
     }
 
     #[test]

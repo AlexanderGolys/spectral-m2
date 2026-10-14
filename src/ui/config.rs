@@ -16,6 +16,14 @@ pub(crate) struct UiConfig {
     pub(crate) picker_right_margin: usize,
     pub(crate) statusline_margin: u16,
     pub(crate) max_output_rows: usize,
+    /// The fewest rows a folded value may keep: a head row, the fold row, and a tail.
+    pub min_output_rows: usize,
+    /// The glyph drawn down the column between a split's panes.
+    pub split_divider: &'static str,
+    /// Columns kept between a syntax tree's deepest row and its source ranges.
+    pub tree_location_gap: usize,
+    /// Blank rows inside the band of printed output, above and below its text.
+    pub printed_margin: u16,
 }
 
 /// Presentation configuration used by every UI element.
@@ -34,6 +42,10 @@ pub(crate) const UI: UiConfig = UiConfig {
     picker_right_margin: 2,
     statusline_margin: 2,
     max_output_rows: 40,
+    min_output_rows: 3,
+    split_divider: "\u{2502}",
+    tree_location_gap: 2,
+    printed_margin: 1,
 };
 
 impl UiConfig {

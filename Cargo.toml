@@ -23,7 +23,7 @@ name = "spectral-m2"
 path = "src/main.rs"
 
 [dependencies]
-crossterm = { version = "0.29.0", features = ["osc52"] }
+crossterm = { version = "0.29.0", features = ["osc52", "serde"] }
 html2text = "0.17.1"
 m2-syn = { version = "0.3.0", default-features = false, features = ["pretty", "walk"] }
 regex = "1.11"

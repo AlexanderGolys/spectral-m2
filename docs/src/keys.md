@@ -17,7 +17,8 @@
 | `Alt+K` | Toggle keymaps. |
 | `Alt+L` | Clear the feed. |
 | `Alt+C`, `Alt+O`, `Alt+T` | Show code, output, or syntax tree beside the session. |
-| `Alt+R`, `Alt+W` | Restart Macaulay2 or close the split view. |
+| `Alt+R` | Restart Macaulay2. |
+| `Ctrl+Q` | Close the view, from whichever pane has focus. |
 | `Ctrl+D` | Toggle highlight debug. |
 | `Ctrl+C` | Quit from the shell. |
 
@@ -29,7 +30,7 @@
 | `Ctrl+Shift+Left`, `Ctrl+Shift+Right` | Resize a visible split. |
 | `Up`, `Down`, `PageUp`, `PageDown` | Scroll a preview. |
 | `Left`, `Right` | Cycle output projections in output preview. |
-| `Ctrl+Q`, `Ctrl+C` | Leave a preview instead of quitting Spectral. |
+| `Ctrl+C` | Leave a preview instead of quitting Spectral. |
 
 ## Pickers
 

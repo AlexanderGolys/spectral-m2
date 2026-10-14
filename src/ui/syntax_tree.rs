@@ -8,6 +8,7 @@ use ratatui::widgets::{Paragraph, Widget};
 
 use super::block::{Block, HLSpan};
 use super::cell::{Cell, CodeBlock};
+use super::config::UI;
 use super::render::RenderContext;
 use crate::ui::controller::settings::theme::groups::HLGroup;
 
@@ -111,8 +112,12 @@ impl SyntaxTreeBlock {
         }
     }
 
-    /// Resolve the tree into styled display rows.
+    /// Resolve the tree into styled display rows, each row's source range set in one
+    /// column after the widest row so the ranges read down the page.
     pub(crate) fn tree_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
+        /// A row's structure, and the source range it covers.
+        type Row = (Line<'static>, Option<String>);
+
         fn line(
             node: &PrettyNode,
             label: Option<&str>,
@@ -120,7 +125,7 @@ impl SyntaxTreeBlock {
             branch: &str,
             delimiter: bool,
             context: &RenderContext,
-        ) -> Line<'static> {
+        ) -> Row {
             let groups = context.groups();
             let name = groups.style(HLGroup::Type);
             let mut spans = vec![Span::styled(format!("{prefix}{branch}"), groups.muted())];
@@ -138,9 +143,9 @@ impl SyntaxTreeBlock {
                 ));
             } else if let Some(token) = token {
                 spans.extend([
-                    Span::styled("Token![", groups.preview_mode()),
+                    Span::styled("Token![", groups.info()),
                     Span::styled(token.to_string(), groups.tree_code()),
-                    Span::styled("]", groups.preview_mode()),
+                    Span::styled("]", groups.info()),
                 ]);
             } else {
                 spans.push(Span::styled(node.name().to_string(), name));
@@ -167,10 +172,11 @@ impl SyntaxTreeBlock {
                     ));
                 }
             }
-            let location = node.span().map(|span| format!("  {span}"));
+            let location = node.span().map(|span| span.to_string());
             if !delimiter && node.role() != PrettyNodeRole::Token {
                 let occupied = Line::from(spans.clone()).width()
                     + location.as_ref().map_or(0, |text| text.chars().count())
+                    + UI.tree_location_gap
                     + 1;
                 let width = usize::from(context.width())
                     .saturating_sub(occupied)
@@ -184,10 +190,7 @@ impl SyntaxTreeBlock {
                     spans.push(Span::styled(format!(" {text}"), groups.tree_code()));
                 }
             }
-            if let Some(location) = location {
-                spans.push(Span::styled(location, groups.muted()));
-            }
-            Line::from(spans)
+            (Line::from(spans), location)
         }
 
         fn walk_entry(
@@ -195,7 +198,7 @@ impl SyntaxTreeBlock {
             prefix: String,
             last: bool,
             context: &RenderContext,
-            lines: &mut Vec<Line<'static>>,
+            lines: &mut Vec<Row>,
         ) {
             let branch = if last { "╰─" } else { "├─" };
             if let Some((opening, closing)) = (entry.node.name() == "Delimited")
@@ -269,6 +272,28 @@ impl SyntaxTreeBlock {
                 &mut lines,
             );
         }
+        let column = lines
+            .iter()
+            .map(|(structure, _)| structure.width())
+            .max()
+            .unwrap_or(0)
+            + UI.tree_location_gap;
+        let muted = context.groups().muted();
+        let mut lines: Vec<Line<'static>> = lines
+            .into_iter()
+            .map(|(mut structure, location)| {
+                if let Some(location) = location {
+                    let room = usize::from(context.width()).saturating_sub(location.chars().count());
+                    let start = column.min(room).max(structure.width() + UI.tree_location_gap);
+                    structure.spans.push(Span::styled(
+                        " ".repeat(start - structure.width()),
+                        muted,
+                    ));
+                    structure.spans.push(Span::styled(location, muted));
+                }
+                structure
+            })
+            .collect();
         lines.push(Line::default());
         lines
     }
@@ -298,7 +323,7 @@ impl Block for SyntaxTreeBlock {
             .style(groups.code())
             .render(Rect::new(area.x, area.y, area.width, 1), buf);
         let source_height = u16::try_from(source.len()).unwrap_or(u16::MAX);
-        Paragraph::new(source).style(groups.transcript()).render(
+        Paragraph::new(source).style(groups.code()).render(
             Rect::new(area.x, area.y.saturating_add(1), area.width, source_height),
             buf,
         );

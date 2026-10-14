@@ -26,21 +26,14 @@ impl Keymap {
             remappable: action.is_remappable(),
         }
     }
-
-    fn fixed(action: Action) -> Self {
-        Self {
-            action,
-            remappable: false,
-        }
-    }
 }
 
 /// The editor's exact normalized-key bindings.
 #[derive(Clone)]
 pub(crate) struct Keymaps {
     bindings: HashMap<KeyEvent, Keymap>,
-    preview: HashMap<KeyEvent, Keymap>,
     reserved: HashSet<KeyEvent>,
+    rebinds: Vec<(Action, KeyEvent)>,
 }
 
 impl Keymaps {
@@ -54,18 +47,30 @@ impl Keymaps {
             .map(|binding| binding.action)
     }
 
-    /// Resolve a fixed key owned by preview panes.
-    pub(crate) fn preview_action(&self, key: KeyEvent) -> Option<Action> {
-        self.preview
-            .get(&key.binding())
-            .map(|binding| binding.action)
-    }
-
-    /// The key that triggers `action`, for hints and help.
-    pub(crate) fn key_for(&self, action: Action) -> Option<String> {
+    /// The key that triggers `action`.
+    pub fn key(&self, action: Action) -> Option<KeyEvent> {
         self.bindings
             .iter()
-            .find_map(|(key, binding)| (binding.action == action).then(|| key.to_string()))
+            .find_map(|(key, binding)| (binding.action == action).then_some(*key))
+    }
+
+    /// The key that triggers `action`, labelled for hints and help.
+    pub(crate) fn key_for(&self, action: Action) -> Option<String> {
+        self.key(action).map(|key| key.to_string())
+    }
+
+    /// The default keymaps with `rebinds` made over them, in order.
+    pub fn replaying(rebinds: &[(Action, KeyEvent)]) -> Self {
+        let mut keymaps = Self::default();
+        for &(action, key) in rebinds {
+            keymaps.rebind(action, key);
+        }
+        keymaps
+    }
+
+    /// Every rebind that took effect, in the order made.
+    pub fn rebinds(&self) -> &[(Action, KeyEvent)] {
+        &self.rebinds
     }
 
     pub(crate) fn rebind(&mut self, action: Action, key: KeyEvent) -> bool {
@@ -101,6 +106,7 @@ impl Keymaps {
             self.bindings.insert(target, conflict);
         }
         self.bindings.insert(key, binding);
+        self.rebinds.push((action, key));
         true
     }
 }
@@ -134,14 +140,13 @@ impl Default for Keymaps {
                 keymap!(OpenOutput <- Char('o') + Alt),
                 keymap!(OpenSyntaxTree <- Char('t') + Alt),
                 keymap!(Restart <- Char('r') + Alt),
-                keymap!(ClosePane <- Char('w') + Alt),
+                keymap!(ClosePane <- Char('q') + Ctrl),
                 keymap!(ToggleHighlightDebug <- Char('d') + Ctrl),
                 keymap!(CopySelection <- Char('y') + Ctrl),
                 keymap!(Submit <- Enter),
                 keymap!(ScrollFeedUp <- PageUp),
                 keymap!(ScrollFeedDown <- PageDown),
             ]),
-            preview: HashMap::from([(key!(Char('q')), Keymap::fixed(Action::Quit))]),
             reserved: HashSet::from([
                 key!(Char('v') + Alt),
                 key!(Char('l') + Ctrl),
@@ -162,6 +167,7 @@ impl Default for Keymaps {
                 key!(Delete),
                 key!(Tab),
             ]),
+            rebinds: Vec::new(),
         }
     }
 }
@@ -174,14 +180,13 @@ mod tests {
         keymaps.action(key, false)
     }
 
+    /// The key that submits, held with Shift, inserts a newline instead.
     #[test]
     fn editing_keys_are_not_command_bindings() {
         let keymaps = Keymaps::default();
-        let plain = key!(Enter);
-        let shifted = key!(Enter + Shift);
+        let submit = keymaps.key(Action::Submit).expect("submitting is bound");
 
-        assert!(action(&keymaps, plain) == Some(Action::Submit));
-        assert!(action(&keymaps, shifted).is_none());
+        assert!(action(&keymaps, submit + Shift).is_none());
     }
 
     #[test]
@@ -193,27 +198,40 @@ mod tests {
         }
     }
 
+    /// Every default shortcut on a character holds a modifier, so typing that
+    /// character stays text.
     #[test]
-    fn preview_exit_is_fixed_to_plain_q() {
+    fn shortcuts_leave_their_plain_characters_to_typing() {
         let keymaps = Keymaps::default();
 
-        assert!(keymaps.preview_action(key!(Char('q'))) == Some(Action::Quit));
-        assert!(keymaps.preview_action(key!(Char('q') + Ctrl)).is_none());
+        for &command in Action::REMAPPABLE {
+            let Some(bound) = keymaps.key(command) else {
+                continue;
+            };
+            if let Char(character) = bound.code {
+                assert!(
+                    action(&keymaps, key!(Char(character))).is_none(),
+                    "{bound} leaves no plain {character:?}"
+                );
+            }
+        }
     }
 
     // The terminal reports a shifted letter as the letter itself, so a binding on
     // a character must not demand the shift state match.
     #[test]
     fn character_bindings_ignore_shift() {
-        let keymaps = Keymaps::default();
-        let shifted = key!(Char('c') + Ctrl + Shift);
+        let mut keymaps = Keymaps::default();
+        let bound = key!(Char('c') + Ctrl);
+        assert!(keymaps.rebind(Action::ClearFeed, bound));
 
-        assert!(action(&keymaps, shifted) == Some(Action::Quit));
+        assert!(action(&keymaps, bound + Shift) == Some(Action::ClearFeed));
     }
 
     #[test]
     fn control_slash_accepts_legacy_terminal_encoding() {
-        let keymaps = Keymaps::default();
+        let mut keymaps = Keymaps::default();
+        assert!(keymaps.rebind(Action::OpenCommands, key!(Char('/') + Ctrl)));
         let legacy = key!(Char('7') + Ctrl);
 
         assert!(action(&keymaps, legacy) == Some(Action::OpenCommands));
@@ -221,36 +239,35 @@ mod tests {
 
     #[test]
     fn keys_are_labelled_for_display() {
-        let keymaps = Keymaps::default();
         let ctrl = if cfg!(target_os = "macos") {
             "⌘"
         } else {
             "ctrl"
         };
-        assert_eq!(
-            keymaps.key_for(Action::OpenSettings),
-            Some(format!("{ctrl}+o"))
-        );
-        assert_eq!(
-            keymaps.key_for(Action::OpenCommands),
-            Some(format!("{ctrl}+/"))
-        );
-        assert_eq!(
-            keymaps.key_for(Action::ResizePaneLeft),
-            Some(format!("{ctrl}+⇧+←"))
-        );
+        assert_eq!(key!(Char('o') + Ctrl).to_string(), format!("{ctrl}+o"));
+        assert_eq!(key!(Char('/') + Ctrl).to_string(), format!("{ctrl}+/"));
+        assert_eq!(key!(Left + Ctrl + Shift).to_string(), format!("{ctrl}+⇧+←"));
+
+        let keymaps = Keymaps::default();
+        for &command in Action::REMAPPABLE {
+            assert_eq!(
+                keymaps.key_for(command),
+                keymaps.key(command).map(|key| key.to_string())
+            );
+        }
     }
 
     #[test]
     fn remapping_swaps_remappable_conflicts_and_preserves_fixed_keys() {
         let mut keymaps = Keymaps::default();
-        let copy = key!(Char('y') + Ctrl);
-        let submit = key!(Enter);
-
         let clear = Action::ClearFeed;
+        let copy = keymaps.key(Action::CopySelection).expect("copying is bound");
+        let cleared_by = keymaps.key(clear).expect("clearing is bound");
+        let submit = keymaps.key(Action::Submit).expect("submitting is bound");
+
         assert!(keymaps.rebind(clear, copy));
         assert!(action(&keymaps, copy) == Some(clear));
-        assert!(action(&keymaps, key!(Char('l') + Alt)) == Some(Action::CopySelection));
+        assert!(action(&keymaps, cleared_by) == Some(Action::CopySelection));
         assert!(!keymaps.rebind(clear, submit));
         assert!(action(&keymaps, submit) == Some(Action::Submit));
     }

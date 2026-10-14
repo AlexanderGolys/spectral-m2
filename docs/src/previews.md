@@ -35,6 +35,7 @@ The presentation keeps semantic structure compact:
 - delimiter rows enclose and indent their contents;
 - `Token![…]` displays its source character only inside the brackets;
 - virtual tokens are named without pretending that their marker text occurred in the source;
-- absent optionals and empty or purely mechanical collection wrappers are hidden.
+- absent optionals and empty or purely mechanical collection wrappers are hidden;
+- source ranges line up in one column after the widest row.
 
-The syntax-tree canvas is centered as a whole, and its status line marks `Syntax Tree Preview Mode` in the middle.
+Code and syntax-tree views sit on one code background throughout, and the output view on the background of printed text, so no seams separate their blocks. Each view names itself at the left of its status line.

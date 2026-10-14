@@ -2,12 +2,8 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::fs;
-use std::path::Path;
 use std::sync::LazyLock;
 
-#[cfg(not(test))]
-use std::{env, path::PathBuf};
 
 use ratatui::style::{Color, Style};
 use serde::{Deserialize, Serialize};
@@ -17,6 +13,7 @@ mod palette;
 
 use self::groups::{Base, Groups, Overrides, StyleSpec};
 use self::palette::Palette;
+use super::Persisted;
 
 /// One palette leaf exposed by the flat appearance picker.
 pub struct Variant {
@@ -247,7 +244,8 @@ impl VariantIndex {
 }
 
 /// A selected scheme variant and its terminal-background treatment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "StoredAppearance", into = "StoredAppearance")]
 pub struct Appearance {
     scheme: SchemeIndex,
     variant: VariantIndex,
@@ -283,65 +281,44 @@ impl Default for Appearance {
     }
 }
 
-impl Appearance {
-    /// Load the last selected appearance, falling back to Everforest medium.
-    #[cfg(not(test))]
-    pub fn load() -> Self {
-        appearance_file_path()
-            .as_deref()
-            .and_then(Self::read)
-            .unwrap_or_default()
-    }
+impl Persisted for Appearance {
+    const FILE: &'static str = "appearance.json";
+}
 
-    /// Keep tests independent of a developer's saved appearance.
-    #[cfg(test)]
-    pub fn load() -> Self {
-        Self::default()
-    }
-
-    /// Persist this appearance for the next process.
-    #[cfg(not(test))]
-    pub fn save(self) {
-        if let Some(path) = appearance_file_path() {
-            let _ = self.write(&path);
+impl From<Appearance> for StoredAppearance {
+    fn from(appearance: Appearance) -> Self {
+        Self {
+            scheme: appearance.scheme().label().into(),
+            variant: appearance.variant().label().into(),
+            mode: appearance.mode(),
+            transparent_background: appearance.transparent_background,
         }
     }
+}
 
-    /// Keep tests from modifying the developer's saved appearance.
-    #[cfg(test)]
-    pub fn save(self) {}
+impl TryFrom<StoredAppearance> for Appearance {
+    type Error = String;
 
-    fn read(path: &Path) -> Option<Self> {
-        let stored: StoredAppearance =
-            serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
+    /// The appearance a stored one names, unless its scheme or variant is gone.
+    fn try_from(stored: StoredAppearance) -> Result<Self, Self::Error> {
         let scheme = SCHEMES
             .iter()
-            .position(|scheme| scheme.label() == stored.scheme)?;
-        let variant = SCHEMES[scheme].variants().iter().position(|variant| {
-            variant.label() == stored.variant && variant.mode() == stored.mode
-        })?;
-        Some(Self {
+            .position(|scheme| scheme.label() == stored.scheme)
+            .ok_or_else(|| format!("no scheme {}", stored.scheme))?;
+        let variant = SCHEMES[scheme]
+            .variants()
+            .iter()
+            .position(|variant| variant.label() == stored.variant && variant.mode() == stored.mode)
+            .ok_or_else(|| format!("no variant {} of {}", stored.variant, stored.scheme))?;
+        Ok(Self {
             scheme: SchemeIndex(scheme),
             variant: VariantIndex(variant),
             transparent_background: stored.transparent_background,
         })
     }
+}
 
-    fn write(self, path: &Path) -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(
-            path,
-            serde_json::to_vec(&StoredAppearance {
-                scheme: self.scheme().label().into(),
-                variant: self.variant().label().into(),
-                mode: self.variant().mode(),
-                transparent_background: self.transparent_background,
-            })?,
-        )
-    }
-
+impl Appearance {
     pub fn scheme(self) -> &'static Scheme {
         &SCHEMES[self.scheme.get()]
     }
@@ -421,8 +398,15 @@ impl Appearance {
         }
     }
 
+    /// The scheme to paint with. A transparent background takes the canvas colour
+    /// out of the scheme itself, so whatever is set in the canvas group -- the
+    /// padding inside a laid-out value included -- shows the terminal through.
     pub fn groups(self) -> Groups {
-        self.variant().groups()
+        let mut groups = self.variant().groups();
+        if self.transparent_background {
+            groups.Canvas.bg = None;
+        }
+        groups
     }
 
     pub fn canvas(self, opaque: Style) -> Style {
@@ -434,19 +418,13 @@ impl Appearance {
     }
 }
 
-#[cfg(not(test))]
-fn appearance_file_path() -> Option<PathBuf> {
-    let config = env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(config.join("spectral-m2").join("appearance.json"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::groups::HLGroup;
     use super::*;
+    use crate::ui::controller::settings::{read, write};
     use std::env;
+    use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -583,7 +561,7 @@ mod tests {
         )
         .unwrap();
 
-        let appearance = Appearance::read(&path).expect("legacy appearance");
+        let appearance: Appearance = read(&path).expect("legacy appearance");
         let _ = fs::remove_file(&path);
         assert_eq!(appearance.scheme().label(), "gruvbox");
         assert_eq!(appearance.variant().label(), "soft");
@@ -601,9 +579,9 @@ mod tests {
             std::process::id()
         ));
         let appearance = Appearance::default().cycle_theme(1).cycle_background();
-        appearance.write(&path).unwrap();
+        write(&path, &appearance).unwrap();
 
-        assert_eq!(Appearance::read(&path), Some(appearance));
+        assert_eq!(read(&path), Some(appearance));
         let _ = fs::remove_file(path);
     }
 
@@ -613,7 +591,13 @@ mod tests {
         let transparent = opaque.cycle_background();
         let groups = opaque.groups();
 
-        assert_eq!(transparent.groups().transcript(), groups.transcript());
+        assert_eq!(transparent.groups().transcript().bg, None);
+        assert_eq!(transparent.groups().transcript().fg, groups.transcript().fg);
+        assert_eq!(
+            transparent.groups().style(HLGroup::Canvas).bg,
+            None,
+            "padding set in the canvas group shows the terminal through"
+        );
         assert_eq!(transparent.groups().code(), groups.code());
         assert_eq!(transparent.groups().picker(), groups.picker());
         assert_eq!(transparent.canvas(groups.transcript()).bg, None);

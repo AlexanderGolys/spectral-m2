@@ -1,11 +1,12 @@
 //! Operations emitted by keymaps and other UI event sources.
 
+use serde::{Deserialize, Serialize};
 use these_macros_should_be_illegal::enum_fn;
 
 /// A small by-value operation routed through the focused UI hierarchy.
 #[enum_fn(description: &'static str)]
 #[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
     FocusPaneLeft = "focus the left pane",
     FocusPaneRight = "focus the right pane",
@@ -23,7 +24,7 @@ pub enum Action {
     OpenOutput = "open output",
     OpenSyntaxTree = "open syntax tree",
     Restart = "restart Macaulay2",
-    ClosePane = "close the split view",
+    ClosePane = "close the view",
     ToggleHighlightDebug = "toggle highlight groups",
     CopySelection = "copy the selection",
 }

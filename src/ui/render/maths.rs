@@ -13,6 +13,7 @@
 
 use std::ops::Range;
 
+use serde::{Deserialize, Serialize};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use these_macros_should_be_illegal::discriminated_str;
@@ -85,7 +86,8 @@ pub struct Unsupported(pub String);
 
 /// How a fraction is set, as chosen in settings.
 #[discriminated_str(label)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FractionStyle {
     /// Numerator, rule, denominator: three rows, as M2 sets one itself.
     #[default]
@@ -152,6 +154,23 @@ pub fn spans(
             Err(Unsupported("plain text carries nothing to colour".into()))
         }
     }
+}
+
+/// A value's type annotation as rows no wider than `width`, its pieces set side by
+/// side from their own structure and painted in the type's colour throughout.
+pub fn annotation(parts: &[M2Value], width: usize, fractions: FractionStyle) -> Vec<SpanLine> {
+    let line = MathBlock::row(parts.iter().map(|part| MathBlock::value(part, fractions)));
+    MathBlock::fitted(vec![line], width)
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|span| TextSpan {
+                    kind: HLGroup::Type,
+                    ..span
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// A cursor over TeX source.
@@ -331,12 +350,13 @@ impl<'a> Input<'a> {
             // rather than a character, since a bare backslash starts one.
             "backslash" => Ok(Math::atom("\\", HLGroup::Operator)),
             "setminus" => Ok(Math::atom("\u{2216}", HLGroup::Operator)),
+            brace @ ("{" | "}") => Ok(Math::atom(brace, HLGroup::Delimiter)),
             "left" => self.fences(),
             // A font wrapper renames the role of what it wraps but adds no shape.
             font if FONTS.contains(&font) => {
                 let body = self.atom()?;
                 Ok(match font {
-                    "mathbb" => Math::retag(body, HLGroup::Type),
+                    "mathbb" => Math::retag(body.doubled(), HLGroup::Type),
                     _ => body,
                 })
             }
@@ -432,6 +452,8 @@ impl<'a> Input<'a> {
 
     fn fence(&mut self) -> Result<char, Unsupported> {
         self.skip_trivia();
+        // A brace is escaped in TeX, since a bare one groups.
+        self.eat("\\");
         match self.rest().chars().next() {
             Some(fence) if DELIMITERS.contains(fence) => {
                 self.at += fence.len_utf8();
@@ -455,8 +477,8 @@ const DELIMITERS: &str = "()[]{}|.";
 /// Font commands M2 wraps names in. All are transparent to layout: they change how a
 /// name is *set*, never what it is. `mathit` marks multi-character names, which is how
 /// M2 keeps `x2` from reading as a power; the parser gets that from structure instead.
-const FONTS: [&str; 8] = [
-    "mathbb", "mathbf", "mathcal", "mathrm", "mathfrak", "mathsf", "mathtt", "mathit",
+const FONTS: [&str; 9] = [
+    "mathbb", "mathbf", "mathcal", "mathrm", "mathfrak", "mathsf", "mathtt", "mathit", "texttt",
 ];
 
 impl Math {
@@ -474,6 +496,18 @@ impl Math {
         Self::Atom {
             text: text.into(),
             kind,
+        }
+    }
+
+    /// A blackboard letter as M2 spells the ring it names: `\mathbb Q` is `QQ`, the
+    /// name typed in code, rather than a lone `Q` that reads as a variable.
+    fn doubled(self) -> Self {
+        match self {
+            Self::Atom { text, kind } if text.chars().count() == 1 => Self::Atom {
+                text: text.repeat(2),
+                kind,
+            },
+            other => other,
         }
     }
 
@@ -589,6 +623,17 @@ impl Math {
     fn chunks(pieces: &[Self], fractions: FractionStyle) -> Vec<MathBlock> {
         let mut chunks = vec![Vec::new()];
         for (index, piece) in pieces.iter().enumerate() {
+            // M2 pads an arrow with thin spaces of its own; the gap a binary operator
+            // is set apart by already provides them.
+            let beside_binary = index
+                .checked_sub(1)
+                .and_then(|before| pieces.get(before))
+                .into_iter()
+                .chain(pieces.get(index + 1))
+                .any(Self::is_binary);
+            if *piece == Self::Space && beside_binary {
+                continue;
+            }
             // A binary operator is set apart from its operands; a leading sign and a
             // product dot are not, so `-x` and `x\u{22C5}y` stay tight.
             let apart = index > 0 && piece.is_binary();
@@ -1013,11 +1058,11 @@ impl MathBlock {
     }
 
     /// One expression over another in two rows: the rule is an underline across the
-    /// numerator's bottom row rather than a row of its own. The denominator's top row
-    /// is the baseline, as the rule's row is in a stacked fraction.
+    /// numerator's bottom row rather than a row of its own. That row carries the rule,
+    /// so it is the baseline, as the rule's row is in a stacked fraction.
     fn underlined(numerator: Self, denominator: Self) -> Self {
         let width = numerator.width().max(denominator.width()).max(1);
-        let baseline = numerator.height();
+        let baseline = numerator.height() - 1;
         let mut numerator = numerator.pad(width, Align::Centre);
         if let Some(bottom) = numerator.rows.last_mut() {
             *bottom = bottom
@@ -1038,30 +1083,37 @@ impl MathBlock {
 
     /// A fence drawn to `height` rows around `baseline`.
     ///
-    /// A bracket grows from its top, middle and bottom pieces. These families measure
-    /// one column under every terminal convention, unlike the box-drawing set, so a
-    /// grown matrix keeps its shape wherever it is read. Any other fence -- M2's `<|`
-    /// -- stays one row high on the baseline, and TeX's `.` marks the absence of one.
+    /// A bracket grows from its top, extension and bottom pieces, a brace adding the
+    /// tip that points at the baseline. Two rows leave no room for a tip, so a brace
+    /// that short is drawn from its two halves instead; without either it would be a
+    /// parenthesis. These families measure one column under every terminal convention,
+    /// unlike the box-drawing set, so a grown matrix keeps its shape wherever it is
+    /// read. Any other fence -- M2's `<|` -- stays one row high on the baseline, and
+    /// TeX's `.` marks the absence of one.
     fn fence(fence: &str, height: usize, baseline: usize) -> Self {
-        let [top, middle, bottom] = match fence {
-            "." => return Self::empty(),
-            _ if height == 1 => return Self::atom(fence, HLGroup::Delimiter),
-            "(" => ["\u{239B}", "\u{239C}", "\u{239D}"],
-            ")" => ["\u{239E}", "\u{239F}", "\u{23A0}"],
-            "[" => ["\u{23A1}", "\u{23A2}", "\u{23A3}"],
-            "]" => ["\u{23A4}", "\u{23A5}", "\u{23A6}"],
-            "{" => ["\u{23A7}", "\u{23AA}", "\u{23A9}"],
-            "}" => ["\u{23AB}", "\u{23AA}", "\u{23AD}"],
-            "|" => ["\u{23AA}", "\u{23AA}", "\u{23AA}"],
+        let [top, extension, bottom, tip] = match (fence, height) {
+            (".", _) => return Self::empty(),
+            (_, 1) => return Self::atom(fence, HLGroup::Delimiter),
+            ("{", 2) => ["\u{23B0}", "", "\u{23B1}", ""],
+            ("}", 2) => ["\u{23B1}", "", "\u{23B0}", ""],
+            ("(", _) => ["\u{239B}", "\u{239C}", "\u{239D}", "\u{239C}"],
+            (")", _) => ["\u{239E}", "\u{239F}", "\u{23A0}", "\u{239F}"],
+            ("[", _) => ["\u{23A1}", "\u{23A2}", "\u{23A3}", "\u{23A2}"],
+            ("]", _) => ["\u{23A4}", "\u{23A5}", "\u{23A6}", "\u{23A5}"],
+            ("{", _) => ["\u{23A7}", "\u{23AA}", "\u{23A9}", "\u{23A8}"],
+            ("}", _) => ["\u{23AB}", "\u{23AA}", "\u{23AD}", "\u{23AC}"],
+            ("|", _) => ["\u{23AA}"; 4],
             _ => return Self::atom(fence, HLGroup::Delimiter),
         };
+        let pointed = baseline.clamp(1, height.saturating_sub(2).max(1));
         Self {
             rows: (0..height)
                 .map(|row| {
                     let glyph = match row {
                         0 => top,
                         _ if row + 1 == height => bottom,
-                        _ => middle,
+                        _ if row == pointed => tip,
+                        _ => extension,
                     };
                     vec![TextSpan::new(glyph, HLGroup::Delimiter)]
                 })
@@ -1093,7 +1145,7 @@ impl MathBlock {
             .map(|row| {
                 row.into_iter()
                     .enumerate()
-                    .map(|(column, entry)| entry.pad(widths[column], Align::Left))
+                    .map(|(column, entry)| entry.pad(widths[column], Align::Centre))
                     .reduce(|left, right| left.beside(column_gap()).beside(right))
                     .unwrap_or_else(Self::empty)
             })
@@ -1251,7 +1303,7 @@ mod tests {
     fn blackboard_bold_is_a_type_rather_than_a_variable() {
         let parsed = Math::parse(r"\mathbb{Z}").expect("a ring parses");
 
-        assert_eq!(parsed, atom("Z", HLGroup::Type));
+        assert_eq!(parsed, atom("ZZ", HLGroup::Type));
     }
 
     /// The three shapes `backend.rs` currently rewrites with regexes before rendering.
@@ -1466,8 +1518,8 @@ mod tests {
         assert_eq!(
             text(&spans(&table, 80, FractionStyle::Stacked).expect("renders")),
             [
-                "\u{23A7} 1 \u{21D2} 2    \u{23AB}",
-                "\u{23A9} 3 \u{21D2} text \u{23AD}"
+                "\u{23B0} 1 \u{21D2} 2    \u{23B1}",
+                "\u{23B1} 3 \u{21D2} text \u{23B0}"
             ]
         );
     }
@@ -1603,7 +1655,7 @@ mod tests {
         );
         assert_eq!(
             fraction_picture(fraction, FractionStyle::Underlined),
-            ["    1", "x + 3"]
+            ["x + 1", "    3"]
         );
         assert_eq!(
             fraction_picture(fraction, FractionStyle::Inline),
@@ -1780,14 +1832,27 @@ mod tests {
     fn cases_take_one_brace_on_the_left() {
         let rows = picture(r"\begin{cases}1\\2\end{cases}");
 
-        assert_eq!(rows, ["\u{23A7}1", "\u{23A9}2"]);
+        assert_eq!(rows, ["\u{23B0}1", "\u{23B1}2"]);
+    }
+
+    /// A brace is told from a parenthesis by its tip, or at two rows by its halves.
+    #[test]
+    fn a_brace_never_draws_as_a_parenthesis() {
+        assert_eq!(
+            picture(r"\begin{cases}1\\2\\3\end{cases}"),
+            ["\u{23A7}1", "\u{23A8}2", "\u{23A9}3"]
+        );
+        assert_ne!(
+            picture(r"\left\{\begin{matrix}1\\2\end{matrix}\right\}"),
+            picture(r"\left(\begin{matrix}1\\2\end{matrix}\right)")
+        );
     }
 
     #[test]
     fn columns_are_padded_to_their_widest_entry() {
         assert_eq!(
             picture(r"\begin{matrix}1&x\\x^{2}+1&y\end{matrix}"),
-            ["1       x", "x\u{00B2} + 1  y"]
+            ["  1     x", "x\u{00B2} + 1  y"]
         );
     }
 

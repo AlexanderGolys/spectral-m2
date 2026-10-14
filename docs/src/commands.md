@@ -15,7 +15,7 @@ Commands are handled by Spectral rather than sent to Macaulay2.
 | `/new` | `Alt+R` | Restart the M2 process and reset its state. |
 | `/debug` | `Ctrl+D` | Toggle the highlight inspector; opening it posts a live value/muted/null probe. |
 | `/quit` | `Ctrl+C` | Leave Spectral. |
-| `/close split view` | `Alt+W` | Close the view beside the session; shown only while split. |
+| `/close view` | `Ctrl+Q` | Close the view beside the session; shown only while split. |
 
 Views open beside the session. `Alt+V` is not a command keymap: on a selected `code`, `output`, or `ast` row, it opens that view in place of the focused pane instead. The command's own keymap remains visible beside it.
 

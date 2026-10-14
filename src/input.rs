@@ -15,6 +15,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
+use serde::{Deserialize, Serialize};
 use these_macros_should_be_illegal::discriminated_str;
 
 use self::hints::Hint;
@@ -55,7 +56,8 @@ pub enum InputAction {
 }
 
 /// User-adjustable layout policy owned by the input component.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct InputSettings {
     /// Maximum editor-height percentage occupied by the input.
     pub max_height_percent: u8,
@@ -366,7 +368,7 @@ impl InputTextField {
     }
 
     pub fn history_next(&mut self) {
-        if let Some(buffer) = self.history.next() {
+        if let Some(buffer) = self.history.next(&self.text) {
             self.load(buffer);
         }
     }

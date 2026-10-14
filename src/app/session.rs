@@ -575,7 +575,11 @@ fn response_blocks(
     }
     let value = match (response.value.clone(), output.value, response.has_value) {
         (Some(value), Some(rendered), true) => {
-            Some(OutputBlock::rendered(value, rendered.type_info).numbered(number))
+            Some(
+                OutputBlock::rendered(value, rendered.type_info)
+                    .annotated(response.type_parts.clone())
+                    .numbered(number),
+            )
         }
         _ => None,
     };
@@ -613,6 +617,7 @@ mod tests {
                 transcript: "x\n\n".into(),
                 value: value.map(M2Value::Net),
                 type_info,
+                type_parts: Vec::new(),
                 has_value,
                 depth: 1,
             };

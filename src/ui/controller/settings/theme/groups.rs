@@ -4,7 +4,7 @@ use std::sync::{LazyLock, RwLock};
 
 use ratatui::style::{Modifier, Style};
 use serde::Deserialize;
-use these_macros_should_be_illegal::{enum_fn, strutuct};
+use these_macros_should_be_illegal::enum_fn;
 
 use super::palette::Palette;
 

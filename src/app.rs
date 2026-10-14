@@ -53,7 +53,7 @@ impl Pane {
     fn new(view: ViewKind) -> Self {
         Self {
             view,
-            viewport: Viewport::for_view(view),
+            viewport: Viewport::at_bottom(),
         }
     }
 
@@ -94,6 +94,8 @@ impl Pane {
 struct Panes {
     list: Vec<Pane>,
     active: usize,
+    /// Whether the last layout had a split too narrow to show side by side.
+    collapsed: bool,
 }
 
 impl Panes {
@@ -104,6 +106,7 @@ impl Panes {
         Self {
             list: vec![Pane::new(ViewKind::Shell)],
             active: 0,
+            collapsed: false,
         }
     }
 
@@ -152,9 +155,30 @@ impl Panes {
         }
     }
 
+    /// Close the view on screen, whichever pane has focus: the one beside the
+    /// session, or else the one shown in place of it.
+    fn close_view(&mut self) {
+        if self.split() {
+            self.close_split();
+        } else if self.focused().view != ViewKind::Shell {
+            self.leave_preview();
+        }
+    }
+
     fn close_split(&mut self) {
         self.list.truncate(Self::SPLIT);
         self.active = 0;
+    }
+
+    /// Fit the panes to `width` columns. A split too narrow to show side by side
+    /// shows the view full width instead, from the moment it opens or the window
+    /// narrows; `Ctrl+Left` still brings the shell back.
+    fn fit(&mut self, width: u16) {
+        let collapsed = self.split() && width < MIN_SPLIT_WIDTH;
+        if collapsed && !self.collapsed {
+            self.focus(Self::SPLIT);
+        }
+        self.collapsed = collapsed;
     }
 
     fn focus(&mut self, pane: usize) {
@@ -244,6 +268,10 @@ impl App {
                 self.resize_split(1);
                 return true;
             }
+            Action::ClosePane => {
+                self.panes.close_view();
+                return true;
+            }
             Action::Quit if self.panes.focused().view != ViewKind::Shell => {
                 self.panes.leave_preview();
                 return true;
@@ -309,7 +337,9 @@ impl App {
                 let update = workspace
                     .session
                     .submit(workspace.editor.submission(), &mut workspace.highlighter);
-                workspace.editor.apply(update)
+                let running = workspace.editor.apply(update);
+                self.follow_new_input();
+                running
             }
             Reaction::ResumeIncomplete => {
                 if workspace.editor.take_incomplete().is_some() {
@@ -319,7 +349,9 @@ impl App {
             }
             Reaction::Post(source) => {
                 let update = workspace.session.submit(source, &mut workspace.highlighter);
-                workspace.editor.post(update)
+                let running = workspace.editor.post(update);
+                self.follow_new_input();
+                running
             }
             Reaction::Restart => workspace.editor.apply(workspace.session.restart()),
             Reaction::Copy(text) => {
@@ -331,7 +363,7 @@ impl App {
                 true
             }
             Reaction::ClosePane => {
-                self.panes.close_split();
+                self.panes.close_view();
                 true
             }
             Reaction::Quit => false,
@@ -368,6 +400,7 @@ impl App {
     }
 
     fn layout(&mut self, area: Rect) {
+        self.panes.fit(area.width);
         (self.pane_areas, self.divider) = pane_layout(
             area,
             self.panes.list.len(),
@@ -377,16 +410,20 @@ impl App {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
-        self.layout(frame.area());
-        if let Some(divider) = self.divider {
-            for y in divider.y..divider.bottom() {
-                frame.buffer_mut()[(divider.x, y)].set_symbol("│");
-            }
-        }
         let active = self.panes.active;
         let split = self.panes.split();
         let workspace = &mut self.workspace;
         workspace.editor.set_processing(workspace.session.busy());
+        let mut area = frame.area();
+        let shared_status = (split && workspace.editor.statusline_shown()).then(|| {
+            area.height = area.height.saturating_sub(1);
+            Rect::new(area.x, area.bottom(), area.width, 1)
+        });
+        self.layout(area);
+        let workspace = &mut self.workspace;
+        if let Some(divider) = self.divider {
+            workspace.editor.draw_divider(frame, divider);
+        }
         for pane in (0..self.panes.list.len())
             .filter(|pane| *pane != active)
             .chain(std::iter::once(active))
@@ -419,6 +456,23 @@ impl App {
                 ),
             }
         }
+        if let Some(status) = shared_status {
+            let beside = &self.panes.list[Panes::SPLIT];
+            workspace.editor.draw_shared_status(
+                frame,
+                status,
+                beside.view,
+                &beside.viewport,
+                active == Panes::SPLIT,
+            );
+        }
+    }
+
+    /// Bring every view to its newest content, as the shell follows its own feed.
+    fn follow_new_input(&mut self) {
+        for pane in &mut self.panes.list {
+            pane.viewport.follow_bottom();
+        }
     }
 
     fn poll(&mut self) -> (bool, bool) {
@@ -427,6 +481,9 @@ impl App {
         for update in self.workspace.session.poll() {
             dirty = true;
             running &= self.workspace.editor.apply(update);
+        }
+        if dirty {
+            self.follow_new_input();
         }
         (running, dirty)
     }
@@ -541,6 +598,26 @@ mod tests {
         assert_eq!(panes.active, 0);
     }
 
+    /// Closing acts on the view on screen, whichever pane has focus.
+    #[test]
+    fn closing_the_view_works_from_either_pane() {
+        let mut panes = Panes::new();
+        panes.open_view(ViewKind::Output, OpenTarget::Split);
+        panes.close_view();
+        assert_eq!(views(&panes), [ViewKind::Shell]);
+
+        panes.open_view(ViewKind::Output, OpenTarget::Split);
+        panes.focus(Panes::SPLIT);
+        panes.close_view();
+        assert_eq!(views(&panes), [ViewKind::Shell]);
+
+        panes.open_view(ViewKind::Code, OpenTarget::InPlace);
+        panes.close_view();
+        assert_eq!(views(&panes), [ViewKind::Shell]);
+        panes.close_view();
+        assert_eq!(views(&panes), [ViewKind::Shell]);
+    }
+
     #[test]
     fn leaving_any_view_never_loses_the_shell() {
         let mut panes = Panes::new();
@@ -563,6 +640,23 @@ mod tests {
         panes.open_view(ViewKind::Code, OpenTarget::InPlace);
 
         assert_eq!(views(&panes), [ViewKind::Shell]);
+    }
+
+    #[test]
+    fn a_split_too_narrow_to_show_side_by_side_shows_the_view() {
+        let mut panes = Panes::new();
+        panes.open_view(ViewKind::SyntaxTree, OpenTarget::Split);
+        let narrow = Rect::new(0, 0, MIN_SPLIT_WIDTH - 1, 10);
+        let layout = |panes: &mut Panes| {
+            panes.fit(narrow.width);
+            pane_layout(narrow, panes.list.len(), panes.active, 500).0
+        };
+
+        let areas = layout(&mut panes);
+        assert_eq!(panes.active, Panes::SPLIT);
+        assert_eq!(areas[Panes::SPLIT], narrow);
+        panes.focus(0);
+        assert_eq!(layout(&mut panes)[0], narrow, "the shell stays reachable");
     }
 
     #[test]

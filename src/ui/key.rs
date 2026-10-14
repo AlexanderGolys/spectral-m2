@@ -7,6 +7,7 @@ use crossterm::event::{
     KeyCode, KeyEvent as CrosstermKeyEvent, KeyEventKind, KeyModifiers as CrosstermModifiers,
     ModifierKeyCode,
 };
+use serde::{Deserialize, Serialize};
 use these_macros_should_be_illegal::literally_literal_string;
 
 /// One of the three logical modifiers supported by the UI.
@@ -19,7 +20,7 @@ pub enum KeyMod {
 }
 
 /// A compact key event using the UI's three logical modifiers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct KeyEvent {
     pub code: KeyCode,
     modifiers: u8,

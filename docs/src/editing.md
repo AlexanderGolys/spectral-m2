@@ -33,7 +33,7 @@ degree I
 
 ## History and navigation
 
-`Up` and `Down` move inside multiline input. At the first or last line they recall older or newer submissions. Commands chosen after typing `/` are recorded in the same history; opening the full command picker with `Ctrl+/` does not add a history entry.
+`Up` and `Down` move inside multiline input. At the first or last line they recall older or newer submissions. As in a shell's history search, the text before the cursor when you start browsing is a prefix: typing `R =` and pressing `Up` steps only through submissions beginning with `R =`, each distinct one once. Editing a recalled entry starts a new search from what the input then begins with. Stepping past the newest match restores what you had typed. Commands chosen after typing `/` are recorded in the same history; opening the full command picker with `Ctrl+/` does not add a history entry.
 
 The usual editing keys are available for horizontal movement, line boundaries, deletion, and tabs. `Ctrl+L` clears the current input without clearing the feed.
 

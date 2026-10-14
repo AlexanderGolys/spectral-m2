@@ -67,6 +67,7 @@ struct Frame {
     error: bool,
     value: Option<M2Value>,
     type_info: Option<String>,
+    type_parts: Option<Vec<M2Value>>,
     #[serde(default)]
     has_value: bool,
     #[serde(default)]
@@ -279,6 +280,8 @@ pub struct M2Response {
     /// result is `None` here -- deliberately never rendered -- yet still bound.
     pub value: Option<M2Value>,
     pub type_info: Option<String>,
+    /// The pieces of the type annotation, each rendered as a value is.
+    pub type_parts: Vec<M2Value>,
     /// Whether M2 bound an `oN` for this input. Not implied by `value`: a
     /// suppressed result binds one without producing rendered text.
     pub has_value: bool,
@@ -478,6 +481,7 @@ impl M2Backend {
                         transcript,
                         value: frame.value,
                         type_info: frame.type_info,
+                        type_parts: frame.type_parts.unwrap_or_default(),
                         has_value: frame.has_value,
                         depth: frame.depth,
                     });
@@ -564,6 +568,7 @@ impl Drop for M2Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_width::UnicodeWidthStr;
 
     #[test]
     fn tex_values_render_as_plain_unicode_blocks() {
@@ -846,14 +851,25 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         let Some(M2Value::Markup { .. }) = response.value.as_ref() else {
             panic!("help did not return structured markup");
         };
-        let rendered = response.value.as_ref().unwrap().render_at(60);
+        let width = 60;
+        let rendered = response.value.as_ref().unwrap().render_at(width);
 
+        // The page's own wording is M2's, so only its structure is checked: a
+        // heading naming the topic, entries set as a list, no markup left raw, and
+        // every line within the width it was rendered for.
+        let lines: Vec<&str> = rendered.lines().collect();
         assert!(
-            rendered.contains("# List -- the class of all lists"),
+            lines.iter().any(|line| line.starts_with("# List")),
             "{rendered}"
         );
-        assert!(rendered.contains("* VerticalList"), "{rendered}");
-        assert!(!rendered.contains("<div>"));
+        assert!(lines.iter().any(|line| line.starts_with("* ")), "{rendered}");
+        assert!(!rendered.contains("<div"), "{rendered}");
+        assert!(
+            lines
+                .iter()
+                .all(|line| UnicodeWidthStr::width(*line) <= width),
+            "{rendered}"
+        );
     }
 
     // One reader means M2's own `lineNumber` is the session's input number, so
@@ -1078,6 +1094,31 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             "expected multiline type, got {:?}",
             result.type_info
         );
+    }
+
+    /// A matrix's annotation raises its ranks over the rings: as text the nets join
+    /// along their baselines, and as pieces it sets as `Matrix QQ² ⟵ QQ²`.
+    #[test]
+    fn matrix_types_keep_their_shape() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        let result = backend
+            .evaluate("matrix{{1,2},{3,4/5}}", Some(1))
+            .expect("evaluate matrix");
+
+        assert_eq!(
+            result.type_info.as_deref(),
+            Some("         2       2\nMatrix QQ  <-- QQ")
+        );
+        let rows = crate::ui::render::maths::annotation(
+            &result.type_parts,
+            80,
+            crate::ui::render::maths::FractionStyle::Stacked,
+        );
+        let text: Vec<String> = rows
+            .iter()
+            .map(|row| row.iter().map(|span| span.content.as_str()).collect())
+            .collect();
+        assert_eq!(text, ["Matrix QQ\u{00B2} \u{27F5} QQ\u{00B2}"]);
     }
 
     #[test]

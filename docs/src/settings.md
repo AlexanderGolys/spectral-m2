@@ -2,6 +2,8 @@
 
 Open settings with `Ctrl+O` or `/settings`. Use `Up` and `Down` to choose a row and `Left` or `Right` to adjust it. Each row describes itself in a column after its value.
 
+Changes are kept between sessions. The appearance is saved to `appearance.json` and the other settings, along with keymap changes, to `settings.json`, both in `$XDG_CONFIG_HOME/spectral-m2`, falling back to `~/.config/spectral-m2`.
+
 | Setting | Choices |
 | --- | --- |
 | Theme | Every scheme offering the current mode, keeping the contrast name when the scheme has it and otherwise its position. |
@@ -17,7 +19,7 @@ Open settings with `Ctrl+O` or `/settings`. Use `Up` and `Down` to choose a row 
 
 ## Appearance
 
-Transparent background affects only otherwise empty feed or preview canvas cells. Code bands, output boxes, selections, pickers, and other explicitly styled UI keep their backgrounds.
+Transparent background lets the terminal show through the canvas: otherwise empty feed or preview cells, and the space inside laid-out values. Code bands, output boxes, selections, pickers, and other explicitly styled UI keep their backgrounds.
 
 The installed families are Catppuccin, Tokyo Night, Gruvbox, Gruvbox Material, Everforest, Rosé Pine, and Kanagawa. Each variant uses its own source palette names internally rather than being flattened into one universal color namespace.
 

@@ -24,7 +24,9 @@ mod spin;
 #[derive(Clone, Copy)]
 enum BorderPlacement {
     Gutter,
-    MiddleThird,
+    /// Centred over the middle third, widened into the margins as far as `content`
+    /// columns of text need.
+    MiddleThird { content: u16 },
 }
 
 /// Runtime rendering inputs shared by every block without owning application state.
@@ -193,12 +195,13 @@ impl FrameLayout {
         }
     }
 
-    /// Place a box between one-third and two-thirds of its available width.
-    pub(crate) const fn middle_third() -> Self {
+    /// Centre a box over the middle third of its available width, giving up margin
+    /// rather than wrapping text up to `content` columns wide.
+    pub(crate) const fn middle_third(content: u16) -> Self {
         Self {
             prefix: 0,
             inset: 0,
-            placement: BorderPlacement::MiddleThird,
+            placement: BorderPlacement::MiddleThird { content },
         }
     }
 
@@ -215,15 +218,18 @@ impl FrameLayout {
 
 impl Bordered {
     fn area(area: Rect, layout: FrameLayout) -> Rect {
-        if matches!(layout.placement, BorderPlacement::MiddleThird) {
+        if let BorderPlacement::MiddleThird { content } = layout.placement {
             let left = area.width / 3;
-            let right = area.width.saturating_mul(2) / 3;
-            return Rect::new(
-                area.x + left,
-                area.y,
-                (right - left + 1).min(area.width - left),
-                area.height,
-            );
+            let third = (area.width.saturating_mul(2) / 3 - left + 1).min(area.width - left);
+            let chrome = third.saturating_sub(Self::content_width(third, layout));
+            let width = third
+                .max(content.saturating_add(chrome))
+                .min(area.width);
+            let start = match width > third {
+                true => (area.width - width) / 2,
+                false => left,
+            };
+            return Rect::new(area.x + start, area.y, width, area.height);
         }
         let width = area
             .width
@@ -233,14 +239,24 @@ impl Bordered {
     }
 
     pub(crate) fn inner(area: Rect, layout: FrameLayout) -> Rect {
-        TuiBlock::bordered()
-            .padding(Padding::new(
-                layout.prefix.saturating_sub(layout.inset + 1),
-                1,
-                0,
-                0,
-            ))
-            .inner(Self::area(area, layout))
+        Self::frame(layout).inner(Self::area(area, layout))
+    }
+
+    /// The border and padding drawn around content, without a title or colours.
+    fn frame(layout: FrameLayout) -> TuiBlock<'static> {
+        TuiBlock::bordered().padding(Padding::new(
+            layout.prefix.saturating_sub(layout.inset + 1),
+            1,
+            0,
+            0,
+        ))
+    }
+
+    /// Columns left for content inside a frame `width` wide.
+    fn content_width(width: u16, layout: FrameLayout) -> u16 {
+        Self::frame(layout)
+            .inner(Rect::new(0, 0, width, 1))
+            .width
     }
 
     pub(crate) fn text_width(context: &RenderContext, layout: FrameLayout) -> u16 {
@@ -299,16 +315,10 @@ impl Element for Bordered {
     type Context = ();
 
     fn render(&self, (): &(), area: Rect, buf: &mut Buffer) {
-        let mut block = TuiBlock::bordered()
+        let mut block = Self::frame(self.layout)
             .style(self.surface)
             .border_type(BorderType::Rounded)
-            .border_style(self.border_style)
-            .padding(Padding::new(
-                self.layout.prefix.saturating_sub(self.layout.inset + 1),
-                1,
-                0,
-                0,
-            ));
+            .border_style(self.border_style);
         if let Some(title) = &self.title {
             block = block.title(title.clone());
         }

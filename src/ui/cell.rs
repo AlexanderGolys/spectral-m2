@@ -10,6 +10,7 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
+use unicode_width::UnicodeWidthStr;
 
 use super::block::{Block, Element, HLSpan, Text};
 use super::element::paste;
@@ -246,7 +247,7 @@ impl CodeBlock {
                 CellMarker::Bare,
                 layout,
                 &context,
-                context.groups().transcript(),
+                context.groups().code(),
             ));
         }
         rendered.push(Line::default());
@@ -702,6 +703,13 @@ impl TextBlock {
         Self::new(text, TextKind::System)
     }
 
+    /// The frame of a system message, wide enough for its longest line when the
+    /// pane allows.
+    fn frame(&self) -> FrameLayout {
+        let widest = self.text.lines().map(UnicodeWidthStr::width).max().unwrap_or(0);
+        FrameLayout::middle_third(u16::try_from(widest).unwrap_or(u16::MAX))
+    }
+
     /// Create text printed by evaluated M2 code.
     pub(crate) fn printed(text: impl Into<String>) -> Self {
         Self::new(text, TextKind::Printed)
@@ -709,7 +717,7 @@ impl TextBlock {
 
     fn body(&self, context: &RenderContext) -> Vec<String> {
         let width = match self.kind {
-            TextKind::System => Bordered::text_width(context, FrameLayout::middle_third()),
+            TextKind::System => Bordered::text_width(context, self.frame()),
             TextKind::Printed => context.width().saturating_sub(CellLayout::plain().prefix()),
         };
         let mut lines = word_lines(&self.text, width);
@@ -724,7 +732,7 @@ impl Block for TextBlock {
     fn height(&self, context: &RenderContext) -> u16 {
         row_count!(self.body(context).len()).saturating_add(match self.kind {
             TextKind::System => 2,
-            TextKind::Printed => 0,
+            TextKind::Printed => 2 * UI.printed_margin,
         })
     }
 
@@ -741,7 +749,7 @@ impl Block for TextBlock {
                     })
                     .collect();
                 Bordered::new(
-                    FrameLayout::middle_third(),
+                    self.frame(),
                     Style::new(),
                     theme.info_border(),
                     None,
@@ -751,10 +759,12 @@ impl Block for TextBlock {
             }
             TextKind::Printed => {
                 let prefix = usize::from(CellLayout::plain().prefix());
-                let lines = self
-                    .body(context)
-                    .into_iter()
-                    .map(|line| Line::from(vec![Span::raw(" ".repeat(prefix)), Span::raw(line)]))
+                let margin = || (0..UI.printed_margin).map(|_| Line::default());
+                let lines = margin()
+                    .chain(self.body(context).into_iter().map(|line| {
+                        Line::from(vec![Span::raw(" ".repeat(prefix)), Span::raw(line)])
+                    }))
+                    .chain(margin())
                     .collect::<Vec<_>>();
                 Paragraph::new(lines)
                     .style(theme.printed())
@@ -766,7 +776,7 @@ impl Block for TextBlock {
         match self.kind {
             TextKind::System => Bordered::exclude_frame(
                 Rect::new(0, 0, context.width(), self.height(context)),
-                FrameLayout::middle_third(),
+                self.frame(),
                 exclusions,
             ),
             TextKind::Printed => exclusions.push(Rect::new(
@@ -785,6 +795,8 @@ struct OutputCell {
     text: String,
     value: Option<M2Value>,
     ty: Option<String>,
+    /// The annotation's pieces, set from their structure when M2 sent them.
+    type_parts: Vec<M2Value>,
 }
 
 /// Consecutive values returned by M2 inside one border.
@@ -796,6 +808,7 @@ pub(crate) struct OutputBlock {
 
 impl OutputBlock {
     /// Create a rendered value and its optional type.
+    #[cfg(test)]
     pub(crate) fn value(text: String, ty: Option<String>) -> Self {
         Self {
             cells: vec![OutputCell {
@@ -803,6 +816,7 @@ impl OutputBlock {
                 text: text.trim_end().to_string(),
                 value: None,
                 ty: ty.map(|ty| ty.trim_end().to_string()),
+                type_parts: Vec::new(),
             }],
             expanded: false,
         }
@@ -816,9 +830,16 @@ impl OutputBlock {
                 text: value.render(),
                 value: Some(value),
                 ty,
+                type_parts: Vec::new(),
             }],
             expanded: false,
         }
+    }
+
+    /// Set the type annotation from its pieces rather than its text.
+    pub fn annotated(mut self, parts: Vec<M2Value>) -> Self {
+        self.cells[0].type_parts = parts;
+        self
     }
 
     /// Attach the `oN` assigned by Macaulay2 to this value.
@@ -948,6 +969,14 @@ impl OutputBlock {
     }
 
     fn type_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
+        let theme = context.groups();
+        if !cell.type_parts.is_empty() {
+            let width = usize::from(self.text_width(context));
+            return maths::annotation(&cell.type_parts, width, context.fractions())
+                .into_iter()
+                .map(|row| Line::from(row.spans(theme)))
+                .collect();
+        }
         cell.ty.as_deref().map_or_else(Vec::new, |ty| {
             word_lines(ty, self.text_width(context))
                 .into_iter()
@@ -1302,9 +1331,9 @@ mod tests {
         assert_eq!(style("Root"), groups.style(HLGroup::Type));
         assert_eq!(style("parameters"), groups.style(HLGroup::Property));
         assert_eq!(style("Symbol"), groups.style(HLGroup::Type));
-        assert_eq!(style("Token!["), groups.preview_mode());
+        assert_eq!(style("Token!["), groups.info());
         assert_eq!(style(","), groups.tree_code());
-        assert_eq!(style("]"), groups.preview_mode());
+        assert_eq!(style("]"), groups.info());
         assert_eq!(style(" x"), groups.tree_code());
         assert_eq!(style(" (x,y)"), groups.tree_code());
     }
@@ -1348,7 +1377,7 @@ mod tests {
     }
 
     #[test]
-    fn syntax_tree_uses_the_full_width_and_inverts_the_source_band() {
+    fn syntax_tree_uses_the_full_width_on_one_code_background() {
         let groups = Groups::default();
         let width = 60;
         let buffer = rendered_buffer(&syntax_tree_fixture(), width);
@@ -1362,9 +1391,19 @@ mod tests {
         assert!(rows[0].chars().all(|cell| cell == '─'));
         assert!(rows[1].starts_with("(x,y)"), "{rows:#?}");
         assert!(rows[3].starts_with("Root"), "{rows:#?}");
-        assert_eq!(buffer[(0, 0)].bg, groups.code().bg.unwrap());
-        assert_eq!(buffer[(0, 1)].bg, groups.transcript().bg.unwrap());
-        assert_eq!(buffer[(0, 3)].bg, groups.code().bg.unwrap());
+        for y in 0..buffer.area().height {
+            assert_eq!(buffer[(0, y)].bg, groups.code().bg.unwrap(), "row {y}");
+        }
+        // Every range starts in one column, whatever the depth of its row.
+        let ranges: Vec<_> = rows[3..]
+            .iter()
+            .filter_map(|row| {
+                let start = row.find("1:").or_else(|| row.find("2:"))?;
+                Some(row[..start].chars().count())
+            })
+            .collect();
+        assert!(ranges.len() > 1, "{rows:#?}");
+        assert!(ranges.windows(2).all(|pair| pair[0] == pair[1]), "{rows:#?}");
     }
 
     #[test]
@@ -1495,13 +1534,15 @@ mod tests {
     }
 
     #[test]
-    fn printed_text_is_one_compact_inset_row() {
+    fn printed_text_is_an_inset_row_with_a_margin_above_and_below() {
         let rows = rendered_rows(&TextBlock::printed("text"), 20);
+        let margin = usize::from(UI.printed_margin);
 
-        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.len(), 1 + 2 * margin);
         assert!(rows.iter().all(|row| !row.contains('│')));
+        assert!(rows[..margin].iter().all(|row| row.trim().is_empty()));
         assert_eq!(
-            rows[0].chars().position(|character| character == 't'),
+            rows[margin].chars().position(|character| character == 't'),
             Some(4)
         );
     }
@@ -1514,7 +1555,10 @@ mod tests {
         assert_eq!(text.text, "  text");
         assert_eq!(value.cells[0].text, "  value");
         assert_eq!(value.cells[0].ty.as_deref(), Some("  Type"));
-        assert_eq!(text.height(&RenderContext::new(40, 0)), 1);
+        assert_eq!(
+            text.height(&RenderContext::new(40, 0)),
+            1 + 2 * UI.printed_margin
+        );
         assert_eq!(value.height(&RenderContext::new(40, 0)), 3);
     }
 
@@ -1884,5 +1928,19 @@ mod tests {
         assert_eq!(buffer[(40, 0)].symbol(), "╮");
         assert_eq!(buffer[(27, 1)].symbol(), "m");
         assert_eq!(buffer[(27, 1)].fg, theme.info().fg.unwrap());
+    }
+
+    /// In a narrow pane the box gives up its margins before it wraps its text.
+    #[test]
+    fn a_narrow_info_box_widens_into_its_margins() {
+        let message = "spectral-m2 v0.4.0";
+        let block = TextBlock::system(message);
+        let buffer = rendered_buffer(&block, 30);
+        let rows: Vec<String> = (0..buffer.area().height)
+            .map(|y| (0..30).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+
+        assert_eq!(block.height(&RenderContext::new(30, 0)), 3, "{rows:#?}");
+        assert!(rows[1].contains(message), "{rows:#?}");
     }
 }
