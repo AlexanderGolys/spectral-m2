@@ -1162,12 +1162,6 @@ pub(crate) struct ErrorMessageBlock {
     pub(crate) message: String,
 }
 
-impl ErrorMessageBlock {
-    pub(crate) fn new(message: String) -> Self {
-        Self { message }
-    }
-}
-
 impl Block for ErrorMessageBlock {
     fn height(&self, context: &RenderContext) -> u16 {
         row_count!(error_box_text(&self.message, context).len()).saturating_add(2)
@@ -1718,7 +1712,9 @@ mod tests {
         let boxes: [Box<dyn Block>; 3] = [
             Box::new(OutputBlock::value("x".into(), None)),
             Box::new(WarningBlock { text: "x".into() }),
-            Box::new(ErrorMessageBlock::new("x".into())),
+            Box::new(ErrorMessageBlock {
+                message: "x".into(),
+            }),
         ];
 
         for block in boxes {
@@ -1739,7 +1735,9 @@ mod tests {
                 theme.warning(),
             ),
             (
-                Box::new(ErrorMessageBlock::new("error".into())) as Box<dyn Block>,
+                Box::new(ErrorMessageBlock {
+                    message: "error".into(),
+                }) as Box<dyn Block>,
                 theme.error(),
             ),
         ] {

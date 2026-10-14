@@ -33,7 +33,7 @@ const PROMPT_GLYPH: &str = "❯";
 #[discriminated_str(description)]
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum InputAction {
+pub enum InputAction {
     InsertNewline = "insert a line break",
     InsertTab = "insert a tab",
     DeleteBack = "delete before the cursor",
@@ -56,11 +56,11 @@ pub(crate) enum InputAction {
 
 /// User-adjustable layout policy owned by the input component.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct InputSettings {
+pub struct InputSettings {
     /// Maximum editor-height percentage occupied by the input.
-    pub(crate) max_height_percent: u8,
+    pub max_height_percent: u8,
     /// Context rows retained around the cursor.
-    pub(crate) scrolloff: u8,
+    pub scrolloff: u8,
 }
 
 impl Default for InputSettings {
@@ -74,7 +74,7 @@ impl Default for InputSettings {
 
 /// One input setting exposed through the settings picker.
 #[derive(Clone, Copy)]
-pub(crate) enum InputSetting {
+pub enum InputSetting {
     /// Maximum input height.
     MaxHeight,
     /// Cursor context rows.
@@ -83,15 +83,23 @@ pub(crate) enum InputSetting {
 
 impl InputSetting {
     /// Picker label for this setting.
-    pub(crate) const fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::MaxHeight => "max input height",
             Self::Scrolloff => "scrolloff",
         }
     }
 
+    /// What this setting controls.
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::MaxHeight => "share of the pane multiline input may grow into",
+            Self::Scrolloff => "context rows kept around the input cursor",
+        }
+    }
+
     /// Current picker value for this setting.
-    pub(crate) fn value(self, settings: InputSettings) -> String {
+    pub fn value(self, settings: InputSettings) -> String {
         match self {
             Self::MaxHeight => format!("{}%", settings.max_height_percent),
             Self::Scrolloff => format!("{} rows", settings.scrolloff),
@@ -99,7 +107,7 @@ impl InputSetting {
     }
 
     /// Adjust this setting by one picker step.
-    pub(crate) fn adjust(self, settings: &mut InputSettings, delta: i8) {
+    pub fn adjust(self, settings: &mut InputSettings, delta: i8) {
         let field = match self {
             Self::MaxHeight => &mut settings.max_height_percent,
             Self::Scrolloff => &mut settings.scrolloff,
@@ -120,7 +128,7 @@ impl InputSetting {
 }
 
 /// Editable source, its byte-offset cursor, and submission history.
-pub(crate) struct InputTextField {
+pub struct InputTextField {
     text: String,
     cursor: usize,
     revision: u64,
@@ -141,7 +149,7 @@ impl InputTextField {
         }
     }
 
-    pub(crate) fn text(&self) -> &str {
+    pub fn text(&self) -> &str {
         &self.text
     }
 
@@ -158,18 +166,18 @@ impl InputTextField {
         (start < end).then_some(start..end)
     }
 
-    pub(crate) fn selected_text(&self) -> Option<&str> {
+    pub fn selected_text(&self) -> Option<&str> {
         self.selection().map(|range| &self.text[range])
     }
 
-    pub(crate) fn start_selection(&mut self, cursor: usize) {
+    pub fn start_selection(&mut self, cursor: usize) {
         if self.text.is_char_boundary(cursor) {
             self.cursor = cursor;
             self.anchor = Some(cursor);
         }
     }
 
-    pub(crate) fn continue_selection(&mut self, cursor: usize) {
+    pub fn continue_selection(&mut self, cursor: usize) {
         if self.anchor.is_some() && self.text.is_char_boundary(cursor) {
             self.cursor = cursor;
         }
@@ -177,7 +185,7 @@ impl InputTextField {
 
     /// Drop the selection, keeping the cursor where it is. Every plain movement
     /// does this, so selecting is strictly a shifted gesture.
-    pub(crate) fn clear_selection(&mut self) {
+    pub fn clear_selection(&mut self) {
         self.anchor = None;
     }
 
@@ -188,7 +196,7 @@ impl InputTextField {
         move_cursor(self);
     }
 
-    pub(crate) fn select_left(&mut self) {
+    pub fn select_left(&mut self) {
         self.extend_selection(|field| {
             if field.cursor > 0 {
                 field.cursor = field.previous_boundary();
@@ -196,7 +204,7 @@ impl InputTextField {
         });
     }
 
-    pub(crate) fn select_right(&mut self) {
+    pub fn select_right(&mut self) {
         self.extend_selection(|field| {
             if field.cursor < field.text.len() {
                 field.cursor = field.next_boundary(field.cursor);
@@ -204,7 +212,7 @@ impl InputTextField {
         });
     }
 
-    pub(crate) fn select_home(&mut self) {
+    pub fn select_home(&mut self) {
         self.extend_selection(|field| {
             field.cursor = field.text[..field.cursor]
                 .rfind('\n')
@@ -212,7 +220,7 @@ impl InputTextField {
         });
     }
 
-    pub(crate) fn select_end(&mut self) {
+    pub fn select_end(&mut self) {
         self.extend_selection(|field| {
             field.cursor = field.text[field.cursor..]
                 .find('\n')
@@ -234,14 +242,14 @@ impl InputTextField {
         true
     }
 
-    pub(crate) fn insert_char(&mut self, ch: char) {
+    pub fn insert_char(&mut self, ch: char) {
         self.delete_selection();
         self.text.insert(self.cursor, ch);
         self.cursor += ch.len_utf8();
         self.changed();
     }
 
-    pub(crate) fn insert_str(&mut self, s: &str) {
+    pub fn insert_str(&mut self, s: &str) {
         self.delete_selection();
         self.text.insert_str(self.cursor, s);
         self.cursor += s.len();
@@ -255,7 +263,7 @@ impl InputTextField {
         self.changed();
     }
 
-    pub(crate) fn backspace(&mut self) {
+    pub fn backspace(&mut self) {
         if self.delete_selection() {
             return;
         }
@@ -268,7 +276,7 @@ impl InputTextField {
         self.changed();
     }
 
-    pub(crate) fn delete_forward(&mut self) {
+    pub fn delete_forward(&mut self) {
         if self.delete_selection() {
             return;
         }
@@ -280,21 +288,21 @@ impl InputTextField {
         self.changed();
     }
 
-    pub(crate) fn move_left(&mut self) {
+    pub fn move_left(&mut self) {
         self.clear_selection();
         if self.cursor > 0 {
             self.cursor = self.previous_boundary();
         }
     }
 
-    pub(crate) fn move_right(&mut self) {
+    pub fn move_right(&mut self) {
         self.clear_selection();
         if self.cursor < self.text.len() {
             self.cursor = self.next_boundary(self.cursor);
         }
     }
 
-    pub(crate) fn move_home(&mut self) {
+    pub fn move_home(&mut self) {
         self.clear_selection();
         self.cursor = self.text[..self.cursor]
             .rfind('\n')
@@ -302,7 +310,7 @@ impl InputTextField {
             .unwrap_or(0);
     }
 
-    pub(crate) fn move_end(&mut self) {
+    pub fn move_end(&mut self) {
         self.clear_selection();
         self.cursor = self.text[self.cursor..]
             .find('\n')
@@ -310,7 +318,7 @@ impl InputTextField {
             .unwrap_or(self.text.len());
     }
 
-    pub(crate) fn move_up(&mut self) {
+    pub fn move_up(&mut self) {
         self.clear_selection();
         let starts = self.line_starts();
         let current = self.current_line(&starts);
@@ -321,7 +329,7 @@ impl InputTextField {
         self.cursor = self.cursor_at_column(&starts, current - 1, column);
     }
 
-    pub(crate) fn move_down(&mut self) {
+    pub fn move_down(&mut self) {
         self.clear_selection();
         let starts = self.line_starts();
         let current = self.current_line(&starts);
@@ -332,11 +340,11 @@ impl InputTextField {
         self.cursor = self.cursor_at_column(&starts, current + 1, column);
     }
 
-    pub(crate) fn cursor_on_first_line(&self) -> bool {
+    pub fn cursor_on_first_line(&self) -> bool {
         !self.text[..self.cursor].contains('\n')
     }
 
-    pub(crate) fn cursor_on_last_line(&self) -> bool {
+    pub fn cursor_on_last_line(&self) -> bool {
         !self.text[self.cursor..].contains('\n')
     }
 
@@ -351,13 +359,13 @@ impl InputTextField {
         (line, col)
     }
 
-    pub(crate) fn history_prev(&mut self) {
+    pub fn history_prev(&mut self) {
         if let Some(buffer) = self.history.prev(&self.text, self.cursor) {
             self.load(buffer);
         }
     }
 
-    pub(crate) fn history_next(&mut self) {
+    pub fn history_next(&mut self) {
         if let Some(buffer) = self.history.next() {
             self.load(buffer);
         }
@@ -449,7 +457,7 @@ impl InputTextField {
 }
 
 /// The live source field and its transient presentation state.
-pub(crate) struct InputCode {
+pub struct InputCode {
     field: InputTextField,
     hint: Hint,
     settings: InputSettings,
@@ -465,25 +473,25 @@ pub(crate) struct InputCode {
 }
 
 /// Transient presentation inputs supplied by the containing editor.
-pub(crate) struct InputContext<'a> {
+pub struct InputContext<'a> {
     /// Width, prefix, and resolved highlight groups.
-    pub(crate) render: &'a RenderContext,
+    pub render: &'a RenderContext,
     /// Parser-backed semantic highlighter.
-    pub(crate) highlighter: &'a mut dyn Highlighter,
+    pub highlighter: &'a mut dyn Highlighter,
     /// Whether the source currently names a command.
-    pub(crate) command: bool,
+    pub command: bool,
     /// Whether the backend is inside the debugger.
-    pub(crate) debugging: bool,
+    pub debugging: bool,
     /// Whether this input is the focused UI element.
-    pub(crate) focused: bool,
+    pub focused: bool,
     /// Whether submitted source directly touches the input's upper edge.
-    pub(crate) code_above: bool,
+    pub code_above: bool,
     /// Incomplete source whose following line is the live input.
-    pub(crate) pending: Option<&'a str>,
+    pub pending: Option<&'a str>,
 }
 
 impl InputCode {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             field: InputTextField::new(),
             hint: Hint::default(),
@@ -500,59 +508,59 @@ impl InputCode {
         }
     }
 
-    pub(crate) fn field(&self) -> &InputTextField {
+    pub fn field(&self) -> &InputTextField {
         &self.field
     }
 
-    pub(crate) fn field_mut(&mut self) -> &mut InputTextField {
+    pub fn field_mut(&mut self) -> &mut InputTextField {
         &mut self.field
     }
 
     /// Return the component's adjustable layout policy.
-    pub(crate) const fn settings(&self) -> InputSettings {
+    pub const fn settings(&self) -> InputSettings {
         self.settings
     }
 
     /// Replace the component's adjustable layout policy.
-    pub(crate) fn set_settings(&mut self, settings: InputSettings) {
+    pub fn set_settings(&mut self, settings: InputSettings) {
         self.settings = settings;
     }
 
     /// Adjust one component-owned setting.
-    pub(crate) fn adjust(&mut self, setting: InputSetting, delta: i8) {
+    pub fn adjust(&mut self, setting: InputSetting, delta: i8) {
         setting.adjust(&mut self.settings, delta);
     }
 
-    pub(crate) fn accept_submission(&mut self) {
+    pub fn accept_submission(&mut self) {
         self.field.accept_submission();
         self.hint = Hint::default();
         self.diagnostic = None;
         self.diagnostic_range = None;
     }
 
-    pub(crate) fn set_diagnostic(&mut self, diagnostic: String, range: Option<Range<usize>>) {
+    pub fn set_diagnostic(&mut self, diagnostic: String, range: Option<Range<usize>>) {
         self.diagnostic = Some(diagnostic);
         self.diagnostic_range = range;
     }
 
-    pub(crate) fn clear_diagnostic(&mut self) {
+    pub fn clear_diagnostic(&mut self) {
         self.diagnostic = None;
         self.diagnostic_range = None;
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.field.clear();
         self.clear_diagnostic();
     }
 
     /// Replace the live draft with source transferred back from the feed.
-    pub(crate) fn restore(&mut self, source: String) {
+    pub fn restore(&mut self, source: String) {
         self.field.replace_text(source);
         self.clear_diagnostic();
     }
 
     /// Apply one input-owned editing operation.
-    pub(crate) fn edit(&mut self, action: InputAction) {
+    pub fn edit(&mut self, action: InputAction) {
         use InputAction::*;
         if matches!(
             action,
@@ -586,7 +594,7 @@ impl InputCode {
     }
 
     /// Interpret one unbound terminal key as editor input.
-    pub(crate) fn handle_key(&mut self, key: KeyEvent) -> Option<char> {
+    pub fn handle_key(&mut self, key: KeyEvent) -> Option<char> {
         use InputAction::*;
         let action = match key.code {
             KeyCode::Char('l') if key.ctrl() => Some(Clear),
@@ -619,18 +627,18 @@ impl InputCode {
     }
 
     /// Insert pasted source as one input-owned edit.
-    pub(crate) fn insert(&mut self, text: &str) {
+    pub fn insert(&mut self, text: &str) {
         self.clear_diagnostic();
         self.field.insert_str(text);
     }
 
     /// Return whether a pointer event lies over the last rendered input pane.
-    pub(crate) fn contains(&self, event: MouseEvent) -> bool {
+    pub fn contains(&self, event: MouseEvent) -> bool {
         self.area.contains(Position::new(event.column, event.row))
     }
 
     /// Handle mouse selection in the last rendered text rectangle.
-    pub(crate) fn handle_mouse(&mut self, event: MouseEvent) -> (bool, Option<String>) {
+    pub fn handle_mouse(&mut self, event: MouseEvent) -> (bool, Option<String>) {
         let (area, scroll) = (self.text_area, self.scroll);
         if area.is_empty() {
             self.selecting = false;
@@ -665,7 +673,7 @@ impl InputCode {
     }
 
     #[cfg(test)]
-    pub(crate) fn new_in_memory() -> Self {
+    pub fn new_in_memory() -> Self {
         Self {
             field: InputTextField::new_in_memory(),
             hint: Hint::default(),
@@ -683,12 +691,12 @@ impl InputCode {
     }
 
     /// Return the source currently being edited.
-    pub(crate) fn text(&self) -> &str {
+    pub fn text(&self) -> &str {
         self.field.text()
     }
 
     /// Render the live source with fresh syntax highlighting.
-    pub(crate) fn highlighted_lines(
+    pub fn highlighted_lines(
         &mut self,
         context: &RenderContext,
         highlighter: &mut dyn Highlighter,
@@ -750,7 +758,7 @@ impl InputCode {
     }
 
     /// Height needed by the input within its configured share of the editor.
-    pub(crate) fn height(&self, width: u16, prefix: u16, editor_height: u16) -> u16 {
+    pub fn height(&self, width: u16, prefix: u16, editor_height: u16) -> u16 {
         let rows = self.visual_rows(width.saturating_sub(prefix)) as u16;
         let chrome = 2 + u16::from(self.diagnostic.is_some());
         let cap = editor_height
@@ -761,7 +769,7 @@ impl InputCode {
     }
 
     /// Render the input locally and return its terminal cursor when focused.
-    pub(crate) fn render(
+    pub fn render(
         &mut self,
         context: InputContext<'_>,
         area: Rect,
@@ -835,26 +843,26 @@ impl InputCode {
     }
 
     /// Forget the pane rectangle while another view is displayed.
-    pub(crate) fn hide(&mut self) {
+    pub fn hide(&mut self) {
         self.area = Rect::ZERO;
         self.text_area = Rect::ZERO;
     }
 
     /// Return the input pane's last rendered rectangle.
     #[cfg(test)]
-    pub(crate) fn area(&self) -> Rect {
+    pub fn area(&self) -> Rect {
         self.area
     }
 
     /// Return the editable text's last rendered rectangle.
     #[cfg(test)]
-    pub(crate) fn text_area(&self) -> Rect {
+    pub fn text_area(&self) -> Rect {
         self.text_area
     }
 
     /// Supply layout rectangles without rendering in mouse-routing tests.
     #[cfg(test)]
-    pub(crate) fn set_test_area(&mut self, area: Rect, text_area: Rect) {
+    pub fn set_test_area(&mut self, area: Rect, text_area: Rect) {
         self.area = area;
         self.text_area = text_area;
     }
@@ -925,7 +933,7 @@ impl InputCode {
     /// so typing carries on where the caret is shown; one sitting before a
     /// newline stays at the end of its own row, since the next row begins past
     /// the newline rather than at the cursor.
-    pub(crate) fn visual_cursor(&self, width: u16) -> (usize, usize) {
+    pub fn visual_cursor(&self, width: u16) -> (usize, usize) {
         let text = self.text();
         let cursor = self.field.cursor();
         let rows = HardWrap.wrap(text, width);
@@ -938,11 +946,11 @@ impl InputCode {
     }
 
     /// How many visual rows the live source occupies at `width`.
-    pub(crate) fn visual_rows(&self, width: u16) -> usize {
+    pub fn visual_rows(&self, width: u16) -> usize {
         self.lines(width).len()
     }
 
-    pub(crate) fn cursor_at_visual(&self, width: u16, row: usize, column: usize) -> usize {
+    pub fn cursor_at_visual(&self, width: u16, row: usize, column: usize) -> usize {
         let rows = HardWrap.wrap(self.text(), width);
         let line = &rows[row.min(rows.len().saturating_sub(1))];
         self.text()[line.range.clone()]

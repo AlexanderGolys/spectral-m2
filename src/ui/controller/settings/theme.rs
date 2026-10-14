@@ -26,7 +26,7 @@ pub struct Variant {
     groups: Groups,
 }
 
-/// A named palette variant with its canonical brightness.
+/// A named palette variant with its canonical mode.
 pub enum ColorVariant {
     Dark(Variant),
     Light(Variant),
@@ -43,10 +43,10 @@ impl ColorVariant {
         &self.variant().name
     }
 
-    pub const fn brightness(&self) -> Brightness {
+    pub const fn mode(&self) -> Mode {
         match self {
-            Self::Dark(_) => Brightness::Dark,
-            Self::Light(_) => Brightness::Light,
+            Self::Dark(_) => Mode::Dark,
+            Self::Light(_) => Mode::Light,
         }
     }
 
@@ -81,17 +81,24 @@ impl Scheme {
     pub fn variants(&self) -> &[ColorVariant] {
         &self.variants
     }
+
+    /// Indices of the variants supplied for `mode`, in declaration order.
+    fn variants_in(&self, mode: Mode) -> Vec<usize> {
+        (0..self.variants.len())
+            .filter(|&variant| self.variants[variant].mode() == mode)
+            .collect()
+    }
 }
 
-/// Canonical terminal background brightness supplied by a scheme variant.
+/// Canonical terminal background mode supplied by a scheme variant.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Brightness {
+pub enum Mode {
     Dark,
     Light,
 }
 
-impl fmt::Display for Brightness {
+impl fmt::Display for Mode {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Dark => "dark",
@@ -100,7 +107,7 @@ impl fmt::Display for Brightness {
     }
 }
 
-/// Variant names divided by their terminal-background brightness.
+/// Variant names divided by their terminal-background mode.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Variants {
@@ -121,10 +128,10 @@ struct VariantColors {
 }
 
 impl VariantColors {
-    fn get(&self, brightness: Brightness, variant: &str) -> Option<Color> {
-        match brightness {
-            Brightness::Dark => &self.dark,
-            Brightness::Light => &self.light,
+    fn get(&self, mode: Mode, variant: &str) -> Option<Color> {
+        match mode {
+            Mode::Dark => &self.dark,
+            Mode::Light => &self.light,
         }
         .get(variant)
         .copied()
@@ -137,12 +144,12 @@ impl VariantColors {
 struct Colors(HashMap<String, VariantColors>);
 
 impl Colors {
-    fn palette(&self, brightness: Brightness, variant: &str) -> Result<Palette, String> {
+    fn palette(&self, mode: Mode, variant: &str) -> Result<Palette, String> {
         self.0
             .iter()
             .map(|(name, colors)| {
                 colors
-                    .get(brightness, variant)
+                    .get(mode, variant)
                     .map(|color| (name.clone(), color))
                     .ok_or_else(|| format!("color `{name}` has no `{variant}` value"))
             })
@@ -166,12 +173,12 @@ struct SchemeFile {
 impl SchemeFile {
     fn resolve(self) -> Result<Scheme, String> {
         let mut variants = Vec::new();
-        for (brightness, names) in [
-            (Brightness::Dark, self.variants.dark),
-            (Brightness::Light, self.variants.light),
+        for (mode, names) in [
+            (Mode::Dark, self.variants.dark),
+            (Mode::Light, self.variants.light),
         ] {
             for name in names {
-                let palette = self.colors.palette(brightness, &name)?;
+                let palette = self.colors.palette(mode, &name)?;
                 let groups = Groups::resolve(&self.base, &self.overrides, &palette)?;
                 let variant = Variant {
                     name,
@@ -179,9 +186,9 @@ impl SchemeFile {
                     palette,
                     groups,
                 };
-                variants.push(match brightness {
-                    Brightness::Dark => ColorVariant::Dark(variant),
-                    Brightness::Light => ColorVariant::Light(variant),
+                variants.push(match mode {
+                    Mode::Dark => ColorVariant::Dark(variant),
+                    Mode::Light => ColorVariant::Light(variant),
                 });
             }
         }
@@ -190,6 +197,15 @@ impl SchemeFile {
             variants,
         })
     }
+}
+
+/// The choice `delta` steps after `current`, wrapping around `choices`.
+fn cycled<T: Copy + PartialEq>(choices: &[T], current: T, delta: i8) -> T {
+    let position = choices
+        .iter()
+        .position(|choice| *choice == current)
+        .expect("the current choice is among the choices");
+    choices[(position as isize + isize::from(delta)).rem_euclid(choices.len() as isize) as usize]
 }
 
 const SCHEME_FILES: &[&str] = &[
@@ -243,7 +259,8 @@ pub struct Appearance {
 struct StoredAppearance {
     scheme: String,
     variant: String,
-    brightness: Brightness,
+    #[serde(alias = "brightness")]
+    mode: Mode,
     transparent_background: bool,
 }
 
@@ -256,9 +273,7 @@ impl Default for Appearance {
         let variant = SCHEMES[scheme]
             .variants()
             .iter()
-            .position(|variant| {
-                variant.label() == "medium" && variant.brightness() == Brightness::Dark
-            })
+            .position(|variant| variant.label() == "medium" && variant.mode() == Mode::Dark)
             .expect("everforest dark medium is embedded");
         Self {
             scheme: SchemeIndex(scheme),
@@ -303,7 +318,7 @@ impl Appearance {
             .iter()
             .position(|scheme| scheme.label() == stored.scheme)?;
         let variant = SCHEMES[scheme].variants().iter().position(|variant| {
-            variant.label() == stored.variant && variant.brightness() == stored.brightness
+            variant.label() == stored.variant && variant.mode() == stored.mode
         })?;
         Some(Self {
             scheme: SchemeIndex(scheme),
@@ -321,7 +336,7 @@ impl Appearance {
             serde_json::to_vec(&StoredAppearance {
                 scheme: self.scheme().label().into(),
                 variant: self.variant().label().into(),
-                brightness: self.variant().brightness(),
+                mode: self.variant().mode(),
                 transparent_background: self.transparent_background,
             })?,
         )
@@ -335,63 +350,57 @@ impl Appearance {
         &self.scheme().variants()[self.variant.get()]
     }
 
-    pub fn colorscheme_label(self) -> String {
-        format!("{} {}", self.scheme().label(), self.variant().label())
+    pub fn mode(self) -> Mode {
+        self.variant().mode()
     }
 
-    pub fn cycle_colorscheme(self, delta: i8) -> Self {
-        let brightness = self.variant().brightness();
-        let choices = SCHEMES
-            .iter()
-            .enumerate()
-            .flat_map(|(scheme, data)| {
-                data.variants()
-                    .iter()
-                    .enumerate()
-                    .filter(move |(_, variant)| variant.brightness() == brightness)
-                    .map(move |(variant, _)| (scheme, variant))
-            })
+    /// Step to a neighbouring scheme offering the current mode.
+    pub fn cycle_theme(self, delta: i8) -> Self {
+        let mode = self.mode();
+        let schemes = (0..SCHEMES.len())
+            .filter(|&scheme| !SCHEMES[scheme].variants_in(mode).is_empty())
             .collect::<Vec<_>>();
-        let current = choices
-            .iter()
-            .position(|choice| *choice == (self.scheme.get(), self.variant.get()))
-            .expect("the selected colorscheme belongs to its brightness");
-        let next = (current as isize + isize::from(delta)).rem_euclid(choices.len() as isize);
-        let (scheme, variant) = choices[next as usize];
+        self.retarget(cycled(&schemes, self.scheme.get(), delta), mode)
+    }
+
+    /// Step to a neighbouring variant of the current scheme and mode.
+    pub fn cycle_contrast(self, delta: i8) -> Self {
+        let variants = self.scheme().variants_in(self.mode());
         Self {
-            scheme: SchemeIndex(scheme),
-            variant: VariantIndex(variant),
+            variant: VariantIndex(cycled(&variants, self.variant.get(), delta)),
             ..self
         }
     }
 
-    pub fn cycle_brightness(self, delta: i8) -> Self {
-        let variants = self.scheme().variants();
-        let mut choices = Vec::new();
-        for variant in variants {
-            let brightness = variant.brightness();
-            if !choices.contains(&brightness) {
-                choices.push(brightness);
+    /// Step to the scheme's neighbouring mode.
+    pub fn cycle_mode(self, delta: i8) -> Self {
+        let mut modes = Vec::new();
+        for variant in self.scheme().variants() {
+            if !modes.contains(&variant.mode()) {
+                modes.push(variant.mode());
             }
         }
-        let current = choices
+        self.retarget(self.scheme.get(), cycled(&modes, self.mode(), delta))
+    }
+
+    /// Select `scheme` in `mode`, keeping the current variant's name when offered and
+    /// otherwise its position among its mode's variants.
+    fn retarget(self, scheme: usize, mode: Mode) -> Self {
+        let target = &SCHEMES[scheme];
+        let candidates = target.variants_in(mode);
+        let position = self
+            .scheme()
+            .variants_in(self.mode())
             .iter()
-            .position(|brightness| *brightness == self.variant().brightness())
-            .expect("the selected variant supplies an available brightness");
-        let next = (current as isize + isize::from(delta)).rem_euclid(choices.len() as isize);
-        let name = self.variant().label();
-        let variant = variants
+            .position(|&variant| variant == self.variant.get())
+            .expect("the selected variant belongs to its mode");
+        let variant = candidates
             .iter()
-            .position(|variant| {
-                variant.brightness() == choices[next as usize] && variant.label() == name
-            })
-            .or_else(|| {
-                variants
-                    .iter()
-                    .position(|variant| variant.brightness() == choices[next as usize])
-            })
-            .expect("every available brightness has a variant");
+            .copied()
+            .find(|&variant| target.variants()[variant].label() == self.variant().label())
+            .unwrap_or_else(|| candidates[position.min(candidates.len() - 1)]);
         Self {
+            scheme: SchemeIndex(scheme),
             variant: VariantIndex(variant),
             ..self
         }
@@ -468,13 +477,13 @@ mod tests {
     fn catppuccin_encodes_its_four_canonical_flavours() {
         let variants = SCHEMES[0].variants();
         let labels: Vec<_> = variants.iter().map(ColorVariant::label).collect();
-        let brightness: Vec<_> = variants
+        let modes: Vec<_> = variants
             .iter()
-            .map(|variant| variant.brightness().to_string())
+            .map(|variant| variant.mode().to_string())
             .collect();
 
         assert_eq!(labels, ["mocha", "macchiato", "frappe", "latte"]);
-        assert_eq!(brightness, ["dark", "dark", "dark", "light"]);
+        assert_eq!(modes, ["dark", "dark", "dark", "light"]);
     }
 
     #[test]
@@ -500,7 +509,7 @@ mod tests {
             rose_pine
                 .variants()
                 .iter()
-                .map(|variant| (variant.brightness().to_string(), variant.label()))
+                .map(|variant| (variant.mode().to_string(), variant.label()))
                 .collect::<Vec<_>>(),
             [
                 ("dark".into(), "main"),
@@ -512,7 +521,7 @@ mod tests {
             kanagawa
                 .variants()
                 .iter()
-                .map(|variant| (variant.brightness().to_string(), variant.label()))
+                .map(|variant| (variant.mode().to_string(), variant.label()))
                 .collect::<Vec<_>>(),
             [
                 ("dark".into(), "wave"),
@@ -526,21 +535,59 @@ mod tests {
     fn appearance_cycles_each_axis_in_both_directions() {
         let appearance = Appearance::default();
 
+        assert_eq!(appearance.cycle_contrast(1).variant().label(), "soft");
+        assert_eq!(appearance.cycle_contrast(-1).variant().label(), "hard");
+        assert_eq!(appearance.cycle_theme(1).scheme().label(), "rosé pine");
         assert_eq!(
-            appearance.cycle_colorscheme(1).colorscheme_label(),
-            "everforest soft"
+            appearance.cycle_theme(-1).scheme().label(),
+            "gruvbox material"
         );
-        assert_eq!(
-            appearance.cycle_colorscheme(-1).colorscheme_label(),
-            "everforest hard"
-        );
-        assert_eq!(appearance.cycle_brightness(1).variant().label(), "medium");
-        assert_eq!(appearance.cycle_brightness(-1).variant().label(), "medium");
+        assert_eq!(appearance.cycle_mode(1).variant().label(), "medium");
+        assert_eq!(appearance.cycle_mode(-1).variant().label(), "medium");
         assert_eq!(appearance.background_label(), "opaque");
         assert_eq!(
             appearance.cycle_background().background_label(),
             "transparent"
         );
+    }
+
+    #[test]
+    fn theme_changes_keep_the_contrast_name_or_position() {
+        let appearance = Appearance::default();
+        let gruvbox = appearance.cycle_theme(-1).cycle_theme(-1);
+        assert_eq!(gruvbox.scheme().label(), "gruvbox");
+        assert_eq!(gruvbox.variant().label(), "medium");
+
+        let rose_pine = appearance.cycle_theme(1);
+        assert_eq!(rose_pine.variant().label(), "moon");
+        assert_eq!(rose_pine.cycle_theme(-1), appearance);
+
+        let latte = appearance.cycle_theme(-4).cycle_mode(1);
+        assert_eq!(latte.variant().label(), "latte");
+        assert_eq!(latte.cycle_contrast(1), latte);
+    }
+
+    #[test]
+    fn appearance_saved_with_brightness_still_loads() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "spectral-m2-legacy-appearance-{}-{nonce}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            r#"{"scheme":"gruvbox","variant":"soft","brightness":"light","transparent_background":false}"#,
+        )
+        .unwrap();
+
+        let appearance = Appearance::read(&path).expect("legacy appearance");
+        let _ = fs::remove_file(&path);
+        assert_eq!(appearance.scheme().label(), "gruvbox");
+        assert_eq!(appearance.variant().label(), "soft");
+        assert!(appearance.mode() == Mode::Light);
     }
 
     #[test]
@@ -553,9 +600,7 @@ mod tests {
             "spectral-m2-appearance-{}-{nonce}.json",
             std::process::id()
         ));
-        let appearance = Appearance::default()
-            .cycle_colorscheme(1)
-            .cycle_background();
+        let appearance = Appearance::default().cycle_theme(1).cycle_background();
         appearance.write(&path).unwrap();
 
         assert_eq!(Appearance::read(&path), Some(appearance));
@@ -586,7 +631,7 @@ mod tests {
 
         assert_eq!(appearance.scheme().label(), "everforest");
         assert_eq!(appearance.variant().label(), "medium");
-        assert!(appearance.variant().brightness() == Brightness::Dark);
+        assert!(appearance.variant().mode() == Mode::Dark);
         assert_eq!(
             palette.resolve(Some("bg0")).unwrap(),
             Some(Color::Rgb(0x2d, 0x35, 0x3b))
@@ -648,7 +693,7 @@ mod tests {
             for variant in scheme
                 .variants()
                 .iter()
-                .filter(|variant| variant.brightness() == Brightness::Dark)
+                .filter(|variant| variant.mode() == Mode::Dark)
             {
                 for (name, style) in variant.groups().highlight_groups() {
                     if style.bg.and_then(luma).is_some_and(|value| value > 140) {

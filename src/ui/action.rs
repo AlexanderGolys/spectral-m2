@@ -6,7 +6,7 @@ use these_macros_should_be_illegal::enum_fn;
 #[enum_fn(description: &'static str)]
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Action {
+pub enum Action {
     FocusPaneLeft = "focus the left pane",
     FocusPaneRight = "focus the right pane",
     ResizePaneLeft = "move the pane divider left",
@@ -17,29 +17,25 @@ pub(crate) enum Action {
     ScrollFeedDown = "scroll the feed down",
     OpenCommands = "open commands",
     OpenSettings = "open settings",
-    OpenStyle = "open style",
     OpenKeymaps = "open keymaps",
     ClearFeed = "clear the feed",
     OpenCode = "open code",
-    NewWorkspace = "open a new split",
     OpenOutput = "open output",
     OpenSyntaxTree = "open syntax tree",
     Restart = "restart Macaulay2",
-    ClosePane = "close the focused pane",
+    ClosePane = "close the split view",
     ToggleHighlightDebug = "toggle highlight groups",
     CopySelection = "copy the selection",
 }
 
 impl Action {
     /// Actions whose user binding may be replaced.
-    pub(crate) const REMAPPABLE: &'static [Self] = &[
+    pub const REMAPPABLE: &'static [Self] = &[
         Self::OpenCommands,
         Self::OpenSettings,
-        Self::OpenStyle,
         Self::OpenKeymaps,
         Self::ClearFeed,
         Self::OpenCode,
-        Self::NewWorkspace,
         Self::OpenOutput,
         Self::OpenSyntaxTree,
         Self::Restart,
@@ -49,7 +45,7 @@ impl Action {
         Self::CopySelection,
     ];
 
-    pub(crate) fn is_remappable(self) -> bool {
+    pub fn is_remappable(self) -> bool {
         Self::REMAPPABLE.contains(&self)
     }
 }

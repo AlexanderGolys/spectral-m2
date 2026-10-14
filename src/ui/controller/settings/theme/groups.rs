@@ -1,9 +1,10 @@
 use std::ops::Index;
+#[cfg(not(test))]
 use std::sync::{LazyLock, RwLock};
 
 use ratatui::style::{Modifier, Style};
 use serde::Deserialize;
-use these_macros_should_be_illegal::enum_fn;
+use these_macros_should_be_illegal::{enum_fn, strutuct};
 
 use super::palette::Palette;
 
@@ -242,10 +243,12 @@ highlight_groups! {
 /// calls. Carrying it made every context a copy of every style and made a repaint look
 /// like a rebuild. Each published table is leaked so a reader can hold `&'static
 /// Groups` without a guard; republishing happens only when a person changes the theme.
+#[cfg(not(test))]
 static SCHEME: LazyLock<RwLock<&'static Groups>> =
     LazyLock::new(|| RwLock::new(Box::leak(Box::new(Groups::default()))));
 
 /// Read the scheme currently in effect.
+#[cfg(not(test))]
 pub fn scheme() -> &'static Groups {
     *SCHEME
         .read()
@@ -253,10 +256,29 @@ pub fn scheme() -> &'static Groups {
 }
 
 /// Publish a newly resolved scheme for every later read.
+#[cfg(not(test))]
 pub fn publish(groups: Groups) {
     *SCHEME
         .write()
         .expect("the scheme lock is never held across a panic") = Box::leak(Box::new(groups));
+}
+
+// Each test runs on its own thread, so a per-thread scheme keeps one test's theme
+// changes from repainting another running in parallel.
+#[cfg(test)]
+thread_local! {
+    static SCHEME: std::cell::Cell<&'static Groups> =
+        std::cell::Cell::new(Box::leak(Box::new(Groups::default())));
+}
+
+#[cfg(test)]
+pub fn scheme() -> &'static Groups {
+    SCHEME.get()
+}
+
+#[cfg(test)]
+pub fn publish(groups: Groups) {
+    SCHEME.set(Box::leak(Box::new(groups)));
 }
 
 impl Groups {
@@ -323,7 +345,7 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
-    use crate::ui::controller::settings::theme::{Brightness, SchemeFile, SCHEMES, SCHEME_FILES};
+    use crate::ui::controller::settings::theme::{Mode, SchemeFile, SCHEMES, SCHEME_FILES};
 
     #[test]
     fn every_scheme_fills_the_complete_group_space() {
@@ -354,12 +376,11 @@ mod tests {
 
     #[test]
     fn an_override_replaces_its_link_outright() {
-        let scheme: SchemeFile =
-            toml::from_str(SCHEME_FILES[0]).expect("embedded scheme parses");
+        let scheme: SchemeFile = toml::from_str(SCHEME_FILES[0]).expect("embedded scheme parses");
         let name = &scheme.variants.dark[0];
         let palette = scheme
             .colors
-            .palette(Brightness::Dark, name)
+            .palette(Mode::Dark, name)
             .expect("variant palette");
         let overrides = Overrides {
             Conditional: Some(StyleSpec {

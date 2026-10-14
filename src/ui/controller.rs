@@ -1,9 +1,9 @@
 //! Interactive editor: submitted feed, live input and history, navigation,
 //! scrolling, and rendering.
 
-pub(crate) mod commands;
+pub mod commands;
 mod picker;
-pub(crate) mod settings;
+pub mod settings;
 
 use std::time::{Duration, Instant};
 
@@ -17,17 +17,16 @@ use these_macros_should_be_illegal::discriminated_str;
 
 use self::commands::Command;
 #[cfg(test)]
-use self::picker::{LineContext, PickerItem};
-use self::picker::{Picker, PickerController, PickerInput, PickerItems, PickerMode, ValueItem};
+use self::picker::PickerItem;
+use self::picker::{Picker, PickerController, PickerInput, PickerItems, PickerMode, Row};
 use self::settings::keymap::Keymaps;
-use self::settings::theme::groups::{publish, Groups, HLGroup};
+use self::settings::theme::groups::{publish, scheme, HLGroup};
 use self::settings::theme::Appearance;
 use self::settings::{Settings, StatusLinePosition};
 use super::action::Action;
 use super::block::{Block, Element, HLSpan, Reformatted, Rethemed, TextSpan};
 use super::cell::{
-    Cell, CellState, CodeBlock, ErrorMessageBlock, EvaluationBlock, IncompleteBlock, OutputBlock,
-    TextBlock,
+    Cell, CellState, CodeBlock, EvaluationBlock, IncompleteBlock, OutputBlock, TextBlock,
 };
 use super::config::UI;
 use super::debug::FrameStats;
@@ -44,7 +43,7 @@ use crate::code::highlight::Highlighter;
 use crate::input::{InputCode, InputContext, InputSetting, InputSettings};
 
 /// An outward effect produced while handling input or an [`Action`].
-pub(crate) enum Reaction {
+pub enum Reaction {
     Continue,
     Submit,
     ResumeIncomplete,
@@ -54,13 +53,12 @@ pub(crate) enum Reaction {
     /// Put the current selection on the system clipboard.
     Copy(String),
     Open(ViewKind, OpenTarget),
-    New(OpenTarget),
     ClosePane,
 }
 
 /// Content rendered by one workspace pane.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum ViewKind {
+pub enum ViewKind {
     #[default]
     Shell,
     Code,
@@ -68,18 +66,18 @@ pub(crate) enum ViewKind {
     SyntaxTree,
 }
 
-/// Whether a command replaces the focused pane or creates the right pane.
+/// Whether a view opens beside the session or in place of the focused pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OpenTarget {
-    Current,
+pub enum OpenTarget {
     Split,
+    InPlace,
 }
 
 // @##Hardcoded
 impl OpenTarget {
-    fn alternative(key: KeyEvent, can_split: bool) -> Option<Self> {
-        if key.code == KeyCode::Char('v') && key.alt() && !key.ctrl() && can_split {
-            Some(Self::Split)
+    fn alternative(key: KeyEvent, has_alternative: bool) -> Option<Self> {
+        if key.code == KeyCode::Char('v') && key.alt() && !key.ctrl() && has_alternative {
+            Some(Self::InPlace)
         } else {
             None
         }
@@ -110,18 +108,18 @@ impl OutputMode {
 
 /// Independent scrolling and output-filter state for one pane.
 #[derive(Default)]
-pub(crate) struct Viewport {
-    pub(crate) scroll: usize,
+pub struct Viewport {
+    pub scroll: usize,
     output: OutputMode,
     preview: Option<PreviewCache>,
 }
 
 /// Immutable committed cells paired with the revision that changes them.
-pub(crate) struct CommittedCells<'a> {
+pub struct CommittedCells<'a> {
     /// Cells in evaluation order.
-    pub(crate) cells: &'a [CommittedCell],
+    pub cells: &'a [CommittedCell],
     /// Workspace revision for cache invalidation.
-    pub(crate) revision: u64,
+    pub revision: u64,
 }
 
 /// Parsed block model retained by one code or syntax-tree preview pane.
@@ -133,7 +131,7 @@ struct PreviewCache {
 
 impl Viewport {
     // @##Suspicious
-    pub(crate) fn for_view(view: ViewKind) -> Self {
+    pub fn for_view(view: ViewKind) -> Self {
         Self {
             scroll: if view == ViewKind::SyntaxTree {
                 usize::MAX
@@ -144,7 +142,7 @@ impl Viewport {
         }
     }
 
-    pub(crate) fn cycle_output(&mut self, delta: i8) {
+    pub fn cycle_output(&mut self, delta: i8) {
         self.output = self.output.cycle(delta);
         self.scroll = 0;
     }
@@ -220,7 +218,7 @@ impl Viewport {
 }
 
 /// A session result to apply to the editor model.
-pub(crate) enum EditorUpdate {
+pub enum EditorUpdate {
     Ignore,
     /// Leave the shell; the backend shuts down with it.
     Quit,
@@ -269,13 +267,12 @@ pub(crate) enum EditorUpdate {
 }
 
 /// A state change requested by a picker or one of its lines.
-pub(crate) enum EditorEvent {
+pub enum EditorEvent {
     EditCommand(KeyEvent),
     ResumeTyping(char),
     ClosePickers,
     RunCommand(Command, OpenTarget),
     ClosePicker,
-    OpenStyle,
     RestoreDefaults,
     SetSettings(Settings),
     SetInput(InputSettings),
@@ -287,25 +284,37 @@ pub(crate) enum EditorEvent {
 #[discriminated_str(label)]
 #[derive(Clone, Copy)]
 enum AppearanceField {
-    Colorscheme = "colorscheme",
-    Brightness = "brightness",
+    Theme = "theme",
+    Contrast = "contrast",
+    Mode = "mode",
     Background = "background",
 }
 
 impl AppearanceField {
     fn value(self, appearance: Appearance) -> String {
         match self {
-            Self::Colorscheme => appearance.colorscheme_label(),
-            Self::Brightness => appearance.variant().brightness().to_string(),
+            Self::Theme => appearance.scheme().label().to_string(),
+            Self::Contrast => appearance.variant().label().to_string(),
+            Self::Mode => appearance.mode().to_string(),
             Self::Background => appearance.background_label().to_string(),
         }
     }
 
     fn adjust(self, appearance: Appearance, delta: i8) -> Appearance {
         match self {
-            Self::Colorscheme => appearance.cycle_colorscheme(delta),
-            Self::Brightness => appearance.cycle_brightness(delta),
+            Self::Theme => appearance.cycle_theme(delta),
+            Self::Contrast => appearance.cycle_contrast(delta),
+            Self::Mode => appearance.cycle_mode(delta),
             Self::Background => appearance.cycle_background(),
+        }
+    }
+
+    const fn description(self) -> &'static str {
+        match self {
+            Self::Theme => "colour scheme family",
+            Self::Contrast => "the theme's variants for the current mode",
+            Self::Mode => "dark or light palette",
+            Self::Background => "paint empty canvas or let the terminal show through",
         }
     }
 }
@@ -332,24 +341,53 @@ struct ScreenCell {
 }
 
 const SHELL_ITEMS: &[ShellItem] = &[
+    ShellItem::Appearance(AppearanceField::Theme),
+    ShellItem::Appearance(AppearanceField::Contrast),
+    ShellItem::Appearance(AppearanceField::Mode),
+    ShellItem::Appearance(AppearanceField::Background),
     ShellItem::Input(InputSetting::MaxHeight),
     ShellItem::Input(InputSetting::Scrolloff),
     ShellItem::Statusline,
     ShellItem::Fractions,
     ShellItem::OutputRows,
-    ShellItem::Style,
     ShellItem::RestoreDefault,
 ];
 
 /// One item listed in the settings picker.
 #[derive(Clone, Copy)]
 enum ShellItem {
+    Appearance(AppearanceField),
     Input(InputSetting),
     Statusline,
     Fractions,
     OutputRows,
-    Style,
     RestoreDefault,
+}
+
+impl ShellItem {
+    /// The setting's name, leading its row.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Appearance(field) => field.label(),
+            Self::Input(field) => field.label(),
+            Self::Statusline => "statusline",
+            Self::Fractions => "fractions",
+            Self::OutputRows => "max output height",
+            Self::RestoreDefault => "restore default",
+        }
+    }
+
+    /// What the setting controls, shown after its value.
+    const fn description(self) -> &'static str {
+        match self {
+            Self::Appearance(field) => field.description(),
+            Self::Input(field) => field.description(),
+            Self::Statusline => "where the status line sits",
+            Self::Fractions => "how rational values are drawn",
+            Self::OutputRows => "rows a value shows before its middle folds away",
+            Self::RestoreDefault => "reset settings, keymaps and appearance",
+        }
+    }
 }
 
 /// The editor child that receives an otherwise unclaimed input event.
@@ -361,23 +399,13 @@ enum ElementFocus {
     Picker(PickerMode),
 }
 
-/// Presentation settings shared by every workspace.
-#[derive(Clone)]
-pub(crate) struct EditorConfig {
-    settings: Settings,
-    input: InputSettings,
-    keymaps: Keymaps,
-    appearance: Appearance,
-}
-
 /// The transcript feed, live input, and viewport state.
-pub(crate) struct Editor {
+pub struct Editor {
     feed: Feed,
     input: InputCode,
     settings: Settings,
     keymaps: Keymaps,
     appearance: Appearance,
-    groups: Groups,
     status_line: StatusLine,
     continuation: Option<String>,
     processing: bool,
@@ -400,7 +428,7 @@ pub(crate) struct Editor {
 }
 
 impl Editor {
-    pub(crate) fn new(welcome: String) -> Self {
+    pub fn new(welcome: String) -> Self {
         let appearance = Appearance::load();
         publish(appearance.groups());
         let mut editor = Self {
@@ -409,7 +437,6 @@ impl Editor {
             settings: Settings::default(),
             keymaps: Keymaps::default(),
             appearance,
-            groups: appearance.groups(),
             status_line: StatusLine::default(),
             continuation: None,
             processing: false,
@@ -434,50 +461,29 @@ impl Editor {
     }
 
     /// Reflect whether this editor's backend currently owns unfinished work.
-    pub(crate) fn set_processing(&mut self, processing: bool) {
+    pub fn set_processing(&mut self, processing: bool) {
         if self.processing != processing {
             self.processing = processing;
             self.refresh_status_line();
         }
     }
 
-    pub(crate) fn submission(&self) -> &str {
+    pub fn submission(&self) -> &str {
         self.input.text()
     }
 
-    pub(crate) fn config(&self) -> EditorConfig {
-        EditorConfig {
-            settings: self.settings,
-            input: self.input.settings(),
-            keymaps: self.keymaps.clone(),
-            appearance: self.appearance,
-        }
-    }
-
-    pub(crate) fn set_config(&mut self, config: &EditorConfig) {
-        self.settings = config.settings;
-        self.input.set_settings(config.input);
-        self.keymaps.clone_from(&config.keymaps);
-        self.apply_appearance(config.appearance);
-        self.refresh_status_line();
-    }
-
-    pub(crate) fn append_error(&mut self, message: impl Into<String>) {
-        self.push_block(Box::new(ErrorMessageBlock::new(message.into())));
-    }
-
-    pub(crate) fn set_context(&mut self, split: bool, previewing: bool, pane_focused: bool) {
+    pub fn set_context(&mut self, split: bool, previewing: bool, pane_focused: bool) {
         self.split = split;
         self.previewing = previewing;
         self.pane_focused = pane_focused;
     }
 
-    pub(crate) fn picker_open(&self) -> bool {
+    pub fn picker_open(&self) -> bool {
         matches!(self.focus(), ElementFocus::Picker(_))
     }
 
     /// Resolve a terminal key through the active command keymaps.
-    pub(crate) fn resolve_action(&self, key: KeyEvent) -> Option<Action> {
+    pub fn resolve_action(&self, key: KeyEvent) -> Option<Action> {
         (self.previewing && !self.picker_open())
             .then(|| self.keymaps.preview_action(key))
             .flatten()
@@ -490,7 +496,7 @@ impl Editor {
     }
 
     /// Forward unbound preview input to its focused component.
-    pub(crate) fn handle_preview_key(&mut self, key: KeyEvent) -> Reaction {
+    pub fn handle_preview_key(&mut self, key: KeyEvent) -> Reaction {
         if matches!(self.focus(), ElementFocus::Picker(_)) {
             return self.handle_picker_key(key);
         }
@@ -501,7 +507,7 @@ impl Editor {
     }
 
     /// Apply a session result. Returns whether the shell should keep running.
-    pub(crate) fn apply(&mut self, update: EditorUpdate) -> bool {
+    pub fn apply(&mut self, update: EditorUpdate) -> bool {
         match update {
             EditorUpdate::Quit => return false,
             EditorUpdate::Ignore => {}
@@ -582,7 +588,7 @@ impl Editor {
         true
     }
 
-    pub(crate) fn post(&mut self, update: EditorUpdate) -> bool {
+    pub fn post(&mut self, update: EditorUpdate) -> bool {
         match update {
             EditorUpdate::Batch(updates) => updates.into_iter().all(|update| self.post(update)),
             EditorUpdate::Pending { id, cells } => {
@@ -604,7 +610,7 @@ impl Editor {
     }
 
     /// Move the feed's unfinished tail back into the live editor.
-    pub(crate) fn take_incomplete(&mut self) -> Option<String> {
+    pub fn take_incomplete(&mut self) -> Option<String> {
         let source = self.feed.take_incomplete()?.into_source();
         self.continuation = None;
         self.input.restore(source.clone());
@@ -616,7 +622,7 @@ impl Editor {
         self.feed.push(block);
     }
 
-    pub(crate) fn paste(&mut self, text: &str) {
+    pub fn paste(&mut self, text: &str) {
         self.input.insert(text);
         self.refresh_status_line();
     }
@@ -627,7 +633,7 @@ impl Editor {
     /// Route the wheel by what it is pointing at: over the input pane it resizes
     /// the pane, everywhere else it scrolls the feed. A double click on a folded
     /// value expands it, and on an expanded one folds it back.
-    pub(crate) fn handle_mouse(&mut self, event: MouseEvent) -> Reaction {
+    pub fn handle_mouse(&mut self, event: MouseEvent) -> Reaction {
         if self.double_clicked(event)
             && self
                 .feed
@@ -676,7 +682,7 @@ impl Editor {
             })
     }
 
-    pub(crate) fn handle_preview_mouse(&mut self, event: MouseEvent) -> Reaction {
+    pub fn handle_preview_mouse(&mut self, event: MouseEvent) -> Reaction {
         self.handle_screen_mouse(event)
             .unwrap_or(Reaction::Continue)
     }
@@ -785,7 +791,7 @@ impl Editor {
     }
 
     /// Forward unbound shell input to its focused component.
-    pub(crate) fn handle_input(&mut self, key: KeyEvent) -> Reaction {
+    pub fn handle_input(&mut self, key: KeyEvent) -> Reaction {
         if matches!(self.focus(), ElementFocus::Picker(_)) {
             return self.handle_picker_key(key);
         }
@@ -820,7 +826,7 @@ impl Editor {
     }
 
     /// React to a mapped command after its originating key has been discarded.
-    pub(crate) fn handle_action(&mut self, action: Action) -> Reaction {
+    pub fn handle_action(&mut self, action: Action) -> Reaction {
         if matches!(self.focus(), ElementFocus::Picker(_)) {
             return self.handle_picker_action(action);
         }
@@ -831,7 +837,7 @@ impl Editor {
             self.screen_selection = None;
         }
         if let Some(command) = commands::shortcut(action) {
-            return command.run(self, OpenTarget::Current);
+            return command.run(self, OpenTarget::Split);
         }
 
         if action == Action::CopySelection {
@@ -854,7 +860,7 @@ impl Editor {
             if let Some(command) = commands::exact(self.input.text(), self.split) {
                 self.continuation = None;
                 self.input.accept_submission();
-                return command.run(self, OpenTarget::Current);
+                return command.run(self, OpenTarget::Split);
             }
             // Submitting is not an edit, so an incomplete buffer's inserted
             // newline must not consume a live selection.
@@ -876,11 +882,9 @@ impl Editor {
             | Action::ResizePaneRight
             | Action::Quit
             | Action::OpenSettings
-            | Action::OpenStyle
             | Action::OpenKeymaps
             | Action::ClearFeed
             | Action::OpenCode
-            | Action::NewWorkspace
             | Action::OpenOutput
             | Action::OpenSyntaxTree
             | Action::Restart
@@ -894,7 +898,7 @@ impl Editor {
         let commands = commands::matching("", self.split);
         self.pickers = vec![PickerController {
             mode: PickerMode::Commands,
-            picker: commands::picker(&commands, &self.keymaps, self.split),
+            picker: commands::picker(&commands, &self.keymaps),
         }];
         self.refresh_status_line();
     }
@@ -921,7 +925,7 @@ impl Editor {
         let commands = commands::matching("", self.split);
         self.pickers = vec![PickerController {
             mode: PickerMode::FilteredCommands,
-            picker: commands::picker(&commands, &self.keymaps, self.split),
+            picker: commands::picker(&commands, &self.keymaps),
         }];
         self.refresh_status_line();
     }
@@ -945,7 +949,7 @@ impl Editor {
         else {
             return;
         };
-        let mut picker = commands::picker(&commands, &self.keymaps, self.split);
+        let mut picker = commands::picker(&commands, &self.keymaps);
         picker.select(selected);
         self.pickers.last_mut().unwrap().picker = picker;
     }
@@ -983,96 +987,95 @@ impl Editor {
         Picker::new("settings", self.shell_items())
     }
 
-    fn style_picker(&self) -> Picker {
-        Picker::new("style", Self::appearance_items(self.appearance))
-    }
-
     fn keymaps_picker(&self) -> Picker {
         Picker::new("keymaps", self.keymap_items())
     }
 
     fn shell_items(&self) -> PickerItems {
+        let groups = scheme();
         SHELL_ITEMS
             .iter()
             .copied()
-            .map(|item| match item {
-                ShellItem::Input(field) => {
-                    let mut settings = self.input.settings();
-                    ValueItem::adjust(field.label(), field.value(settings), move |delta| {
-                        field.adjust(&mut settings, delta);
-                        EditorEvent::SetInput(settings)
-                    })
+            .map(|item| {
+                let cells = |value: &str| {
+                    vec![
+                        Span::styled(item.label(), groups.muted()).into(),
+                        Span::styled(value.to_string(), groups.value()).into(),
+                        Span::styled(item.description(), groups.muted()).into(),
+                    ]
+                };
+                match item {
+                    ShellItem::Appearance(field) => {
+                        let appearance = self.appearance;
+                        Row::adjust(cells(&field.value(appearance)), move |delta| {
+                            EditorEvent::SetAppearance(field.adjust(appearance, delta))
+                        })
+                    }
+                    ShellItem::Input(field) => {
+                        let mut settings = self.input.settings();
+                        Row::adjust(cells(&field.value(settings)), move |delta| {
+                            field.adjust(&mut settings, delta);
+                            EditorEvent::SetInput(settings)
+                        })
+                    }
+                    ShellItem::Statusline => {
+                        let mut settings = self.settings;
+                        let value = match settings.statusline {
+                            StatusLinePosition::BelowInput => "below input",
+                            StatusLinePosition::AboveInput => "above input",
+                            StatusLinePosition::Off => "off",
+                        };
+                        Row::adjust(cells(value), move |delta| {
+                            settings.statusline = settings.statusline.cycle(delta);
+                            EditorEvent::SetSettings(settings)
+                        })
+                    }
+                    ShellItem::Fractions => {
+                        let mut settings = self.settings;
+                        Row::adjust(cells(settings.fractions.label()), move |delta| {
+                            settings.fractions = settings.fractions.cycle(delta);
+                            EditorEvent::SetSettings(settings)
+                        })
+                    }
+                    ShellItem::OutputRows => {
+                        let mut settings = self.settings;
+                        let value = format!("{} rows", settings.output_rows);
+                        Row::adjust(cells(&value), move |delta| {
+                            settings.adjust_output_rows(delta);
+                            EditorEvent::SetSettings(settings)
+                        })
+                    }
+                    ShellItem::RestoreDefault => {
+                        Row::enter(cells(""), || EditorEvent::RestoreDefaults)
+                    }
                 }
-                ShellItem::Statusline => {
-                    let mut settings = self.settings;
-                    let value = match settings.statusline {
-                        StatusLinePosition::BelowInput => "below input",
-                        StatusLinePosition::AboveInput => "above input",
-                        StatusLinePosition::Off => "off",
-                    };
-                    ValueItem::adjust("statusline", value, move |delta| {
-                        settings.statusline = settings.statusline.cycle(delta);
-                        EditorEvent::SetSettings(settings)
-                    })
-                }
-                ShellItem::Fractions => {
-                    let mut settings = self.settings;
-                    ValueItem::adjust("fractions", settings.fractions.label(), move |delta| {
-                        settings.fractions = settings.fractions.cycle(delta);
-                        EditorEvent::SetSettings(settings)
-                    })
-                }
-                ShellItem::OutputRows => {
-                    let mut settings = self.settings;
-                    let value = format!("{} rows", settings.output_rows);
-                    ValueItem::adjust("max output height", value, move |delta| {
-                        settings.adjust_output_rows(delta);
-                        EditorEvent::SetSettings(settings)
-                    })
-                }
-                ShellItem::Style => {
-                    ValueItem::enter("style", self.appearance.colorscheme_label(), false, || {
-                        EditorEvent::OpenStyle
-                    })
-                }
-                ShellItem::RestoreDefault => {
-                    ValueItem::enter("restore default", "", true, || EditorEvent::RestoreDefaults)
-                }
+                .into()
             })
             .collect()
     }
 
     fn keymap_items(&self) -> PickerItems {
+        let groups = scheme();
         Action::REMAPPABLE
             .iter()
             .map(|&action| {
-                ValueItem::keymap(
-                    action.description(),
-                    self.keymaps
-                        .key_for(action)
-                        .unwrap_or_else(|| "unbound".to_string()),
+                let key = self
+                    .keymaps
+                    .key_for(action)
+                    .unwrap_or_else(|| "unbound".to_string());
+                Row::new(
+                    vec![
+                        Span::styled(action.description(), groups.muted()).into(),
+                        Span::styled(key, groups.style(HLGroup::KeymapHint)).into(),
+                    ],
                     move |input| match input {
                         PickerInput::Key(key) => Some(EditorEvent::Rebind(action, key)),
                         _ => None,
                     },
                 )
+                .into()
             })
             .collect()
-    }
-
-    fn appearance_items(appearance: Appearance) -> PickerItems {
-        [
-            AppearanceField::Colorscheme,
-            AppearanceField::Brightness,
-            AppearanceField::Background,
-        ]
-        .into_iter()
-        .map(|field| {
-            ValueItem::adjust(field.label(), field.value(appearance), move |delta| {
-                EditorEvent::SetAppearance(field.adjust(appearance, delta))
-            })
-        })
-        .collect()
     }
 
     fn handle_picker_key(&mut self, key: KeyEvent) -> Reaction {
@@ -1106,7 +1109,7 @@ impl Editor {
                 return Reaction::Continue;
             }
             if let Some(command) = commands::shortcut(action) {
-                return command.run(self, OpenTarget::Current);
+                return command.run(self, OpenTarget::Split);
             }
         }
         if let Some(event) = self.pickers.last_mut().unwrap().handle_action(action) {
@@ -1129,10 +1132,6 @@ impl Editor {
         self.open_from_commands(PickerMode::Settings, Self::settings_picker);
     }
 
-    fn open_style_from_commands(&mut self) {
-        self.open_from_commands(PickerMode::Style, Self::style_picker);
-    }
-
     fn open_keymaps_from_commands(&mut self) {
         self.open_from_commands(PickerMode::Keymaps, Self::keymaps_picker);
     }
@@ -1150,14 +1149,6 @@ impl Editor {
         self.pickers.push(PickerController {
             mode,
             picker: picker(self),
-        });
-        self.refresh_status_line();
-    }
-
-    fn open_style(&mut self) {
-        self.pickers.push(PickerController {
-            mode: PickerMode::Style,
-            picker: self.style_picker(),
         });
         self.refresh_status_line();
     }
@@ -1200,7 +1191,6 @@ impl Editor {
                     self.refresh_commands();
                 }
             }
-            EditorEvent::OpenStyle => self.open_style(),
             EditorEvent::RestoreDefaults => {
                 if self.settings.reformats(&Settings::default()) {
                     self.feed.on_event(&Reformatted);
@@ -1227,7 +1217,7 @@ impl Editor {
             }
             EditorEvent::SetAppearance(appearance) => {
                 self.apply_appearance(appearance);
-                let items = Self::appearance_items(appearance);
+                let items = self.shell_items();
                 self.pickers.last_mut().unwrap().picker.set_items(items);
             }
             EditorEvent::Rebind(action, key) => {
@@ -1306,16 +1296,15 @@ impl Editor {
     }
 
     fn highlight_debug_entries(&self) -> Vec<(String, ratatui::style::Style)> {
-        let heading = self
-            .groups
+        let heading = scheme()
             .prompt()
             .add_modifier(ratatui::style::Modifier::BOLD);
         let mut entries = vec![
-            (self.frame_stats.label(), self.groups.muted()),
+            (self.frame_stats.label(), scheme().muted()),
             ("highlight groups".into(), heading),
         ];
         entries.extend(
-            self.groups
+            scheme()
                 .highlight_groups()
                 .into_iter()
                 .map(|(name, style)| (name.into(), style)),
@@ -1384,11 +1373,11 @@ impl Editor {
             width,
             height,
         );
-        let base = self.groups.transcript().patch(self.groups.value());
+        let base = scheme().transcript().patch(scheme().value());
         let block = TuiBlock::bordered()
             .style(base)
-            .border_style(self.groups.border())
-            .title(Span::styled(title, self.groups.prompt()));
+            .border_style(scheme().border())
+            .title(Span::styled(title, scheme().prompt()));
         frame.render_widget(Clear, area);
         frame.render_widget(Paragraph::new(lines).style(base).block(block), area);
         self.selection_exclusions.push(area);
@@ -1435,7 +1424,7 @@ impl Editor {
         self.status_line.handle(event);
     }
 
-    pub(crate) fn draw(
+    pub fn draw(
         &mut self,
         frame: &mut Frame,
         area: Rect,
@@ -1446,7 +1435,7 @@ impl Editor {
             self.frame_stats.tick();
         }
         self.selection_exclusions.clear();
-        let theme = self.groups;
+        let theme = *scheme();
         let input_prefix = UI.prompt_width();
         frame.render_widget(Clear, area);
 
@@ -1508,7 +1497,7 @@ impl Editor {
         if let Some(controller) = self.pickers.last() {
             controller
                 .picker
-                .render(&theme, sections[1], frame.buffer_mut());
+                .render(&(), sections[1], frame.buffer_mut());
             self.selection_exclusions.push(sections[1]);
         }
         self.selection_exclusions.push(input_area);
@@ -1556,7 +1545,7 @@ impl Editor {
         self.paint_screen_selection(frame);
     }
 
-    pub(crate) fn draw_preview(
+    pub fn draw_preview(
         &mut self,
         frame: &mut Frame,
         area: Rect,
@@ -1570,7 +1559,7 @@ impl Editor {
         }
         self.selection_exclusions.clear();
         self.input.hide();
-        let theme = self.groups;
+        let theme = *scheme();
         frame.render_widget(Clear, area);
         TuiBlock::default()
             .style(self.appearance.canvas(if view == ViewKind::SyntaxTree {
@@ -1647,7 +1636,7 @@ impl Editor {
         if let Some(controller) = self.pickers.last() {
             controller
                 .picker
-                .render(&theme, sections[1], frame.buffer_mut());
+                .render(&(), sections[1], frame.buffer_mut());
             self.status_line.render(
                 &StatusLineContext {
                     center,
@@ -1760,7 +1749,7 @@ impl Editor {
                     .is_some_and(|cell| cell.selectable);
                 if selectable {
                     let cell = &mut buffer[(x, y)];
-                    cell.set_style(self.groups.selection());
+                    cell.set_style(scheme().selection());
                 }
             }
         }
@@ -2255,7 +2244,9 @@ mod tests {
         let before = editor.input.settings().scrolloff;
 
         open_settings(&mut editor);
-        editor.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        move_to_setting(&mut editor, |item| {
+            matches!(item, ShellItem::Input(InputSetting::Scrolloff))
+        });
         editor.handle_key(key(KeyCode::Right, KeyModifiers::NONE));
 
         assert_eq!(editor.input.settings().scrolloff, before + 1);
@@ -2272,6 +2263,9 @@ mod tests {
         let before = editor.input.settings().max_height_percent;
 
         open_settings(&mut editor);
+        move_to_setting(&mut editor, |item| {
+            matches!(item, ShellItem::Input(InputSetting::MaxHeight))
+        });
         press(&mut editor, KeyCode::Right, KeyModifiers::NONE);
 
         assert_eq!(editor.input.settings().max_height_percent, before + 5);
@@ -2285,7 +2279,7 @@ mod tests {
         input.max_height_percent = 40;
         editor.input.set_settings(input);
         assert!(editor.keymaps.rebind(Action::ClearFeed, rebound));
-        editor.apply_appearance(editor.appearance.cycle_colorscheme(1));
+        editor.apply_appearance(editor.appearance.cycle_theme(1));
         editor.open_settings_from_commands();
 
         move_to_setting(&mut editor, |item| {
@@ -2301,17 +2295,6 @@ mod tests {
         assert_eq!(editor.input.settings().scrolloff, defaults.scrolloff);
         assert!(editor.resolve_action(rebound).is_none());
         assert_eq!(editor.appearance, Appearance::default());
-    }
-
-    #[test]
-    fn unchanged_config_keeps_the_retained_feed() {
-        let mut editor = Editor::new("visible".into());
-        rendered_buffer(&mut editor, 40, 10);
-        assert!(editor.feed.retained());
-
-        editor.set_config(&editor.config());
-
-        assert!(editor.feed.retained());
     }
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
@@ -2349,12 +2332,13 @@ mod tests {
         row
     }
 
-    fn open_style(editor: &mut Editor) {
-        for character in "/st".chars() {
-            press(editor, KeyCode::Char(character), KeyModifiers::NONE);
-        }
-        press(editor, KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(picker_title(editor), Some("style"));
+    /// Open settings on the row adjusting one appearance axis.
+    fn open_appearance(editor: &mut Editor, field: AppearanceField) {
+        open_settings(editor);
+        move_to_setting(
+            editor,
+            |item| matches!(item, ShellItem::Appearance(candidate) if candidate.label() == field.label()),
+        );
     }
 
     fn open_keymaps(editor: &mut Editor) {
@@ -2365,44 +2349,39 @@ mod tests {
     }
 
     fn item_text(item: &dyn PickerItem) -> String {
-        let groups = Groups::default();
-        item.spans(&LineContext {
-            width: 80,
-            value_column: 40,
-            columns: None,
-            selected: false,
-            groups,
-        })
-        .into_iter()
-        .map(|span| span.content)
-        .collect::<String>()
+        item.cells()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     #[test]
-    fn style_cycles_ordered_colorscheme_variants_in_one_axis() {
+    fn settings_cycle_theme_and_contrast_separately() {
         let mut editor = Editor::new(String::new());
-        open_style(&mut editor);
+        open_appearance(&mut editor, AppearanceField::Contrast);
 
         press(&mut editor, KeyCode::Right, KeyModifiers::NONE);
-        assert_eq!(editor.appearance.colorscheme_label(), "everforest soft");
+        assert_eq!(editor.appearance.variant().label(), "soft");
+        press(&mut editor, KeyCode::Right, KeyModifiers::NONE);
+        assert_eq!(editor.appearance.variant().label(), "hard");
+        assert_eq!(editor.appearance.scheme().label(), "everforest");
+
+        press(&mut editor, KeyCode::Esc, KeyModifiers::NONE);
+        open_appearance(&mut editor, AppearanceField::Theme);
         press(&mut editor, KeyCode::Left, KeyModifiers::NONE);
-        assert_eq!(editor.appearance.colorscheme_label(), "everforest medium");
+        assert_eq!(editor.appearance.scheme().label(), "gruvbox material");
         press(&mut editor, KeyCode::Left, KeyModifiers::NONE);
-        assert_eq!(editor.appearance.colorscheme_label(), "everforest hard");
-        press(&mut editor, KeyCode::Left, KeyModifiers::NONE);
-        assert_eq!(
-            editor.appearance.colorscheme_label(),
-            "gruvbox material original"
-        );
+        assert_eq!(editor.appearance.scheme().label(), "gruvbox");
+        assert_eq!(editor.appearance.variant().label(), "hard");
     }
 
     #[test]
-    fn enter_closes_style_and_keeps_changes() {
+    fn enter_closes_settings_and_keeps_appearance_changes() {
         let mut editor = Editor::new(String::new());
         let original = editor.appearance;
 
-        open_style(&mut editor);
-        press(&mut editor, KeyCode::Up, KeyModifiers::NONE);
+        open_appearance(&mut editor, AppearanceField::Background);
         press(&mut editor, KeyCode::Right, KeyModifiers::NONE);
         assert_ne!(editor.appearance, original);
 
@@ -2412,31 +2391,23 @@ mod tests {
     }
 
     #[test]
-    fn style_brightness_preserves_the_variant_when_available() {
+    fn mode_preserves_the_variant_when_available() {
         let mut editor = Editor::new(String::new());
-        open_style(&mut editor);
-        press(&mut editor, KeyCode::Down, KeyModifiers::NONE);
+        open_appearance(&mut editor, AppearanceField::Mode);
 
         press(&mut editor, KeyCode::Right, KeyModifiers::NONE);
-        assert_eq!(
-            editor.appearance.variant().brightness().to_string(),
-            "light"
-        );
+        assert_eq!(editor.appearance.variant().mode().to_string(), "light");
         assert_eq!(editor.appearance.variant().label(), "medium");
         press(&mut editor, KeyCode::Right, KeyModifiers::NONE);
-        assert_eq!(editor.appearance.variant().brightness().to_string(), "dark");
+        assert_eq!(editor.appearance.variant().mode().to_string(), "dark");
         press(&mut editor, KeyCode::Left, KeyModifiers::NONE);
-        assert_eq!(
-            editor.appearance.variant().brightness().to_string(),
-            "light"
-        );
+        assert_eq!(editor.appearance.variant().mode().to_string(), "light");
     }
 
     #[test]
-    fn style_background_row_toggles_transparency_from_either_direction() {
+    fn background_row_toggles_transparency_from_either_direction() {
         let mut editor = Editor::new(String::new());
-        open_style(&mut editor);
-        press(&mut editor, KeyCode::Up, KeyModifiers::NONE);
+        open_appearance(&mut editor, AppearanceField::Background);
 
         press(&mut editor, KeyCode::Right, KeyModifiers::NONE);
         assert!(editor.appearance.transparent_background);
@@ -2445,32 +2416,26 @@ mod tests {
     }
 
     #[test]
-    fn style_rows_expose_three_cyclic_axes() {
-        let rows = Editor::appearance_items(Appearance::default());
+    fn settings_lead_with_the_cyclic_appearance_axes() {
+        let editor = Editor::new(String::new());
+        let rows = editor.shell_items();
         let rows: Vec<_> = rows.iter().map(|row| item_text(row.as_ref())).collect();
 
-        assert_eq!(rows.len(), 3);
-        assert!(rows[0].contains("colorscheme") && rows[0].contains("everforest medium"));
-        assert!(rows[1].contains("brightness") && rows[1].contains("dark"));
-        assert!(rows[2].contains("background") && rows[2].contains("opaque"));
+        assert!(rows[0].contains("theme") && rows[0].contains("everforest"));
+        assert!(rows[1].contains("contrast") && rows[1].contains("medium"));
+        assert!(rows[2].contains("mode") && rows[2].contains("dark"));
+        assert!(rows[3].contains("background") && rows[3].contains("opaque"));
     }
 
     #[test]
-    fn settings_style_row_opens_the_separate_picker_and_returns() {
-        let mut editor = Editor::new(String::new());
-
-        open_settings(&mut editor);
-        let style_row = move_to_setting(&mut editor, |item| matches!(item, ShellItem::Style));
-        press(&mut editor, KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(picker_title(&editor), Some("style"));
-        press(&mut editor, KeyCode::Backspace, KeyModifiers::NONE);
-        assert_eq!(picker_title(&editor), Some("settings"));
-        assert_eq!(editor.pickers.last().unwrap().picker.selected(), style_row);
-
-        press(&mut editor, KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(picker_title(&editor), Some("style"));
-        press(&mut editor, KeyCode::Esc, KeyModifiers::NONE);
-        assert!(editor.pickers.is_empty());
+    fn every_setting_shows_its_description_after_the_value() {
+        let editor = Editor::new(String::new());
+        for (item, row) in SHELL_ITEMS.iter().zip(editor.shell_items()) {
+            let text = item_text(row.as_ref());
+            let description = text.find(item.description()).expect("described row");
+            assert!(text.trim_end().ends_with(item.description()), "{text:?}");
+            assert!(description > text.find(char::is_alphanumeric).unwrap());
+        }
     }
 
     #[test]
@@ -2523,18 +2488,13 @@ mod tests {
     }
 
     #[test]
-    fn typing_closes_settings_and_style_and_reaches_the_input() {
+    fn typing_closes_settings_and_reaches_the_input() {
         let mut editor = Editor::new(String::new());
         editor.input.field_mut().insert_char('x');
         editor.open_settings_from_commands();
         press(&mut editor, KeyCode::Char('y'), KeyModifiers::NONE);
         assert!(editor.pickers.is_empty());
         assert_eq!(editor.input.text(), "xy");
-
-        editor.open_style();
-        press(&mut editor, KeyCode::Char('z'), KeyModifiers::NONE);
-        assert!(editor.pickers.is_empty());
-        assert_eq!(editor.input.text(), "xyz");
     }
 
     #[test]
@@ -2610,15 +2570,13 @@ mod tests {
         let action = editor.handle_key(key(KeyCode::Char('c'), KeyModifiers::ALT));
         assert!(matches!(
             action,
-            Reaction::Open(ViewKind::Code, OpenTarget::Current)
+            Reaction::Open(ViewKind::Code, OpenTarget::Split)
         ));
 
-        for (key, title) in [('s', "style"), ('k', "keymaps")] {
-            press(&mut editor, KeyCode::Char(key), KeyModifiers::ALT);
-            assert_eq!(picker_title(&editor), Some(title));
-            press(&mut editor, KeyCode::Char(key), KeyModifiers::ALT);
-            assert!(editor.pickers.is_empty());
-        }
+        press(&mut editor, KeyCode::Char('k'), KeyModifiers::ALT);
+        assert_eq!(picker_title(&editor), Some("keymaps"));
+        press(&mut editor, KeyCode::Char('k'), KeyModifiers::ALT);
+        assert!(editor.pickers.is_empty());
     }
 
     #[test]
@@ -2634,14 +2592,18 @@ mod tests {
         press(&mut editor, KeyCode::Backspace, KeyModifiers::NONE);
         assert_eq!(picker_title(&editor), Some("commands"));
 
-        for _ in 0..4 {
+        let code = commands::matching("", false)
+            .iter()
+            .position(|command| command.label() == "code")
+            .expect("code is a command");
+        for _ in 0..code {
             press(&mut editor, KeyCode::Down, KeyModifiers::NONE);
         }
         let action = editor.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(editor.pickers.is_empty());
         assert!(matches!(
             action,
-            Reaction::Open(ViewKind::Code, OpenTarget::Current)
+            Reaction::Open(ViewKind::Code, OpenTarget::Split)
         ));
         assert_eq!(editor.input.text(), "x");
 
@@ -2661,7 +2623,7 @@ mod tests {
         let action = editor.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(
             action,
-            Reaction::Open(ViewKind::SyntaxTree, OpenTarget::Current)
+            Reaction::Open(ViewKind::SyntaxTree, OpenTarget::Split)
         ));
 
         press(&mut editor, KeyCode::Up, KeyModifiers::NONE);
@@ -2707,7 +2669,7 @@ mod tests {
         let action = editor.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(
             action,
-            Reaction::Open(ViewKind::Code, OpenTarget::Current)
+            Reaction::Open(ViewKind::Code, OpenTarget::Split)
         ));
     }
 
@@ -2766,7 +2728,7 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(buffer[(x, y)].fg, editor.groups.prompt().fg.unwrap());
+        assert_eq!(buffer[(x, y)].fg, scheme().prompt().fg.unwrap());
     }
 
     #[test]
@@ -2820,7 +2782,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_has_no_tabs_and_style_has_its_own_title() {
+    fn settings_has_no_tabs() {
         let mut editor = Editor::new(String::new());
         editor.open_settings_from_commands();
 
@@ -2829,11 +2791,6 @@ mod tests {
 
         assert!(screen.contains(" settings "));
         assert!(!screen.contains("[shell]") && !screen.contains("[theme]"));
-
-        editor.open_style();
-        assert!(rendered_editor(&mut editor, 70, 12)
-            .join("\n")
-            .contains(" style "));
     }
 
     #[test]
@@ -2911,6 +2868,37 @@ mod tests {
     }
 
     #[test]
+    fn debug_view_and_status_line_follow_theme_changes() {
+        let mut editor = Editor::new(String::new());
+        let rethemed = editor.appearance.cycle_theme(1);
+        let groups = rethemed.groups();
+        assert_ne!(
+            groups.highlight_groups(),
+            editor.appearance.groups().highlight_groups()
+        );
+
+        editor.apply_appearance(rethemed);
+
+        let debug_styles = editor
+            .highlight_debug_entries()
+            .into_iter()
+            .skip(2)
+            .map(|(_, style)| style)
+            .collect::<Vec<_>>();
+        let themed_styles = groups
+            .highlight_groups()
+            .into_iter()
+            .map(|(_, style)| style)
+            .collect::<Vec<_>>();
+        assert_eq!(debug_styles, themed_styles);
+        let buffer = rendered_buffer(&mut editor, 70, 20);
+        assert_eq!(
+            buffer[(0, buffer.area().bottom() - 1)].bg,
+            groups.statusline_bg().bg.unwrap()
+        );
+    }
+
+    #[test]
     fn highlight_debug_lists_only_the_complete_highlight_group_space() {
         let mut editor = Editor::new(String::new());
         press(&mut editor, KeyCode::Char('d'), KeyModifiers::CONTROL);
@@ -2925,7 +2913,7 @@ mod tests {
         assert!(screen.contains("Canvas"));
         assert!(screen.contains("Delimiter"));
         let entries = editor.highlight_debug_entries();
-        assert_eq!(entries.len(), editor.groups.highlight_groups().len() + 2);
+        assert_eq!(entries.len(), scheme().highlight_groups().len() + 2);
         assert!(!entries.iter().any(|(name, _)| name == "bg_dim"));
         assert!(entries
             .iter()
@@ -2960,8 +2948,8 @@ mod tests {
 
         let margin = &terminal.backend().buffer()[(0, editor.input.area().y)];
         assert_eq!(margin.symbol(), " ");
-        assert_eq!(margin.bg, editor.groups.code().bg.unwrap());
-        assert_ne!(margin.bg, editor.groups.transcript().bg.unwrap());
+        assert_eq!(margin.bg, scheme().code().bg.unwrap());
+        assert_ne!(margin.bg, scheme().transcript().bg.unwrap());
     }
 
     #[test]
@@ -2976,8 +2964,8 @@ mod tests {
 
         for x in 0..70 {
             assert_eq!(buffer[(x, y)].symbol(), "▀");
-            assert_eq!(buffer[(x, y)].fg, editor.groups.separator().fg.unwrap());
-            assert_eq!(buffer[(x, y)].bg, editor.groups.code().bg.unwrap());
+            assert_eq!(buffer[(x, y)].fg, scheme().separator().fg.unwrap());
+            assert_eq!(buffer[(x, y)].bg, scheme().code().bg.unwrap());
         }
 
         editor.apply(EditorUpdate::CellSucceeded {
@@ -3051,20 +3039,20 @@ mod tests {
         assert_eq!(buffer[content].bg, ratatui::style::Color::Reset);
         assert_eq!(
             buffer[(0, editor.input.area().y)].bg,
-            editor.groups.code().bg.unwrap()
+            scheme().code().bg.unwrap()
         );
         assert_eq!(
             buffer[(0, buffer.area().bottom() - 1)].bg,
-            editor.groups.statusline_bg().bg.unwrap()
+            scheme().statusline_bg().bg.unwrap()
         );
     }
 
     #[test]
     fn slash_commands_use_the_prompt_highlight_in_the_input() {
         let mut editor = Editor::new(String::new());
-        editor.input.field_mut().insert_str("/style");
+        editor.input.field_mut().insert_str("/settings");
         let buffer = rendered_buffer(&mut editor, 70, 20);
-        let foreground = editor.groups.prompt().fg.unwrap();
+        let foreground = scheme().prompt().fg.unwrap();
 
         let text_area = editor.input.text_area();
         for x in text_area.x..text_area.x + 6 {
@@ -3093,7 +3081,7 @@ mod tests {
         assert!(status.contains("continue"));
         assert_eq!(
             buffer[(UI.statusline_margin, 9)].fg,
-            editor.groups.muted().fg.unwrap()
+            scheme().muted().fg.unwrap()
         );
 
         editor.set_processing(true);
@@ -3249,7 +3237,7 @@ mod tests {
 
         assert!(matches!(
             action,
-            Reaction::Open(ViewKind::Code, OpenTarget::Current)
+            Reaction::Open(ViewKind::Code, OpenTarget::Split)
         ));
         assert!(editor.submission().is_empty());
     }
@@ -3360,10 +3348,10 @@ mod tests {
         assert_eq!(banner, (usize::from(buffer.area().width) - 24) / 2);
         assert_eq!(
             buffer[(banner as u16, y)].fg,
-            editor.groups.style(HLGroup::Statusline2).fg.unwrap()
+            scheme().style(HLGroup::Statusline2).fg.unwrap()
         );
         assert!(!row.contains("syntax tree"));
-        assert_eq!(buffer[(key, y)].fg, editor.groups.prompt().fg.unwrap());
+        assert_eq!(buffer[(key, y)].fg, scheme().prompt().fg.unwrap());
         assert!(row.starts_with("  "));
         assert!(row.ends_with("  "));
     }

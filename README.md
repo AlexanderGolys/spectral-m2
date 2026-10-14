@@ -18,8 +18,8 @@ betti res I
 - structured values, types, printed text, warnings, and errors;
 - persistent multiline history and keyboard or mouse selection;
 - code, output, and syntax-tree previews with independent navigation;
-- responsive two-workspace splits, including one-at-a-time narrow layouts;
-- command, settings, style, keymap, and highlight-debug pickers;
+- views of the session opened beside it, including one-at-a-time narrow layouts;
+- command, settings, keymap, and highlight-debug pickers;
 - ordered native colorscheme variants with opaque or transparent canvas modes.
 
 ## Requirements
@@ -42,7 +42,7 @@ Run the current checkout without installing it:
 cargo run --release
 ```
 
-Type `/` for the filtered command picker, `Ctrl+/` for all commands, or `Ctrl+O` for settings. On a splittable command, `Alt+V` opens an alternative pane without replacing that command's own keymap.
+Type `/` for the filtered command picker, `Ctrl+/` for all commands, or `Ctrl+O` for settings. Views open beside the session; on a view command, `Alt+V` opens it in place instead.
 
 ## Configuration
 

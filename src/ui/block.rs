@@ -12,28 +12,28 @@ use super::render::selection::Exclusions;
 use super::render::RenderContext;
 
 /// The available width changed, moving every wrap boundary.
-pub(crate) struct Resized {
-    pub(crate) width: u16,
+pub struct Resized {
+    pub width: u16,
 }
 
 /// Highlight groups now resolve through a different scheme.
 ///
 /// Carries nothing: a scheme is ambient, read at paint time rather than handed down.
-pub(crate) struct Rethemed;
+pub struct Rethemed;
 
 /// Returned values are set differently -- fractions in another style -- so their
 /// heights move as well as their cells.
-pub(crate) struct Reformatted;
+pub struct Reformatted;
 
 /// A renderable UI component with an explicit rendering context.
-pub(crate) trait Element: Send {
+pub trait Element: Send {
     type Context;
 
     fn render(&self, context: &Self::Context, area: Rect, buf: &mut Buffer);
 }
 
 /// A self-contained element rendered locally across a measured number of feed rows.
-pub(crate) trait Block {
+pub trait Block {
     /// Number of consecutive feed rows occupied at the context width.
     fn height(&self, context: &RenderContext) -> u16;
 
@@ -63,16 +63,16 @@ pub(crate) trait Block {
 
 /// Semantic content whose style is resolved from a highlight group at render time.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct HLSpan<T = Range<usize>> {
-    pub(crate) content: T,
-    pub(crate) kind: HLGroup,
+pub struct HLSpan<T = Range<usize>> {
+    pub content: T,
+    pub kind: HLGroup,
     /// A group laid over `kind` without replacing it, such as the underline that
     /// rules a fraction's numerator.
-    pub(crate) mark: Option<HLGroup>,
+    pub mark: Option<HLGroup>,
 }
 
 impl<T> HLSpan<T> {
-    pub(crate) fn new(content: impl Into<T>, kind: HLGroup) -> Self {
+    pub fn new(content: impl Into<T>, kind: HLGroup) -> Self {
         Self {
             content: content.into(),
             kind,
@@ -80,7 +80,7 @@ impl<T> HLSpan<T> {
         }
     }
 
-    pub(crate) fn marked(self, mark: HLGroup) -> Self {
+    pub fn marked(self, mark: HLGroup) -> Self {
         Self {
             mark: Some(mark),
             ..self
@@ -88,7 +88,7 @@ impl<T> HLSpan<T> {
     }
 
     /// The same groups over different content: a piece of this span, or this span moved.
-    pub(crate) fn with_content<U>(&self, content: impl Into<U>) -> HLSpan<U> {
+    pub fn with_content<U>(&self, content: impl Into<U>) -> HLSpan<U> {
         HLSpan {
             content: content.into(),
             kind: self.kind,
@@ -96,7 +96,7 @@ impl<T> HLSpan<T> {
         }
     }
 
-    pub(crate) fn style(&self, groups: &Groups) -> Style {
+    pub fn style(&self, groups: &Groups) -> Style {
         let style = groups.style(self.kind);
         match self.mark {
             Some(mark) => style.patch(groups.style(mark)),
@@ -106,10 +106,10 @@ impl<T> HLSpan<T> {
 }
 
 /// Owned semantic text used by UI elements.
-pub(crate) type TextSpan = HLSpan<String>;
+pub type TextSpan = HLSpan<String>;
 
 /// A UI element represented by one line of styled text.
-pub(crate) trait Text: Send {
+pub trait Text: Send {
     type Context: ?Sized;
 
     fn spans(&self, context: &Self::Context) -> Vec<Span<'static>>;

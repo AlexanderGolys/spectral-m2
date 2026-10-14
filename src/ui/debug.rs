@@ -7,11 +7,11 @@ const WINDOW: Duration = Duration::from_secs(10);
 
 /// Recent rendered-frame times used by the highlight debug view.
 #[derive(Default)]
-pub(crate) struct FrameStats(VecDeque<Instant>);
+pub struct FrameStats(VecDeque<Instant>);
 
 impl FrameStats {
     /// Record one rendered application frame.
-    pub(crate) fn tick(&mut self) {
+    pub fn tick(&mut self) {
         let now = Instant::now();
         if self
             .0
@@ -31,7 +31,7 @@ impl FrameStats {
     }
 
     /// Format current, minimum, and average draw rates over the last ten seconds.
-    pub(crate) fn label(&self) -> String {
+    pub fn label(&self) -> String {
         let intervals = self
             .0
             .iter()

@@ -14,19 +14,17 @@
 | `Ctrl+L` | Clear the input. |
 | `Ctrl+/` | Toggle commands. |
 | `Ctrl+O` | Toggle settings. |
-| `Alt+S`, `Alt+K` | Toggle style or keymaps. |
+| `Alt+K` | Toggle keymaps. |
 | `Alt+L` | Clear the feed. |
-| `Alt+C`, `Alt+O`, `Alt+T` | Open code, output, or syntax-tree preview. |
-| `Alt+N` | Open a new workspace. |
-| `Alt+R`, `Alt+W` | Restart Macaulay2 or close the focused pane. |
+| `Alt+C`, `Alt+O`, `Alt+T` | Show code, output, or syntax tree beside the session. |
+| `Alt+R`, `Alt+W` | Restart Macaulay2 or close the split view. |
 | `Ctrl+D` | Toggle highlight debug. |
 | `Ctrl+C` | Quit from the shell. |
 
-## Split and previews
+## Split view and previews
 
 | Key | Action |
 | --- | --- |
-| `Alt+V` | Open a splittable command in an alternative pane. |
 | `Ctrl+Left`, `Ctrl+Right` | Focus a pane, including in a collapsed narrow split. |
 | `Ctrl+Shift+Left`, `Ctrl+Shift+Right` | Resize a visible split. |
 | `Up`, `Down`, `PageUp`, `PageDown` | Scroll a preview. |
@@ -38,7 +36,7 @@
 | Key | Action |
 | --- | --- |
 | `Up`, `Down` | Change the selected row. |
-| `Left`, `Right` | Adjust a settings or style row. |
-| `Enter` | Open or run the selected row. |
-| `Alt+V` | Open the selected splittable command in an alternative pane. |
+| `Left`, `Right` | Adjust a settings row. |
+| `Enter` | Open or run the selected row; a view opens beside the session. |
+| `Alt+V` | Open the selected view in place of the focused pane. |
 | `Esc` | Close the current picker or debug overlay. |

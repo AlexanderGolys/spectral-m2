@@ -1,22 +1,21 @@
-# Settings and style
+# Settings
 
-Open settings with `Ctrl+O` or `/settings`. Use `Up` and `Down` to choose a row and `Left` or `Right` to adjust it.
+Open settings with `Ctrl+O` or `/settings`. Use `Up` and `Down` to choose a row and `Left` or `Right` to adjust it. Each row describes itself in a column after its value.
 
 | Setting | Choices |
 | --- | --- |
+| Theme | Every scheme offering the current mode, keeping the contrast name when the scheme has it and otherwise its position. |
+| Contrast | The current theme's variants for the current mode, such as hard, medium, and soft. |
+| Mode | The dark and light palettes available for the current theme. |
+| Background | An opaque or transparent empty canvas. |
 | Max input height | Percentage of the pane available to growing multiline input, in 5% steps. |
 | Scrolloff | Context rows retained above and below the input cursor. |
 | Status line | Below input, above input, or off. |
-| Style | Opens the separate style picker. |
+| Fractions | Stacked, underlined, or inline. |
+| Max output height | Rows a returned value shows before its middle folds away. |
 | Restore default | Resets settings, keymaps, and appearance. |
 
-## Style
-
-`/style` opens the same style picker directly. Its three ordered axes are:
-
-- **colorscheme** — cycles every scheme variant of the current brightness, keeping each scheme's variants adjacent and deterministic;
-- **brightness** — switches between the dark and light variants available for the current scheme;
-- **background** — chooses an opaque or transparent empty canvas.
+## Appearance
 
 Transparent background affects only otherwise empty feed or preview canvas cells. Code bands, output boxes, selections, pickers, and other explicitly styled UI keep their backgrounds.
 

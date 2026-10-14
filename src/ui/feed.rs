@@ -425,12 +425,6 @@ impl Feed {
         self.anchor = None;
     }
 
-    /// Return whether the current viewport has retained rendered cells.
-    #[cfg(test)]
-    pub(crate) fn retained(&self) -> bool {
-        self.surface.is_some()
-    }
-
     /// Render the current viewport and return whether it is underfilled.
     pub(crate) fn render(
         &mut self,

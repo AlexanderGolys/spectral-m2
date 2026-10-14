@@ -1,12 +1,13 @@
 //! Commands exposed by the `/` picker and process-ending input handled locally.
 
 use crossterm::event::KeyCode;
+use ratatui::text::{Line, Span};
 
-use super::picker::{Line, LineContext, Picker, PickerInput, PickerItem};
+use super::picker::{Picker, PickerInput, PickerItem};
 use super::settings::keymap::Keymaps;
+use super::settings::theme::groups::scheme;
 use super::{Editor, EditorEvent, OpenTarget, Reaction, ViewKind};
 use crate::ui::action::Action;
-use crate::ui::block::Text;
 use crate::ui::key::KeyMod::Alt;
 
 /// Prefix that turns input text into a live command query.
@@ -41,7 +42,8 @@ type CommandCallback = fn(&mut Editor, OpenTarget) -> Reaction;
 pub(crate) struct Command {
     label: &'static str,
     shortcut: Action,
-    splittable: bool,
+    /// Opens a view, beside the session unless asked to open it in place.
+    opens_view: bool,
     callback: CommandCallback,
 }
 
@@ -49,13 +51,13 @@ impl Command {
     const fn new(
         label: &'static str,
         shortcut: Action,
-        splittable: bool,
+        opens_view: bool,
         callback: CommandCallback,
     ) -> Self {
         Self {
             label,
             shortcut,
-            splittable,
+            opens_view,
             callback,
         }
     }
@@ -68,15 +70,13 @@ impl Command {
                 .any(|word| word.starts_with(query))
     }
 
-    fn item(self, keymaps: &Keymaps, split: bool) -> Box<dyn PickerItem> {
-        let can_split = self.splittable && !split;
+    fn item(self, keymaps: &Keymaps) -> Box<dyn PickerItem> {
         let shortcut = keymaps
             .key_for(self.shortcut)
             .unwrap_or_else(|| "unbound".to_string());
         Box::new(CommandItem {
             command: self,
             shortcut,
-            can_split,
         })
     }
 
@@ -98,76 +98,52 @@ impl Command {
 struct CommandItem {
     command: Command,
     shortcut: String,
-    can_split: bool,
 }
 
-impl Text for CommandItem {
-    type Context = LineContext;
-
-    fn spans(&self, context: &LineContext) -> Vec<ratatui::text::Span<'static>> {
-        use ratatui::text::Span;
-
-        let literal = self.command.literal();
-        let mut hint = vec![Span::styled(self.shortcut.clone(), context.groups.prompt())];
-        if self.can_split {
-            hint.extend([
-                Span::styled(" · ", context.groups.muted()),
-                Span::styled(
-                    (KeyCode::Char('v') + Alt).to_string(),
-                    context.groups.prompt(),
-                ),
-                Span::styled(" alternative view", context.groups.muted()),
-            ]);
-        }
-        context.columns([
-            vec![Span::styled(literal, context.groups.prompt())],
-            vec![Span::styled(
-                self.command.shortcut.description(),
-                context.groups.value(),
-            )],
-            hint,
-        ])
-    }
-}
-
-impl Line for CommandItem {
-    fn column_widths(&self) -> [usize; 3] {
-        let alternative = (KeyCode::Char('v') + Alt).to_string();
-        [
-            self.command.label.len() + 1,
-            self.command.shortcut.description().len(),
-            self.shortcut.chars().count()
-                + usize::from(self.can_split)
-                    * (3 + alternative.chars().count() + " alternative view".len()),
-        ]
-    }
+impl CommandItem {
+    const IN_PLACE: &str = " open in place";
 }
 
 impl PickerItem for CommandItem {
+    fn cells(&self) -> Vec<Line<'static>> {
+        let groups = scheme();
+        let mut hint = vec![Span::styled(self.shortcut.clone(), groups.prompt())];
+        if self.command.opens_view {
+            hint.extend([
+                Span::styled(" · ", groups.muted()),
+                Span::styled((KeyCode::Char('v') + Alt).to_string(), groups.prompt()),
+                Span::styled(Self::IN_PLACE, groups.muted()),
+            ]);
+        }
+        vec![
+            Span::styled(self.command.literal(), groups.prompt()).into(),
+            Span::styled(self.command.shortcut.description(), groups.value()).into(),
+            hint.into(),
+        ]
+    }
+
     fn handle(&mut self, input: PickerInput) -> Option<EditorEvent> {
         let target = match input {
-            PickerInput::Action(Action::Submit) => OpenTarget::Current,
-            PickerInput::Key(key) => OpenTarget::alternative(key, self.can_split)?,
+            PickerInput::Action(Action::Submit) => OpenTarget::Split,
+            PickerInput::Key(key) => OpenTarget::alternative(key, self.command.opens_view)?,
             _ => return None,
         };
         Some(EditorEvent::RunCommand(self.command, target))
     }
 }
 
-const COMMANDS: [Command; 11] = [
+const COMMANDS: [Command; 9] = [
     Command::new("settings", Action::OpenSettings, false, open_settings),
-    Command::new("style", Action::OpenStyle, false, style),
     Command::new("keymaps", Action::OpenKeymaps, false, open_keymaps),
     Command::new("clear", Action::ClearFeed, false, clear),
     Command::new("code", Action::OpenCode, true, code),
-    Command::new("split", Action::NewWorkspace, false, split),
     Command::new("output", Action::OpenOutput, true, output),
     Command::new("ast", Action::OpenSyntaxTree, true, syntax_tree),
     Command::new("new", Action::Restart, false, restart),
     Command::new("quit", Action::Quit, false, quit),
     Command::new("debug", Action::ToggleHighlightDebug, false, debug),
 ];
-const CLOSE: Command = Command::new("close focused window", Action::ClosePane, false, close);
+const CLOSE: Command = Command::new("close split view", Action::ClosePane, false, close);
 
 pub(crate) fn shortcut(action: Action) -> Option<Command> {
     COMMANDS
@@ -199,24 +175,19 @@ pub(crate) fn exact(input: &str, split: bool) -> Option<Command> {
         .find(|command| command.label == label)
 }
 
-pub(crate) fn picker(commands: &[Command], keymaps: &Keymaps, split: bool) -> Picker {
+pub fn picker(commands: &[Command], keymaps: &Keymaps) -> Picker {
     Picker::new(
         "commands",
         commands
             .iter()
             .copied()
-            .map(|command| command.item(keymaps, split))
+            .map(|command| command.item(keymaps))
             .collect(),
     )
 }
 
 fn open_settings(editor: &mut Editor, _: OpenTarget) -> Reaction {
     editor.open_settings_from_commands();
-    Reaction::Continue
-}
-
-fn style(editor: &mut Editor, _: OpenTarget) -> Reaction {
-    editor.open_style_from_commands();
     Reaction::Continue
 }
 
@@ -233,11 +204,6 @@ fn clear(editor: &mut Editor, _: OpenTarget) -> Reaction {
 fn debug(editor: &mut Editor, _: OpenTarget) -> Reaction {
     editor.close_pickers();
     editor.toggle_highlight_debug()
-}
-
-fn split(editor: &mut Editor, _: OpenTarget) -> Reaction {
-    editor.close_pickers();
-    Reaction::New(OpenTarget::Split)
 }
 
 macro_rules! views {
@@ -301,28 +267,25 @@ mod tests {
         assert!(matching("does-not-exist", false).is_empty());
         assert!(matching("close", false).is_empty());
         assert_eq!(matching("close", true).len(), 1);
-        assert_eq!(matching("style", false).len(), 1);
-        assert_eq!(exact("/style", false).unwrap().label(), "style");
         assert!(exact("/new", false).unwrap().shortcut == Action::Restart);
-        assert!(exact("/split", false).unwrap().shortcut == Action::NewWorkspace);
-        assert!(exact("/sty", false).is_none());
+        assert!(exact("/sett", false).is_none());
     }
 
     #[test]
-    fn new_restarts_while_split_always_opens_a_split() {
+    fn neither_a_second_session_nor_a_separate_style_picker_is_a_command() {
+        assert!(exact("/split", false).is_none());
+        assert!(exact("/style", false).is_none());
+    }
+
+    #[test]
+    fn new_restarts_the_session() {
         let mut editor = Editor::new(String::new());
 
         assert!(matches!(
             exact("/new", false)
                 .unwrap()
-                .run(&mut editor, OpenTarget::Current),
+                .run(&mut editor, OpenTarget::Split),
             Reaction::Restart
-        ));
-        assert!(matches!(
-            exact("/split", false)
-                .unwrap()
-                .run(&mut editor, OpenTarget::Current),
-            Reaction::New(OpenTarget::Split)
         ));
     }
 
@@ -334,69 +297,45 @@ mod tests {
             let action = command.shortcut;
             assert!(keymaps.key_for(action).is_some(), "{}", command.label);
             assert_eq!(shortcut(action).unwrap().label, command.label);
-            assert!(command
-                .item(&keymaps, false)
-                .spans(&LineContext {
-                    width: 200,
-                    value_column: 12,
-                    columns: Some([24, 48]),
-                    selected: false,
-                    groups: Groups::default(),
-                })
-                .iter()
-                .any(|span| span.content.contains(action.description())));
+            assert_eq!(
+                command.item(&keymaps).cells()[1].to_string(),
+                action.description()
+            );
         }
         assert_eq!(exact("/ast", false).unwrap().label(), "ast");
     }
 
     #[test]
     fn command_metadata_stays_beside_its_label() {
-        let item = matching("code", false)[0].item(&Keymaps::default(), false);
-        let text = item
-            .spans(&LineContext {
-                width: 200,
-                value_column: 12,
-                columns: Some([24, 48]),
-                selected: false,
-                groups: Groups::default(),
-            })
-            .into_iter()
-            .map(|span| span.content)
-            .collect::<String>();
+        let cells = matching("code", false)[0].item(&Keymaps::default()).cells();
         let alt_c = (KeyCode::Char('c') + Alt).to_string();
         let alt_v = (KeyCode::Char('v') + Alt).to_string();
 
-        assert_eq!(text.find(Action::OpenCode.description()), Some(27));
-        assert_eq!(text.find(&alt_c), Some(51));
-        assert!(text.contains(&format!("{alt_c} · {alt_v} alternative view")));
-
-        let spans = item.spans(&LineContext {
-            width: 200,
-            value_column: 12,
-            columns: Some([24, 48]),
-            selected: false,
-            groups: Groups::default(),
-        });
-        let literal = spans.iter().find(|span| span.content == "/code").unwrap();
-        assert_eq!(literal.style.fg, Groups::default().prompt().fg);
+        assert_eq!(cells[0].to_string(), "/code");
+        assert_eq!(cells[0].spans[0].style.fg, Groups::default().prompt().fg);
+        assert_eq!(cells[1].to_string(), Action::OpenCode.description());
+        assert_eq!(
+            cells[2].to_string(),
+            format!("{alt_c} · {alt_v} open in place")
+        );
     }
 
     #[test]
-    fn alt_v_requests_an_alternative_view_only_for_splittable_unsplit_items() {
+    fn a_view_opens_beside_the_session_unless_asked_to_open_in_place() {
         let keymaps = Keymaps::default();
         let code = matching("code", false)[0];
-        let mut item = code.item(&keymaps, false);
+        let mut item = code.item(&keymaps);
         assert!(matches!(
-            item.handle(PickerInput::Key(KeyCode::Char('v') + Alt)),
+            item.handle(PickerInput::Action(Action::Submit)),
             Some(EditorEvent::RunCommand(_, OpenTarget::Split))
         ));
+        assert!(matches!(
+            item.handle(PickerInput::Key(KeyCode::Char('v') + Alt)),
+            Some(EditorEvent::RunCommand(_, OpenTarget::InPlace))
+        ));
 
-        let mut item = code.item(&keymaps, true);
-        assert!(item
-            .handle(PickerInput::Key(KeyCode::Char('v') + Alt))
-            .is_none());
         let settings = matching("settings", false)[0];
-        let mut item = settings.item(&keymaps, false);
+        let mut item = settings.item(&keymaps);
         assert!(item
             .handle(PickerInput::Key(KeyCode::Char('v') + Alt))
             .is_none());

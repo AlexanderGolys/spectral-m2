@@ -501,9 +501,10 @@ impl Math {
                 FractionStyle::Stacked => {
                     MathBlock::fraction(numerator.layout(fractions), denominator.layout(fractions))
                 }
-                FractionStyle::Underlined => {
-                    MathBlock::underlined(numerator.layout(fractions), denominator.layout(fractions))
-                }
+                FractionStyle::Underlined => MathBlock::underlined(
+                    numerator.layout(fractions),
+                    denominator.layout(fractions),
+                ),
                 FractionStyle::Inline => MathBlock::row([
                     numerator.inline_operand(fractions),
                     MathBlock::atom("/", HLGroup::Operator),
@@ -1664,7 +1665,10 @@ mod tests {
         let numerator = &cells[(0, 0)];
         assert_eq!(numerator.symbol(), "1");
         assert!(numerator.modifier.contains(Modifier::UNDERLINED));
-        assert_eq!(Some(numerator.underline_color), groups.FractionRule.underline_color);
+        assert_eq!(
+            Some(numerator.underline_color),
+            groups.FractionRule.underline_color
+        );
         assert_eq!(Some(numerator.fg), groups.Number.fg);
         assert!(!cells[(0, 1)].modifier.contains(Modifier::UNDERLINED));
     }

@@ -12,7 +12,7 @@ use these_macros_should_be_illegal::literally_literal_string;
 /// One of the three logical modifiers supported by the UI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub(crate) enum KeyMod {
+pub enum KeyMod {
     Ctrl = 1,
     Alt = 2,
     Shift = 4,
@@ -20,20 +20,20 @@ pub(crate) enum KeyMod {
 
 /// A compact key event using the UI's three logical modifiers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct KeyEvent {
-    pub(crate) code: KeyCode,
+pub struct KeyEvent {
+    pub code: KeyCode,
     modifiers: u8,
 }
 
 /// Held modifier state used when a terminal omits modifiers from another key.
 #[derive(Default)]
-pub(crate) struct Keyboard {
+pub struct Keyboard {
     modifiers: u8,
 }
 
 impl Keyboard {
     /// Normalize one raw event, consuming modifier and key-release notifications.
-    pub(crate) fn event(&mut self, event: CrosstermKeyEvent) -> Option<KeyEvent> {
+    pub fn event(&mut self, event: CrosstermKeyEvent) -> Option<KeyEvent> {
         if let KeyCode::Modifier(code) = event.code {
             if let Some(modifier) = KeyMod::from(code) {
                 match event.kind {
@@ -66,27 +66,27 @@ impl KeyMod {
 
 impl KeyEvent {
     /// Create an unmodified key event.
-    pub(crate) const fn new(code: KeyCode) -> Self {
+    pub const fn new(code: KeyCode) -> Self {
         Self { code, modifiers: 0 }
     }
 
     /// Whether this event carries the platform's primary command modifier.
-    pub(crate) const fn ctrl(self) -> bool {
+    pub const fn ctrl(self) -> bool {
         self.modifiers & KeyMod::Ctrl as u8 != 0
     }
 
     /// Whether this event carries Alt, called Option on macOS.
-    pub(crate) const fn alt(self) -> bool {
+    pub const fn alt(self) -> bool {
         self.modifiers & KeyMod::Alt as u8 != 0
     }
 
     /// Whether this event carries Shift.
-    pub(crate) const fn shift(self) -> bool {
+    pub const fn shift(self) -> bool {
         self.modifiers & KeyMod::Shift as u8 != 0
     }
 
     /// Whether this event can be inserted as ordinary text.
-    pub(crate) const fn is_text(self) -> bool {
+    pub const fn is_text(self) -> bool {
         !self.ctrl() && !self.alt()
     }
 
@@ -96,7 +96,7 @@ impl KeyEvent {
     }
 
     /// Normalize terminal encodings that should address the same binding.
-    pub(crate) fn binding(mut self) -> Self {
+    pub fn binding(mut self) -> Self {
         if self.code == KeyCode::Char('7') && self.ctrl() {
             self.code = KeyCode::Char('/');
         }
