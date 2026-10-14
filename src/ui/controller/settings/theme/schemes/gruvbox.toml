@@ -534,143 +534,38 @@ hard = "#3c3836"
 medium = "#3c3836"
 soft = "#3c3836"
 
-[groups]
+[base]
+Canvas = { bg = "background" }
+Code = { bg = "code_background" }
+Raised = { bg = "printed_background" }
+Pending = { bg = "printed_background" }
+Selection = { bg = "selection" }
+Focus = { bg = "dark1" }
 
-Comment = { fg = "gray_244", italic = true }
-Constant = { fg = "accent_orange" }
-String = { fg = "accent_green", italic = true }
-Character = { fg = "accent_green", italic = true }
-Number = { fg = "accent_purple" }
-Boolean = { fg = "accent_purple" }
-Float = { fg = "accent_purple" }
-Identifier = { fg = "text" }
-Function = { fg = "accent_green", bold = true }
-Statement = { fg = "accent_red" }
-Conditional = { fg = "accent_red" }
-Repeat = { fg = "accent_red" }
-Label = { fg = "accent_red" }
-Operator = { fg = "accent_orange" }
-Keyword = { fg = "accent_red" }
-Exception = { fg = "accent_red" }
-PreProc = { fg = "accent_green", bold = true }
-Include = { fg = "accent_green", bold = true }
-Define = { fg = "accent_green", bold = true }
-Macro = { fg = "accent_green", bold = true }
-PreCondit = { fg = "accent_green", bold = true }
-Type = { fg = "accent_yellow" }
-StorageClass = { fg = "accent_red" }
-Structure = { fg = "accent_yellow" }
-Typedef = { fg = "accent_yellow" }
-Special = { fg = "accent_orange" }
-SpecialChar = { fg = "accent_green", italic = true }
-Tag = { fg = "accent_blue", sp = "accent_blue", underline = true }
-Delimiter = { fg = "accent_orange" }
-SpecialComment = { fg = "gray_244", italic = true }
-Debug = { fg = "accent_red" }
-Underlined = { fg = "accent_blue", sp = "accent_blue", underline = true }
-Ignore = { fg = "gray_244" }
-Error = { fg = "accent_red", sp = "accent_red", bold = true, reverse = true }
-Todo = { fg = "accent_yellow", sp = "accent_yellow", bold = true }
-Added = { fg = "accent_green", bold = true }
-Changed = { fg = "accent_blue", sp = "accent_blue" }
-Removed = { fg = "accent_red", sp = "accent_red", bold = true, reverse = true }
-
-Warning = { fg = "accent_yellow", sp = "accent_yellow" }
-Info = { fg = "accent_blue", sp = "accent_blue" }
-Hint = { fg = "accent_aqua" }
-DiagnosticError = { sp = "accent_red", underline = true }
-DiagnosticWarning = { sp = "accent_yellow", underline = true }
-DiagnosticInfo = { sp = "accent_blue", underline = true }
-DiagnosticHint = { sp = "accent_aqua", underline = true }
-
-Installation = { fg = "accent_red" }
-Property = { fg = "accent_blue" }
-Namespace = { fg = "text" }
-Package = { fg = "text" }
-CompiledFunction = { fg = "accent_orange" }
-Symbol = { fg = "accent_orange" }
-Variable = { fg = "text" }
-AlgVariable = { fg = "accent_orange" }
-Parameter = { fg = "accent_blue" }
-Regex = { fg = "accent_blue", sp = "accent_blue", underline = true }
-Punctuation = { fg = "accent_orange" }
-Quote = { fg = "accent_orange" }
-Documentation = { fg = "accent_blue", sp = "accent_blue", underline = true }
-
-LspTypeClass = { fg = "accent_yellow" }
-LspTypeComment = { fg = "gray_244", italic = true }
-LspTypeDecorator = { fg = "accent_green", bold = true }
-LspTypeEnum = { fg = "accent_yellow" }
-LspTypeEnumMember = { fg = "accent_orange" }
-LspTypeEvent = { fg = "accent_orange" }
-LspTypeFunction = { fg = "accent_green", bold = true }
-LspTypeInterface = { fg = "accent_yellow" }
-LspTypeKeyword = { fg = "accent_red" }
-LspTypeMacro = { fg = "accent_green", bold = true }
-LspTypeMethod = { fg = "accent_green", bold = true }
-LspTypeModifier = { fg = "accent_red" }
-LspTypeNamespace = { fg = "text" }
-LspTypeNumber = { fg = "accent_purple" }
-LspTypeOperator = { fg = "accent_orange" }
-LspTypeParameter = { fg = "accent_blue" }
-LspTypeProperty = { fg = "accent_blue" }
-LspTypeRegexp = { fg = "accent_blue", sp = "accent_blue", underline = true }
-LspTypeString = { fg = "accent_green", italic = true }
-LspTypeStruct = { fg = "accent_yellow" }
-LspTypeType = { fg = "accent_yellow" }
-LspTypeTypeParameter = { fg = "accent_yellow" }
-LspTypeVariable = { fg = "text" }
-
-LspModAbstract = { italic = true }
-LspModAsync = { italic = true }
-LspModDeclaration = { bold = true }
-LspModDefaultLibrary = { italic = true }
-LspModDefinition = { bold = true }
-LspModDeprecated = { crossed_out = true }
-LspModDocumentation = { italic = true }
-LspModModification = { underline = true }
-LspModReadonly = { italic = true }
-LspModStatic = { underline = true }
-
-Visual = { bg = "selection" }
-Value = { fg = "text" }
+Text = { fg = "text" }
 Muted = { fg = "gray_244" }
-Printed = { fg = "accent_green", bg = "printed_background", italic = true }
-ShellCommand = { fg = "accent_aqua" }
-ShellMessage = { fg = "gray_244" }
-ShellError = { fg = "accent_red", sp = "accent_red", bold = true, reverse = true }
-HintText = { fg = "gray_244" }
-Normal = { bg = "background" }
-CodeBlock = { bg = "code_background" }
-PendingBlock = { bg = "printed_background" }
-Separator = { fg = "border_background" }
-ValueBorder = { fg = "selection", sp = "selection" }
-OutputNumber = { fg = "accent_aqua", bold = true }
-ErrorBorder = { fg = "accent_red", sp = "accent_red" }
-WarningBorder = { fg = "accent_yellow", sp = "accent_yellow" }
-InfoBorder = { fg = "accent_blue", sp = "accent_blue" }
-Statusline1 = { fg = "accent_green" }
-Statusline2 = { fg = "accent_yellow" }
-Statusline3 = { fg = "accent_red" }
-StatuslineBorder = { fg = "selection", sp = "selection" }
-StatuslineBg = { bg = "statusline" }
-StatuslineError = { fg = "accent_red", sp = "accent_red" }
-StatuslineWarning = { fg = "accent_yellow", sp = "accent_yellow" }
-KeymapHint = { fg = "accent_aqua" }
-PickerText = { fg = "text" }
-Picker = { bg = "printed_background" }
-PickerSelected = { bg = "dark1" }
-PickerBorder = { fg = "selection", sp = "selection" }
+Faint = { fg = "selection" }
 
-Accent1 = { fg = "accent_red" }
-Accent2 = { fg = "accent_orange" }
-Accent3 = { fg = "accent_yellow" }
-Accent4 = { fg = "accent_green" }
-Accent5 = { fg = "accent_aqua" }
-Accent6 = { fg = "accent_blue" }
-Accent7 = { fg = "accent_purple" }
+Keyword = { fg = "accent_red" }
+Function = { fg = "accent_green", bold = true }
+Type = { fg = "accent_yellow" }
+String = { fg = "accent_green", italic = true }
+Number = { fg = "accent_purple" }
+Operator = { fg = "accent_orange" }
+Symbol = { fg = "accent_orange" }
+Module = { fg = "text" }
 
-BgColor1 = { bg = "background" }
-BgColor2 = { bg = "code_background" }
-BgColor3 = { bg = "border_background" }
-BgColor4 = { bg = "selection" }
+Accent = { fg = "accent_aqua" }
+Error = { fg = "accent_red" }
+Warning = { fg = "accent_yellow" }
+Info = { fg = "accent_blue" }
+Hint = { fg = "accent_aqua" }
+
+[overrides]
+Constant = { fg = "accent_orange" }
+Delimiter = { fg = "accent_orange" }
+Punctuation = { fg = "accent_orange" }
+Parameter = { fg = "accent_blue" }
+Property = { fg = "accent_blue" }
+Installation = { fg = "accent_red" }
+CompiledFunction = { fg = "accent_orange" }

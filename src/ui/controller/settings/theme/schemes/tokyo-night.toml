@@ -388,143 +388,40 @@ moon = "#ffc777"
 [colors.yellow.light]
 day = "#8c6c3e"
 
-[groups]
+[base]
+Canvas = { bg = "bg" }
+Code = { bg = "bg_dark1" }
+Raised = { bg = "bg_dark" }
+Pending = { bg = "bg_highlight" }
+Selection = { bg = "selection" }
+Focus = { bg = "bg_visual" }
 
+Text = { fg = "fg" }
+Muted = { fg = "fg_dark" }
+Faint = { fg = "terminal_black" }
+
+Keyword = { fg = "purple", italic = true }
+Function = { fg = "blue" }
+Type = { fg = "blue1" }
+String = { fg = "green" }
+Number = { fg = "orange" }
+Operator = { fg = "blue5" }
+Symbol = { fg = "blue1" }
+Module = { fg = "cyan" }
+
+Accent = { fg = "cyan" }
+Error = { fg = "error" }
+Warning = { fg = "warning" }
+Info = { fg = "blue" }
+Hint = { fg = "cyan" }
+
+[overrides]
 Comment = { fg = "comment", italic = true }
 Constant = { fg = "blue1" }
-String = { fg = "green" }
-Character = { fg = "green" }
-Number = { fg = "orange" }
-Boolean = { fg = "orange" }
-Float = { fg = "orange" }
-Identifier = { fg = "fg" }
-Function = { fg = "blue" }
-Statement = { fg = "purple", italic = true }
-Conditional = { fg = "purple", italic = true }
-Repeat = { fg = "purple", italic = true }
-Label = { fg = "blue" }
-Operator = { fg = "blue5" }
-Keyword = { fg = "purple", italic = true }
-Exception = { fg = "purple", italic = true }
-PreProc = { fg = "blue" }
-Include = { fg = "blue" }
-Define = { fg = "blue" }
-Macro = { fg = "blue" }
-PreCondit = { fg = "blue" }
-Type = { fg = "blue1" }
-StorageClass = { fg = "purple", italic = true }
-Structure = { fg = "blue1" }
-Typedef = { fg = "blue1" }
-Special = { fg = "blue1" }
-SpecialChar = { fg = "green" }
-Tag = { fg = "fg", sp = "fg", underline = true }
 Delimiter = { fg = "blue5" }
-SpecialComment = { fg = "comment", italic = true }
-Debug = { fg = "purple", italic = true }
-Underlined = { fg = "fg", sp = "fg", underline = true }
-Ignore = { fg = "fg_dark" }
-Error = { fg = "error", sp = "error" }
-Todo = { fg = "warning", sp = "warning", bold = true }
-Added = { fg = "blue" }
-Changed = { fg = "blue", sp = "blue" }
-Removed = { fg = "error", sp = "error" }
-
-Warning = { fg = "warning", sp = "warning" }
-Info = { fg = "blue", sp = "blue" }
-Hint = { fg = "cyan" }
-DiagnosticError = { sp = "error", underline = true }
-DiagnosticWarning = { sp = "warning", underline = true }
-DiagnosticInfo = { sp = "blue", underline = true }
-DiagnosticHint = { sp = "cyan", underline = true }
-
-Installation = { fg = "blue" }
-Property = { fg = "green1" }
-Namespace = { fg = "cyan" }
-Package = { fg = "cyan" }
-CompiledFunction = { fg = "blue1" }
-Symbol = { fg = "blue1" }
-Variable = { fg = "fg" }
-AlgVariable = { fg = "red" }
 Parameter = { fg = "yellow" }
+Property = { fg = "green1" }
+CompiledFunction = { fg = "blue1" }
+Builtin = { fg = "red" }
 Regex = { fg = "fg", sp = "fg", underline = true }
-Punctuation = { fg = "fg_dark" }
-Quote = { fg = "blue1" }
 Documentation = { fg = "fg", sp = "fg", underline = true }
-
-LspTypeClass = { fg = "blue1" }
-LspTypeComment = { fg = "comment", italic = true }
-LspTypeDecorator = { fg = "blue" }
-LspTypeEnum = { fg = "blue1" }
-LspTypeEnumMember = { fg = "blue1" }
-LspTypeEvent = { fg = "blue1" }
-LspTypeFunction = { fg = "blue" }
-LspTypeInterface = { fg = "blue1" }
-LspTypeKeyword = { fg = "purple", italic = true }
-LspTypeMacro = { fg = "blue" }
-LspTypeMethod = { fg = "blue" }
-LspTypeModifier = { fg = "purple", italic = true }
-LspTypeNamespace = { fg = "cyan" }
-LspTypeNumber = { fg = "orange" }
-LspTypeOperator = { fg = "blue5" }
-LspTypeParameter = { fg = "yellow" }
-LspTypeProperty = { fg = "green1" }
-LspTypeRegexp = { fg = "fg", sp = "fg", underline = true }
-LspTypeString = { fg = "green" }
-LspTypeStruct = { fg = "blue1" }
-LspTypeType = { fg = "blue1" }
-LspTypeTypeParameter = { fg = "blue1" }
-LspTypeVariable = { fg = "fg" }
-
-LspModAbstract = { italic = true }
-LspModAsync = { italic = true }
-LspModDeclaration = { bold = true }
-LspModDefaultLibrary = { italic = true }
-LspModDefinition = { bold = true }
-LspModDeprecated = { crossed_out = true }
-LspModDocumentation = { italic = true }
-LspModModification = { underline = true }
-LspModReadonly = { italic = true }
-LspModStatic = { underline = true }
-
-Visual = { bg = "selection" }
-Value = { fg = "fg" }
-Muted = { fg = "fg_dark" }
-Printed = { fg = "green", bg = "bg_dark" }
-ShellCommand = { fg = "cyan" }
-ShellMessage = { fg = "fg_dark" }
-ShellError = { fg = "error", sp = "error" }
-HintText = { fg = "fg_dark" }
-Normal = { bg = "bg" }
-CodeBlock = { bg = "bg_dark1" }
-PendingBlock = { bg = "bg_highlight" }
-Separator = { fg = "bg_dark" }
-ValueBorder = { fg = "terminal_black", sp = "terminal_black" }
-OutputNumber = { fg = "cyan", bold = true }
-ErrorBorder = { fg = "error", sp = "error" }
-WarningBorder = { fg = "warning", sp = "warning" }
-InfoBorder = { fg = "blue", sp = "blue" }
-Statusline1 = { fg = "green" }
-Statusline2 = { fg = "yellow" }
-Statusline3 = { fg = "red" }
-StatuslineBorder = { fg = "terminal_black", sp = "terminal_black" }
-StatuslineBg = { bg = "statusline_canvas" }
-StatuslineError = { fg = "error", sp = "error" }
-StatuslineWarning = { fg = "warning", sp = "warning" }
-KeymapHint = { fg = "cyan" }
-PickerText = { fg = "fg" }
-Picker = { bg = "bg_dark" }
-PickerSelected = { bg = "bg_visual" }
-PickerBorder = { fg = "terminal_black", sp = "terminal_black" }
-
-Accent1 = { fg = "red" }
-Accent2 = { fg = "orange" }
-Accent3 = { fg = "yellow" }
-Accent4 = { fg = "green" }
-Accent5 = { fg = "cyan" }
-Accent6 = { fg = "blue" }
-Accent7 = { fg = "magenta" }
-
-BgColor1 = { bg = "bg_dark" }
-BgColor2 = { bg = "bg" }
-BgColor3 = { bg = "bg_highlight" }
-BgColor4 = { bg = "bg_visual" }

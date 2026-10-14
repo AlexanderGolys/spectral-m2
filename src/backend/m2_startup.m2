@@ -70,7 +70,7 @@ needsPackage "JSON"
     --
     --     net => text                   tex => {source, fallback}
     --     markup => {html, fallback}    hashtable => {{key, value}, ...}
-    --     collection => {kind, items}   token => {text, role}
+    --     collection => {kind, items}
     --
     -- A value is either drawn whole by one of M2's own formatters, or it is a
     -- container whose entries are rendered one by one, so the shell can set
@@ -82,35 +82,32 @@ needsPackage "JSON"
     -- font; one with a `texMath` of its own has a real TeX form. A formatter
     -- that throws costs the value its TeX, never the statement its result.
     drawnWhole := value -> (
-        if lookup(texMath, class value) === lookup(texMath, Thing) then asNet value
+        if lookup(texMath, class value) === lookup(texMath, Thing) then
+            asNet value
         else try hashTable {
-            symbol tex => hashTable {symbol source => tex value, symbol fallback => toString net value}
+            symbol tex => hashTable {symbol source => tex value, symbol fallback =>
+                    toString net value}
         } else asNet value
     );
     render Thing := HashTable => drawnWhole;
-    -- A value that is one word with a role in code -- null, true, a string, a
-    -- function's name -- so the shell can colour it as code colours that role.
-    token := (text, role) -> hashTable {
-        symbol token => hashTable {symbol text => text, symbol role => role}
-    };
-    render Nothing := HashTable => value -> token("null", "null");
-    render Boolean := HashTable => value -> token(toString value, "boolean");
-    render String := HashTable => value -> token(value, "string");
     -- M2's own test for whether a function was ever bound to a name.
     hasAttribute := value Core#"private dictionary"#"hasAttribute";
     reverseDictionary := value Core#"private dictionary"#"ReverseDictionary";
+
     -- A function's TeX is its Net in a typewriter font, and nothing more. A
     -- named one is drawn by its name; an anonymous one's Net only says where it
     -- was written (`FunctionClosure[stdio:2:36-2:42]`), so it is drawn by its
     -- class instead.
-    render Function := HashTable => value -> token(
-        if hasAttribute(value, reverseDictionary) then toString value else toString class value,
-        "function"
+    render Function := HashTable => value -> (
+        if hasAttribute(value, reverseDictionary) then
+            asNet value
+        else hashTable {symbol net => toString class value}
     );
     -- Every documentation node at once: DIV, TABLE, UL and the rest all descend
     -- from Hypertext.
     render hypertextType := HashTable => value -> hashTable {
-        symbol markup => hashTable {symbol html => html value, symbol fallback => toString net value}
+        symbol markup => hashTable {symbol html => html value, symbol fallback =>
+                toString net value}
     };
     -- Only what M2 itself draws as a plain table: a class that still uses
     -- HashTable's own `net`. Inheritance alone says far too much -- matrices,
@@ -121,13 +118,15 @@ needsPackage "JSON"
         symbol hashtable => apply(pairs value, pair -> apply(toList pair, render))
     };
     render HashTable := HashTable => value -> (
-        if lookup(net, class value) === lookup(net, HashTable) then table value
+        if lookup(net, class value) === lookup(net, HashTable) then
+            table value
         else drawnWhole value
     );
     -- The kind names the nearest of the shell's collection kinds, so a list
     -- subclass such as Hybrid arrives as the List it is drawn as.
     collection := (kind, value) -> hashTable {
-        symbol collection => hashTable {symbol kind => kind, symbol items => apply(toList value, render)}
+        symbol collection => hashTable {symbol kind => kind, symbol items => apply(toList value,
+            render)}
     };
     render List := HashTable => value -> collection("List", value);
     render Array := HashTable => value -> collection("Array", value);
@@ -141,17 +140,20 @@ needsPackage "JSON"
     -- render that threw part-way cannot leave every later one folded.
     openingMutable := false;
     openMutable := (value, open) -> (
-        if openingMutable then return drawnWhole value;
+        if openingMutable then
+            return drawnWhole value;
         openingMutable = true;
         rendered := open value;
         openingMutable = false;
         rendered
     );
     render MutableHashTable := HashTable => value -> (
-        if lookup(net, class value) === lookup(net, MutableHashTable) then openMutable(value, table)
+        if lookup(net, class value) === lookup(net, MutableHashTable) then
+            openMutable(value, table)
         else drawnWhole value
     );
-    render MutableList := HashTable => value -> openMutable(value, entries -> collection("List", entries));
+    render MutableList := HashTable => value -> openMutable(value, entries -> collection("List",
+        entries));
 
     -- One frame closes one input. Marked with a control character no diagnostic
     -- and no prompt can begin with, so the shell can pick frames out of the

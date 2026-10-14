@@ -31,7 +31,7 @@ pub(crate) const UI: UiConfig = UiConfig {
     picker_tab_width: 4,
     picker_right_margin: 2,
     statusline_margin: 2,
-    max_output_rows: 24,
+    max_output_rows: 40,
 };
 
 impl UiConfig {

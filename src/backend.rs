@@ -1,6 +1,6 @@
 //! Macaulay2 process management, protocol types, and transcript decoding.
 
-pub(crate) mod transcript;
+pub mod transcript;
 
 use std::io::{BufRead, BufReader, PipeReader, Write};
 use std::path::{Path, PathBuf};
@@ -76,7 +76,7 @@ struct Frame {
 /// A displayed M2 value in its preferred TeX form or its original Net form.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum M2Value {
+pub enum M2Value {
     /// TeX source accompanied by the Net spelling used when it is unsupported.
     Tex { source: String, fallback: String },
     /// A value for which M2 could not produce TeX.
@@ -98,7 +98,7 @@ pub(crate) enum M2Value {
 /// What a token is in code, which decides how it is coloured.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum Role {
+pub enum Role {
     Null,
     Boolean,
     String,
@@ -107,7 +107,7 @@ pub(crate) enum Role {
 
 /// The M2 list class a collection was drawn as, named exactly as M2 names it.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-pub(crate) enum CollectionKind {
+pub enum CollectionKind {
     List,
     Array,
     Sequence,
@@ -118,7 +118,7 @@ pub(crate) enum CollectionKind {
 
 impl CollectionKind {
     /// The opening and closing delimiters M2 draws this kind between.
-    pub(crate) const fn delimiters(self) -> (&'static str, &'static str) {
+    pub const fn delimiters(self) -> (&'static str, &'static str) {
         match self {
             Self::List | Self::VerticalList => ("{", "}"),
             Self::Array => ("[", "]"),
@@ -238,7 +238,7 @@ impl M2Value {
     }
 
     /// Render this value at a requested terminal width.
-    pub(crate) fn render_at(&self, width: usize) -> String {
+    pub fn render_at(&self, width: usize) -> String {
         match self {
             Self::Markup { html, fallback } => html2text::config::plain()
                 .link_footnotes(false)
@@ -251,7 +251,7 @@ impl M2Value {
     }
 
     /// Render this value as copyable terminal text.
-    pub(crate) fn render(&self) -> String {
+    pub fn render(&self) -> String {
         self.block()
             .to_string()
             .lines()
@@ -262,41 +262,41 @@ impl M2Value {
 }
 
 /// The output and status returned by one M2 evaluation.
-pub(crate) struct M2Response {
+pub struct M2Response {
     /// The input number M2 evaluated this under, and so the `N` of its `oN`.
     ///
     /// M2 keeps the count itself now that one reader serves the whole session,
     /// which makes this the authority rather than anything the shell tracks: work
     /// the session runs on its own behalf, such as the init file, consumes input
     /// numbers exactly as typed cells do.
-    pub(crate) number: u32,
-    pub(crate) is_error: bool,
+    pub number: u32,
+    pub is_error: bool,
     /// Everything M2 said while the statement ran -- printed output and
     /// diagnostics, in order. With the input echo off and the mode installing no
     /// prompt, this carries no session scaffolding to unpick.
-    pub(crate) transcript: String,
+    pub transcript: String,
     /// The rendered result, present only when M2 displayed it. A `;`-suppressed
     /// result is `None` here -- deliberately never rendered -- yet still bound.
-    pub(crate) value: Option<M2Value>,
-    pub(crate) type_info: Option<String>,
+    pub value: Option<M2Value>,
+    pub type_info: Option<String>,
     /// Whether M2 bound an `oN` for this input. Not implied by `value`: a
     /// suppressed result binds one without producing rendered text.
-    pub(crate) has_value: bool,
+    pub has_value: bool,
     /// M2's interpreter depth after the evaluation. Anything above 1 means a
     /// nested interpreter, which is what being in the debugger looks like.
-    pub(crate) depth: u32,
+    pub depth: u32,
 }
 
 impl M2Response {
     /// Render the displayed value, preserving its Net fallback.
-    pub(crate) fn rendered_value(&self) -> Option<String> {
+    pub fn rendered_value(&self) -> Option<String> {
         self.value.as_ref().map(M2Value::render)
     }
 }
 
 /// The live Macaulay2 child, the stdin it reads its session from, and the
 /// demultiplexed stream it answers on.
-pub(crate) struct M2Backend {
+pub struct M2Backend {
     process: Child,
     input: ChildStdin,
     chunks: Receiver<Chunk>,
@@ -304,7 +304,7 @@ pub(crate) struct M2Backend {
 }
 
 impl M2Backend {
-    pub(crate) fn spawn() -> Result<Self> {
+    pub fn spawn() -> Result<Self> {
         let config = Self::config_dir()?;
         Self::spawn_in(&config, Some(config.join("init.m2")))
     }
@@ -460,7 +460,7 @@ impl M2Backend {
     /// Synchronous and blocking. The terminator statement is appended so that a
     /// statement which errors, and therefore runs none of the hooks, is still
     /// closed by a frame rather than leaving this loop waiting forever.
-    pub(crate) fn evaluate(&mut self, code: &str, number: Option<u32>) -> Result<M2Response> {
+    pub fn evaluate(&mut self, code: &str, number: Option<u32>) -> Result<M2Response> {
         let _ = number;
         writeln!(self.input, "{}", code.trim_end())?;
         writeln!(self.input, "{CELL_TERMINATOR}")?;
@@ -493,7 +493,7 @@ impl M2Backend {
     }
 
     /// The M2 version, as reported by the startup frame.
-    pub(crate) fn version(&self) -> Result<String> {
+    pub fn version(&self) -> Result<String> {
         Ok(self.version.clone())
     }
 }
@@ -1088,6 +1088,20 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         assert!(!result.is_error, "{}", result.transcript);
         assert_eq!(result.rendered_value().as_deref(), Some("1.3"));
         assert!(result.has_value);
+    }
+
+    #[test]
+    fn inexact_values_respect_printing_accuracy() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        backend
+            .evaluate("printingAccuracy = 3;", Some(1))
+            .expect("set accuracy");
+        let result = backend
+            .evaluate("1.23456789", Some(2))
+            .expect("evaluate real");
+
+        assert!(!result.is_error, "{}", result.transcript);
+        assert_eq!(result.rendered_value().as_deref(), Some("1.235"));
     }
 
     #[test]

@@ -886,143 +886,41 @@ dragon = "#49443c"
 [colors.winterYellow.light]
 lotus = "#49443c"
 
-[groups]
+[base]
+Canvas = { bg = "background" }
+Code = { bg = "background_dim" }
+Raised = { bg = "border" }
+Pending = { bg = "selection" }
+Selection = { bg = "selection" }
+Focus = { bg = "winterGreen" }
 
-Comment = { fg = "comment", italic = true }
-Constant = { fg = "boolean" }
-String = { fg = "string" }
-Character = { fg = "string" }
-Number = { fg = "number" }
-Boolean = { fg = "boolean", bold = true }
-Float = { fg = "number" }
-Identifier = { fg = "text" }
-Function = { fg = "function" }
-Statement = { fg = "label", italic = true }
-Conditional = { fg = "label", italic = true }
-Repeat = { fg = "label", italic = true }
-Label = { fg = "label", bold = true }
-Operator = { fg = "operator" }
-Keyword = { fg = "label", italic = true }
-Exception = { fg = "label", italic = true }
-PreProc = { fg = "function" }
-Include = { fg = "function" }
-Define = { fg = "function" }
-Macro = { fg = "function" }
-PreCondit = { fg = "function" }
-Type = { fg = "type" }
-StorageClass = { fg = "label", italic = true }
-Structure = { fg = "type" }
-Typedef = { fg = "type" }
-Special = { fg = "boolean" }
-SpecialChar = { fg = "string" }
-Tag = { fg = "url", sp = "url", underline = true }
-Delimiter = { fg = "operator" }
-SpecialComment = { fg = "comment", italic = true }
-Debug = { fg = "label", italic = true }
-Underlined = { fg = "url", sp = "url", underline = true }
-Ignore = { fg = "comment" }
-Error = { fg = "error", sp = "error" }
-Todo = { fg = "warning", sp = "warning", bold = true }
-Added = { fg = "function" }
-Changed = { fg = "url", sp = "url" }
-Removed = { fg = "error", sp = "error" }
-
-Warning = { fg = "warning", sp = "warning" }
-Info = { fg = "url", sp = "url" }
-Hint = { fg = "property" }
-DiagnosticError = { sp = "error", underline = true }
-DiagnosticWarning = { sp = "warning", underline = true }
-DiagnosticInfo = { sp = "url", underline = true }
-DiagnosticHint = { sp = "property", underline = true }
-
-Installation = { fg = "label", bold = true }
-Property = { fg = "property" }
-Namespace = { fg = "type" }
-Package = { fg = "type" }
-CompiledFunction = { fg = "function", bold = true }
-Symbol = { fg = "boolean" }
-Variable = { fg = "text" }
-AlgVariable = { fg = "builtin", italic = true }
-Parameter = { fg = "parameter" }
-Regex = { fg = "url", sp = "url", underline = true }
-Punctuation = { fg = "punctuation" }
-Quote = { fg = "string" }
-Documentation = { fg = "url", sp = "url", underline = true }
-
-LspTypeClass = { fg = "type" }
-LspTypeComment = { fg = "comment", italic = true }
-LspTypeDecorator = { fg = "function" }
-LspTypeEnum = { fg = "type" }
-LspTypeEnumMember = { fg = "boolean" }
-LspTypeEvent = { fg = "boolean" }
-LspTypeFunction = { fg = "function" }
-LspTypeInterface = { fg = "type" }
-LspTypeKeyword = { fg = "label", italic = true }
-LspTypeMacro = { fg = "function" }
-LspTypeMethod = { fg = "function" }
-LspTypeModifier = { fg = "label", italic = true }
-LspTypeNamespace = { fg = "type" }
-LspTypeNumber = { fg = "number" }
-LspTypeOperator = { fg = "operator" }
-LspTypeParameter = { fg = "parameter" }
-LspTypeProperty = { fg = "property" }
-LspTypeRegexp = { fg = "url", sp = "url", underline = true }
-LspTypeString = { fg = "string" }
-LspTypeStruct = { fg = "type" }
-LspTypeType = { fg = "type" }
-LspTypeTypeParameter = { fg = "type" }
-LspTypeVariable = { fg = "text" }
-
-LspModAbstract = { italic = true }
-LspModAsync = { italic = true }
-LspModDeclaration = { bold = true }
-LspModDefaultLibrary = { italic = true }
-LspModDefinition = { bold = true }
-LspModDeprecated = { crossed_out = true }
-LspModDocumentation = { italic = true }
-LspModModification = { underline = true }
-LspModReadonly = { italic = true }
-LspModStatic = { underline = true }
-
-Visual = { bg = "selection" }
-Value = { fg = "text" }
+Text = { fg = "text" }
 Muted = { fg = "comment" }
-Printed = { fg = "string", bg = "border" }
-ShellCommand = { fg = "property" }
-ShellMessage = { fg = "comment" }
-ShellError = { fg = "error", sp = "error" }
-HintText = { fg = "comment" }
-Normal = { bg = "background" }
-CodeBlock = { bg = "background_dim" }
-PendingBlock = { bg = "selection" }
-Separator = { fg = "background" }
-ValueBorder = { fg = "border", sp = "border" }
-OutputNumber = { fg = "property", bold = true }
-ErrorBorder = { fg = "error", sp = "error" }
-WarningBorder = { fg = "warning", sp = "warning" }
-InfoBorder = { fg = "url", sp = "url" }
-Statusline1 = { fg = "function" }
-Statusline2 = { fg = "warning", sp = "warning" }
-Statusline3 = { fg = "return" }
-StatuslineBorder = { fg = "border", sp = "border" }
-StatuslineBg = { bg = "background_dim" }
-StatuslineError = { fg = "error", sp = "error" }
-StatuslineWarning = { fg = "warning", sp = "warning" }
-KeymapHint = { fg = "property" }
-PickerText = { fg = "text" }
-Picker = { bg = "border" }
-PickerSelected = { bg = "winterGreen" }
-PickerBorder = { fg = "border", sp = "border" }
+Faint = { fg = "border" }
 
-Accent1 = { fg = "samuraiRed" }
-Accent2 = { fg = "surimiOrange" }
-Accent3 = { fg = "roninYellow" }
-Accent4 = { fg = "springGreen" }
-Accent5 = { fg = "waveAqua1" }
-Accent6 = { fg = "crystalBlue" }
-Accent7 = { fg = "oniViolet" }
+Keyword = { fg = "label", italic = true }
+Function = { fg = "function" }
+Type = { fg = "type" }
+String = { fg = "string" }
+Number = { fg = "number" }
+Operator = { fg = "operator" }
+Symbol = { fg = "boolean" }
+Module = { fg = "type" }
 
-BgColor1 = { bg = "background_dim" }
-BgColor2 = { bg = "background" }
-BgColor3 = { bg = "sumiInk4" }
-BgColor4 = { bg = "sumiInk5" }
+Accent = { fg = "property" }
+Error = { fg = "error" }
+Warning = { fg = "warning" }
+Info = { fg = "url" }
+Hint = { fg = "property" }
+
+[overrides]
+Constant = { fg = "boolean" }
+Boolean = { fg = "boolean", bold = true }
+Delimiter = { fg = "operator" }
+Punctuation = { fg = "punctuation" }
+Parameter = { fg = "parameter" }
+Property = { fg = "property" }
+Installation = { fg = "label", bold = true }
+CompiledFunction = { fg = "function", bold = true }
+Builtin = { fg = "builtin", italic = true }
+Quote = { fg = "string" }

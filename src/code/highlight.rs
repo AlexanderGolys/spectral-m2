@@ -12,10 +12,7 @@ impl Add<u32> for HLSpan {
 
     fn add(self, offset: u32) -> Self::Output {
         let offset = offset as usize;
-        Self {
-            content: self.content.start + offset..self.content.end + offset,
-            kind: self.kind,
-        }
+        self.with_content(self.content.start + offset..self.content.end + offset)
     }
 }
 
@@ -23,16 +20,14 @@ impl Sub<usize> for HLSpan {
     type Output = Self;
 
     fn sub(self, offset: usize) -> Self::Output {
-        Self {
-            content: self.content.start.saturating_sub(offset)
-                ..self.content.end.saturating_sub(offset),
-            kind: self.kind,
-        }
+        self.with_content(
+            self.content.start.saturating_sub(offset)..self.content.end.saturating_sub(offset),
+        )
     }
 }
 
 /// A source-to-highlight projection consumed by the renderer.
-pub(crate) trait Highlighter {
+pub trait Highlighter {
     /// Return ordered byte ranges carrying semantic theme groups.
     fn highlight(&mut self, source: &str) -> Vec<HLSpan>;
 
@@ -52,7 +47,7 @@ pub(crate) trait Highlighter {
 }
 
 /// The Macaulay2 Tree-sitter highlighter using the grammar crate's own query.
-pub(crate) struct SyntaxHighlighter {
+pub struct SyntaxHighlighter {
     config: HighlightConfiguration,
     highlighter: TsHighlighter,
 }
@@ -84,8 +79,8 @@ impl SyntaxHighlighter {
         ("label", HLGroup::Installation),
         ("type.parameter", HLGroup::Type),
         ("function.builtin", HLGroup::CompiledFunction),
-        ("variable.builtin", HLGroup::AlgVariable),
-        ("constant.builtin", HLGroup::Constant),
+        ("variable.builtin", HLGroup::Builtin),
+        ("constant.builtin", HLGroup::Builtin),
         ("boolean", HLGroup::Boolean),
         ("error", HLGroup::Error),
         ("string.special.url", HLGroup::Documentation),
@@ -94,7 +89,7 @@ impl SyntaxHighlighter {
     ];
 
     /// Configure highlighting from the query shipped with the grammar version.
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         let mut config = HighlightConfiguration::new(
             tree_sitter_macaulay2::language(),
             "macaulay2",

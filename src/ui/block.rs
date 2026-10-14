@@ -4,6 +4,7 @@ use std::ops::Range;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Offset, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use super::controller::settings::theme::groups::{Groups, HLGroup};
@@ -65,6 +66,9 @@ pub(crate) trait Block {
 pub(crate) struct HLSpan<T = Range<usize>> {
     pub(crate) content: T,
     pub(crate) kind: HLGroup,
+    /// A group laid over `kind` without replacing it, such as the underline that
+    /// rules a fraction's numerator.
+    pub(crate) mark: Option<HLGroup>,
 }
 
 impl<T> HLSpan<T> {
@@ -72,6 +76,31 @@ impl<T> HLSpan<T> {
         Self {
             content: content.into(),
             kind,
+            mark: None,
+        }
+    }
+
+    pub(crate) fn marked(self, mark: HLGroup) -> Self {
+        Self {
+            mark: Some(mark),
+            ..self
+        }
+    }
+
+    /// The same groups over different content: a piece of this span, or this span moved.
+    pub(crate) fn with_content<U>(&self, content: impl Into<U>) -> HLSpan<U> {
+        HLSpan {
+            content: content.into(),
+            kind: self.kind,
+            mark: self.mark,
+        }
+    }
+
+    pub(crate) fn style(&self, groups: &Groups) -> Style {
+        let style = groups.style(self.kind);
+        match self.mark {
+            Some(mark) => style.patch(groups.style(mark)),
+            None => style,
         }
     }
 }
@@ -95,7 +124,7 @@ impl Text for [TextSpan] {
 
     fn spans(&self, groups: &Groups) -> Vec<Span<'static>> {
         self.iter()
-            .map(|span| Span::styled(span.content.clone(), groups.style(span.kind)))
+            .map(|span| Span::styled(span.content.clone(), span.style(groups)))
             .collect()
     }
 }

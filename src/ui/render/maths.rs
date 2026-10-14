@@ -25,7 +25,7 @@ use crate::ui::wrap::WordWrap;
 
 /// A piece of parsed maths, tagged with the role that decides its colour.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Math {
+pub enum Math {
     /// One indivisible run of text: a numeral, a name, an operator, a delimiter.
     Atom { text: String, kind: HLGroup },
     /// The thin space M2 sets between factors: a gap that keeps the product `x y`
@@ -67,7 +67,7 @@ pub(crate) enum Math {
 /// and M2 wraps them in an explicit `\left( … \right)` of its own. Supplying fences
 /// here as well is what drew every matrix inside two sets of brackets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GridKind {
+pub enum GridKind {
     /// Aligned columns and nothing around them; the source says what fences them.
     Bare,
     /// Entries the environment itself parenthesises, as `pmatrix` does.
@@ -81,28 +81,28 @@ pub(crate) enum GridKind {
 /// Carrying the reason rather than a bare `None` is what lets a fallback be reported
 /// rather than silently substituted, so an unhandled construct can be found and added.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Unsupported(pub(crate) String);
+pub struct Unsupported(pub String);
 
 /// How a fraction is set, as chosen in settings.
 #[discriminated_str(label)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum FractionStyle {
+pub enum FractionStyle {
     /// Numerator, rule, denominator: three rows, as M2 sets one itself.
     #[default]
     Stacked = "stacked",
-    /// The numerator over its denominator, the rule an overline on the denominator's
-    /// top row: two rows.
-    Overlined = "overlined",
+    /// The numerator over its denominator, the rule an underline on the numerator's
+    /// bottom row: two rows.
+    Underlined = "underlined",
     /// `a/b` along one row, a compound part parenthesised.
     Inline = "inline",
 }
 
 impl FractionStyle {
-    pub(crate) const fn cycle(self, delta: i8) -> Self {
+    pub const fn cycle(self, delta: i8) -> Self {
         match (self, delta > 0) {
-            (Self::Stacked, true) | (Self::Inline, false) => Self::Overlined,
-            (Self::Overlined, true) | (Self::Stacked, false) => Self::Inline,
-            (Self::Inline, true) | (Self::Overlined, false) => Self::Stacked,
+            (Self::Stacked, true) | (Self::Inline, false) => Self::Underlined,
+            (Self::Underlined, true) | (Self::Stacked, false) => Self::Inline,
+            (Self::Inline, true) | (Self::Underlined, false) => Self::Stacked,
         }
     }
 }
@@ -126,7 +126,7 @@ impl Role {
 /// TeX is coloured from its parsed structure, a container from its entries, and a
 /// token by its role. A value M2 drew as plain text carries nothing to colour, and
 /// the caller's flat path renders it unchanged.
-pub(crate) fn spans(
+pub fn spans(
     value: &M2Value,
     width: usize,
     fractions: FractionStyle,
@@ -446,9 +446,6 @@ impl<'a> Input<'a> {
 /// U+22C5 DOT OPERATOR, whose width is the same under every terminal convention --
 /// unlike U+00B7 MIDDLE DOT, which is East Asian Ambiguous and would shift a border.
 const PRODUCT: &str = "\u{22C5}";
-/// U+0305 COMBINING OVERLINE: drawn over the character before it and taking no
-/// column, so an overlined row keeps its width.
-const OVERLINE: char = '\u{0305}';
 const THIN_SPACE: &str = "\\,";
 /// How many digits M2 sets between the thin spaces of a long numeral.
 const DIGIT_GROUP: usize = 3;
@@ -464,7 +461,7 @@ const FONTS: [&str; 8] = [
 
 impl Math {
     /// Parse one M2 TeX expression.
-    pub(crate) fn parse(source: &str) -> Result<Self, Unsupported> {
+    pub fn parse(source: &str) -> Result<Self, Unsupported> {
         let mut input = Input::new(source);
         let parsed = input.expression(&[])?;
         match input.rest().is_empty() {
@@ -492,7 +489,7 @@ impl Math {
     }
 
     /// Lay out as rows of spans around a baseline, fractions set in `fractions`.
-    pub(crate) fn layout(&self, fractions: FractionStyle) -> MathBlock {
+    pub fn layout(&self, fractions: FractionStyle) -> MathBlock {
         match self {
             Self::Atom { text, kind } => MathBlock::atom(text, *kind),
             Self::Space => MathBlock::gap(),
@@ -504,8 +501,8 @@ impl Math {
                 FractionStyle::Stacked => {
                     MathBlock::fraction(numerator.layout(fractions), denominator.layout(fractions))
                 }
-                FractionStyle::Overlined => {
-                    MathBlock::overlined(numerator.layout(fractions), denominator.layout(fractions))
+                FractionStyle::Underlined => {
+                    MathBlock::underlined(numerator.layout(fractions), denominator.layout(fractions))
                 }
                 FractionStyle::Inline => MathBlock::row([
                     numerator.inline_operand(fractions),
@@ -518,13 +515,13 @@ impl Math {
                 .fenced(&left.to_string(), &right.to_string()),
             Self::Power { base, exponent } => {
                 let base = base.layout(fractions);
+                // An exponent with no superscript form is written out after a caret,
+                // kept to one row so it cannot be read as a row above the base.
                 match exponent.inline_script(Shift::Raised) {
                     Some(inline) => base.beside(inline),
-                    None => {
-                        let exponent = exponent.layout(fractions);
-                        let baseline = exponent.height() + base.baseline;
-                        MathBlock::stack(vec![exponent, base], baseline, Align::Left)
-                    }
+                    None => base
+                        .beside(MathBlock::atom("^", HLGroup::Operator))
+                        .beside(exponent.inline_operand(FractionStyle::Inline)),
                 }
             }
             Self::Index { base, subscript } => {
@@ -692,7 +689,7 @@ impl Shift {
 /// the `+` lands level with the numerator; with one it sits on the rule, where a reader
 /// expects it. Every operation below preserves it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct MathBlock {
+pub struct MathBlock {
     rows: Vec<SpanLine>,
     baseline: usize,
 }
@@ -714,11 +711,11 @@ impl MathBlock {
 
     /// The single column set around a binary operator and between factors.
     fn gap() -> Self {
-        Self::atom(" ", HLGroup::Normal)
+        Self::atom(" ", HLGroup::Canvas)
     }
 
     #[cfg(test)]
-    pub(crate) fn rows(&self) -> &[SpanLine] {
+    pub fn rows(&self) -> &[SpanLine] {
         &self.rows
     }
 
@@ -727,15 +724,15 @@ impl MathBlock {
     }
 
     #[cfg(test)]
-    pub(crate) const fn baseline(&self) -> usize {
+    pub const fn baseline(&self) -> usize {
         self.baseline
     }
 
-    pub(crate) fn width(&self) -> usize {
+    pub fn width(&self) -> usize {
         self.rows.iter().map(Self::row_width).max().unwrap_or(0)
     }
 
-    pub(crate) fn height(&self) -> usize {
+    pub fn height(&self) -> usize {
         self.rows.len()
     }
 
@@ -747,8 +744,8 @@ impl MathBlock {
 
     /// The part of a row whose columns fall within `range`.
     ///
-    /// A mark of no width, such as the overline of an overlined fraction, belongs to
-    /// the column of the character it marks.
+    /// A mark of no width, such as a combining accent, belongs to the column of the
+    /// character it marks.
     fn columns(row: &SpanLine, range: Range<usize>) -> SpanLine {
         let mut column = 0;
         let mut start = 0;
@@ -766,7 +763,7 @@ impl MathBlock {
                         range.contains(&start)
                     })
                     .collect();
-                (!kept.is_empty()).then(|| TextSpan::new(kept, span.kind))
+                (!kept.is_empty()).then(|| span.with_content(kept))
             })
             .collect()
     }
@@ -781,7 +778,7 @@ impl MathBlock {
         for row in &mut self.rows {
             let pad = width - Self::row_width(row);
             if pad > 0 {
-                row.push(TextSpan::new(" ".repeat(pad), HLGroup::Normal));
+                row.push(TextSpan::new(" ".repeat(pad), HLGroup::Canvas));
             }
         }
         self
@@ -805,7 +802,7 @@ impl MathBlock {
             // Rows this block does not reach still owe their columns.
             for (index, row) in rows.iter_mut().enumerate() {
                 if index < offset || index >= offset + reached {
-                    row.push(TextSpan::new(" ".repeat(width), HLGroup::Normal));
+                    row.push(TextSpan::new(" ".repeat(width), HLGroup::Canvas));
                 }
             }
         }
@@ -902,7 +899,7 @@ impl MathBlock {
                 let (height, baseline) = (line.height(), line.baseline);
                 let lead = match index {
                     0 => Self::fence(open, height, baseline),
-                    _ => Self::atom(&" ".repeat(indent), HLGroup::Normal),
+                    _ => Self::atom(&" ".repeat(indent), HLGroup::Canvas),
                 };
                 let tail = (index + 1 == count).then(|| Self::fence(close, height, baseline));
                 Self::row([lead, line].into_iter().chain(tail))
@@ -978,10 +975,10 @@ impl MathBlock {
                 Align::Centre => slack / 2,
             };
             if before > 0 {
-                row.insert(0, TextSpan::new(" ".repeat(before), HLGroup::Normal));
+                row.insert(0, TextSpan::new(" ".repeat(before), HLGroup::Canvas));
             }
             if slack > before {
-                row.push(TextSpan::new(" ".repeat(slack - before), HLGroup::Normal));
+                row.push(TextSpan::new(" ".repeat(slack - before), HLGroup::Canvas));
             }
         }
         self
@@ -1014,18 +1011,17 @@ impl MathBlock {
         Self::stack(vec![numerator, rule, denominator], baseline, Align::Centre)
     }
 
-    /// One expression over another in two rows: the rule is an overline across the
-    /// denominator's top row rather than a row of its own. That row is the baseline,
-    /// as the rule's row is in a stacked fraction.
-    fn overlined(numerator: Self, denominator: Self) -> Self {
+    /// One expression over another in two rows: the rule is an underline across the
+    /// numerator's bottom row rather than a row of its own. The denominator's top row
+    /// is the baseline, as the rule's row is in a stacked fraction.
+    fn underlined(numerator: Self, denominator: Self) -> Self {
         let width = numerator.width().max(denominator.width()).max(1);
         let baseline = numerator.height();
-        let mut denominator = denominator.pad(width, Align::Centre);
-        for span in &mut denominator.rows[0] {
-            span.content = span
-                .content
-                .chars()
-                .flat_map(|character| [character, OVERLINE])
+        let mut numerator = numerator.pad(width, Align::Centre);
+        if let Some(bottom) = numerator.rows.last_mut() {
+            *bottom = bottom
+                .drain(..)
+                .map(|span| span.marked(HLGroup::FractionRule))
                 .collect();
         }
         Self::stack(vec![numerator, denominator], baseline, Align::Centre)
@@ -1090,7 +1086,7 @@ impl MathBlock {
             })
             .collect();
 
-        let column_gap = || Self::atom("  ", HLGroup::Normal);
+        let column_gap = || Self::atom("  ", HLGroup::Canvas);
         let stacked: Vec<Self> = laid
             .into_iter()
             .map(|row| {
@@ -1139,17 +1135,18 @@ impl MathBlock {
     fn visible_width(&self) -> usize {
         self.rows
             .iter()
-            .map(|row| {
-                let text: String = row.iter().map(|span| span.content.as_str()).collect();
-                UnicodeWidthStr::width(text.trim_end())
-            })
+            .map(|row| Self::row_width(&Self::trimmed(row.clone())))
             .max()
             .unwrap_or(0)
     }
 
-    /// A row without the blank columns it ends on.
+    /// A row without the blank columns it ends on. A marked blank shows its mark, so
+    /// it is not blank.
     fn trimmed(mut row: SpanLine) -> SpanLine {
         while let Some(last) = row.last_mut() {
+            if last.mark.is_some() {
+                break;
+            }
             let kept = last.content.trim_end().len();
             if kept > 0 {
                 last.content.truncate(kept);
@@ -1604,8 +1601,8 @@ mod tests {
             ["    1", "x + \u{2500}", "    3"]
         );
         assert_eq!(
-            fraction_picture(fraction, FractionStyle::Overlined),
-            ["    1", "x + 3\u{0305}"]
+            fraction_picture(fraction, FractionStyle::Underlined),
+            ["    1", "x + 3"]
         );
         assert_eq!(
             fraction_picture(fraction, FractionStyle::Inline),
@@ -1627,30 +1624,35 @@ mod tests {
         );
     }
 
-    /// The overline spans the whole fraction, padding included, so a denominator
-    /// narrower than its numerator is still wholly under the rule.
+    /// The rule spans the whole fraction, padding included, so a numerator narrower
+    /// than its denominator is still wholly over the rule, and the rule is the only
+    /// thing marked.
     #[test]
-    fn an_overlined_fraction_rules_its_full_width() {
-        assert_eq!(
-            fraction_picture(r"\frac{100}{3}", FractionStyle::Overlined),
-            ["100", " \u{0305}3\u{0305} \u{0305}"]
-        );
+    fn an_underlined_fraction_rules_its_full_width() {
+        let rows = spans(&tex(r"\frac{3}{100}"), 80, FractionStyle::Underlined).expect("renders");
+
+        assert_eq!(text(&rows), [" 3 ", "100"]);
+        assert!(rows[0]
+            .iter()
+            .all(|span| span.mark == Some(HLGroup::FractionRule)));
+        assert!(rows[1].iter().all(|span| span.mark.is_none()));
     }
 
-    /// Painted into the terminal, the overline rides in the cell of the character it
-    /// marks rather than taking one of its own.
+    /// Painted into the terminal, the rule is the numerator's underline in the rule's
+    /// special colour, over the numerator's own colours.
     #[test]
-    fn an_overline_shares_the_cell_of_its_character() {
+    fn an_underlined_rule_paints_in_its_special_colour() {
         use crate::ui::block::Text;
         use crate::ui::controller::settings::theme::groups::Groups;
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
+        use ratatui::style::Modifier;
         use ratatui::text::Line;
         use ratatui::widgets::{Paragraph, Widget};
 
-        let rows = spans(&tex(r"\frac{1}{3}"), 80, FractionStyle::Overlined).expect("renders");
+        let rows = spans(&tex(r"\frac{1}{3}"), 80, FractionStyle::Underlined).expect("renders");
         let groups = Groups::default();
-        let area = Rect::new(0, 0, 2, 2);
+        let area = Rect::new(0, 0, 1, 2);
         let mut cells = Buffer::empty(area);
         Paragraph::new(
             rows.iter()
@@ -1659,8 +1661,12 @@ mod tests {
         )
         .render(area, &mut cells);
 
-        assert_eq!(cells[(0, 1)].symbol(), "3\u{0305}");
-        assert_eq!(cells[(1, 1)].symbol(), " ", "the overline took no column");
+        let numerator = &cells[(0, 0)];
+        assert_eq!(numerator.symbol(), "1");
+        assert!(numerator.modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(Some(numerator.underline_color), groups.FractionRule.underline_color);
+        assert_eq!(Some(numerator.fg), groups.Number.fg);
+        assert!(!cells[(0, 1)].modifier.contains(Modifier::UNDERLINED));
     }
 
     /// A container's brackets grow to the tallest entry on their line.
@@ -1705,6 +1711,13 @@ mod tests {
     fn a_simple_power_stays_on_one_row() {
         assert_eq!(picture("x^{2} + 1"), ["x\u{00B2} + 1"]);
         assert_eq!(picture("x^{10}"), ["x\u{00B9}\u{2070}"]);
+    }
+
+    #[test]
+    fn a_power_without_superscripts_is_written_with_a_caret() {
+        assert_eq!(picture("x^{x}"), ["x^x"]);
+        assert_eq!(picture("x^{y+1} + 1"), ["x^(y + 1) + 1"]);
+        assert_eq!(picture(r"x^{\frac{1}{2}}"), ["x^(1/2)"]);
     }
 
     #[test]

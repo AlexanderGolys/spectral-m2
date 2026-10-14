@@ -6,22 +6,22 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 /// Printed text, an optional returned value, and warnings from one evaluation.
-pub(crate) struct CapturedOutput {
-    pub(crate) printed: String,
-    pub(crate) value: Option<CapturedValue>,
-    pub(crate) warnings: Vec<String>,
+pub struct CapturedOutput {
+    pub printed: String,
+    pub value: Option<CapturedValue>,
+    pub warnings: Vec<String>,
 }
 
 /// The rendered value and optional M2 type annotation of an output cell.
-pub(crate) struct CapturedValue {
-    pub(crate) text: String,
-    pub(crate) type_info: Option<String>,
+pub struct CapturedValue {
+    pub text: String,
+    pub type_info: Option<String>,
 }
 
 /// Ordinary output emitted before a failed evaluation and its diagnostic.
-pub(crate) struct CapturedError {
-    pub(crate) printed: String,
-    pub(crate) diagnostic: String,
+pub struct CapturedError {
+    pub printed: String,
+    pub diagnostic: String,
 }
 
 /// Warning lines carried beside otherwise successful output.
@@ -47,7 +47,7 @@ static DIAGNOSTIC_KEYWORD: LazyLock<Regex> =
 /// keeping only the message (`warning: …` / `error: …`). The prefix is slated
 /// for removal upstream, so we drop it rather than render it. Returns the input
 /// unchanged when no such prefix is present (e.g. an ordinary value line).
-pub(crate) fn strip_m2_location(s: &str) -> &str {
+pub fn strip_m2_location(s: &str) -> &str {
     LOCATION_PREFIX
         .find(s)
         .map_or(s, |location| &s[location.end()..])
@@ -75,7 +75,7 @@ fn captured_text<'a>(raw: &'a str, code: &str) -> &'a str {
 }
 
 /// Separate the printed text, value, and type annotation in a successful capture.
-pub(crate) fn captured_output(
+pub fn captured_output(
     raw: &str,
     code: &str,
     value: Option<&str>,
@@ -113,7 +113,7 @@ fn take_warnings(text: &str, warnings: &mut Vec<String>) -> String {
 }
 
 /// Remove the echoed input and keep pre-error output out of the diagnostic.
-pub(crate) fn captured_error(raw: &str, code: &str) -> CapturedError {
+pub fn captured_error(raw: &str, code: &str) -> CapturedError {
     let lines = captured_text(raw, code)
         .lines()
         .filter(|line| !BACKTRACE.is_match(line.trim()))

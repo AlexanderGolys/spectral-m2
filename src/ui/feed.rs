@@ -1,7 +1,7 @@
 //! Eagerly retained transcript rendering with viewport-sized copying.
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Alignment, Offset, Rect};
+use ratatui::layout::{Alignment, Offset, Position, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{Block as TuiBlock, Paragraph, Widget};
 
@@ -17,6 +17,9 @@ struct ViewportState {
     area: Rect,
     scroll: usize,
     anchor: Option<(usize, u16)>,
+    context: RenderContext,
+    /// Each visible block's index, screen rows, and first local row shown there.
+    placements: Vec<(usize, Rect, u16)>,
 }
 
 /// Storage for an open-ended block or the one block the feed must mutate in place.
@@ -360,6 +363,34 @@ impl Feed {
         }
     }
 
+    /// Expand or fold the value under a screen position, keeping the top row in place.
+    pub(crate) fn toggle_fold(&mut self, position: Position) -> bool {
+        let Some(surface) = &self.surface else {
+            return false;
+        };
+        let Some(&(index, area, start)) = surface
+            .placements
+            .iter()
+            .find(|(_, area, _)| area.contains(position))
+        else {
+            return false;
+        };
+        let (context, anchor) = (surface.context, surface.anchor);
+        let block = &mut self.blocks[index];
+        let toggled = match &mut block.content {
+            FeedContent::Evaluation(evaluation) => {
+                evaluation.toggle_fold(start + position.y - area.y, &context)
+            }
+            FeedContent::Block(_) | FeedContent::Incomplete(_) => false,
+        };
+        if toggled {
+            block.invalidate_layout();
+            self.anchor = anchor;
+            self.surface = None;
+        }
+        toggled
+    }
+
     /// Move by signed rows, positive toward older content.
     pub(crate) fn scroll(&mut self, rows: i8) {
         self.anchor = None;
@@ -491,6 +522,7 @@ impl Feed {
         let mut crop = visible.rows.saturating_sub(area.height);
         let mut anchor = None;
         let mut exclusions = Exclusions::default();
+        let mut placements = Vec::new();
         for (index, height, bottom) in visible.blocks.into_iter().rev() {
             let (cells, block_exclusions) = blocks[index].render(context, canvas);
             let start = crop.min(height - bottom);
@@ -507,6 +539,7 @@ impl Feed {
                     + Offset::new(i32::from(area.x), i32::from(y)),
             );
             anchor = anchor.or((rows > 0).then_some((index, start)));
+            placements.push((index, Rect::new(area.x, y, area.width, rows), start));
             y += rows;
         }
         (
@@ -514,6 +547,8 @@ impl Feed {
                 area,
                 scroll,
                 anchor,
+                context: *context,
+                placements,
             },
             underfilled,
             exclusions,
@@ -610,7 +645,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::ui::cell::{CellState, OutputBlock, TextBlock};
+    use crate::ui::cell::{CellState, EvaluationBlock, OutputBlock, TextBlock};
     use crate::ui::controller::settings::theme::groups::Groups;
 
     /// A one-row block counting actual cell rendering.
@@ -661,6 +696,46 @@ mod tests {
                 buffer[(0, row)].set_char(char::from_digit(u32::from(row % 10), 10).unwrap());
             }
         }
+    }
+
+    #[test]
+    fn toggling_a_fold_keeps_the_top_row_in_place() {
+        let rows = (0..30)
+            .map(|row| format!("row {row:02}"))
+            .collect::<Vec<_>>();
+        let mut evaluation = EvaluationBlock::new(1, [("x".to_string(), Vec::new())]);
+        evaluation.succeed(
+            0,
+            1,
+            CellState::Value,
+            Vec::new(),
+            Some(OutputBlock::value(rows.join("\n"), None)),
+        );
+        let mut feed = Feed::new(Box::new(TextBlock::printed("")));
+        feed.push_evaluation(evaluation);
+        let context = RenderContext::new(40, 0).with_output_limit(8);
+        let area = Rect::new(0, 0, 40, 10);
+        let screen = |feed: &mut Feed| {
+            let mut target = Buffer::empty(area);
+            feed.render(&context, area, &mut target, Style::default());
+            (0..area.height)
+                .map(|y| (0..area.width).map(|x| target[(x, y)].symbol()).collect())
+                .collect::<Vec<String>>()
+        };
+
+        let folded = screen(&mut feed);
+        assert!(folded.iter().any(|row| row.contains("rows hidden")));
+        assert!(!feed.toggle_fold(Position::new(0, 20)), "outside the feed");
+        assert!(feed.toggle_fold(Position::new(10, 5)));
+        let expanded = screen(&mut feed);
+        assert_eq!(expanded[0], folded[0]);
+        assert!(!expanded.iter().any(|row| row.contains("rows hidden")));
+        assert!(expanded[8].contains("row 07"), "{expanded:#?}");
+
+        assert!(feed.toggle_fold(Position::new(10, 5)));
+        assert!(screen(&mut feed)
+            .iter()
+            .any(|row| row.contains("rows hidden")));
     }
 
     #[test]

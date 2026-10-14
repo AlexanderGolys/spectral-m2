@@ -28,6 +28,7 @@ enum BorderPlacement {
 }
 
 /// Runtime rendering inputs shared by every block without owning application state.
+#[derive(Clone, Copy)]
 pub(crate) struct RenderContext {
     width: u16,
     prefix: u16,
@@ -45,6 +46,14 @@ impl RenderContext {
         }
     }
 
+    /// Fold returned values taller than `rows`.
+    pub(crate) fn with_output_limit(self, rows: usize) -> Self {
+        Self {
+            output_limit: Some(rows),
+            ..self
+        }
+    }
+
     /// Set returned maths with fractions in `fractions`.
     pub(crate) fn with_fractions(self, fractions: FractionStyle) -> Self {
         Self { fractions, ..self }
@@ -56,12 +65,7 @@ impl RenderContext {
 
     /// Retain rendering services at a nested element's local width.
     pub(crate) fn with_width(&self, width: u16) -> Self {
-        Self {
-            width,
-            prefix: self.prefix,
-            output_limit: self.output_limit,
-            fractions: self.fractions,
-        }
+        Self { width, ..*self }
     }
 
     pub(crate) fn fractions(&self) -> FractionStyle {
@@ -72,7 +76,7 @@ impl RenderContext {
     pub(crate) fn full_output(&self) -> Self {
         Self {
             output_limit: None,
-            ..self.with_width(self.width)
+            ..*self
         }
     }
 
@@ -157,7 +161,7 @@ impl Highlights for [HLSpan] {
             }
             out.push(Span::styled(
                 seg[st - abs_start..en - abs_start].to_string(),
-                base.patch(groups.style(s.kind)),
+                base.patch(s.style(groups)),
             ));
             cur = en;
         }

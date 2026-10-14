@@ -5,6 +5,8 @@ pub(crate) mod commands;
 mod picker;
 pub(crate) mod settings;
 
+use std::time::{Duration, Instant};
+
 use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
@@ -32,7 +34,6 @@ use super::debug::FrameStats;
 use super::element::EventListener;
 use super::feed::{BlockView, Feed};
 use super::key::{KeyEvent, KeyMod};
-use super::render::maths::FractionStyle;
 use super::render::selection::Exclusions;
 use super::render::RenderContext;
 use super::statusline::{StatusLine, StatusLineContext, StatusLineEvent};
@@ -335,6 +336,7 @@ const SHELL_ITEMS: &[ShellItem] = &[
     ShellItem::Input(InputSetting::Scrolloff),
     ShellItem::Statusline,
     ShellItem::Fractions,
+    ShellItem::OutputRows,
     ShellItem::Style,
     ShellItem::RestoreDefault,
 ];
@@ -345,6 +347,7 @@ enum ShellItem {
     Input(InputSetting),
     Statusline,
     Fractions,
+    OutputRows,
     Style,
     RestoreDefault,
 }
@@ -392,6 +395,8 @@ pub(crate) struct Editor {
     highlight_debug: bool,
     highlight_debug_scroll: usize,
     frame_stats: FrameStats,
+    /// When and where the previous left click landed, to recognise a double click.
+    last_click: Option<(Instant, Position)>,
 }
 
 impl Editor {
@@ -422,6 +427,7 @@ impl Editor {
             highlight_debug: false,
             highlight_debug_scroll: 0,
             frame_stats: FrameStats::default(),
+            last_click: None,
         };
         editor.refresh_status_line();
         editor
@@ -615,9 +621,22 @@ impl Editor {
         self.refresh_status_line();
     }
 
+    /// Longest pause between two clicks on one cell that still reads as a double click.
+    const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+
     /// Route the wheel by what it is pointing at: over the input pane it resizes
-    /// the pane, everywhere else it scrolls the feed.
+    /// the pane, everywhere else it scrolls the feed. A double click on a folded
+    /// value expands it, and on an expanded one folds it back.
     pub(crate) fn handle_mouse(&mut self, event: MouseEvent) -> Reaction {
+        if self.double_clicked(event)
+            && self
+                .feed
+                .toggle_fold(Position::new(event.column, event.row))
+        {
+            self.last_click = None;
+            self.screen_selection = None;
+            return Reaction::Continue;
+        }
         if let Some(action) = self.handle_screen_mouse(event) {
             return action;
         }
@@ -642,6 +661,19 @@ impl Editor {
             return copy.map_or(Reaction::Continue, Reaction::Copy);
         }
         Reaction::Continue
+    }
+
+    /// Record a left press, reporting whether it repeats the previous one in time and place.
+    fn double_clicked(&mut self, event: MouseEvent) -> bool {
+        let MouseEventKind::Down(MouseButton::Left) = event.kind else {
+            return false;
+        };
+        let click = (Instant::now(), Position::new(event.column, event.row));
+        self.last_click
+            .replace(click)
+            .is_some_and(|(at, position)| {
+                position == click.1 && click.0.duration_since(at) <= Self::DOUBLE_CLICK
+            })
     }
 
     pub(crate) fn handle_preview_mouse(&mut self, event: MouseEvent) -> Reaction {
@@ -990,6 +1022,14 @@ impl Editor {
                         EditorEvent::SetSettings(settings)
                     })
                 }
+                ShellItem::OutputRows => {
+                    let mut settings = self.settings;
+                    let value = format!("{} rows", settings.output_rows);
+                    ValueItem::adjust("max output height", value, move |delta| {
+                        settings.adjust_output_rows(delta);
+                        EditorEvent::SetSettings(settings)
+                    })
+                }
                 ShellItem::Style => {
                     ValueItem::enter("style", self.appearance.colorscheme_label(), false, || {
                         EditorEvent::OpenStyle
@@ -1162,7 +1202,7 @@ impl Editor {
             }
             EditorEvent::OpenStyle => self.open_style(),
             EditorEvent::RestoreDefaults => {
-                if self.settings.fractions != FractionStyle::default() {
+                if self.settings.reformats(&Settings::default()) {
                     self.feed.on_event(&Reformatted);
                 }
                 self.settings = Settings::default();
@@ -1173,7 +1213,7 @@ impl Editor {
                 self.pickers.last_mut().unwrap().picker.set_items(items);
             }
             EditorEvent::SetSettings(settings) => {
-                if settings.fractions != self.settings.fractions {
+                if settings.reformats(&self.settings) {
                     self.feed.on_event(&Reformatted);
                 }
                 self.settings = settings;
@@ -1455,8 +1495,9 @@ impl Editor {
             } else {
                 (sections[2], sections[3])
             };
-        let context =
-            RenderContext::new(editor_area.width, 0).with_fractions(self.settings.fractions);
+        let context = RenderContext::new(editor_area.width, 0)
+            .with_fractions(self.settings.fractions)
+            .with_output_limit(self.settings.output_rows);
         let input_context = RenderContext::new(editor_area.width, input_prefix);
 
         self.feed_area = sections[0];
@@ -1793,6 +1834,7 @@ fn mark_selectable_segment(
 mod tests {
     use super::*;
     use crate::ui::cell::{CellState, OutputBlock};
+    use crate::ui::render::maths::FractionStyle;
     use crossterm::event::{KeyEvent as CrosstermKeyEvent, KeyModifiers};
     use m2_syn::PrettyNode;
     use ratatui::backend::TestBackend;
@@ -1965,6 +2007,55 @@ mod tests {
             panic!("mouse release did not copy the screen selection");
         };
         assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn double_click_expands_a_folded_value_and_folds_it_back() {
+        let mut editor = Editor::new(String::new());
+        editor.settings.output_rows = 8;
+        editor.apply(EditorUpdate::Pending {
+            id: 1,
+            cells: vec![("x".into(), Vec::new())],
+        });
+        let value = (0..30)
+            .map(|row| format!("row {row:02}"))
+            .collect::<Vec<_>>();
+        editor.apply(EditorUpdate::CellSucceeded {
+            id: 1,
+            index: 0,
+            number: 1,
+            state: CellState::Value,
+            outputs: Vec::new(),
+            value: Some(OutputBlock::value(value.join("\n"), None).numbered(1)),
+        });
+        let folded = |rows: &[String]| rows.iter().position(|row| row.contains("rows hidden"));
+        let click = |editor: &mut Editor, row| {
+            for kind in [MouseEventKind::Down, MouseEventKind::Up] {
+                editor.handle_mouse(mouse(kind(MouseButton::Left), 10, row));
+            }
+        };
+
+        let row = folded(&rendered_editor(&mut editor, 40, 40)).unwrap() as u16;
+        click(&mut editor, row);
+        assert!(folded(&rendered_editor(&mut editor, 40, 40)).is_some());
+        click(&mut editor, row);
+        let rows = rendered_editor(&mut editor, 40, 40);
+        assert!(folded(&rows).is_none(), "{rows:#?}");
+        assert!(rows.iter().any(|row| row.contains("row 15")), "{rows:#?}");
+
+        click(&mut editor, row);
+        click(&mut editor, row);
+        assert!(folded(&rendered_editor(&mut editor, 40, 40)).is_some());
+    }
+
+    #[test]
+    fn output_fold_threshold_steps_and_keeps_room_to_fold() {
+        let mut settings = Settings::default();
+        settings.adjust_output_rows(1);
+        assert_eq!(settings.output_rows, UI.max_output_rows + 4);
+        assert!(settings.reformats(&Settings::default()));
+        (0..100).for_each(|_| settings.adjust_output_rows(-1));
+        assert_eq!(settings.output_rows, 4);
     }
 
     #[test]
@@ -2758,7 +2849,7 @@ mod tests {
             seen,
             [
                 FractionStyle::Stacked,
-                FractionStyle::Overlined,
+                FractionStyle::Underlined,
                 FractionStyle::Inline
             ]
         );
@@ -2830,11 +2921,8 @@ mod tests {
         assert!(screen.contains("FPS"));
         assert!(screen.contains("highlight groups"));
         assert!(screen.contains("Conditional"));
-        assert!(screen.contains("LspTypeClass"));
-        assert!(screen.contains("Accent1"));
-        assert!(screen.contains("BgColor1"));
-        assert!(screen.contains("CodeBlock"));
-        assert!(screen.contains("Normal"));
+        assert!(screen.contains("Code"));
+        assert!(screen.contains("Canvas"));
         assert!(screen.contains("Delimiter"));
         let entries = editor.highlight_debug_entries();
         assert_eq!(entries.len(), editor.groups.highlight_groups().len() + 2);
@@ -2845,18 +2933,18 @@ mod tests {
             .all(|(name, _)| screen.contains(name)));
         assert!(rows[title_row].ends_with('┐'));
         assert_eq!(
-            rows.iter().find_map(|row| row.find("CodeBlock")).unwrap(),
-            rows.iter().find_map(|row| row.find("Normal")).unwrap(),
+            rows.iter().find_map(|row| row.find("Code")).unwrap(),
+            rows.iter().find_map(|row| row.find("Canvas")).unwrap(),
         );
         assert_eq!(
-            rows.iter().find_map(|row| row.find("Normal")).unwrap(),
+            rows.iter().find_map(|row| row.find("Canvas")).unwrap(),
             rows.iter().find_map(|row| row.find("Delimiter")).unwrap()
         );
 
         press(&mut editor, KeyCode::Esc, KeyModifiers::NONE);
         assert!(!rendered_editor(&mut editor, 120, 120)
             .join("\n")
-            .contains("Normal"));
+            .contains("Canvas"));
     }
 
     #[test]

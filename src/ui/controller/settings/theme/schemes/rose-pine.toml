@@ -123,143 +123,40 @@ moon = "#e0def4"
 [colors.text.light]
 dawn = "#464261"
 
-[groups]
+[base]
+Canvas = { bg = "base" }
+Code = { bg = "_nc" }
+Raised = { bg = "surface" }
+Pending = { bg = "surface" }
+Selection = { bg = "highlight_med" }
+Focus = { bg = "highlight_low" }
 
-Comment = { fg = "subtle", italic = true }
-Constant = { fg = "gold" }
-String = { fg = "gold" }
-Character = { fg = "gold" }
-Number = { fg = "gold" }
-Boolean = { fg = "rose" }
-Float = { fg = "gold" }
-Identifier = { fg = "text", italic = true }
-Function = { fg = "rose" }
-Statement = { fg = "pine" }
-Conditional = { fg = "pine" }
-Repeat = { fg = "pine" }
-Label = { fg = "foam" }
-Operator = { fg = "subtle" }
-Keyword = { fg = "pine" }
-Exception = { fg = "pine" }
-PreProc = { fg = "rose" }
-Include = { fg = "rose" }
-Define = { fg = "rose" }
-Macro = { fg = "rose" }
-PreCondit = { fg = "rose" }
-Type = { fg = "foam" }
-StorageClass = { fg = "pine" }
-Structure = { fg = "foam" }
-Typedef = { fg = "foam" }
-Special = { fg = "iris", italic = true }
-SpecialChar = { fg = "gold" }
-Tag = { fg = "iris", sp = "iris", underline = true }
-Delimiter = { fg = "subtle" }
-SpecialComment = { fg = "subtle", italic = true }
-Debug = { fg = "pine" }
-Underlined = { fg = "iris", sp = "iris", underline = true }
-Ignore = { fg = "subtle" }
-Error = { fg = "love", sp = "love" }
-Todo = { fg = "gold", sp = "gold", bold = true }
-Added = { fg = "rose" }
-Changed = { fg = "foam", sp = "foam" }
-Removed = { fg = "love", sp = "love" }
-
-Warning = { fg = "gold", sp = "gold" }
-Info = { fg = "foam", sp = "foam" }
-Hint = { fg = "pine" }
-DiagnosticError = { sp = "love", underline = true }
-DiagnosticWarning = { sp = "gold", underline = true }
-DiagnosticInfo = { sp = "foam", underline = true }
-DiagnosticHint = { sp = "pine", underline = true }
-
-Installation = { fg = "foam" }
-Property = { fg = "foam", italic = true }
-Namespace = { fg = "text" }
-Package = { fg = "text" }
-CompiledFunction = { fg = "rose" }
-Symbol = { fg = "iris", italic = true }
-Variable = { fg = "text", italic = true }
-AlgVariable = { fg = "love", bold = true, italic = true }
-Parameter = { fg = "iris", italic = true }
-Regex = { fg = "iris", sp = "iris", underline = true }
-Punctuation = { fg = "subtle" }
-Quote = { fg = "gold" }
-Documentation = { fg = "iris", sp = "iris", underline = true }
-
-LspTypeClass = { fg = "foam" }
-LspTypeComment = { fg = "subtle", italic = true }
-LspTypeDecorator = { fg = "rose" }
-LspTypeEnum = { fg = "foam" }
-LspTypeEnumMember = { fg = "gold" }
-LspTypeEvent = { fg = "iris", italic = true }
-LspTypeFunction = { fg = "rose" }
-LspTypeInterface = { fg = "foam" }
-LspTypeKeyword = { fg = "pine" }
-LspTypeMacro = { fg = "rose" }
-LspTypeMethod = { fg = "rose" }
-LspTypeModifier = { fg = "pine" }
-LspTypeNamespace = { fg = "text" }
-LspTypeNumber = { fg = "gold" }
-LspTypeOperator = { fg = "subtle" }
-LspTypeParameter = { fg = "iris", italic = true }
-LspTypeProperty = { fg = "foam", italic = true }
-LspTypeRegexp = { fg = "iris", sp = "iris", underline = true }
-LspTypeString = { fg = "gold" }
-LspTypeStruct = { fg = "foam" }
-LspTypeType = { fg = "foam" }
-LspTypeTypeParameter = { fg = "foam" }
-LspTypeVariable = { fg = "text", italic = true }
-
-LspModAbstract = { italic = true }
-LspModAsync = { italic = true }
-LspModDeclaration = { bold = true }
-LspModDefaultLibrary = { italic = true }
-LspModDefinition = { bold = true }
-LspModDeprecated = { crossed_out = true }
-LspModDocumentation = { italic = true }
-LspModModification = { underline = true }
-LspModReadonly = { italic = true }
-LspModStatic = { underline = true }
-
-Visual = { bg = "highlight_med" }
-Value = { fg = "text" }
+Text = { fg = "text" }
 Muted = { fg = "subtle" }
-Printed = { fg = "gold", bg = "surface" }
-ShellCommand = { fg = "foam" }
-ShellMessage = { fg = "subtle" }
-ShellError = { fg = "love", sp = "love" }
-HintText = { fg = "subtle" }
-Normal = { bg = "base" }
-CodeBlock = { bg = "_nc" }
-PendingBlock = { bg = "surface" }
-Separator = { fg = "base" }
-ValueBorder = { fg = "highlight_low", sp = "highlight_low" }
-OutputNumber = { fg = "foam", bold = true }
-ErrorBorder = { fg = "love", sp = "love" }
-WarningBorder = { fg = "gold", sp = "gold" }
-InfoBorder = { fg = "foam", sp = "foam" }
-Statusline1 = { fg = "leaf" }
-Statusline2 = { fg = "gold" }
-Statusline3 = { fg = "love" }
-StatuslineBorder = { fg = "highlight_low", sp = "highlight_low" }
-StatuslineBg = { bg = "_nc" }
-StatuslineError = { fg = "love", sp = "love" }
-StatuslineWarning = { fg = "gold", sp = "gold" }
-KeymapHint = { fg = "foam" }
-PickerText = { fg = "text" }
-Picker = { bg = "surface" }
-PickerSelected = { bg = "highlight_low" }
-PickerBorder = { fg = "highlight_low", sp = "highlight_low" }
+Faint = { fg = "highlight_low" }
 
-Accent1 = { fg = "love" }
-Accent2 = { fg = "rose" }
-Accent3 = { fg = "gold" }
-Accent4 = { fg = "leaf" }
-Accent5 = { fg = "foam" }
-Accent6 = { fg = "pine" }
-Accent7 = { fg = "iris" }
+Keyword = { fg = "pine" }
+Function = { fg = "rose" }
+Type = { fg = "foam" }
+String = { fg = "gold" }
+Number = { fg = "gold" }
+Operator = { fg = "subtle" }
+Symbol = { fg = "iris", italic = true }
+Module = { fg = "text" }
 
-BgColor1 = { bg = "base" }
-BgColor2 = { bg = "surface" }
-BgColor3 = { bg = "overlay" }
-BgColor4 = { bg = "highlight_low" }
+Accent = { fg = "foam" }
+Error = { fg = "love" }
+Warning = { fg = "gold" }
+Info = { fg = "foam" }
+Hint = { fg = "pine" }
+
+[overrides]
+Boolean = { fg = "rose" }
+Variable = { fg = "text", italic = true }
+Parameter = { fg = "iris", italic = true }
+Property = { fg = "foam", italic = true }
+Installation = { fg = "foam" }
+Builtin = { fg = "love", bold = true, italic = true }
+Quote = { fg = "gold" }
+Regex = { fg = "iris", sp = "iris", underline = true }
+Documentation = { fg = "iris", sp = "iris", underline = true }

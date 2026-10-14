@@ -344,143 +344,37 @@ material = "#b47109"
 mix = "#b4730e"
 original = "#b57614"
 
-[groups]
+[base]
+Canvas = { bg = "bg0" }
+Code = { bg = "bg_dim" }
+Raised = { bg = "bg1" }
+Pending = { bg = "bg1" }
+Selection = { bg = "bg_visual_blue" }
+Focus = { bg = "bg_diff_green" }
 
-Comment = { fg = "grey1", italic = true }
-Constant = { fg = "purple", italic = true }
-String = { fg = "aqua" }
-Character = { fg = "aqua" }
-Number = { fg = "purple" }
-Boolean = { fg = "purple" }
-Float = { fg = "purple" }
-Identifier = { fg = "fg0" }
-Function = { fg = "green", bold = true }
-Statement = { fg = "red" }
-Conditional = { fg = "red" }
-Repeat = { fg = "red" }
-Label = { fg = "orange" }
-Operator = { fg = "orange" }
-Keyword = { fg = "red" }
-Exception = { fg = "red" }
-PreProc = { fg = "green", bold = true }
-Include = { fg = "green", bold = true }
-Define = { fg = "green", bold = true }
-Macro = { fg = "green", bold = true }
-PreCondit = { fg = "green", bold = true }
-Type = { fg = "yellow", italic = true }
-StorageClass = { fg = "red" }
-Structure = { fg = "yellow", italic = true }
-Typedef = { fg = "yellow", italic = true }
-Special = { fg = "blue" }
-SpecialChar = { fg = "aqua" }
-Tag = { fg = "blue", sp = "blue", underline = true }
-Delimiter = { fg = "grey1" }
-SpecialComment = { fg = "grey1", italic = true }
-Debug = { fg = "red" }
-Underlined = { fg = "blue", sp = "blue", underline = true }
-Ignore = { fg = "grey1" }
-Error = { fg = "red", sp = "red" }
-Todo = { fg = "yellow", sp = "yellow", bold = true }
-Added = { fg = "green", bold = true }
-Changed = { fg = "blue", sp = "blue" }
-Removed = { fg = "red", sp = "red" }
-
-Warning = { fg = "yellow", sp = "yellow" }
-Info = { fg = "blue", sp = "blue" }
-Hint = { fg = "aqua" }
-DiagnosticError = { sp = "red", underline = true }
-DiagnosticWarning = { sp = "yellow", underline = true }
-DiagnosticInfo = { sp = "blue", underline = true }
-DiagnosticHint = { sp = "aqua", underline = true }
-
-Installation = { fg = "orange" }
-Property = { fg = "blue" }
-Namespace = { fg = "yellow", italic = true }
-Package = { fg = "yellow", italic = true }
-CompiledFunction = { fg = "green", bold = true }
-Symbol = { fg = "blue" }
-Variable = { fg = "fg0" }
-AlgVariable = { fg = "purple", italic = true }
-Parameter = { fg = "fg0" }
-Regex = { fg = "blue", sp = "blue", underline = true }
-Punctuation = { fg = "grey2" }
-Quote = { fg = "yellow" }
-Documentation = { fg = "blue", sp = "blue", underline = true }
-
-LspTypeClass = { fg = "yellow", italic = true }
-LspTypeComment = { fg = "grey1", italic = true }
-LspTypeDecorator = { fg = "green", bold = true }
-LspTypeEnum = { fg = "yellow", italic = true }
-LspTypeEnumMember = { fg = "purple", italic = true }
-LspTypeEvent = { fg = "blue" }
-LspTypeFunction = { fg = "green", bold = true }
-LspTypeInterface = { fg = "yellow", italic = true }
-LspTypeKeyword = { fg = "red" }
-LspTypeMacro = { fg = "green", bold = true }
-LspTypeMethod = { fg = "green", bold = true }
-LspTypeModifier = { fg = "red" }
-LspTypeNamespace = { fg = "yellow", italic = true }
-LspTypeNumber = { fg = "purple" }
-LspTypeOperator = { fg = "orange" }
-LspTypeParameter = { fg = "fg0" }
-LspTypeProperty = { fg = "blue" }
-LspTypeRegexp = { fg = "blue", sp = "blue", underline = true }
-LspTypeString = { fg = "aqua" }
-LspTypeStruct = { fg = "yellow", italic = true }
-LspTypeType = { fg = "yellow", italic = true }
-LspTypeTypeParameter = { fg = "yellow", italic = true }
-LspTypeVariable = { fg = "fg0" }
-
-LspModAbstract = { italic = true }
-LspModAsync = { italic = true }
-LspModDeclaration = { bold = true }
-LspModDefaultLibrary = { italic = true }
-LspModDefinition = { bold = true }
-LspModDeprecated = { crossed_out = true }
-LspModDocumentation = { italic = true }
-LspModModification = { underline = true }
-LspModReadonly = { italic = true }
-LspModStatic = { underline = true }
-
-Visual = { bg = "bg_visual_blue" }
-Value = { fg = "fg0" }
+Text = { fg = "fg0" }
 Muted = { fg = "grey1" }
-Printed = { fg = "aqua", bg = "bg1" }
-ShellCommand = { fg = "aqua" }
-ShellMessage = { fg = "grey0" }
-ShellError = { fg = "red", sp = "red" }
-HintText = { fg = "grey0" }
-Normal = { bg = "bg0" }
-CodeBlock = { bg = "bg_dim" }
-PendingBlock = { bg = "bg1" }
-Separator = { fg = "bg0" }
-ValueBorder = { fg = "bg3", sp = "bg3" }
-OutputNumber = { fg = "aqua", bold = true }
-ErrorBorder = { fg = "red", sp = "red" }
-WarningBorder = { fg = "yellow", sp = "yellow" }
-InfoBorder = { fg = "blue", sp = "blue" }
-Statusline1 = { fg = "green" }
-Statusline2 = { fg = "yellow" }
-Statusline3 = { fg = "red" }
-StatuslineBorder = { fg = "bg5", sp = "bg5" }
-StatuslineBg = { bg = "bg1" }
-StatuslineError = { fg = "red", sp = "red" }
-StatuslineWarning = { fg = "yellow", sp = "yellow" }
-KeymapHint = { fg = "aqua" }
-PickerText = { fg = "fg0" }
-Picker = { bg = "bg1" }
-PickerSelected = { bg = "bg_diff_green" }
-PickerBorder = { fg = "bg4", sp = "bg4" }
+Faint = { fg = "bg3" }
 
-Accent1 = { fg = "red" }
-Accent2 = { fg = "orange" }
-Accent3 = { fg = "yellow" }
-Accent4 = { fg = "green" }
-Accent5 = { fg = "aqua" }
-Accent6 = { fg = "blue" }
-Accent7 = { fg = "purple" }
+Keyword = { fg = "red" }
+Function = { fg = "green", bold = true }
+Type = { fg = "yellow", italic = true }
+String = { fg = "aqua" }
+Number = { fg = "purple" }
+Operator = { fg = "orange" }
+Symbol = { fg = "blue" }
+Module = { fg = "yellow", italic = true }
 
-BgColor1 = { bg = "bg1" }
-BgColor2 = { bg = "bg2" }
-BgColor3 = { bg = "bg3" }
-BgColor4 = { bg = "bg4" }
+Accent = { fg = "aqua" }
+Error = { fg = "red" }
+Warning = { fg = "yellow" }
+Info = { fg = "blue" }
+Hint = { fg = "aqua" }
+
+[overrides]
+Constant = { fg = "purple", italic = true }
+Punctuation = { fg = "grey2" }
+Property = { fg = "blue" }
+Installation = { fg = "orange" }
+Builtin = { fg = "purple", italic = true }
+Quote = { fg = "yellow" }

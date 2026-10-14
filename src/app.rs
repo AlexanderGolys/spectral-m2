@@ -1,6 +1,6 @@
 //! Application workspaces, panes, and the terminal event loop.
 
-pub(crate) mod session;
+pub mod session;
 
 use std::io;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -612,7 +612,7 @@ fn welcome_message(m2_version: &str) -> String {
 }
 
 /// Run the terminal event loop until any workspace requests exit.
-pub(crate) fn run(backend: M2Backend) -> Result<()> {
+pub fn run(backend: M2Backend) -> Result<()> {
     let mut terminal = ReplTerminal::enter()?;
     let mut app = App::new(backend);
     let mut dirty = true;

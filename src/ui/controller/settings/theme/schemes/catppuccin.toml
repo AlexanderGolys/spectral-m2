@@ -1,13 +1,13 @@
 name = "catppuccin"
 
 [variants]
-dark = ["mocha", "macchiato", "frappé"]
+dark = ["mocha", "macchiato", "frappe"]
 light = ["latte"]
 
 [colors.base.dark]
 mocha = "#1e1e2e"
 macchiato = "#24273a"
-"frappé" = "#303446"
+frappe = "#303446"
 
 [colors.base.light]
 latte = "#eff1f5"
@@ -15,7 +15,7 @@ latte = "#eff1f5"
 [colors.blue.dark]
 mocha = "#89b4fa"
 macchiato = "#8aadf4"
-"frappé" = "#8caaee"
+frappe = "#8caaee"
 
 [colors.blue.light]
 latte = "#1e66f5"
@@ -23,7 +23,7 @@ latte = "#1e66f5"
 [colors.crust.dark]
 mocha = "#11111b"
 macchiato = "#181926"
-"frappé" = "#232634"
+frappe = "#232634"
 
 [colors.crust.light]
 latte = "#dce0e8"
@@ -31,7 +31,7 @@ latte = "#dce0e8"
 [colors.flamingo.dark]
 mocha = "#f2cdcd"
 macchiato = "#f0c6c6"
-"frappé" = "#eebebe"
+frappe = "#eebebe"
 
 [colors.flamingo.light]
 latte = "#dd7878"
@@ -39,7 +39,7 @@ latte = "#dd7878"
 [colors.green.dark]
 mocha = "#a6e3a1"
 macchiato = "#a6da95"
-"frappé" = "#a6d189"
+frappe = "#a6d189"
 
 [colors.green.light]
 latte = "#40a02b"
@@ -47,7 +47,7 @@ latte = "#40a02b"
 [colors.lavender.dark]
 mocha = "#b4befe"
 macchiato = "#b7bdf8"
-"frappé" = "#babbf1"
+frappe = "#babbf1"
 
 [colors.lavender.light]
 latte = "#7287fd"
@@ -55,7 +55,7 @@ latte = "#7287fd"
 [colors.mantle.dark]
 mocha = "#181825"
 macchiato = "#1e2030"
-"frappé" = "#292c3c"
+frappe = "#292c3c"
 
 [colors.mantle.light]
 latte = "#e6e9ef"
@@ -63,7 +63,7 @@ latte = "#e6e9ef"
 [colors.maroon.dark]
 mocha = "#eba0ac"
 macchiato = "#ee99a0"
-"frappé" = "#ea999c"
+frappe = "#ea999c"
 
 [colors.maroon.light]
 latte = "#e64553"
@@ -71,7 +71,7 @@ latte = "#e64553"
 [colors.mauve.dark]
 mocha = "#cba6f7"
 macchiato = "#c6a0f6"
-"frappé" = "#ca9ee6"
+frappe = "#ca9ee6"
 
 [colors.mauve.light]
 latte = "#8839ef"
@@ -79,7 +79,7 @@ latte = "#8839ef"
 [colors.overlay0.dark]
 mocha = "#6c7086"
 macchiato = "#6e738d"
-"frappé" = "#737994"
+frappe = "#737994"
 
 [colors.overlay0.light]
 latte = "#9ca0b0"
@@ -87,7 +87,7 @@ latte = "#9ca0b0"
 [colors.overlay1.dark]
 mocha = "#7f849c"
 macchiato = "#8087a2"
-"frappé" = "#838ba7"
+frappe = "#838ba7"
 
 [colors.overlay1.light]
 latte = "#8c8fa1"
@@ -95,7 +95,7 @@ latte = "#8c8fa1"
 [colors.overlay2.dark]
 mocha = "#9399b2"
 macchiato = "#939ab7"
-"frappé" = "#949cbb"
+frappe = "#949cbb"
 
 [colors.overlay2.light]
 latte = "#7c7f93"
@@ -103,7 +103,7 @@ latte = "#7c7f93"
 [colors.peach.dark]
 mocha = "#fab387"
 macchiato = "#f5a97f"
-"frappé" = "#ef9f76"
+frappe = "#ef9f76"
 
 [colors.peach.light]
 latte = "#fe640b"
@@ -111,7 +111,7 @@ latte = "#fe640b"
 [colors.pink.dark]
 mocha = "#f5c2e7"
 macchiato = "#f5bde6"
-"frappé" = "#f4b8e4"
+frappe = "#f4b8e4"
 
 [colors.pink.light]
 latte = "#ea76cb"
@@ -119,7 +119,7 @@ latte = "#ea76cb"
 [colors.red.dark]
 mocha = "#f38ba8"
 macchiato = "#ed8796"
-"frappé" = "#e78284"
+frappe = "#e78284"
 
 [colors.red.light]
 latte = "#d20f39"
@@ -127,7 +127,7 @@ latte = "#d20f39"
 [colors.rosewater.dark]
 mocha = "#f5e0dc"
 macchiato = "#f4dbd6"
-"frappé" = "#f2d5cf"
+frappe = "#f2d5cf"
 
 [colors.rosewater.light]
 latte = "#dc8a78"
@@ -135,7 +135,7 @@ latte = "#dc8a78"
 [colors.sapphire.dark]
 mocha = "#74c7ec"
 macchiato = "#7dc4e4"
-"frappé" = "#85c1dc"
+frappe = "#85c1dc"
 
 [colors.sapphire.light]
 latte = "#209fb5"
@@ -143,7 +143,7 @@ latte = "#209fb5"
 [colors.sky.dark]
 mocha = "#89dceb"
 macchiato = "#91d7e3"
-"frappé" = "#99d1db"
+frappe = "#99d1db"
 
 [colors.sky.light]
 latte = "#04a5e5"
@@ -151,7 +151,7 @@ latte = "#04a5e5"
 [colors.subtext0.dark]
 mocha = "#a6adc8"
 macchiato = "#a5adcb"
-"frappé" = "#a5adce"
+frappe = "#a5adce"
 
 [colors.subtext0.light]
 latte = "#6c6f85"
@@ -159,7 +159,7 @@ latte = "#6c6f85"
 [colors.subtext1.dark]
 mocha = "#bac2de"
 macchiato = "#b8c0e0"
-"frappé" = "#b5bfe2"
+frappe = "#b5bfe2"
 
 [colors.subtext1.light]
 latte = "#5c5f77"
@@ -167,7 +167,7 @@ latte = "#5c5f77"
 [colors.surface0.dark]
 mocha = "#313244"
 macchiato = "#363a4f"
-"frappé" = "#414559"
+frappe = "#414559"
 
 [colors.surface0.light]
 latte = "#ccd0da"
@@ -175,7 +175,7 @@ latte = "#ccd0da"
 [colors.surface1.dark]
 mocha = "#45475a"
 macchiato = "#494d64"
-"frappé" = "#51576d"
+frappe = "#51576d"
 
 [colors.surface1.light]
 latte = "#bcc0cc"
@@ -183,7 +183,7 @@ latte = "#bcc0cc"
 [colors.surface2.dark]
 mocha = "#585b70"
 macchiato = "#5b6078"
-"frappé" = "#626880"
+frappe = "#626880"
 
 [colors.surface2.light]
 latte = "#acb0be"
@@ -191,7 +191,7 @@ latte = "#acb0be"
 [colors.teal.dark]
 mocha = "#94e2d5"
 macchiato = "#8bd5ca"
-"frappé" = "#81c8be"
+frappe = "#81c8be"
 
 [colors.teal.light]
 latte = "#179299"
@@ -199,7 +199,7 @@ latte = "#179299"
 [colors.text.dark]
 mocha = "#cdd6f4"
 macchiato = "#cad3f5"
-"frappé" = "#c6d0f5"
+frappe = "#c6d0f5"
 
 [colors.text.light]
 latte = "#4c4f69"
@@ -207,148 +207,46 @@ latte = "#4c4f69"
 [colors.yellow.dark]
 mocha = "#f9e2af"
 macchiato = "#eed49f"
-"frappé" = "#e5c890"
+frappe = "#e5c890"
 
 [colors.yellow.light]
 latte = "#df8e1d"
 
-[groups]
+[base]
+Canvas = { bg = "base" }
+Code = { bg = "crust" }
+Raised = { bg = "mantle" }
+Pending = { bg = "surface0" }
+Selection = { bg = "surface2" }
+Focus = { bg = "crust" }
 
-Comment = { fg = "overlay2", italic = true }
-Constant = { fg = "peach" }
-String = { fg = "green" }
-Character = { fg = "green" }
-Number = { fg = "peach" }
-Boolean = { fg = "peach" }
-Float = { fg = "peach" }
-Identifier = { fg = "text" }
-Function = { fg = "blue" }
-Statement = { fg = "mauve" }
-Conditional = { fg = "mauve" }
-Repeat = { fg = "mauve" }
-Label = { fg = "sapphire" }
-Operator = { fg = "sky" }
-Keyword = { fg = "mauve" }
-Exception = { fg = "mauve" }
-PreProc = { fg = "blue" }
-Include = { fg = "blue" }
-Define = { fg = "blue" }
-Macro = { fg = "blue" }
-PreCondit = { fg = "blue" }
-Type = { fg = "yellow" }
-StorageClass = { fg = "mauve" }
-Structure = { fg = "yellow" }
-Typedef = { fg = "yellow" }
-Special = { fg = "pink" }
-SpecialChar = { fg = "green" }
-Tag = { fg = "blue", sp = "blue", italic = true, underline = true }
-Delimiter = { fg = "overlay2" }
-SpecialComment = { fg = "overlay2", italic = true }
-Debug = { fg = "mauve" }
-Underlined = { fg = "blue", sp = "blue", italic = true, underline = true }
-Ignore = { fg = "overlay0" }
-Error = { fg = "red", sp = "red" }
-Todo = { fg = "yellow", sp = "yellow", bold = true }
-Added = { fg = "blue" }
-Changed = { fg = "blue", sp = "blue" }
-Removed = { fg = "red", sp = "red" }
-
-Warning = { fg = "yellow", sp = "yellow" }
-Info = { fg = "blue", sp = "blue" }
-Hint = { fg = "teal" }
-DiagnosticError = { sp = "red", underline = true }
-DiagnosticWarning = { sp = "yellow", underline = true }
-DiagnosticInfo = { sp = "blue", underline = true }
-DiagnosticHint = { sp = "teal", underline = true }
-
-Installation = { fg = "sapphire" }
-Property = { fg = "lavender" }
-Namespace = { fg = "yellow", italic = true }
-Package = { fg = "yellow", italic = true }
-CompiledFunction = { fg = "peach" }
-Symbol = { fg = "pink" }
-Variable = { fg = "text" }
-AlgVariable = { fg = "red" }
-Parameter = { fg = "maroon" }
-Regex = { fg = "blue", sp = "blue", italic = true, underline = true }
-Punctuation = { fg = "overlay2" }
-Quote = { fg = "pink" }
-Documentation = { fg = "blue", sp = "blue", italic = true, underline = true }
-
-LspTypeClass = { fg = "yellow" }
-LspTypeComment = { fg = "overlay2", italic = true }
-LspTypeDecorator = { fg = "blue" }
-LspTypeEnum = { fg = "yellow" }
-LspTypeEnumMember = { fg = "peach" }
-LspTypeEvent = { fg = "pink" }
-LspTypeFunction = { fg = "blue" }
-LspTypeInterface = { fg = "yellow" }
-LspTypeKeyword = { fg = "mauve" }
-LspTypeMacro = { fg = "blue" }
-LspTypeMethod = { fg = "blue" }
-LspTypeModifier = { fg = "mauve" }
-LspTypeNamespace = { fg = "yellow", italic = true }
-LspTypeNumber = { fg = "peach" }
-LspTypeOperator = { fg = "sky" }
-LspTypeParameter = { fg = "maroon" }
-LspTypeProperty = { fg = "lavender" }
-LspTypeRegexp = { fg = "blue", sp = "blue", italic = true, underline = true }
-LspTypeString = { fg = "green" }
-LspTypeStruct = { fg = "yellow" }
-LspTypeType = { fg = "yellow" }
-LspTypeTypeParameter = { fg = "yellow" }
-LspTypeVariable = { fg = "text" }
-
-LspModAbstract = { italic = true }
-LspModAsync = { italic = true }
-LspModDeclaration = { bold = true }
-LspModDefaultLibrary = { italic = true }
-LspModDefinition = { bold = true }
-LspModDeprecated = { crossed_out = true }
-LspModDocumentation = { italic = true }
-LspModModification = { underline = true }
-LspModReadonly = { italic = true }
-LspModStatic = { underline = true }
-
-Visual = { bg = "surface2" }
-Value = { fg = "text" }
+Text = { fg = "text" }
 Muted = { fg = "overlay0" }
-Printed = { fg = "green", bg = "mantle" }
-ShellCommand = { fg = "teal" }
-ShellMessage = { fg = "overlay0" }
-ShellError = { fg = "red", sp = "red" }
-HintText = { fg = "overlay0" }
-Normal = { bg = "base" }
-CodeBlock = { bg = "crust" }
-PendingBlock = { bg = "surface0" }
-Separator = { fg = "mantle" }
-ValueBorder = { fg = "surface2", sp = "surface2" }
-OutputNumber = { fg = "teal", bold = true }
-ErrorBorder = { fg = "red", sp = "red" }
-WarningBorder = { fg = "yellow", sp = "yellow" }
-InfoBorder = { fg = "blue", sp = "blue" }
-Statusline1 = { fg = "green" }
-Statusline2 = { fg = "yellow" }
-Statusline3 = { fg = "red" }
-StatuslineBorder = { fg = "surface2", sp = "surface2" }
-StatuslineBg = { bg = "crust" }
-StatuslineError = { fg = "red", sp = "red" }
-StatuslineWarning = { fg = "yellow", sp = "yellow" }
-KeymapHint = { fg = "teal" }
-PickerText = { fg = "text" }
-Picker = { bg = "mantle" }
-PickerSelected = { bg = "crust" }
-PickerBorder = { fg = "surface2", sp = "surface2" }
+Faint = { fg = "surface2" }
 
-Accent1 = { fg = "red" }
-Accent2 = { fg = "peach" }
-Accent3 = { fg = "yellow" }
-Accent4 = { fg = "green" }
-Accent5 = { fg = "teal" }
-Accent6 = { fg = "blue" }
-Accent7 = { fg = "mauve" }
+Keyword = { fg = "mauve" }
+Function = { fg = "blue" }
+Type = { fg = "yellow" }
+String = { fg = "green" }
+Number = { fg = "peach" }
+Operator = { fg = "sky" }
+Symbol = { fg = "pink" }
+Module = { fg = "yellow", italic = true }
 
-BgColor1 = { bg = "crust" }
-BgColor2 = { bg = "mantle" }
-BgColor3 = { bg = "surface0" }
-BgColor4 = { bg = "surface1" }
+Accent = { fg = "teal" }
+Error = { fg = "red" }
+Warning = { fg = "yellow" }
+Info = { fg = "blue" }
+Hint = { fg = "teal" }
+
+[overrides]
+Comment = { fg = "overlay2", italic = true }
+Delimiter = { fg = "overlay2" }
+Punctuation = { fg = "overlay2" }
+Parameter = { fg = "maroon" }
+Property = { fg = "lavender" }
+Installation = { fg = "sapphire" }
+CompiledFunction = { fg = "peach" }
+Builtin = { fg = "red" }
+Regex = { fg = "pink" }
+Documentation = { fg = "blue", sp = "blue", italic = true, underline = true }

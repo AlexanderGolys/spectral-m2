@@ -7,78 +7,133 @@ use these_macros_should_be_illegal::enum_fn;
 
 use super::palette::Palette;
 
-macro_rules! style_spec {
-    ($($flag:ident: $modifier:ident),+ $(,)?) => {
-        /// A serialized style whose colors name entries in its scheme palette.
-        #[derive(Default, Deserialize)]
-        #[serde(default, deny_unknown_fields)]
-        pub(crate) struct StyleSpec {
-            fg: Option<String>,
-            bg: Option<String>,
-            sp: Option<String>,
-            $($flag: bool),+
+/// A serialized style whose colors name entries in its scheme palette.
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StyleSpec {
+    fg: Option<String>,
+    bg: Option<String>,
+    sp: Option<String>,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    reverse: bool,
+    crossed_out: bool,
+}
+impl StyleSpec {
+    /// Turn the declared modifiers and palette-named colours into a concrete [`Style`].
+    fn resolve(&self, palette: &Palette) -> Result<Style, String> {
+        let mut modifiers = Modifier::empty();
+        modifiers.set(Modifier::BOLD, self.bold);
+        modifiers.set(Modifier::ITALIC, self.italic);
+        modifiers.set(Modifier::UNDERLINED, self.underline);
+        modifiers.set(Modifier::REVERSED, self.reverse);
+        modifiers.set(Modifier::CROSSED_OUT, self.crossed_out);
+        let mut style = Style::new().add_modifier(modifiers);
+        if let Some(color) = palette.resolve(self.fg.as_deref())? {
+            style = style.fg(color);
         }
-
-        impl StyleSpec {
-            fn resolve(&self, palette: &Palette) -> Result<Style, String> {
-                let mut modifiers = Modifier::empty();
-                $(modifiers.set(Modifier::$modifier, self.$flag);)+
-                let mut style = Style::new().add_modifier(modifiers);
-                if let Some(color) = palette.resolve(self.fg.as_deref())? {
-                    style = style.fg(color);
-                }
-                if let Some(color) = palette.resolve(self.bg.as_deref())? {
-                    style = style.bg(color);
-                }
-                if let Some(color) = palette.resolve(self.sp.as_deref())? {
-                    style = style.underline_color(color);
-                }
-                Ok(style)
-            }
+        if let Some(color) = palette.resolve(self.bg.as_deref())? {
+            style = style.bg(color);
         }
-    };
+        if let Some(color) = palette.resolve(self.sp.as_deref())? {
+            style = style.underline_color(color);
+        }
+        Ok(style)
+    }
 }
 
-style_spec! {
-    bold: BOLD,
-    dim: DIM,
-    italic: ITALIC,
-    underline: UNDERLINED,
-    slow_blink: SLOW_BLINK,
-    rapid_blink: RAPID_BLINK,
-    reverse: REVERSED,
-    hidden: HIDDEN,
-    crossed_out: CROSSED_OUT,
+/// `style` underlined in its own colour.
+fn underlined(style: Style) -> Style {
+    Style {
+        underline_color: style.fg,
+        ..style
+    }
+    .underlined()
 }
 
+/// Only an underline, drawn in `style`'s colour, over whatever it marks.
+fn underline_in(style: Style) -> Style {
+    Style {
+        underline_color: style.fg,
+        ..Style::new()
+    }
+    .underlined()
+}
+
+/// Declares the group set once, in two layers, and derives from it the [`HLGroup`]
+/// selector enum, the [`Groups`] style table, its resolution and indexing.
+///
+/// A scheme sets only the `base` styles from its palette. Every `linked` group is a
+/// Rust expression over the resolved base styles, which a scheme may replace through
+/// its optional overrides; so adding, renaming or relinking a group is one line here.
 macro_rules! highlight_groups {
-    ($($name:ident),+ $(,)?) => {
+    (
+        base { $($base:ident),+ $(,)? }
+        linked($from:ident) { $($linked:ident = $link:expr),+ $(,)? }
+    ) => {
         /// The complete scheme-independent space of syntax and interface styles.
         #[enum_fn(description: &'static str = stringify)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        pub(crate) enum HLGroup {
-            $($name),+
+        pub enum HLGroup {
+            $($base,)+
+            $($linked),+
         }
 
-        /// Every highlight-group value represented by the same finite field set.
+        /// The styles a scheme sets from its palette, which every other group links to.
         #[allow(non_snake_case)]
-        #[derive(Clone, Copy, Deserialize)]
+        #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
-        pub(crate) struct Groups<S = Style> {$(
-            #[doc = concat!("Style for `", stringify!($name), "` content.")]
-            pub(crate) $name: S,
+        pub struct Base<S = Style> {$(
+            pub $base: S,
         )+}
 
-        impl Groups<StyleSpec> {
-            pub(crate) fn resolve(&self, palette: &Palette) -> Result<Groups, String> {
-                Ok(Groups {$($name: self.$name.resolve(palette)
-                    .map_err(|error| format!("{}: {error}", stringify!($name)))?),+})
-            }
+        /// A scheme's own styles for linked groups, each replacing its link outright.
+        #[allow(non_snake_case)]
+        #[derive(Default, Deserialize)]
+        #[serde(default, deny_unknown_fields)]
+        pub struct Overrides {$(
+            $linked: Option<StyleSpec>,
+        )+}
+
+        /// Every highlight group's resolved style.
+        #[allow(non_snake_case)]
+        #[derive(Clone, Copy)]
+        pub struct Groups {
+            $(pub $base: Style,)+
+            $(pub $linked: Style),+
         }
 
         impl Groups {
-            pub(crate) fn highlight_groups(&self) -> Vec<(&'static str, Style)> {
-                vec![$((HLGroup::$name.description(), self.$name)),+]
+            /// Resolve the base styles from the palette, then every linked group from
+            /// them unless the scheme overrides it, naming the offending group when a
+            /// colour is unknown.
+            pub fn resolve(
+                base: &Base<StyleSpec>,
+                overrides: &Overrides,
+                palette: &Palette,
+            ) -> Result<Self, String> {
+                let resolve = |name: &str, spec: &StyleSpec| {
+                    spec.resolve(palette).map_err(|error| format!("{name}: {error}"))
+                };
+                let $from = Base {$(
+                    $base: resolve(stringify!($base), &base.$base)?,
+                )+};
+                Ok(Self {
+                    $($base: $from.$base,)+
+                    $($linked: match &overrides.$linked {
+                        Some(spec) => resolve(stringify!($linked), spec)?,
+                        None => $link,
+                    }),+
+                })
+            }
+
+            /// Every group's name paired with its style, in declaration order.
+            pub fn highlight_groups(&self) -> Vec<(&'static str, Style)> {
+                vec![
+                    $((HLGroup::$base.description(), self.$base),)+
+                    $((HLGroup::$linked.description(), self.$linked)),+
+                ]
             }
         }
 
@@ -86,197 +141,156 @@ macro_rules! highlight_groups {
             type Output = Style;
 
             fn index(&self, group: HLGroup) -> &Self::Output {
-                match group {$(HLGroup::$name => &self.$name),+}
+                match group {
+                    $(HLGroup::$base => &self.$base,)+
+                    $(HLGroup::$linked => &self.$linked),+
+                }
             }
         }
     };
 }
 
 highlight_groups! {
-    Comment,
-    Constant,
-    String,
-    Character,
-    Number,
-    Boolean,
-    Float,
-    Identifier,
-    Function,
-    Statement,
-    Conditional,
-    Repeat,
-    Label,
-    Operator,
-    Keyword,
-    Exception,
-    PreProc,
-    Include,
-    Define,
-    Macro,
-    PreCondit,
-    Type,
-    StorageClass,
-    Structure,
-    Typedef,
-    Special,
-    SpecialChar,
-    Tag,
-    Delimiter,
-    SpecialComment,
-    Debug,
-    Underlined,
-    Ignore,
-    Error,
-    Todo,
-    Added,
-    Changed,
-    Removed,
-    Warning,
-    Info,
-    Hint,
-    DiagnosticError,
-    DiagnosticWarning,
-    DiagnosticInfo,
-    DiagnosticHint,
-    Installation,
-    Property,
-    Namespace,
-    Package,
-    CompiledFunction,
-    Symbol,
-    Variable,
-    AlgVariable,
-    Parameter,
-    Regex,
-    Punctuation,
-    Quote,
-    Documentation,
-    LspTypeClass,
-    LspTypeComment,
-    LspTypeDecorator,
-    LspTypeEnum,
-    LspTypeEnumMember,
-    LspTypeEvent,
-    LspTypeFunction,
-    LspTypeInterface,
-    LspTypeKeyword,
-    LspTypeMacro,
-    LspTypeMethod,
-    LspTypeModifier,
-    LspTypeNamespace,
-    LspTypeNumber,
-    LspTypeOperator,
-    LspTypeParameter,
-    LspTypeProperty,
-    LspTypeRegexp,
-    LspTypeString,
-    LspTypeStruct,
-    LspTypeType,
-    LspTypeTypeParameter,
-    LspTypeVariable,
-    LspModAbstract,
-    LspModAsync,
-    LspModDeclaration,
-    LspModDefaultLibrary,
-    LspModDefinition,
-    LspModDeprecated,
-    LspModDocumentation,
-    LspModModification,
-    LspModReadonly,
-    LspModStatic,
-    Visual,
-    Value,
-    Muted,
-    Printed,
-    ShellCommand,
-    ShellMessage,
-    ShellError,
-    HintText,
-    Normal,
-    CodeBlock,
-    PendingBlock,
-    Separator,
-    ValueBorder,
-    OutputNumber,
-    ErrorBorder,
-    WarningBorder,
-    InfoBorder,
-    Statusline1,
-    Statusline2,
-    Statusline3,
-    StatuslineBorder,
-    StatuslineBg,
-    StatuslineError,
-    StatuslineWarning,
-    KeymapHint,
-    PickerText,
-    Picker,
-    PickerSelected,
-    PickerBorder,
-    Accent1,
-    Accent2,
-    Accent3,
-    Accent4,
-    Accent5,
-    Accent6,
-    Accent7,
-    BgColor1,
-    BgColor2,
-    BgColor3,
-    BgColor4,
+    base {
+        // Surfaces: the transcript, code, raised popups and printed text, a pending
+        // cell, selected text and the focused row of a list.
+        Canvas,
+        Code,
+        Raised,
+        Pending,
+        Selection,
+        Focus,
+        // Text: ordinary, receding, and the faint lines that frame blocks.
+        Text,
+        Muted,
+        Faint,
+        // Syntax.
+        Keyword,
+        Function,
+        Type,
+        String,
+        Number,
+        Operator,
+        Symbol,
+        Module,
+        // Signals: what asks for attention, and each severity.
+        Accent,
+        Error,
+        Warning,
+        Info,
+        Hint,
+    }
+    linked(base) {
+        // Tree-sitter captures of M2 source.
+        Comment = base.Muted.italic(),
+        Constant = base.Number,
+        Boolean = base.Number,
+        Float = base.Number,
+        Statement = base.Keyword,
+        Conditional = base.Keyword,
+        Repeat = base.Keyword,
+        Exception = base.Keyword,
+        StorageClass = base.Keyword,
+        Debug = base.Keyword,
+        Delimiter = base.Muted,
+        Punctuation = base.Muted,
+        Variable = base.Text,
+        Parameter = base.Text,
+        Property = base.Text,
+        Installation = base.Function,
+        CompiledFunction = base.Function,
+        Builtin = base.Symbol,
+        Quote = base.Symbol,
+        Namespace = base.Module,
+        Package = base.Module,
+        Regex = underlined(base.Info),
+        Documentation = underlined(base.Info),
+        // Diagnostic underlines, coloured through the special (underline) colour.
+        DiagnosticError = underline_in(base.Error),
+        DiagnosticWarning = underline_in(base.Warning),
+        DiagnosticInfo = underline_in(base.Info),
+        DiagnosticHint = underline_in(base.Hint),
+        // Transcript: values, printed text and the frames around them.
+        Value = base.Text,
+        FractionRule = underline_in(base.Operator),
+        Printed = base.String.patch(base.Raised),
+        HintText = base.Muted,
+        Separator = Style {
+            fg: base.Canvas.bg,
+            ..Style::new()
+        },
+        ValueBorder = base.Faint,
+        OutputNumber = base.Accent.bold(),
+        ErrorBorder = base.Error,
+        WarningBorder = base.Warning,
+        InfoBorder = base.Info,
+        // Status line segments and key-hint labels.
+        Statusline1 = base.String,
+        Statusline2 = base.Warning,
+        Statusline3 = base.Error,
+        StatuslineBg = base.Code,
+        StatuslineError = base.Error,
+        StatuslineWarning = base.Warning,
+        KeymapHint = base.Accent,
+    }
 }
 
 /// The one scheme in effect, republished whenever the appearance changes.
 ///
 /// A scheme is a mapping from [`HLGroup`] to [`Style`] — reflection over an enum, not
 /// state any element owns — so it is read from here rather than carried through render
-/// calls. Carrying it made every context a copy of 131 styles and made a repaint look
+/// calls. Carrying it made every context a copy of every style and made a repaint look
 /// like a rebuild. Each published table is leaked so a reader can hold `&'static
 /// Groups` without a guard; republishing happens only when a person changes the theme.
 static SCHEME: LazyLock<RwLock<&'static Groups>> =
     LazyLock::new(|| RwLock::new(Box::leak(Box::new(Groups::default()))));
 
 /// Read the scheme currently in effect.
-pub(crate) fn scheme() -> &'static Groups {
+pub fn scheme() -> &'static Groups {
     *SCHEME
         .read()
         .expect("the scheme lock is never held across a panic")
 }
 
 /// Publish a newly resolved scheme for every later read.
-pub(crate) fn publish(groups: Groups) {
+pub fn publish(groups: Groups) {
     *SCHEME
         .write()
         .expect("the scheme lock is never held across a panic") = Box::leak(Box::new(groups));
 }
 
 impl Groups {
-    pub(crate) fn style(&self, group: HLGroup) -> Style {
+    /// The style of one group, selected by its [`HLGroup`] tag.
+    pub fn style(&self, group: HLGroup) -> Style {
         self[group]
     }
 
-    pub(crate) fn diagnostic(&self) -> Style {
+    /// The underline-only style that marks a diagnostic span without recolouring its text.
+    pub fn diagnostic(&self) -> Style {
         self.DiagnosticError
     }
 }
 
+/// Generates one named style accessor per interface role, each reading a single group.
+/// The names say what the UI draws; the groups say what a scheme colours.
 macro_rules! accessors {
     ($($name:ident: $group:ident),+ $(,)?) => {
         impl Groups {$(
-            pub(crate) fn $name(&self) -> Style {
+            pub fn $name(&self) -> Style {
                 self.$group
             }
         )+}
     };
 }
 
+// Interface role -> the group a scheme styles it with.
 accessors! {
-    transcript: Normal,
-    code: CodeBlock,
-    pending: PendingBlock,
+    transcript: Canvas,
+    code: Code,
+    pending: Pending,
     separator: Separator,
-    picker: Picker,
-    picker_selected: PickerSelected,
+    picker: Raised,
+    picker_selected: Focus,
     value: Value,
     error: Error,
     warning: Warning,
@@ -287,7 +301,7 @@ accessors! {
     border: ValueBorder,
     output_number: OutputNumber,
     prompt: KeymapHint,
-    selection: Visual,
+    selection: Selection,
     muted: Muted,
     printed: Printed,
     hint_text: HintText,
@@ -297,6 +311,7 @@ accessors! {
     statusline_bg: StatuslineBg,
 }
 
+/// The default appearance's resolved scheme, used before any theme is published.
 impl Default for Groups {
     fn default() -> Self {
         super::Appearance::default().groups()
@@ -308,7 +323,7 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
-    use crate::ui::controller::settings::theme::SCHEMES;
+    use crate::ui::controller::settings::theme::{Brightness, SchemeFile, SCHEMES, SCHEME_FILES};
 
     #[test]
     fn every_scheme_fills_the_complete_group_space() {
@@ -328,6 +343,40 @@ mod tests {
     }
 
     #[test]
+    fn linked_groups_follow_their_base_style() {
+        let groups = Groups::default();
+        assert_eq!(groups.Conditional, groups.Keyword);
+        assert_eq!(groups.Comment.fg, groups.Muted.fg);
+        assert_eq!(groups.OutputNumber.fg, groups.Accent.fg);
+        assert_eq!(groups.FractionRule.underline_color, groups.Operator.fg);
+        assert_eq!(groups.FractionRule.fg, None);
+    }
+
+    #[test]
+    fn an_override_replaces_its_link_outright() {
+        let scheme: SchemeFile =
+            toml::from_str(SCHEME_FILES[0]).expect("embedded scheme parses");
+        let name = &scheme.variants.dark[0];
+        let palette = scheme
+            .colors
+            .palette(Brightness::Dark, name)
+            .expect("variant palette");
+        let overrides = Overrides {
+            Conditional: Some(StyleSpec {
+                bold: true,
+                ..StyleSpec::default()
+            }),
+            ..Overrides::default()
+        };
+
+        let linked = Groups::resolve(&scheme.base, &Overrides::default(), &palette).unwrap();
+        let overridden = Groups::resolve(&scheme.base, &overrides, &palette).unwrap();
+        assert_eq!(linked.Conditional, linked.Keyword);
+        assert_eq!(overridden.Conditional, Style::new().bold());
+        assert_eq!(overridden.Repeat, linked.Repeat);
+    }
+
+    #[test]
     fn groups_have_one_uniform_indexed_representation() {
         let groups = Groups::default();
         assert_eq!(groups.style(HLGroup::Number), groups[HLGroup::Number]);
@@ -344,7 +393,6 @@ mod tests {
             .diagnostic()
             .add_modifier
             .contains(Modifier::UNDERLINED));
-        assert_eq!(groups.border().underline_color, groups.border().fg);
     }
 
     #[test]
@@ -403,47 +451,8 @@ mod tests {
     }
 
     #[test]
-    fn generic_palette_slots_have_component_neutral_names() {
-        let names = Groups::default().highlight_groups();
-        assert_eq!(
-            names
-                .iter()
-                .filter(|(name, _)| name.starts_with("Accent"))
-                .count(),
-            7
-        );
-        assert_eq!(
-            names
-                .iter()
-                .filter(|(name, _)| name.starts_with("BgColor"))
-                .count(),
-            4
-        );
-        for groups in SCHEMES
-            .iter()
-            .flat_map(|scheme| scheme.variants())
-            .map(|variant| variant.groups())
-        {
-            for (name, style) in groups.highlight_groups() {
-                if name.starts_with("Accent") {
-                    assert!(style.fg.is_some() && style.bg.is_none());
-                } else if name.starts_with("BgColor") {
-                    assert!(style.bg.is_some());
-                }
-            }
-        }
-    }
-
-    #[test]
     fn group_names_describe_semantics_instead_of_palette_hues() {
         let groups = Groups::default().highlight_groups();
-        assert_eq!(
-            groups
-                .iter()
-                .filter(|(name, _)| name.starts_with("Lsp"))
-                .count(),
-            33
-        );
         assert!(groups.iter().all(|(name, _)| ![
             "White", "Gray", "Red", "Orange", "Yellow", "Green", "Aqua", "Teal", "Cyan", "Blue",
             "Purple", "Magenta", "Pink"

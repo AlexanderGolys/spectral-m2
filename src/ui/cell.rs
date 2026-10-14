@@ -586,6 +586,22 @@ impl EvaluationBlock {
     fn output_margin(&self) -> u16 {
         Self::OUTPUT_MARGIN * u16::from(!self.outputs.is_empty())
     }
+
+    /// Expand or fold the returned value covering local `row`; false when none folds there.
+    pub(crate) fn toggle_fold(&mut self, row: u16, context: &RenderContext) -> bool {
+        let mut top = self.code_height(context) + self.output_margin();
+        for output in &mut self.outputs {
+            let bottom = top.saturating_add(output.block().height(context));
+            if (top..bottom).contains(&row) {
+                return match output {
+                    EvaluationOutput::Value(block) => block.toggle_fold(context),
+                    EvaluationOutput::Evaluation(_) => false,
+                };
+            }
+            top = bottom;
+        }
+        false
+    }
 }
 
 impl Block for EvaluationBlock {
@@ -774,6 +790,8 @@ struct OutputCell {
 /// Consecutive values returned by M2 inside one border.
 pub(crate) struct OutputBlock {
     cells: Vec<OutputCell>,
+    /// Whether values taller than the output limit show every row.
+    expanded: bool,
 }
 
 impl OutputBlock {
@@ -786,6 +804,7 @@ impl OutputBlock {
                 value: None,
                 ty: ty.map(|ty| ty.trim_end().to_string()),
             }],
+            expanded: false,
         }
     }
 
@@ -798,6 +817,7 @@ impl OutputBlock {
                 value: Some(value),
                 ty,
             }],
+            expanded: false,
         }
     }
 
@@ -854,14 +874,14 @@ impl OutputBlock {
         }
     }
 
-    fn value_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
+    fn unfolded_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
         let theme = context.groups();
         // A value whose TeX parses is drawn from its own structure, so a numeral, a
         // name and an operator each take their own colour. Anything else is flat text
         // and keeps the single value colour it always had.
         let width = usize::from(self.text_width(context));
         let fractions = context.fractions();
-        let lines = match cell
+        match cell
             .value
             .as_ref()
             .map(|value| maths::spans(value, width, fractions))
@@ -875,37 +895,56 @@ impl OutputBlock {
                 .into_iter()
                 .map(|line| Line::from(Span::styled(line, theme.value())))
                 .collect(),
-        };
-        match context.output_limit() {
-            Some(limit) => Self::fold(lines, limit, context),
-            None => lines,
         }
     }
 
-    fn fold(
-        mut lines: Vec<Line<'static>>,
-        limit: usize,
-        context: &RenderContext,
-    ) -> Vec<Line<'static>> {
-        match lines.len() <= limit {
-            true => lines,
-            false => {
-                let tail = limit.saturating_sub(1) / 2;
-                let head = limit.saturating_sub(tail + 1);
-                let hidden = lines.len() - head - tail;
-                let mut ending = lines.split_off(lines.len() - tail);
-                lines.truncate(head);
-                lines.push(
-                    Line::from(Span::styled(
-                        format!("⋯ {hidden} rows hidden · output view shows all"),
-                        context.groups().muted(),
-                    ))
-                    .alignment(Alignment::Center),
-                );
-                lines.append(&mut ending);
-                lines
-            }
+    /// Value rows kept above the fold and rows hidden by it, when `rows` exceed
+    /// the output limit and this block is not expanded.
+    fn fold(&self, rows: usize, context: &RenderContext) -> Option<(usize, usize)> {
+        let limit = context.output_limit().filter(|_| !self.expanded)?;
+        let tail = limit.saturating_sub(1) / 2;
+        let head = limit.saturating_sub(tail + 1);
+        (rows > limit).then(|| (head, rows - head - tail))
+    }
+
+    fn cell_fold(&self, cell: &OutputCell, context: &RenderContext) -> Option<(usize, usize)> {
+        self.fold(self.unfolded_lines(cell, context).len(), context)
+    }
+
+    /// Value rows with a blank row standing where the fold row is drawn over the border.
+    fn value_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
+        let mut lines = self.unfolded_lines(cell, context);
+        if let Some((head, hidden)) = self.fold(lines.len(), context) {
+            lines.splice(head..head + hidden, [Line::default()]);
         }
+        lines
+    }
+
+    /// The fold row: a rule crossing the whole block, borders included, around the
+    /// accented count of hidden rows.
+    fn fold_line(hidden: usize, width: u16, context: &RenderContext) -> Line<'static> {
+        let theme = context.groups();
+        let label = Span::styled(
+            format!(" ⋯ {hidden} rows hidden · double-click to expand "),
+            theme.output_number(),
+        );
+        let rule = usize::from(width).saturating_sub(label.width());
+        Line::from(vec![
+            Span::styled("─".repeat(rule / 2), theme.border()),
+            label,
+            Span::styled("─".repeat(rule - rule / 2), theme.border()),
+        ])
+    }
+
+    /// Expand every folded value, or fold them back; false when none is tall enough.
+    pub(crate) fn toggle_fold(&mut self, context: &RenderContext) -> bool {
+        let foldable = context.output_limit().is_some_and(|limit| {
+            self.cells
+                .iter()
+                .any(|cell| self.unfolded_lines(cell, context).len() > limit)
+        });
+        self.expanded ^= foldable;
+        foldable
     }
 
     fn type_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
@@ -992,6 +1031,12 @@ impl Block for OutputBlock {
                     buf,
                 );
             }
+            if let Some((head, hidden)) = self.cell_fold(cell, context) {
+                Self::fold_line(hidden, area.width, context).render(
+                    Rect::new(area.x, row.saturating_add(row_count!(head)), area.width, 1),
+                    buf,
+                );
+            }
             row = row.saturating_add(row_count!(self.lines(cell, context).len()));
         }
     }
@@ -1011,6 +1056,9 @@ impl Block for OutputBlock {
                 layout.prefix(),
                 row_count!(lines.len()),
             ));
+            if let Some((head, _)) = self.cell_fold(cell, context) {
+                exclusions.push(Rect::new(area.x, row + row_count!(head), area.width, 1));
+            }
             let values = self.value_lines(cell, context);
             let types = self.type_lines(cell, context);
             let width = types.iter().map(Line::width).max().unwrap_or_default() as u16;
@@ -1712,18 +1760,23 @@ mod tests {
         assert!(rows[2].contains('y') && rows[2].contains('R'));
     }
 
-    #[test]
-    fn long_output_keeps_its_beginning_and_end_until_opened() {
-        let context = RenderContext::new(40, 0);
-        let block = OutputBlock::value(
-            (0..40)
+    fn tall_value(rows: usize) -> OutputBlock {
+        OutputBlock::value(
+            (0..rows)
                 .map(|row| format!("row {row:02}"))
                 .collect::<Vec<_>>()
                 .join("\n"),
             None,
-        );
-        let text = |lines: Vec<Line<'_>>| {
-            lines
+        )
+    }
+
+    #[test]
+    fn long_output_keeps_its_beginning_and_end_until_expanded() {
+        let context = RenderContext::new(40, 0).with_output_limit(24);
+        let mut block = tall_value(40);
+        let text = |block: &OutputBlock, context: &RenderContext| {
+            block
+                .value_lines(&block.cells[0], context)
                 .into_iter()
                 .map(|line| {
                     line.spans
@@ -1734,15 +1787,41 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        let folded = text(block.value_lines(&block.cells[0], &context));
-        assert_eq!(folded.len(), UI.max_output_rows);
+        let folded = text(&block, &context);
+        assert_eq!(folded.len(), 24);
         assert!(folded.first().unwrap().contains("row 00"));
         assert!(folded.last().unwrap().contains("row 39"));
-        assert!(folded.iter().any(|line| line.contains("17 rows hidden")));
+        assert_eq!(block.cell_fold(&block.cells[0], &context), Some((12, 17)));
+        assert_eq!(text(&block, &context.full_output()).len(), 40);
 
-        let full = text(block.value_lines(&block.cells[0], &context.full_output()));
-        assert_eq!(full.len(), 40);
-        assert!(!full.iter().any(|line| line.contains("rows hidden")));
+        assert!(block.toggle_fold(&context));
+        assert_eq!(text(&block, &context).len(), 40);
+        assert!(block.toggle_fold(&context));
+        assert_eq!(text(&block, &context).len(), 24);
+        assert!(!OutputBlock::value("x".into(), None).toggle_fold(&context));
+    }
+
+    #[test]
+    fn fold_row_crosses_the_borders_around_an_accented_count() {
+        let theme = Groups::default();
+        let block = tall_value(UI.max_output_rows + 20);
+        let buffer = rendered_buffer(&block, 60);
+        let rows = rendered_rows(&block, 60);
+        let fold = rows
+            .iter()
+            .position(|row| row.contains("rows hidden"))
+            .unwrap();
+        let label = rows[fold].chars().position(|cell| cell == '⋯').unwrap() as u16;
+
+        assert!(rows[fold].contains("21 rows hidden · double-click to expand"));
+        assert!(rows[fold].starts_with('─') && rows[fold].ends_with('─'));
+        assert!(!rows[fold].contains('│'));
+        assert!(rows[fold - 1].contains('│') && rows[fold + 1].contains('│'));
+        assert_eq!(buffer[(0, fold as u16)].fg, theme.border().fg.unwrap());
+        assert_eq!(
+            buffer[(label, fold as u16)].fg,
+            theme.output_number().fg.unwrap()
+        );
     }
 
     #[test]

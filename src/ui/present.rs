@@ -33,7 +33,7 @@ pub(crate) fn wrap(line: &[TextSpan], width: u16, policy: &dyn WrapPolicy) -> Ve
         .map(|span| {
             let start = text.len();
             text.push_str(&span.content);
-            (start..text.len(), span.kind)
+            (start..text.len(), span)
         })
         .collect::<Vec<_>>();
     policy
@@ -42,10 +42,10 @@ pub(crate) fn wrap(line: &[TextSpan], width: u16, policy: &dyn WrapPolicy) -> Ve
         .map(|visual| {
             bounds
                 .iter()
-                .filter_map(|(span, kind)| {
-                    let start = span.start.max(visual.range.start);
-                    let end = span.end.min(visual.range.end);
-                    (start < end).then(|| TextSpan::new(&text[start..end], *kind))
+                .filter_map(|(range, span)| {
+                    let start = range.start.max(visual.range.start);
+                    let end = range.end.min(visual.range.end);
+                    (start < end).then(|| span.with_content(&text[start..end]))
                 })
                 .collect()
         })
