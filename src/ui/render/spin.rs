@@ -115,8 +115,8 @@ fn millis(span: Duration) -> Ms {
 
 /// The frame of the marker of a cell still evaluating at `tick`.
 pub fn busy_frame(tick: &Tick) -> &'static str {
-    let frames = UI.busy_frames;
-    let index = tick.t() / UI.busy_frame_ms;
+    let frames = UI.spinner.active_frames();
+    let index = tick.t() / UI.spinner.frame_ms;
     frames[usize::try_from(index).unwrap_or_default() % frames.len()]
 }
 
@@ -215,8 +215,8 @@ mod tests {
 
     #[test]
     fn the_busy_marker_advances_with_the_clock_and_wraps() {
-        let frames = UI.busy_frames;
-        let at = |frame: usize| busy_frame(&Tick::at(frame as Ms * UI.busy_frame_ms, 0));
+        let frames = UI.spinner.active_frames();
+        let at = |frame: usize| busy_frame(&Tick::at(frame as Ms * UI.spinner.frame_ms, 0));
         assert_ne!(at(0), at(1));
         assert_eq!(at(0), frames[0]);
         assert_eq!(at(frames.len()), frames[0]);

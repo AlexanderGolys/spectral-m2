@@ -5,21 +5,25 @@
 //! receives its highlighter separately because highlighting is an application-wide
 //! service rather than editor state.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Offset, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
-use super::block::{Block, Element, HLSpan, Text};
+use super::block::{Block, Element, HLSpan, Link, Text};
 use super::element::paste;
 use super::render::selection::Exclusions;
 use super::render::spin::{busy_frame, Tick};
-use super::render::{labelled_rule, markup, maths};
+use super::render::{markup, maths};
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::wrap::WrappedText;
-use crate::backend::{transcript::strip_m2_location, M2Value};
+use crate::backend::transcript::{captured_output, strip_m2_location};
+use crate::backend::{M2Response, M2Value};
 use crate::ui::config::UI;
 
 macro_rules! row_count {
@@ -34,6 +38,51 @@ pub enum CellState {
     Value,
     Muted,
     Null,
+}
+
+impl CellState {
+    /// How the cell M2 answered with `response` appears: its value shown, bound
+    /// but suppressed, or nothing bound at all.
+    pub fn of(response: &M2Response) -> Self {
+        match (response.has_value, response.value.is_some()) {
+            (true, true) => Self::Value,
+            (true, false) => Self::Muted,
+            _ => Self::Null,
+        }
+    }
+}
+
+/// The blocks a successful `response` to `code` adds after it: warnings, the
+/// text it printed, and its value, not yet numbered.
+pub fn response_blocks(
+    response: &M2Response,
+    code: &str,
+) -> (Vec<Box<dyn Block>>, Option<TextBlock>, Option<OutputBlock>) {
+    // Capture extraction only needs value presence. Formatting it here would
+    // duplicate the output block's work before its preview budget can apply.
+    let value = response
+        .value
+        .as_ref()
+        .map(|value| value.plain_text().unwrap_or(""));
+    let output = captured_output(
+        &response.transcript,
+        code,
+        value,
+        response.type_info.as_deref(),
+    );
+    let warnings: Vec<Box<dyn Block>> = output
+        .warnings
+        .into_iter()
+        .map(|text| Box::new(WarningBlock { text }) as Box<dyn Block>)
+        .collect();
+    let printed = (!output.printed.is_empty()).then(|| TextBlock::printed(output.printed));
+    let value = match (response.value.clone(), output.value, response.has_value) {
+        (Some(value), Some(rendered), true) => Some(
+            OutputBlock::rendered(value, rendered.type_info).annotated(response.type_parts.clone()),
+        ),
+        _ => None,
+    };
+    (warnings, printed, value)
 }
 
 /// Content displayed before one submitted source cell.
@@ -91,7 +140,9 @@ impl CellLayout {
     fn render_separator(self, height: u16, style: Style, buf: &mut Buffer) {
         let x = self.0.inset();
         for y in 0..height {
-            buf[(x, y)].set_symbol("│").set_style(style);
+            buf[(x, y)]
+                .set_symbol(UI.glyphs.cell_separator.current())
+                .set_style(style);
         }
     }
 }
@@ -123,15 +174,15 @@ impl CellMarker {
                     CellState::Value | CellState::Muted | CellState::Null
                         if context.is_recent_output(number) =>
                     {
-                        groups.output_number()
+                        groups.recent_cell_number()
                     }
                     CellState::Value | CellState::Muted | CellState::Null => groups.muted(),
                 },
             ),
             Self::Pending => (busy_frame(&Tick::new(0)).into(), groups.muted()),
-            Self::Queued => ("…".into(), groups.muted()),
+            Self::Queued => (UI.glyphs.unevaluated_cell.current().into(), groups.muted()),
             Self::Failed(number) => (number.to_string(), groups.error()),
-            Self::Invalid => ("×".into(), groups.error()),
+            Self::Invalid => (UI.glyphs.rejected_cell.current().into(), groups.error()),
             Self::Bare | Self::Empty => return None,
         })
     }
@@ -140,14 +191,7 @@ impl CellMarker {
         Span::styled(" ".repeat(self.width(layout).into()), base)
     }
 
-    fn render(
-        self,
-        context: &RenderContext,
-        base: Style,
-        area: Rect,
-        row: u16,
-        buf: &mut Buffer,
-    ) {
+    fn render(self, context: &RenderContext, base: Style, area: Rect, row: u16, buf: &mut Buffer) {
         if let Some((label, style)) = self.label(context) {
             let width = label.chars().count() as u16;
             Paragraph::new(Span::styled(label, style.patch(base)))
@@ -246,7 +290,14 @@ impl CodeBlock {
         let layout = self.layout();
         let mut rendered = Vec::new();
         for cell in &self.cells {
-            rendered.extend(cell_lines(cell, cell.marker(), layout, context, style));
+            rendered.extend(cell_lines(
+                cell,
+                cell.marker(),
+                layout,
+                context,
+                style,
+                true,
+            ));
         }
         rendered
     }
@@ -262,6 +313,7 @@ impl CodeBlock {
                 layout,
                 &context,
                 context.groups().code(),
+                true,
             ));
         }
         rendered.push(Line::default());
@@ -311,11 +363,12 @@ impl Block for IncompleteBlock {
             CellLayout::plain(),
             context,
             style,
+            true,
         ));
         Paragraph::new(lines).style(style).render(area, buf);
         for x in 0..area.width {
             buf[(x, 0)]
-                .set_symbol("┈")
+                .set_symbol(UI.glyphs.pending_separator.current())
                 .set_style(context.groups().muted().patch(style));
         }
     }
@@ -364,6 +417,7 @@ fn cell_lines(
     layout: CellLayout,
     context: &RenderContext,
     style: Style,
+    highlight: bool,
 ) -> Vec<Line<'static>> {
     let width = marker.width(layout);
     cell.wrapped(context.width().saturating_sub(width))
@@ -375,12 +429,16 @@ fn cell_lines(
                 _ => CellMarker::Empty,
             };
             let mut line = vec![marker.span(layout, style)];
-            line.extend(cell.spans.paint(
-                range.start,
-                &cell.text[range.clone()],
-                style,
-                context.groups(),
-            ));
+            if highlight {
+                line.extend(cell.spans.paint(
+                    range.start,
+                    &cell.text[range.clone()],
+                    style,
+                    context.groups(),
+                ));
+            } else {
+                line.push(Span::styled(cell.text[range.clone()].to_string(), style));
+            }
             Line::from(line)
         })
         .collect()
@@ -394,6 +452,8 @@ enum EvaluationState {
     Succeeded(u32, CellState),
     Failed(u32),
     Invalid,
+    /// Code shown rather than submitted, such as documentation's usage.
+    Shown,
 }
 
 impl EvaluationState {
@@ -404,6 +464,7 @@ impl EvaluationState {
             Self::Succeeded(number, state) => CellMarker::Number(*number, *state),
             Self::Failed(number) => CellMarker::Failed(*number),
             Self::Invalid => CellMarker::Invalid,
+            Self::Shown => CellMarker::Empty,
         }
     }
 }
@@ -436,11 +497,35 @@ pub struct EvaluationBlock {
 }
 
 impl EvaluationBlock {
+    fn code_style(state: &EvaluationState, after_error: bool, context: &RenderContext) -> Style {
+        let groups = context.groups();
+        if matches!(state, EvaluationState::Failed(_) | EvaluationState::Invalid) {
+            groups.error_code().patch(groups.error())
+        } else if after_error {
+            groups.error_code().patch(groups.muted())
+        } else {
+            groups.code()
+        }
+    }
+
     const OUTPUT_MARGIN: u16 = 1;
 
     /// Create a pending submission from source cells and their highlights.
     pub fn new(id: u64, cells: impl IntoIterator<Item = (String, Vec<HLSpan>)>) -> Self {
         Self::with_state(id, cells, EvaluationState::Pending)
+    }
+
+    /// Code shown as a submission's is, but never evaluated: nothing pending,
+    /// numbered, or following it.
+    pub fn shown(cells: impl IntoIterator<Item = (String, Vec<HLSpan>)>) -> Self {
+        Self {
+            id: 0,
+            cells: cells
+                .into_iter()
+                .map(|(text, spans)| (Cell::rejected(text, spans), EvaluationState::Shown))
+                .collect(),
+            outputs: Vec::new(),
+        }
     }
 
     /// Create a submission waiting behind the active evaluation.
@@ -547,7 +632,9 @@ impl EvaluationBlock {
     /// lines included, since they still hold their value, null ones not.
     pub fn valued_numbers(&self) -> impl Iterator<Item = u32> + '_ {
         self.cells.iter().filter_map(|(_, state)| match state {
-            EvaluationState::Succeeded(number, CellState::Value | CellState::Muted) => Some(*number),
+            EvaluationState::Succeeded(number, CellState::Value | CellState::Muted) => {
+                Some(*number)
+            }
             _ => None,
         })
     }
@@ -581,6 +668,17 @@ impl EvaluationBlock {
             .map_or_else(CellLayout::plain, CellLayout::numbered)
     }
 
+    /// The gutter beside the code: its numbers, its separator and the gap
+    /// before the code, down every row the code takes.
+    pub fn code_gutter(&self, context: &RenderContext) -> Rect {
+        Rect::new(
+            0,
+            0,
+            self.layout().prefix(),
+            self.code_height(context) + self.output_margin(),
+        )
+    }
+
     fn code_height(&self, context: &RenderContext) -> u16 {
         let layout = self.layout();
         self.cells.iter().fold(1, |height, (cell, state)| {
@@ -595,13 +693,19 @@ impl EvaluationBlock {
     fn code_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
         let layout = self.layout();
         let mut lines = vec![Line::default()];
+        let mut after_error = false;
         for (cell, state) in &self.cells {
-            let style = if matches!(state, EvaluationState::Failed(_) | EvaluationState::Invalid) {
-                context.groups().error().patch(context.groups().code())
-            } else {
-                context.groups().code()
-            };
-            lines.extend(cell_lines(cell, state.marker(), layout, context, style));
+            let failed = matches!(state, EvaluationState::Failed(_) | EvaluationState::Invalid);
+            let style = Self::code_style(state, after_error, context);
+            lines.extend(cell_lines(
+                cell,
+                state.marker(),
+                layout,
+                context,
+                style,
+                !after_error,
+            ));
+            after_error |= failed;
         }
         lines
     }
@@ -654,18 +758,36 @@ impl Block for EvaluationBlock {
         let layout = self.layout();
         layout.render_separator(code_area_height, context.groups().separator(), buf);
         let mut row = area.y.saturating_add(1);
+        let mut after_error = false;
         for (cell, state) in &self.cells {
             let marker = state.marker();
-            let style = if matches!(state, EvaluationState::Failed(_) | EvaluationState::Invalid) {
-                context.groups().error().patch(context.groups().code())
-            } else {
-                context.groups().code()
-            };
-            marker.render(context, style, area, row, buf);
-            row = row.saturating_add(
+            let failed = matches!(state, EvaluationState::Failed(_) | EvaluationState::Invalid);
+            let style = Self::code_style(state, after_error, context);
+            after_error |= failed;
+            let next = row.saturating_add(
                 cell.wrapped(context.width().saturating_sub(marker.width(layout)))
                     .height(),
             );
+            if after_error {
+                if let Some(bg) = context.groups().error_code().bg {
+                    for y in row..next {
+                        for x in area.x..area.right() {
+                            buf[(x, y)].set_bg(bg);
+                        }
+                    }
+                }
+            }
+            marker.render(context, style, area, row, buf);
+            row = next;
+        }
+        if after_error {
+            if let Some(bg) = context.groups().error_code().bg {
+                for y in row..area.y.saturating_add(code_area_height) {
+                    for x in area.x..area.right() {
+                        buf[(x, y)].set_bg(bg);
+                    }
+                }
+            }
         }
         let mut y = area.y.saturating_add(code_area_height);
         for block in self.outputs() {
@@ -687,6 +809,20 @@ impl Block for EvaluationBlock {
             );
             y = y.saturating_add(height);
         }
+    }
+
+    fn link_at(&self, context: &RenderContext, position: Position) -> Option<Link> {
+        let mut top = self.code_height(context) + self.output_margin();
+        for block in self.outputs() {
+            let bottom = top.saturating_add(block.height(context));
+            if (top..bottom).contains(&position.y) {
+                return block
+                    .link_at(context, Position::new(position.x, position.y - top))
+                    .map(|link| link.moved(Offset::new(0, i32::from(top))));
+            }
+            top = bottom;
+        }
+        None
     }
 
     fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
@@ -855,12 +991,21 @@ impl Block for TextBlock {
 
 /// One result inside a possibly shared value border.
 struct OutputCell {
+    layout: RefCell<Option<ValueLayout>>,
     number: Option<u32>,
     text: String,
     value: Option<M2Value>,
     ty: Option<String>,
     /// The annotation's pieces, set from their structure when M2 sent them.
     type_parts: Vec<M2Value>,
+}
+
+/// Retained ordinary value rows, independent of folding and output labels.
+struct ValueLayout {
+    width: u16,
+    math: maths::MathStyle,
+    groups: &'static crate::ui::controller::settings::theme::groups::Groups,
+    lines: Rc<Vec<Line<'static>>>,
 }
 
 /// Consecutive values returned by M2 inside one border.
@@ -876,6 +1021,7 @@ impl OutputBlock {
     pub fn value(text: String, ty: Option<String>) -> Self {
         Self {
             cells: vec![OutputCell {
+                layout: RefCell::default(),
                 number: None,
                 text: text.trim_end().to_string(),
                 value: None,
@@ -890,8 +1036,11 @@ impl OutputBlock {
     pub fn rendered(value: M2Value, ty: Option<String>) -> Self {
         Self {
             cells: vec![OutputCell {
+                layout: RefCell::default(),
                 number: None,
-                text: value.render(),
+                text: value
+                    .plain_text()
+                    .map_or_else(|| value.render(), output_preview),
                 value: Some(value),
                 ty,
                 type_parts: Vec::new(),
@@ -931,10 +1080,10 @@ impl OutputBlock {
 
     fn layout(&self, cell: &OutputCell, context: &RenderContext) -> Vec<String> {
         let width = self.text_width(context);
-        let text = cell
-            .value
-            .as_ref()
-            .map_or_else(|| cell.text.clone(), |value| value.render_at(width.into()));
+        let text = match &cell.value {
+            Some(value @ M2Value::Markup { .. }) => value.render_at(width.into()),
+            _ => cell.text.clone(),
+        };
         if text.is_empty() {
             Vec::new()
         } else {
@@ -947,21 +1096,44 @@ impl OutputBlock {
         }
     }
 
-    fn unfolded_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
+    fn unfolded_lines(&self, cell: &OutputCell, context: &RenderContext) -> Rc<Vec<Line<'static>>> {
         let theme = context.groups();
         // A value whose TeX parses is drawn from its own structure, so a numeral, a
         // name and an operator each take their own colour. Anything else is flat text
         // and keeps the single value colour it always had.
         let width = usize::from(self.text_width(context));
         let style = context.math();
-        if let Some(M2Value::Markup { html, .. }) = &cell.value {
-            if let Some(lines) = markup::lines(html, &context.with_width(width as u16)) {
+        if let Some(M2Value::Markup {
+            html,
+            example_width,
+            ..
+        }) = &cell.value
+        {
+            if let Some(lines) =
+                markup::lines(html, *example_width, &context.with_width(width as u16))
+            {
                 return lines;
             }
         }
-        match cell
-            .value
+        if let Some(layout) = cell.layout.borrow().as_ref().filter(|layout| {
+            layout.width == width as u16
+                && layout.math == style
+                && std::ptr::eq(layout.groups, theme)
+        }) {
+            return layout.lines.clone();
+        }
+        // Tokens carry semantic colours, but their strings use the same bounded
+        // source as the plain fallback rather than wrapping the original value.
+        let token = match &cell.value {
+            Some(M2Value::Token { role, .. }) => Some(M2Value::Token {
+                text: cell.text.clone(),
+                role: *role,
+            }),
+            _ => None,
+        };
+        let mut lines: Vec<Line<'static>> = match token
             .as_ref()
+            .or(cell.value.as_ref())
             .map(|value| maths::spans(value, width, style))
         {
             Some(Ok(rows)) => rows
@@ -973,15 +1145,33 @@ impl OutputBlock {
                 .into_iter()
                 .map(|line| Line::from(Span::styled(line, theme.value())))
                 .collect(),
+        };
+        let limit = (UI.max_output_preview_cells / usize::from(context.width().max(1))).max(1);
+        if lines.len() > limit {
+            let head = limit.saturating_sub(1) / 2;
+            let tail = limit.saturating_sub(head + 1);
+            let end = lines.len().saturating_sub(tail);
+            lines.splice(
+                head..end,
+                [Line::raw("… output preview truncated (render limit) …")],
+            );
         }
+        let lines = Rc::new(lines);
+        cell.layout.replace(Some(ValueLayout {
+            width: width as u16,
+            math: style,
+            groups: theme,
+            lines: lines.clone(),
+        }));
+        lines
     }
 
     /// Value rows kept above the fold and rows hidden by it, when `rows` exceed
     /// the output limit and this block is not expanded.
     fn fold(&self, rows: usize, context: &RenderContext) -> Option<(usize, usize)> {
         let limit = context.output_limit().filter(|_| !self.expanded)?;
-        let tail = limit.saturating_sub(1) / 2;
-        let head = limit.saturating_sub(tail + 1);
+        let tail = limit.saturating_sub(3) / 2;
+        let head = limit.saturating_sub(tail + 3);
         (rows > limit).then(|| (head, rows - head - tail))
     }
 
@@ -989,25 +1179,38 @@ impl OutputBlock {
         self.fold(self.unfolded_lines(cell, context).len(), context)
     }
 
-    /// Value rows with a blank row standing where the fold row is drawn over the border.
+    /// Value rows with three rows for the fold control.
     fn value_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
-        let mut lines = self.unfolded_lines(cell, context);
+        let lines = self.unfolded_lines(cell, context);
         if let Some((head, hidden)) = self.fold(lines.len(), context) {
-            lines.splice(head..head + hidden, [Line::default()]);
+            lines[..head]
+                .iter()
+                .cloned()
+                .chain(std::iter::repeat_n(Line::default(), 3))
+                .chain(lines[head + hidden..].iter().cloned())
+                .collect()
+        } else {
+            lines.as_ref().clone()
         }
-        lines
     }
 
-    /// The fold row: a rule crossing the whole block, borders included, around the
-    /// count of hidden rows, both in the accent.
-    fn fold_line(hidden: usize, width: u16, context: &RenderContext) -> Line<'static> {
-        let theme = context.groups();
-        let style = theme.output_number();
-        let label = Span::styled(
-            format!(" ⋯ {hidden} rows hidden · double-click to expand "),
+    /// Separator, message, separator, each crossing the output border.
+    fn fold_lines(hidden: usize, width: u16, context: &RenderContext) -> [Line<'static>; 3] {
+        let style = context.groups().output_number();
+        let rule = Line::from(Span::styled(
+            UI.glyphs.fold_rule.current().repeat(usize::from(width)),
             style,
-        );
-        labelled_rule(label, width, style)
+        ));
+        let label = format!("⋯ {hidden} rows hidden · double-click to expand");
+        let padding = usize::from(width).saturating_sub(label.len()) / 2;
+        [
+            rule.clone(),
+            Line::from(Span::styled(
+                format!("{}{label}", " ".repeat(padding)),
+                style,
+            )),
+            rule,
+        ]
     }
 
     /// Expand every folded value, or fold them back; false when none is tall enough.
@@ -1102,7 +1305,7 @@ impl Block for OutputBlock {
         for (index, cell) in self.cells.iter().enumerate() {
             row = row.saturating_add(Self::gap(index));
             if let Some(number) = cell.number {
-                let label = context.output_label(number);
+                let label = format!("o{number}");
                 let width = label.chars().count() as u16;
                 // The label's last character crosses the border, so labels of one
                 // length line up.
@@ -1115,14 +1318,79 @@ impl Block for OutputBlock {
                     .render(Rect::new(area.x + start, row, width, 1), buf);
             }
             if let Some((head, hidden)) = self.cell_fold(cell, context) {
-                Self::fold_line(hidden, area.width, context).render(
-                    Rect::new(area.x, row.saturating_add(row_count!(head)), area.width, 1),
-                    buf,
-                );
+                for (offset, line) in Self::fold_lines(hidden, area.width, context)
+                    .into_iter()
+                    .enumerate()
+                {
+                    line.render(
+                        Rect::new(
+                            area.x,
+                            row.saturating_add(row_count!(head))
+                                .saturating_add(offset as u16),
+                            area.width,
+                            1,
+                        ),
+                        buf,
+                    );
+                }
             }
             row = row.saturating_add(row_count!(self.lines(cell, context).len()));
         }
     }
+
+    fn link_at(&self, context: &RenderContext, position: Position) -> Option<Link> {
+        let area = Rect::new(0, 0, context.width(), self.height(context));
+        let inner = Bordered::inner(area, self.border_layout());
+        let mut row = inner.y;
+        for (index, cell) in self.cells.iter().enumerate() {
+            row = row.saturating_add(Self::gap(index));
+            let shown = row_count!(self.lines(cell, context).len());
+            if !(row..row.saturating_add(shown)).contains(&position.y) {
+                row = row.saturating_add(shown);
+                continue;
+            }
+            let Some(M2Value::Markup {
+                html,
+                example_width,
+                ..
+            }) = &cell.value
+            else {
+                return None;
+            };
+            // A folded value shows its head, three fold rows, then its tail.
+            let fold = self.cell_fold(cell, context);
+            let unfolded = |shown: usize| match fold {
+                Some((head, _)) if (head..head + 3).contains(&shown) => None,
+                Some((head, hidden)) if shown >= head + 3 => Some(shown + hidden - 3),
+                _ => Some(shown),
+            };
+            let shown_at = |unfolded: usize| match fold {
+                Some((head, hidden)) if (head..head + hidden).contains(&unfolded) => None,
+                Some((head, hidden)) if unfolded >= head + hidden => Some(unfolded + 3 - hidden),
+                _ => Some(unfolded),
+            };
+            let link = markup::link_at(
+                html,
+                *example_width,
+                &context.with_width(self.text_width(context)),
+                Position::new(
+                    position.x.checked_sub(inner.x)?,
+                    unfolded(usize::from(position.y - row))? as u16,
+                ),
+            )?;
+            let cells = link
+                .cells
+                .iter()
+                .filter_map(|cells| {
+                    let y = row + shown_at(usize::from(cells.y))? as u16;
+                    Some(Rect::new(cells.x + inner.x, y, cells.width, 1))
+                })
+                .collect();
+            return Some(Link { cells, ..link });
+        }
+        None
+    }
+
     fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
         let area = Rect::new(0, 0, context.width(), self.height(context));
         let layout = self.border_layout();
@@ -1140,7 +1408,7 @@ impl Block for OutputBlock {
                 row_count!(lines.len()),
             ));
             if let Some((head, _)) = self.cell_fold(cell, context) {
-                exclusions.push(Rect::new(area.x, row + row_count!(head), area.width, 1));
+                exclusions.push(Rect::new(area.x, row + row_count!(head), area.width, 3));
             }
             let values = self.value_lines(cell, context);
             let types = self.type_lines(cell, context);
@@ -1204,6 +1472,27 @@ impl Block for WarningBlock {
     }
 }
 
+/// Bound synchronous work before wrapping flat output, retaining both ends.
+fn output_preview(text: &str) -> String {
+    let budget = UI.max_output_preview_bytes;
+    if text.len() <= budget {
+        return text.to_string();
+    }
+    let mut head = budget / 2;
+    while !text.is_char_boundary(head) {
+        head -= 1;
+    }
+    let mut tail = text.len() - budget / 2;
+    while !text.is_char_boundary(tail) {
+        tail += 1;
+    }
+    format!(
+        "{}\n… output preview truncated (render limit) …\n{}",
+        &text[..head],
+        &text[tail..]
+    )
+}
+
 fn word_lines(text: &str, width: u16) -> Vec<String> {
     WrappedText::word(text.trim_end(), width)
         .text()
@@ -1218,8 +1507,12 @@ fn error_box_text(message: &str, context: &RenderContext) -> Vec<String> {
         .map(strip_m2_location)
         .collect::<Vec<_>>()
         .join("\n");
+    let message = message
+        .strip_prefix("error:")
+        .or_else(|| message.strip_prefix("Error:"))
+        .map_or(message.as_str(), str::trim_start);
     word_lines(
-        &message,
+        message,
         Bordered::text_width(context, CellLayout::plain().frame()),
     )
 }
@@ -1228,13 +1521,14 @@ fn render_error_box(message: &str, context: &RenderContext, area: Rect, buf: &mu
     let theme = context.groups();
     let body = error_box_text(message, context)
         .into_iter()
-        .map(|line| Line::from(Span::styled(line, theme.error())))
+        .map(|line| Line::from(Span::styled(line, theme.error_message())))
         .collect();
+    let title = Some(Line::from(Span::styled(" Error ", theme.error())));
     Bordered::new(
         CellLayout::plain().frame(),
         Style::new(),
         theme.error_border(),
-        None,
+        title,
         body,
     )
     .render(&(), area, buf);
@@ -1273,12 +1567,102 @@ mod tests {
     use m2_syn::{DelimiterKind, DoubleSpan, PrettyNode, Span as M2Span};
 
     #[test]
+    fn oversized_plain_output_has_a_bounded_preview_even_when_expanded() {
+        let text = format!("begin\n{}\nend", "α\n".repeat(UI.max_output_preview_bytes));
+        let block = OutputBlock::rendered(M2Value::Net(text), None);
+        let context = RenderContext::new(80, 0).full_output();
+        let cell = &block.cells[0];
+        assert!(cell.text.len() <= UI.max_output_preview_bytes + 128);
+        assert!(cell.text.starts_with("begin"));
+        assert!(cell.text.ends_with("end"));
+        let lines = block.unfolded_lines(cell, &context);
+        assert!(
+            lines.len() * usize::from(block.text_width(&context)) <= UI.max_output_preview_cells
+        );
+        assert!(lines
+            .iter()
+            .any(|line| line.to_string().contains("render limit")));
+        assert!(lines.last().unwrap().to_string().contains("end"));
+        assert_eq!(usize::from(block.height(&context)), lines.len() + 2);
+    }
+
+    #[test]
+    fn net_help_reuses_plain_layout_across_redraws_and_hover_checks() {
+        let mut backend = crate::backend::M2Backend::spawn_for_examples(None).unwrap();
+        let source = "net help \"arithmetic with complex maps\"";
+        let response = backend.evaluate(source, Some(1)).unwrap();
+        assert!(!matches!(response.value, Some(M2Value::Markup { .. })));
+        let start = std::time::Instant::now();
+        let (_, _, block) = response_blocks(&response, source);
+        let block = block.unwrap();
+        let context = RenderContext::new(120, 0).with_output_limit(40);
+        let first = block.unfolded_lines(&block.cells[0], &context);
+        assert!(first.len() > 40);
+        let height = block.height(&context);
+        assert_eq!(height, 42);
+        let cold = start.elapsed();
+        let start = std::time::Instant::now();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 120, height));
+        for _ in 0..100 {
+            block.render_local(&context, &mut buffer);
+            block.local_selection_exclusions(&context, &mut Exclusions::default());
+            assert!(block.link_at(&context, Position::new(10, 2)).is_none());
+            assert!(Rc::ptr_eq(
+                &first,
+                &block.unfolded_lines(&block.cells[0], &context)
+            ));
+        }
+        eprintln!(
+            "net help: setup {cold:?}; 100 redraws and hover checks {:?}",
+            start.elapsed()
+        );
+        for changed in [context.with_width(60), context.with_blackboard(true)] {
+            assert!(!Rc::ptr_eq(
+                &first,
+                &block.unfolded_lines(&block.cells[0], &changed)
+            ));
+        }
+    }
+
+    #[test]
+    fn folded_help_reuses_layout_across_measurement_painting_and_selection() {
+        let html = "<p><a href='ZZ'>integers</a></p>".repeat(80);
+        let mut block = OutputBlock::rendered(
+            M2Value::Markup {
+                html,
+                fallback: String::new(),
+                example_width: 77,
+            },
+            None,
+        );
+        let context = RenderContext::new(80, 0).with_output_limit(10);
+        let first = block.unfolded_lines(&block.cells[0], &context);
+        assert!(first.len() > 10);
+        assert_eq!(block.height(&context), 12);
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 80, block.height(&context)));
+        block.render_local(&context, &mut buffer);
+        block.local_selection_exclusions(&context, &mut Exclusions::default());
+        let _ = block.link_at(&context, Position::new(10, 2));
+        assert!(Rc::ptr_eq(
+            &first,
+            &block.unfolded_lines(&block.cells[0], &context)
+        ));
+        assert!(block.toggle_fold(&context));
+        assert!(usize::from(block.height(&context)) > 12);
+        assert!(Rc::ptr_eq(
+            &first,
+            &block.unfolded_lines(&block.cells[0], &context)
+        ));
+    }
+
+    #[test]
     fn markup_output_embeds_the_usual_input_and_result_blocks() {
         let context = RenderContext::new(60, 0);
         let block = OutputBlock::rendered(
             M2Value::Markup {
                 html: "<div><h2>Example</h2><pre><code>i1 : 2+2\n\no1 = 4\n\no1 : ZZ</code></pre></div>".into(),
                 fallback: "example".into(),
+                example_width: 77,
             },
             None,
         );
@@ -1288,11 +1672,46 @@ mod tests {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("2+2"), "{text}");
-        assert!(text.contains("o1"), "{text}");
+        assert!(text.contains("o1"), "outputs keep their labels: {text}");
+        assert!(
+            text.lines()
+                .filter(|row| row.contains("2+2"))
+                .all(|row| row.trim_start().starts_with("2+2")),
+            "code carries no number or separator: {text}"
+        );
         assert!(text.contains("ZZ"), "{text}");
         assert!(!text.contains("i1 :"), "{text}");
         assert!(text.contains('─'), "{text}");
+    }
+
+    #[test]
+    fn a_documentation_link_is_found_where_the_output_draws_it() {
+        let context = RenderContext::new(60, 0);
+        let block = OutputBlock::rendered(
+            M2Value::Markup {
+                html: "<p>See <a href='&quot;ancestor(Type,Type)&quot;'>ancestor</a>.</p>".into(),
+                fallback: "See ancestor.".into(),
+                example_width: 77,
+            },
+            None,
+        );
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 60, block.height(&context)));
+        block.render_local(&context, &mut buffer);
+        let (x, y) = (0..buffer.area.height)
+            .find_map(|y| {
+                let row: String = (0..60).map(|x| buffer[(x, y)].symbol()).collect();
+                row.find("ancestor")
+                    .map(|at| (row[..at].chars().count() as u16, y))
+            })
+            .expect("the link is drawn");
+
+        let link = block
+            .link_at(&context, Position::new(x + 2, y))
+            .expect("a link under the pointer");
+
+        assert_eq!(&*link.target, "\"ancestor(Type,Type)\"");
+        assert_eq!(link.cells, [Rect::new(x, y, 8, 1)]);
+        assert!(block.link_at(&context, Position::new(x - 2, y)).is_none());
     }
 
     /// Where a code cell's text starts, and where the border and separator run.
@@ -1473,9 +1892,18 @@ mod tests {
     fn brackets_stand_around_what_they_hold_though_the_tree_lists_them_last() {
         let span = M2Span::for_text("[ab]");
         let mut array = PrettyNode::syntax("Array", Some(span.clone()));
-        array.push_node("elements", PrettyNode::token("Symbol", "ab", span.subspan(1, 3)));
-        array.push_node("opening", PrettyNode::token("Token", "[", span.subspan(0, 1)));
-        array.push_node("closing", PrettyNode::token("Token", "]", span.subspan(3, 4)));
+        array.push_node(
+            "elements",
+            PrettyNode::token("Symbol", "ab", span.subspan(1, 3)),
+        );
+        array.push_node(
+            "opening",
+            PrettyNode::token("Token", "[", span.subspan(0, 1)),
+        );
+        array.push_node(
+            "closing",
+            PrettyNode::token("Token", "]", span.subspan(3, 4)),
+        );
         let block = SyntaxTreeBlock::new("[ab]".into(), Vec::new(), array);
         let buffer = rendered_buffer(&block, 60);
         let rows: Vec<String> = (0..buffer.area().height)
@@ -1609,15 +2037,15 @@ mod tests {
         let groups = Groups::default();
         let context = RenderContext::new(20, 0).with_recent_outputs([Some(9), Some(8), Some(7)]);
         let numbers = [9, 6];
-        let code = CodeBlock::new(numbers.map(|number| {
-            Cell::resolved("x".into(), number, CellState::Value, Vec::new())
-        }));
+        let code = CodeBlock::new(
+            numbers.map(|number| Cell::resolved("x".into(), number, CellState::Value, Vec::new())),
+        );
         let mut cells = Buffer::empty(Rect::new(0, 0, 20, code.height(&context)));
         code.render_local(&context, &mut cells);
         let margin = UI.cell_margin;
 
         let (recent, old) = (&cells[(margin, 0)], &cells[(margin, 1)]);
-        assert_eq!(recent.fg, groups.output_number().fg.unwrap());
+        assert_eq!(recent.fg, groups.recent_cell_number().fg.unwrap());
         assert_eq!(old.fg, groups.muted().fg.unwrap());
         assert!(!recent.modifier.contains(Modifier::BOLD));
 
@@ -1627,7 +2055,9 @@ mod tests {
             block.render_local(&context, &mut buffer);
             buffer[(inset(), 1)].clone()
         };
-        assert!(output(9).modifier.contains(Modifier::BOLD));
+        for number in [9, 8, 7] {
+            assert!(output(number).modifier.contains(Modifier::BOLD));
+        }
         assert!(!output(6).modifier.contains(Modifier::BOLD));
     }
 
@@ -1647,7 +2077,7 @@ mod tests {
     }
 
     #[test]
-    fn the_latest_outputs_are_labelled_as_m2_recalls_them() {
+    fn the_latest_outputs_keep_their_numbered_labels() {
         let context = RenderContext::new(20, 0).with_recent_outputs([Some(9), Some(8), Some(7)]);
         let label = |number| {
             let block = OutputBlock::value("x".into(), None).numbered(number);
@@ -1658,9 +2088,9 @@ mod tests {
                 .collect::<String>()
         };
 
-        assert!(label(9).contains("oo") && !label(9).contains("ooo"));
-        assert!(label(8).contains("ooo") && !label(8).contains("oooo"));
-        assert!(label(7).contains("oooo"));
+        assert!(label(9).contains("o9"));
+        assert!(label(8).contains("o8"));
+        assert!(label(7).contains("o7"));
         assert!(label(6).contains("o6"));
     }
 
@@ -2021,7 +2451,7 @@ mod tests {
                 Box::new(ErrorMessageBlock {
                     message: "error".into(),
                 }) as Box<dyn Block>,
-                theme.error(),
+                theme.error_message(),
             ),
         ] {
             let buffer = rendered_buffer(block.as_ref(), 20);
@@ -2029,6 +2459,65 @@ mod tests {
             assert_eq!(cell.fg, text.fg.unwrap());
             assert_eq!(cell.bg, ratatui::style::Color::Reset);
         }
+    }
+
+    #[test]
+    fn failed_cell_and_unevaluated_tail_use_red_background_and_muted_code() {
+        let marked = |text: &str| {
+            (
+                text.to_string(),
+                vec![HLSpan::new(0..text.len(), HLGroup::Function)],
+            )
+        };
+        let mut block =
+            EvaluationBlock::new(1, [marked("first"), marked("failed"), marked("later")]);
+        block.succeed(0, 1, CellState::Value, Vec::new(), None, None);
+        block.fail(1, 2, None, "error: failed".into());
+        let buffer = rendered_buffer(&block, 36);
+        let theme = Groups::default();
+        let code_x = prefix() as u16;
+
+        assert_eq!(buffer[(code_x, 1)].fg, theme.Function.fg.unwrap());
+        assert_eq!(buffer[(code_x, 1)].bg, theme.code().bg.unwrap());
+        for y in [2, 3, 4] {
+            assert_eq!(buffer[(code_x, y)].bg, theme.error_code().bg.unwrap());
+            assert_eq!(buffer[(35, y)].bg, theme.error_code().bg.unwrap());
+        }
+        assert_eq!(buffer[(code_x, 3)].fg, theme.muted().fg.unwrap());
+        assert_ne!(buffer[(code_x, 3)].fg, theme.Function.fg.unwrap());
+    }
+
+    #[test]
+    fn rejected_cell_uses_its_configured_marker_and_error_background() {
+        let block = EvaluationBlock::invalid(1, "broken".into(), Vec::new(), "error: bad".into());
+        let buffer = rendered_buffer(&block, 24);
+        let theme = Groups::default();
+
+        assert_eq!(
+            buffer[(UI.cell_margin, 1)].symbol(),
+            UI.glyphs.rejected_cell.current()
+        );
+        assert_eq!(
+            buffer[(prefix() as u16, 1)].bg,
+            theme.error_code().bg.unwrap()
+        );
+        assert_eq!(buffer[(23, 1)].bg, theme.error_code().bg.unwrap());
+    }
+
+    #[test]
+    fn error_prefix_becomes_the_title_and_message_uses_light_red() {
+        let block = ErrorMessageBlock {
+            message: "currentString:1:6:(3):[8]: error: bad input".into(),
+        };
+        let buffer = rendered_buffer(&block, 40);
+        let rows = rendered_rows(&block, 40);
+        let theme = Groups::default();
+
+        assert!(rows[0].contains("Error"));
+        assert!(rows[1].contains("bad input"));
+        assert!(!rows[1].contains("error:"));
+        let x = rows[1].find("bad input").unwrap() as u16;
+        assert_eq!(buffer[(x, 1)].fg, theme.error_message().fg.unwrap());
     }
 
     #[test]
@@ -2072,7 +2561,7 @@ mod tests {
         assert_eq!(folded.len(), 24);
         assert!(folded.first().unwrap().contains("row 00"));
         assert!(folded.last().unwrap().contains("row 39"));
-        assert_eq!(block.cell_fold(&block.cells[0], &context), Some((12, 17)));
+        assert_eq!(block.cell_fold(&block.cells[0], &context), Some((11, 19)));
         assert_eq!(text(&block, &context.full_output()).len(), 40);
 
         assert!(block.toggle_fold(&context));
@@ -2094,15 +2583,17 @@ mod tests {
             .unwrap();
         let label = rows[fold].chars().position(|cell| cell == '⋯').unwrap() as u16;
 
-        assert!(rows[fold].contains("21 rows hidden · double-click to expand"));
-        assert!(rows[fold].starts_with('─') && rows[fold].ends_with('─'));
-        assert!(!rows[fold].contains('│'));
-        assert!(rows[fold - 1].contains('│') && rows[fold + 1].contains('│'));
+        assert!(rows[fold].contains("23 rows hidden · double-click to expand"));
+        for rule in [&rows[fold - 1], &rows[fold + 1]] {
+            assert!(rule.starts_with('─') && rule.ends_with('─'));
+            assert!(!rule.contains('│'));
+        }
+        assert!(rows[fold - 2].contains('│') && rows[fold + 2].contains('│'));
         let accent = theme.output_number().fg.unwrap();
         assert_ne!(accent, theme.border().fg.unwrap());
-        assert_eq!(buffer[(0, fold as u16)].fg, accent);
+        assert_eq!(buffer[(0, fold as u16 - 1)].fg, accent);
         assert_eq!(buffer[(label, fold as u16)].fg, accent);
-        assert_eq!(buffer[(59, fold as u16)].fg, accent);
+        assert_eq!(buffer[(59, fold as u16 + 1)].fg, accent);
     }
 
     #[test]

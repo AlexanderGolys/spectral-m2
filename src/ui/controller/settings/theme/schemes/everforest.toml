@@ -4,288 +4,56 @@ name = "everforest"
 dark = ["hard", "medium", "soft"]
 light = ["hard", "medium", "soft"]
 
-[colors.aqua.dark]
-hard = "#83c092"
-medium = "#83c092"
-soft = "#83c092"
+[colors.red]
+dark = "#e67e80"
+light = "#f85552"
 
-[colors.aqua.light]
-hard = "#35a77c"
-medium = "#35a77c"
-soft = "#35a77c"
+[colors.green]
+dark = "#a7c080"
+light = "#8da101"
 
-[colors.bg0.dark]
-hard = "#272e33"
-medium = "#2d353b"
-soft = "#333c43"
+[colors.yellow]
+dark = "#dbbc7f"
+light = "#dfa000"
 
-[colors.bg0.light]
-hard = "#fffbef"
-medium = "#fdf6e3"
-soft = "#f3ead3"
+[colors.blue]
+dark = "#7fbbb3"
+light = "#3a94c5"
 
-[colors.bg1.dark]
-hard = "#2e383c"
-medium = "#343f44"
-soft = "#3a464c"
+[colors.purple]
+dark = "#d699b6"
+light = "#df69ba"
 
-[colors.bg1.light]
-hard = "#f8f5e4"
-medium = "#f4f0d9"
-soft = "#eae4ca"
+[colors.aqua]
+dark = "#83c092"
+light = "#35a77c"
 
-[colors.bg2.dark]
-hard = "#374145"
-medium = "#3d484d"
-soft = "#434f55"
+[colors.orange]
+dark = "#e69875"
+light = "#f57d26"
 
-[colors.bg2.light]
-hard = "#f2efdf"
-medium = "#efebd4"
-soft = "#e5dfc5"
+[colors.gray]
+dark = "#859289"
+light = "#939f91"
 
-[colors.bg3.dark]
-hard = "#414b50"
-medium = "#475258"
-soft = "#4d5960"
+[colors.fg]
+dark = ["#d3c6aa", "#9da9a0", "#859289", "#7a8478"]
+light = ["#5c6a72", "#829181", "#939f91", "#a6b0a0"]
 
-[colors.bg3.light]
-hard = "#edeada"
-medium = "#e6e2cc"
-soft = "#ddd8be"
-
-[colors.bg4.dark]
-hard = "#495156"
-medium = "#4f585e"
-soft = "#555f66"
-
-[colors.bg4.light]
-hard = "#e8e5d5"
-medium = "#e0dcc7"
-soft = "#d8d3ba"
-
-[colors.bg5.dark]
-hard = "#4f5b58"
-medium = "#56635f"
-soft = "#5d6b66"
-
-[colors.bg5.light]
-hard = "#bec5b2"
-medium = "#bdc3af"
-soft = "#b9c0ab"
-
-[colors.bg_blue.dark]
-hard = "#384b55"
-medium = "#3a515d"
-soft = "#3f5865"
-
-[colors.bg_blue.light]
-hard = "#ecf5ed"
-medium = "#e9f0e9"
-soft = "#e1e7dd"
-
-[colors.bg_dim.dark]
-hard = "#1e2326"
-medium = "#232a2e"
-soft = "#293136"
-
-[colors.bg_dim.light]
-hard = "#f2efdf"
-medium = "#efebd4"
-soft = "#e5dfc5"
-
-[colors.bg_green.dark]
-hard = "#3c4841"
-medium = "#425047"
-soft = "#48584e"
-
-[colors.bg_green.light]
-hard = "#f3f5d9"
-medium = "#f0f1d2"
-soft = "#e5e6c5"
-
-[colors.bg_purple.dark]
-hard = "#463f48"
-medium = "#4a444e"
-soft = "#4e4953"
-
-[colors.bg_purple.light]
-hard = "#fceced"
-medium = "#fae8e2"
-soft = "#f1ddd4"
-
-[colors.bg_red.dark]
-hard = "#493b40"
-medium = "#514045"
-soft = "#59464c"
-
-[colors.bg_red.light]
-hard = "#ffe7de"
-medium = "#fde3da"
-soft = "#fadbd0"
-
-[colors.bg_visual.dark]
-hard = "#4c3743"
-medium = "#543a48"
-soft = "#5c3f4f"
-
-[colors.bg_visual.light]
-hard = "#f0f2d4"
-medium = "#eaedc8"
-soft = "#e1e4bd"
-
-[colors.bg_yellow.dark]
-hard = "#45443c"
-medium = "#4d4c43"
-soft = "#55544a"
-
-[colors.bg_yellow.light]
-hard = "#fef2d5"
-medium = "#faedcd"
-soft = "#f1e4c5"
-
-[colors.blue.dark]
-hard = "#7fbbb3"
-medium = "#7fbbb3"
-soft = "#7fbbb3"
-
-[colors.blue.light]
-hard = "#3a94c5"
-medium = "#3a94c5"
-soft = "#3a94c5"
-
-[colors.fg.dark]
-hard = "#d3c6aa"
-medium = "#d3c6aa"
-soft = "#d3c6aa"
-
-[colors.fg.light]
-hard = "#5c6a72"
-medium = "#5c6a72"
-soft = "#5c6a72"
-
-[colors.green.dark]
-hard = "#a7c080"
-medium = "#a7c080"
-soft = "#a7c080"
-
-[colors.green.light]
-hard = "#8da101"
-medium = "#8da101"
-soft = "#8da101"
-
-[colors.grey0.dark]
-hard = "#7a8478"
-medium = "#7a8478"
-soft = "#7a8478"
-
-[colors.grey0.light]
-hard = "#a6b0a0"
-medium = "#a6b0a0"
-soft = "#a6b0a0"
-
-[colors.grey1.dark]
-hard = "#859289"
-medium = "#859289"
-soft = "#859289"
-
-[colors.grey1.light]
-hard = "#939f91"
-medium = "#939f91"
-soft = "#939f91"
-
-[colors.grey2.dark]
-hard = "#9da9a0"
-medium = "#9da9a0"
-soft = "#9da9a0"
-
-[colors.grey2.light]
-hard = "#829181"
-medium = "#829181"
-soft = "#829181"
-
-[colors.orange.dark]
-hard = "#e69875"
-medium = "#e69875"
-soft = "#e69875"
-
-[colors.orange.light]
-hard = "#f57d26"
-medium = "#f57d26"
-soft = "#f57d26"
-
-[colors.purple.dark]
-hard = "#d699b6"
-medium = "#d699b6"
-soft = "#d699b6"
-
-[colors.purple.light]
-hard = "#df69ba"
-medium = "#df69ba"
-soft = "#df69ba"
-
-[colors.red.dark]
-hard = "#e67e80"
-medium = "#e67e80"
-soft = "#e67e80"
-
-[colors.red.light]
-hard = "#f85552"
-medium = "#f85552"
-soft = "#f85552"
-
-[colors.statusline1.dark]
-hard = "#a7c080"
-medium = "#a7c080"
-soft = "#a7c080"
-
-[colors.statusline1.light]
-hard = "#93b259"
-medium = "#93b259"
-soft = "#93b259"
-
-[colors.statusline2.dark]
-hard = "#d3c6aa"
-medium = "#d3c6aa"
-soft = "#d3c6aa"
-
-[colors.statusline2.light]
-hard = "#708089"
-medium = "#708089"
-soft = "#708089"
-
-[colors.statusline3.dark]
-hard = "#e67e80"
-medium = "#e67e80"
-soft = "#e67e80"
-
-[colors.statusline3.light]
-hard = "#e66868"
-medium = "#e66868"
-soft = "#e66868"
-
-[colors.yellow.dark]
-hard = "#dbbc7f"
-medium = "#dbbc7f"
-soft = "#dbbc7f"
-
-[colors.yellow.light]
-hard = "#dfa000"
-medium = "#dfa000"
-soft = "#dfa000"
+[colors.bg]
+dark = { hard = ["#272e33", "#1e2326", "#2e383c", "#374145", "#414b50"], medium = ["#2d353b", "#232a2e", "#343f44", "#3d484d", "#475258"], soft = ["#333c43", "#293136", "#3a464c", "#434f55", "#4d5960"] }
+light = { hard = ["#fffbef", "#f2efdf", "#f8f5e4", "#f2efdf", "#edeada"], medium = ["#fdf6e3", "#efebd4", "#f4f0d9", "#efebd4", "#e6e2cc"], soft = ["#f3ead3", "#e5dfc5", "#eae4ca", "#e5dfc5", "#ddd8be"] }
 
 [base]
 Canvas = { bg = "bg0" }
-Code = { bg = "bg_dim" }
-Raised = { bg = "bg1" }
-Pending = { bg = "bg1" }
-Selection = { bg = "bg_visual" }
-Focus = { bg = "bg_green" }
-
-Text = { fg = "fg" }
-Muted = { fg = "grey1" }
-Faint = { fg = "bg3" }
-
+Code = { bg = "bg1" }
+Raised = { bg = "bg2" }
+Pending = { bg = "bg2" }
+Selection = { bg = "bg3" }
+Focus = { bg = "bg3" }
+Text = { fg = "fg0" }
+Muted = { fg = "gray" }
+Faint = { fg = "fg4" }
 Keyword = { fg = "red" }
 Function = { fg = "green" }
 Type = { fg = "yellow" }
@@ -293,14 +61,13 @@ String = { fg = "aqua" }
 Number = { fg = "purple" }
 Operator = { fg = "orange" }
 Symbol = { fg = "blue" }
-Parameter = { fg = "fg" }
+Parameter = { fg = "fg0" }
 Property = { fg = "purple" }
+EnumVariant = { fg = "aqua" }
+Macro = { fg = "green", italic = true }
+Attribute = { fg = "orange" }
 Builtin = { fg = "purple", italic = true }
 Regex = { fg = "blue", sp = "blue", underline = true }
-EnumVariant = { fg = "aqua" }
-Attribute = { fg = "orange" }
-Macro = { fg = "green", italic = true }
-
 Accent = { fg = "aqua" }
 Error = { fg = "red" }
 Warning = { fg = "yellow" }
@@ -309,6 +76,6 @@ Hint = { fg = "aqua" }
 
 [overrides]
 Constant = { fg = "purple", italic = true }
-Punctuation = { fg = "grey2" }
+Punctuation = { fg = "fg2" }
 Installation = { fg = "orange" }
 Quote = { fg = "yellow" }

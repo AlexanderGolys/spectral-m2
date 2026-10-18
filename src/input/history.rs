@@ -131,7 +131,7 @@ impl History {
     }
 
     fn keeps(entry: &str) -> bool {
-        !entry.trim().is_empty() && (!entry.starts_with('/') || entry.contains('\n'))
+        !entry.trim().is_empty()
     }
 
     /// The newest older entry that starts with the draft's text before its cursor.
@@ -247,7 +247,6 @@ mod tests {
         history.record("R = QQ[x]");
         history.record("  f = i -> (\n  i + 1\n)  \n");
         history.record(" \t");
-        history.record("/ast");
 
         let mut reloaded = History::from_path(Some(path.clone()));
         assert_eq!(

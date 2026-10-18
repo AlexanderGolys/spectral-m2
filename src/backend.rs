@@ -2,6 +2,7 @@
 
 pub mod transcript;
 
+use std::fmt::Display;
 use std::io::{BufRead, BufReader, PipeReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -94,8 +95,14 @@ pub enum M2Value {
         kind: CollectionKind,
         items: Vec<M2Value>,
     },
-    /// Documentation retained as semantic HTML for width-aware rendering.
-    Markup { html: String, fallback: String },
+    /// Documentation retained as semantic HTML for width-aware rendering, with
+    /// the print width its archived examples were wrapped to.
+    Markup {
+        html: String,
+        fallback: String,
+        #[serde(rename = "exampleWidth")]
+        example_width: usize,
+    },
     /// A value that is one word with a role in code: null, a Boolean, a string, a
     /// function's name.
     Token { text: String, role: Role },
@@ -256,7 +263,7 @@ impl M2Value {
     /// Render this value at a requested terminal width.
     pub fn render_at(&self, width: usize) -> String {
         match self {
-            Self::Markup { html, fallback } => html2text::config::plain()
+            Self::Markup { html, fallback, .. } => html2text::config::plain()
                 .link_footnotes(false)
                 .string_from_read(html.as_bytes(), width.max(1))
                 .unwrap_or_else(|_| fallback.clone())
@@ -268,12 +275,35 @@ impl M2Value {
 
     /// Render this value as copyable terminal text.
     pub fn render(&self) -> String {
+        // Flat text already has its layout. Stacking it into a character grid
+        // repeatedly copies all earlier rows and is quadratic for long Nets.
+        if let Some(text) = self.plain_text() {
+            return text
+                .lines()
+                .map(str::trim_end)
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
         self.block()
             .to_string()
             .lines()
             .map(str::trim_end)
             .collect::<Vec<_>>()
             .join("\n")
+    }
+    /// Borrow flat output without parsing TeX or allocating a character grid.
+    pub fn plain_text(&self) -> Option<&str> {
+        match self {
+            Self::Net(text) | Self::Markup { fallback: text, .. } | Self::Token { text, .. } => {
+                Some(text.as_str())
+            }
+            Self::Tex { source, fallback }
+                if !(source.starts_with('$') && source.ends_with('$')) =>
+            {
+                Some(fallback.as_str())
+            }
+            _ => None,
+        }
     }
 }
 
@@ -309,6 +339,7 @@ pub struct M2Response {
 
 impl M2Response {
     /// Render the displayed value, preserving its Net fallback.
+    #[cfg(test)]
     pub fn rendered_value(&self) -> Option<String> {
         self.value.as_ref().map(M2Value::render)
     }
@@ -328,7 +359,15 @@ pub struct M2Backend {
 impl M2Backend {
     pub fn spawn() -> Result<Self> {
         let config = Self::config_dir()?;
-        Self::spawn_in(&config, Some(config.join("init.m2")))
+        Self::spawn_in(&config, Some(config.join("init.m2")), None)
+    }
+
+    /// A Macaulay2 as documentation examples run in: without Spectral's init
+    /// file, and with the package they document already loaded, as M2 loads it
+    /// before running them. Loading it on the command line costs no input
+    /// number, so the examples keep the numbers they were recorded under.
+    pub fn spawn_for_examples(package: Option<&str>) -> Result<Self> {
+        Self::spawn_in(&Self::config_dir()?, None, package)
     }
 
     #[cfg(test)]
@@ -337,7 +376,7 @@ impl M2Backend {
             Some(config) => config.to_path_buf(),
             None => Self::config_dir()?,
         };
-        Self::spawn_in(&config, init_file)
+        Self::spawn_in(&config, init_file, None)
     }
 
     /// Start M2 and let its own top level read the session from stdin.
@@ -352,7 +391,7 @@ impl M2Backend {
     /// Both output streams are handed the same pipe. Printed text, diagnostics
     /// and result frames then share one ordering, which is what lets a cell's
     /// output be attributed by position rather than by guesswork.
-    fn spawn_in(config: &Path, init_file: Option<PathBuf>) -> Result<Self> {
+    fn spawn_in(config: &Path, init_file: Option<PathBuf>, package: Option<&str>) -> Result<Self> {
         let script_path = Self::sync_startup_script(config)?;
         let (reader, writer) = std::io::pipe()?;
 
@@ -366,11 +405,16 @@ impl M2Backend {
         if let Some(init_file) = init_file.as_deref().filter(|path| path.is_file()) {
             command
                 .arg("-e")
-                .arg(format!("load {}", m2_string_literal(init_file)));
+                .arg(format!("load {}", m2_string_literal(init_file.display())));
+        }
+        if let Some(package) = package {
+            command
+                .arg("-e")
+                .arg(format!("needsPackage {}", m2_string_literal(package)));
         }
         let mut process = command
             .arg("-e")
-            .arg(format!("load {}", m2_string_literal(&script_path)))
+            .arg(format!("load {}", m2_string_literal(script_path.display())))
             .stdin(Stdio::piped())
             .stdout(writer.try_clone()?)
             .stderr(writer)
@@ -489,13 +533,20 @@ impl M2Backend {
     /// closed by a frame rather than leaving this loop waiting forever.
     pub fn evaluate(&mut self, code: &str, number: Option<u32>) -> Result<M2Response> {
         let _ = number;
+        self.evaluate_within(code, EVALUATION_TIMEOUT)
+    }
+
+    /// Evaluate `code`, giving up once `timeout` passes without an answer. M2 is
+    /// then still busy with it, so the process can no longer be trusted with
+    /// anything else.
+    pub fn evaluate_within(&mut self, code: &str, timeout: Duration) -> Result<M2Response> {
         writeln!(self.input, "{}", code.trim_end())?;
         writeln!(self.input, "{CELL_TERMINATOR}")?;
         self.input.flush()?;
 
         let mut transcript = String::new();
         loop {
-            match self.chunks.recv_timeout(EVALUATION_TIMEOUT) {
+            match self.chunks.recv_timeout(timeout) {
                 Ok(Chunk::Text(text)) => transcript.push_str(&text),
                 Ok(Chunk::Frame(frame)) => {
                     let frame: Frame = serde_json::from_str(&frame)?;
@@ -511,9 +562,7 @@ impl M2Backend {
                         names: frame.names,
                     });
                 }
-                Err(RecvTimeoutError::Timeout) => {
-                    return Err(Error::Timeout(EVALUATION_TIMEOUT.as_secs()))
-                }
+                Err(RecvTimeoutError::Timeout) => return Err(Error::Timeout(timeout.as_secs())),
                 Err(RecvTimeoutError::Disconnected) => {
                     return Err(Error::Process(self.exit_details(transcript.trim())))
                 }
@@ -532,14 +581,11 @@ impl M2Backend {
     }
 }
 
-/// Spell `path` as an M2 string literal, for the `-e` that loads the script.
-fn m2_string_literal(path: &Path) -> String {
+/// Spell `text` as an M2 string literal, for the `-e` arguments M2 starts with.
+fn m2_string_literal(text: impl Display) -> String {
     format!(
         "\"{}\"",
-        path.display()
-            .to_string()
-            .replace('\\', r"\\")
-            .replace('"', "\\\"")
+        text.to_string().replace('\\', r"\\").replace('"', "\\\"")
     )
 }
 
@@ -614,6 +660,30 @@ mod tests {
         assert_eq!(column(2, false), "⎱⎰");
         assert_eq!(column(4, true), "⎧⎰⎱⎩");
         assert_eq!(column(5, true), "⎧⎪⎨⎪⎩");
+    }
+
+    #[test]
+    fn plain_values_preserve_net_rows_without_building_a_character_grid() {
+        let text = "  x²  \n\n y\t\n";
+        let expected = "  x²\n\n y";
+        for value in [
+            M2Value::Net(text.into()),
+            M2Value::Tex {
+                source: "\\begin{tabular}...".into(),
+                fallback: text.into(),
+            },
+            M2Value::Markup {
+                html: String::new(),
+                fallback: text.into(),
+                example_width: 77,
+            },
+            M2Value::Token {
+                text: text.into(),
+                role: Role::String,
+            },
+        ] {
+            assert_eq!(value.render(), expected);
+        }
     }
 
     #[test]
@@ -998,27 +1068,52 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     }
 
     #[test]
+    fn documentation_links_carry_the_key_help_is_asked_for() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        let response = backend
+            .evaluate("help ancestors", None)
+            .expect("read real documentation");
+        let Some(M2Value::Markup { html, .. }) = response.value else {
+            panic!("documentation did not return markup");
+        };
+        assert!(
+            html.contains(r#"href="&quot;ancestor(Type,Type)&quot;""#),
+            "{html}"
+        );
+        assert!(!html.contains(".html\""), "{html}");
+    }
+
+    #[test]
     fn text_documentation_examples_render_as_native_session_blocks() {
         let mut backend = M2Backend::spawn().expect("spawn M2");
         let response = backend
             .evaluate("help det", None)
             .expect("read real documentation");
-        let Some(M2Value::Markup { html, .. }) = response.value else {
+        let Some(M2Value::Markup {
+            html,
+            example_width,
+            ..
+        }) = response.value
+        else {
             panic!("documentation did not return markup");
         };
         for width in [28, 60, 100] {
             let context = crate::ui::render::RenderContext::new(width, 0);
-            let lines =
-                crate::ui::render::markup::lines(&html, &context).expect("render documentation");
+            let lines = crate::ui::render::markup::lines(&html, example_width, &context)
+                .expect("render documentation");
             let text = lines
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join("\n");
             assert!(text.contains("Description"), "{text}");
-            assert!(text.contains("o1"), "{text}");
-            assert!(text.contains("o5"), "{text}");
+            let unwrapped: String = text.split_whitespace().collect();
+            assert!(
+                unwrapped.contains("genericMatrix(R,2,2)"),
+                "the examples are drawn: {text}"
+            );
             assert!(!text.contains("i1 :"), "{text}");
+            assert!(text.contains("o1"), "{text}");
             assert!(!text.contains("o1 ="), "{text}");
             assert!(
                 lines.iter().all(|line| line.width() <= usize::from(width)),

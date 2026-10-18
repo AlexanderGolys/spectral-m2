@@ -4,426 +4,79 @@ name = "tokyo night"
 dark = ["night", "storm", "moon"]
 light = ["day"]
 
-[colors.bg.dark]
-night = "#1a1b26"
-storm = "#24283b"
-moon = "#222436"
-
-[colors.bg.light]
-day = "#e1e2e7"
-
-[colors.bg_dark.dark]
-night = "#16161e"
-storm = "#1f2335"
-moon = "#1e2030"
-
-[colors.bg_dark.light]
-day = "#d0d5e3"
-
-[colors.bg_dark1.dark]
-night = "#0c0e14"
-storm = "#1b1e2d"
-moon = "#191b29"
-
-[colors.bg_dark1.light]
-day = "#c1c9df"
-
-[colors.bg_float.dark]
-night = "#16161e"
-storm = "#1f2335"
-moon = "#1e2030"
-
-[colors.bg_float.light]
-day = "#d0d5e3"
-
-[colors.bg_highlight.dark]
-night = "#292e42"
-storm = "#292e42"
-moon = "#2f334d"
-
-[colors.bg_highlight.light]
-day = "#c4c8da"
-
-[colors.bg_popup.dark]
-night = "#16161e"
-storm = "#1f2335"
-moon = "#1e2030"
-
-[colors.bg_popup.light]
-day = "#d0d5e3"
-
-[colors.bg_search.dark]
-night = "#3d59a1"
-storm = "#3d59a1"
-moon = "#3e68d7"
-
-[colors.bg_search.light]
-day = "#7890dd"
-
-[colors.bg_sidebar.dark]
-night = "#16161e"
-storm = "#1f2335"
-moon = "#1e2030"
-
-[colors.bg_sidebar.light]
-day = "#d0d5e3"
-
-[colors.bg_statusline.dark]
-night = "#16161e"
-storm = "#1f2335"
-moon = "#1e2030"
-
-[colors.bg_statusline.light]
-day = "#d0d5e3"
-
-[colors.bg_visual.dark]
-night = "#283457"
-storm = "#2e3c64"
-moon = "#2d3f76"
-
-[colors.bg_visual.light]
-day = "#b7c1e3"
-
-[colors.black.dark]
-night = "#15161e"
-storm = "#1d202f"
-moon = "#1b1d2b"
-
-[colors.black.light]
-day = "#b4b5b9"
-
-[colors.blue.dark]
-night = "#7aa2f7"
-storm = "#7aa2f7"
-moon = "#82aaff"
-
-[colors.blue.light]
-day = "#2e7de9"
-
-[colors.blue0.dark]
-night = "#3d59a1"
-storm = "#3d59a1"
-moon = "#3e68d7"
-
-[colors.blue0.light]
-day = "#7890dd"
-
-[colors.blue1.dark]
-night = "#2ac3de"
-storm = "#2ac3de"
-moon = "#65bcff"
-
-[colors.blue1.light]
-day = "#188092"
-
-[colors.blue2.dark]
-night = "#0db9d7"
-storm = "#0db9d7"
-moon = "#0db9d7"
-
-[colors.blue2.light]
-day = "#07879d"
-
-[colors.blue5.dark]
-night = "#89ddff"
-storm = "#89ddff"
-moon = "#89ddff"
-
-[colors.blue5.light]
-day = "#006a83"
-
-[colors.blue6.dark]
-night = "#b4f9f8"
-storm = "#b4f9f8"
-moon = "#b4f9f8"
-
-[colors.blue6.light]
-day = "#2e5857"
-
-[colors.blue7.dark]
-night = "#394b70"
-storm = "#394b70"
-moon = "#394b70"
-
-[colors.blue7.light]
-day = "#92a6d5"
-
-[colors.border.dark]
-night = "#15161e"
-storm = "#1d202f"
-moon = "#1b1d2b"
-
-[colors.border.light]
-day = "#b4b5b9"
-
-[colors.border_highlight.dark]
-night = "#27a1b9"
-storm = "#29a4bd"
-moon = "#589ed7"
-
-[colors.border_highlight.light]
-day = "#4094a3"
-
-[colors.comment.dark]
-night = "#565f89"
-storm = "#565f89"
-moon = "#636da6"
-
-[colors.comment.light]
-day = "#848cb5"
-
-[colors.cyan.dark]
-night = "#7dcfff"
-storm = "#7dcfff"
-moon = "#86e1fc"
-
-[colors.cyan.light]
-day = "#007197"
-
-[colors.dark3.dark]
-night = "#545c7e"
-storm = "#545c7e"
-moon = "#545c7e"
-
-[colors.dark3.light]
-day = "#8990b3"
-
-[colors.dark5.dark]
-night = "#737aa2"
-storm = "#737aa2"
-moon = "#737aa2"
-
-[colors.dark5.light]
-day = "#68709a"
-
-[colors.error.dark]
-night = "#db4b4b"
-storm = "#db4b4b"
-moon = "#c53b53"
-
-[colors.error.light]
-day = "#c64343"
-
-[colors.fg.dark]
-night = "#c0caf5"
-storm = "#c0caf5"
-moon = "#c8d3f5"
-
-[colors.fg.light]
-day = "#3760bf"
-
-[colors.fg_dark.dark]
-night = "#a9b1d6"
-storm = "#a9b1d6"
-moon = "#828bb8"
-
-[colors.fg_dark.light]
-day = "#6172b0"
-
-[colors.fg_float.dark]
-night = "#c0caf5"
-storm = "#c0caf5"
-moon = "#c8d3f5"
-
-[colors.fg_float.light]
-day = "#3760bf"
-
-[colors.fg_gutter.dark]
-night = "#3b4261"
-storm = "#3b4261"
-moon = "#3b4261"
-
-[colors.fg_gutter.light]
-day = "#a8aecb"
-
-[colors.fg_sidebar.dark]
-night = "#a9b1d6"
-storm = "#a9b1d6"
-moon = "#828bb8"
-
-[colors.fg_sidebar.light]
-day = "#6172b0"
-
-[colors.green.dark]
-night = "#9ece6a"
-storm = "#9ece6a"
-moon = "#c3e88d"
-
-[colors.green.light]
-day = "#587539"
-
-[colors.green1.dark]
-night = "#73daca"
-storm = "#73daca"
-moon = "#4fd6be"
-
-[colors.green1.light]
-day = "#387068"
-
-[colors.green2.dark]
-night = "#41a6b5"
-storm = "#41a6b5"
-moon = "#41a6b5"
-
-[colors.green2.light]
-day = "#38919f"
-
-[colors.hint.dark]
-night = "#1abc9c"
-storm = "#1abc9c"
-moon = "#4fd6be"
-
-[colors.hint.light]
-day = "#118c74"
-
-[colors.info.dark]
-night = "#0db9d7"
-storm = "#0db9d7"
-moon = "#0db9d7"
-
-[colors.info.light]
-day = "#07879d"
-
-[colors.magenta.dark]
-night = "#bb9af7"
-storm = "#bb9af7"
-moon = "#c099ff"
-
-[colors.magenta.light]
-day = "#9854f1"
-
-[colors.magenta2.dark]
-night = "#ff007c"
-storm = "#ff007c"
-moon = "#ff007c"
-
-[colors.magenta2.light]
-day = "#d20065"
-
-[colors.orange.dark]
-night = "#ff9e64"
-storm = "#ff9e64"
-moon = "#ff966c"
-
-[colors.orange.light]
-day = "#b15c00"
-
-[colors.purple.dark]
-night = "#9d7cd8"
-storm = "#9d7cd8"
-moon = "#fca7ea"
-
-[colors.purple.light]
-day = "#7847bd"
-
-[colors.red.dark]
-night = "#f7768e"
-storm = "#f7768e"
-moon = "#ff757f"
-
-[colors.red.light]
-day = "#f52a65"
-
-[colors.red1.dark]
-night = "#db4b4b"
-storm = "#db4b4b"
-moon = "#c53b53"
-
-[colors.red1.light]
-day = "#c64343"
-
-[colors.selection.dark]
-night = "#394b70"
-storm = "#394b70"
-moon = "#394b70"
-
-[colors.selection.light]
-day = "#b7c1e3"
-
-[colors.statusline_canvas.dark]
-night = "#0c0e14"
-storm = "#1b1e2d"
-moon = "#191b29"
-
-[colors.statusline_canvas.light]
-day = "#d0d5e3"
-
-[colors.teal.dark]
-night = "#1abc9c"
-storm = "#1abc9c"
-moon = "#4fd6be"
-
-[colors.teal.light]
-day = "#118c74"
-
-[colors.terminal_black.dark]
-night = "#414868"
-storm = "#414868"
-moon = "#444a73"
-
-[colors.terminal_black.light]
-day = "#a1a6c5"
-
-[colors.todo.dark]
-night = "#7aa2f7"
-storm = "#7aa2f7"
-moon = "#82aaff"
-
-[colors.todo.light]
-day = "#2e7de9"
-
-[colors.warning.dark]
-night = "#e0af68"
-storm = "#e0af68"
-moon = "#ffc777"
-
-[colors.warning.light]
-day = "#8c6c3e"
-
-[colors.yellow.dark]
-night = "#e0af68"
-storm = "#e0af68"
-moon = "#ffc777"
-
-[colors.yellow.light]
-day = "#8c6c3e"
+[colors.red]
+dark = { night = { base = "#f7768e", dark = "#db4b4b" }, storm = { base = "#f7768e", dark = "#db4b4b" }, moon = { base = "#ff757f", dark = "#c53b53" } }
+light = { base = "#f52a65", dark = "#c64343" }
+
+[colors.green]
+dark = { night = { base = "#9ece6a", light = "#73daca", dark = "#41a6b5" }, storm = { base = "#9ece6a", light = "#73daca", dark = "#41a6b5" }, moon = { base = "#c3e88d", dark = "#41a6b5" } }
+light = { base = "#587539", light = "#38919f", dark = "#387068" }
+
+[colors.yellow]
+dark = { night = "#e0af68", storm = "#e0af68", moon = "#ffc777" }
+light = "#8c6c3e"
+
+[colors.blue]
+dark = { night = { base = "#7aa2f7", light = "#b4f9f8", dark = "#394b70" }, storm = { base = "#7aa2f7", light = "#b4f9f8", dark = "#394b70" }, moon = { base = "#82aaff", light = "#b4f9f8", dark = "#394b70" } }
+light = { base = "#2e7de9", light = "#92a6d5", dark = "#2e5857" }
+
+[colors.purple]
+dark = { night = "#9d7cd8", storm = "#9d7cd8", moon = "#fca7ea" }
+light = "#7847bd"
+
+[colors.aqua]
+dark = { night = "#7dcfff", storm = "#7dcfff", moon = "#86e1fc" }
+light = "#007197"
+
+[colors.orange]
+dark = { night = "#ff9e64", storm = "#ff9e64", moon = "#ff966c" }
+light = "#b15c00"
+
+[colors.gray]
+dark = { night = "#565f89", storm = "#565f89", moon = "#636da6" }
+light = "#848cb5"
+
+[colors.fg]
+dark = { night = ["#c0caf5", "#a9b1d6", "#565f89"], storm = ["#c0caf5", "#a9b1d6", "#565f89"], moon = ["#c8d3f5", "#828bb8", "#636da6"] }
+light = ["#3760bf", "#6172b0", "#848cb5"]
+
+[colors.bg]
+dark = { night = ["#1a1b26", "#0c0e14", "#16161e", "#292e42", "#283457"], storm = ["#24283b", "#1b1e2d", "#1f2335", "#292e42", "#2e3c64"], moon = ["#222436", "#191b29", "#1e2030", "#2f334d", "#2d3f76"] }
+light = ["#e1e2e7", "#c1c9df", "#d0d5e3", "#c4c8da", "#b7c1e3"]
 
 [base]
-Canvas = { bg = "bg" }
-Code = { bg = "bg_dark1" }
-Raised = { bg = "bg_dark" }
-Pending = { bg = "bg_highlight" }
-Selection = { bg = "selection" }
-Focus = { bg = "bg_visual" }
-
-Text = { fg = "fg" }
-Muted = { fg = "fg_dark" }
-Faint = { fg = "terminal_black" }
-
+Canvas = { bg = "bg0" }
+Code = { bg = "bg1" }
+Raised = { bg = "bg2" }
+Pending = { bg = "bg2" }
+Selection = { bg = "bg4" }
+Focus = { bg = "bg4" }
+Text = { fg = "fg0" }
+Muted = { fg = "gray" }
+Faint = { fg = "fg4" }
 Keyword = { fg = "purple", italic = true }
 Function = { fg = "blue" }
-Type = { fg = "blue1" }
+Type = { fg = "aqua_dark" }
 String = { fg = "green" }
 Number = { fg = "orange" }
-Operator = { fg = "blue5" }
-Symbol = { fg = "blue1" }
+Operator = { fg = "aqua" }
+Symbol = { fg = "aqua_dark" }
 Parameter = { fg = "yellow" }
-Property = { fg = "green1" }
+Property = { fg = "aqua_dark" }
+EnumVariant = { fg = "green_dark" }
+Macro = { fg = "green_dark" }
+Attribute = { fg = "purple_light" }
 Builtin = { fg = "red" }
-Regex = { fg = "fg", sp = "fg", underline = true }
-EnumVariant = { fg = "teal" }
-Attribute = { fg = "magenta" }
-Macro = { fg = "green2" }
-
-Accent = { fg = "cyan" }
-Error = { fg = "error" }
-Warning = { fg = "warning" }
+Regex = { fg = "fg0", sp = "fg0", underline = true }
+Accent = { fg = "aqua" }
+Error = { fg = "red_dark" }
+Warning = { fg = "yellow" }
 Info = { fg = "blue" }
-Hint = { fg = "cyan" }
+Hint = { fg = "aqua" }
 
 [overrides]
-Comment = { fg = "comment", italic = true }
-Constant = { fg = "blue1" }
-Delimiter = { fg = "blue5" }
-CompiledFunction = { fg = "blue1" }
-Documentation = { fg = "fg", sp = "fg", underline = true }
+Comment = { fg = "fg4", italic = true }
+Constant = { fg = "aqua_dark" }
+Delimiter = { fg = "aqua" }
+CompiledFunction = { fg = "aqua_dark" }
+Documentation = { fg = "blue_light" }

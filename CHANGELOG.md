@@ -7,27 +7,34 @@ All notable changes to Spectral M2 are documented here.
 ### Added
 
 - Added a *math fonts* setting, off by default: rings are drawn by the name they have in code, `ZZ`, and on as blackboard glyphs, `ℤ`; `\mathcal` and `\mathfrak` capitals are drawn as script and fraktur glyphs, and `\mathbb` covers every capital.
-- The latest three outputs are labelled `oo`, `ooo` and `oooo`, as Macaulay2 recalls them, and cell numbers are laid out for three digits so a number growing a digit moves nothing.
+- Cell numbers are laid out for three digits so a number growing a digit moves nothing.
 - Added `/values` (`Alt+V`) and `/stdout` (`Alt+P`) views beside `/code`, `/output`, and `/ast`.
-- Added completion shown after the cursor and taken with `Tab`, which cycles through the candidates when pressed again (`Shift+Tab` backwards), while `Alt+Tab` inserts a tab: names Macaulay2 knows, reported by Macaulay2 as it starts and after each cell; file names inside strings; command names; and the file `/save` and `/load` take.
+- Added completion shown as a muted hint after the cursor and taken with `Tab`, which cycles through the candidates when pressed again (`Shift+Tab` backwards), while `Alt+Tab` inserts a tab: names Macaulay2 knows, reported by Macaulay2 as it starts and after each cell; file names inside strings; command names; and the file `/save` and `/load` take.
 - Added undo (`Ctrl+Z`) and redo (`Ctrl+Shift+Z`) for the input, and `Ctrl+Backspace` and `Ctrl+Delete` to delete what `Ctrl+Left` and `Ctrl+Right` move over.
+- Added a *compute examples* setting, off by default: a time limit for each documentation example, which is then run again in a Macaulay2 of its own so its value is drawn from its structure, as a live value is.
+- Links in documentation are underlined under the pointer and run `help` for their page on Ctrl+click, without disturbing the input.
 - History is shared by every running session: input submitted in one can be recalled in the others without restarting them.
 - Added a *complete after* setting for how much of a name is typed before it completes.
 - Added `/save [file]` and `/load <file>` to write the session's code to an `.m2` file and run one in a fresh session, and `/resume` to run the code of the previous session, which is kept on every exit and restart and by a bare `/save`.
 
 ### Fixed
 
+- After an evaluation error, the failed cell and unevaluated code have a red background, while unevaluated code is muted without syntax colours. Error boxes put the error prefix in the title and draw the message in light red; queued and rejected markers are configured with the other UI glyphs.
+- Centralized interface glyphs and the pending spinner in UI configuration, with simple symbols for limited terminals.
+- Documentation headings use the light blue, light yellow, and aqua highlight colours; example code blocks share the transcript width and wrap in narrow panes. Folded outputs show a three-row separator and label, recent cell numbers are darker, and the outer margin follows each adjacent row.
+- A documentation page's title is ruled off beneath, with its name in bold and its brief in italics; its usage, inputs and outputs read as headers rather than bullets; and the location of its source reads as text. Inline code has no background and links no underline of their own. Gruvbox functions are no longer bold.
+- Documentation examples are drawn without cell numbers, on the page's own surface, with values M2 wrapped joined back into one and a blank line kept after the last.
 - Text-package markup retains heading levels, emphasis, links, subscripts, nested lists and table layout. Documentation examples use the session's input, printed-text and output blocks, including multiline values and type annotations.
 - Preserved normal Macaulay2 initialization and user package paths, so packages installed in the home directory can be found as in a regular M2 shell.
 - The syntax tree view keeps one column clear on its left, sets its source between two rules with a margin inside each, and lists an opening bracket before what it encloses and the closing one after, in the order of the source. Field names and code fragments are told apart in Everforest.
 - Printed text is drawn in a lighter, less saturated shade of the string colour, in every theme.
-- `oN` output labels are no longer bold; `oo`, `ooo` and `oooo` stay bold, and the numbers of the cells behind the latest three outputs are drawn in the colour of their labels.
+- Output labels keep their `oN` numbers, with the latest three in bold, and the numbers of the cells behind the latest three outputs are drawn in the colour of their labels.
 - Modules and sheaves whose matrices M2 pads with `\vphantom` are drawn from their structure instead of as raw TeX; names in typewriter face are coloured as code names them.
-- Documentation markup such as `DIV` is drawn with titled headings of three depths, underlined links, muted `--` descriptions, bullet markers and code coloured as typed, instead of one flat colour.
+- Documentation markup such as `DIV` is drawn with titled headings of three depths, links underlined on hover, muted `--` descriptions, bullet markers and code coloured as typed, instead of one flat colour.
 - A cell still evaluating shows a turning spinner and keeps the bottom margin it has once its outputs arrive, so the block no longer changes height on completion.
 - Operators, keywords, commands and scripted functors are coloured as what they are when returned: `symbol ^` as an operator, `symbol if` as a keyword, `Ext` as a function. Values built with `^^`, `**`, `@@`, `|`, `=>` and `==>` keep their operator colour instead of falling back to plain text.
 - The whole screen keeps one column clear on its left, and the hint of an empty input starts at the cursor rather than a cell after it.
-- `oo`, `ooo` and `oooo` name the latest lines that evaluated to something, muted ones included and null ones not, so a muted line no longer leaves an older output wearing the label and a null line takes no place in the rotation.
+- Recent-output highlighting follows the latest lines that evaluated to something, muted ones included and null ones not.
 - A resumed or loaded session runs the cells that were entered together as one submission again, not all at once and not cell by cell.
 - `Ctrl+Left` and `Ctrl+Right` move by a word (with `Shift`, select by one), `Ctrl+Home` and `Ctrl+End` jump to the ends of the input, and `Ctrl+J`, the newline character some terminals send for `Shift+Enter`, inserts a newline. Pane focus and resizing moved to `Alt+Left`, `Alt+Right` and with `Shift`.
 - Cell numbers, output labels, borders and separators sit one cell further left, a label's last character always on its border.

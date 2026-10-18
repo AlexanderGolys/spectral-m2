@@ -1,5 +1,6 @@
 //! The application's session, its panes, and the terminal event loop.
 
+mod examples;
 mod panes;
 pub mod session;
 
@@ -210,7 +211,9 @@ impl App {
                 true
             }
             Reaction::Post(source) => {
-                let update = workspace.session.submit(source, &mut workspace.highlighter);
+                let update = workspace
+                    .session
+                    .submit(&source, &mut workspace.highlighter);
                 let running = workspace.editor.post(update);
                 self.follow_new_input();
                 running
@@ -354,7 +357,6 @@ impl App {
             UI.screen_margin.min(screen.width),
             screen.height,
         );
-        workspace.editor.draw_margin(frame, margin);
         let mut area = Rect::new(
             margin.right(),
             screen.y,
@@ -408,6 +410,7 @@ impl App {
                 .editor
                 .draw_shared_status(frame, status, beside.view, active == Panes::SPLIT);
         }
+        workspace.editor.draw_margin(frame, margin);
     }
 
     /// Bring every view to its newest content, as the shell follows its own feed.
@@ -425,6 +428,8 @@ impl App {
     fn poll(&mut self) -> (bool, bool) {
         let mut dirty = false;
         let mut running = true;
+        let timeout = self.workspace.editor.example_timeout();
+        self.workspace.session.set_example_timeout(timeout);
         for update in self.workspace.session.poll() {
             dirty = true;
             running &= self.workspace.editor.apply(update);

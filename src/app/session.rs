@@ -1,21 +1,21 @@
 //! One independently evaluated Macaulay2 workspace.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::mem;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use std::time::Duration;
 
 use m2_syn::{NativeCellParser, NativeCellState, PrettyNode, PrettyTree};
 
-use crate::backend::transcript::{captured_error, captured_output};
-#[cfg(test)]
-use crate::backend::M2Value;
-use crate::backend::{M2Backend, M2Response};
+use super::examples::{ExamplePage, ExampleRunner};
+use crate::backend::transcript::captured_error;
+use crate::backend::{M2Backend, M2Response, M2Value};
 use crate::code::highlight::Highlighter;
 use crate::errors::Result;
-use crate::ui::block::Block;
-use crate::ui::cell::{CellState, OutputBlock, TextBlock, WarningBlock};
+use crate::ui::cell::{response_blocks, CellState, TextBlock};
 use crate::ui::controller::EditorUpdate;
+use crate::ui::render::markup;
 
 /// One successfully evaluated input cell retained by its workspace.
 #[derive(Clone)]
@@ -85,6 +85,12 @@ pub struct Session {
     restarting: bool,
     /// Code to run in the fresh session once the restart it waits for succeeds.
     after_restart: Option<String>,
+    /// Documentation examples computed again, apart from the session.
+    examples: ExampleRunner,
+    /// How long each example may take; zero computes none.
+    example_timeout: Duration,
+    /// The pages whose examples were asked for, so each is computed once.
+    computed_pages: HashSet<u64>,
 }
 
 impl Session {
@@ -107,6 +113,41 @@ impl Session {
             evaluations: VecDeque::new(),
             restarting: false,
             after_restart: None,
+            examples: ExampleRunner::new(),
+            example_timeout: Duration::ZERO,
+            computed_pages: HashSet::new(),
+        }
+    }
+
+    /// How long each documentation example may take to be computed again;
+    /// zero computes none.
+    pub fn set_example_timeout(&mut self, timeout: Duration) {
+        self.example_timeout = timeout;
+    }
+
+    /// Compute the examples of the documentation `value` shows, once per page.
+    fn compute_examples(&mut self, value: Option<&M2Value>) {
+        let Some(M2Value::Markup {
+            html,
+            example_width,
+            ..
+        }) = value
+        else {
+            return;
+        };
+        let page = markup::page(html);
+        if self.example_timeout.is_zero() || !self.computed_pages.insert(page) {
+            return;
+        }
+        let examples = markup::examples(html, *example_width);
+        if !examples.is_empty() {
+            let package = markup::source_package(html);
+            let page = ExamplePage {
+                page,
+                package,
+                examples,
+            };
+            self.examples.run(page, self.example_timeout);
         }
     }
 
@@ -411,6 +452,13 @@ impl Session {
                 WorkerEvent::Restarted(result) => updates.push(self.resolve_restart(result)),
             }
         }
+        let computed = self.examples.answered();
+        if !computed.is_empty() {
+            for example in computed {
+                markup::remember_example(example.page, example.number, example.response);
+            }
+            updates.push(EditorUpdate::ExamplesComputed);
+        }
         updates
     }
 
@@ -456,11 +504,8 @@ impl Session {
             Ok(response) if !response.is_error => {
                 self.in_debugger = response.depth > 1;
                 self.next_input_number = number + 1;
-                let state = match (response.has_value, response.value.is_some()) {
-                    (true, true) => CellState::Value,
-                    (true, false) => CellState::Muted,
-                    _ => CellState::Null,
-                };
+                let state = CellState::of(&response);
+                self.compute_examples(response.value.as_ref());
                 self.committed.push(CommittedCell {
                     number,
                     state,
@@ -473,7 +518,8 @@ impl Session {
                     .evaluations
                     .front()
                     .is_some_and(|evaluation| index + 1 == evaluation.cells.len());
-                let (outputs, printed, value) = response_blocks(&response, &cell.code, number);
+                let (outputs, printed, value) = response_blocks(&response, &cell.code);
+                let value = value.map(|value| value.numbered(number));
                 let resolved = EditorUpdate::CellSucceeded {
                     id,
                     index,
@@ -653,35 +699,6 @@ fn worker(mut backend: M2Backend, requests: Receiver<WorkerRequest>, events: Sen
     }
 }
 
-fn response_blocks(
-    response: &M2Response,
-    code: &str,
-    number: u32,
-) -> (Vec<Box<dyn Block>>, Option<TextBlock>, Option<OutputBlock>) {
-    let value = response.rendered_value();
-    let output = captured_output(
-        &response.transcript,
-        code,
-        value.as_deref(),
-        response.type_info.as_deref(),
-    );
-    let warnings: Vec<Box<dyn Block>> = output
-        .warnings
-        .into_iter()
-        .map(|text| Box::new(WarningBlock { text }) as Box<dyn Block>)
-        .collect();
-    let printed = (!output.printed.is_empty()).then(|| TextBlock::printed(output.printed));
-    let value = match (response.value.clone(), output.value, response.has_value) {
-        (Some(value), Some(rendered), true) => Some(
-            OutputBlock::rendered(value, rendered.type_info)
-                .annotated(response.type_parts.clone())
-                .numbered(number),
-        ),
-        _ => None,
-    };
-    (warnings, printed, value)
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
@@ -718,7 +735,7 @@ mod tests {
                 depth: 1,
                 names: Vec::new(),
             };
-            let (outputs, printed, value) = response_blocks(&response, "x", 1);
+            let (outputs, printed, value) = response_blocks(&response, "x");
             assert!(outputs.is_empty());
             assert!(printed.is_none());
             assert!(value.is_none());
@@ -891,29 +908,6 @@ mod tests {
         assert_eq!(session.next_input_number(), 1);
         assert!(session.committed().is_empty());
         assert!(!session.busy());
-    }
-
-    #[test]
-    fn debug_post_runs_as_value_muted_and_null_cells() {
-        let backend = M2Backend::spawn().expect("spawn M2");
-        let mut session = Session::new(backend);
-        let mut highlighter = SyntaxHighlighter::new();
-
-        assert!(matches!(
-            session.submit(crate::ui::DEBUG_POST, &mut highlighter),
-            EditorUpdate::Pending { .. }
-        ));
-        updates_until_idle(&mut session);
-        let states = session
-            .committed()
-            .iter()
-            .map(|cell| cell.state)
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            states,
-            [CellState::Value, CellState::Muted, CellState::Null]
-        );
     }
 
     #[test]

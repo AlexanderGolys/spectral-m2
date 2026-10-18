@@ -4,161 +4,79 @@ name = "rosé pine"
 dark = ["main", "moon"]
 light = ["dawn"]
 
-[colors._nc.dark]
-main = "#16141f"
-moon = "#1f1d30"
+[colors.red]
+dark = "#eb6f92"
+light = "#b4637a"
 
-[colors._nc.light]
-dawn = "#f8f0e7"
+[colors.green]
+dark = "#95b1ac"
+light = "#6d8f89"
 
-[colors.base.dark]
-main = "#191724"
-moon = "#232136"
+[colors.yellow]
+dark = "#f6c177"
+light = "#ea9d34"
 
-[colors.base.light]
-dawn = "#faf4ed"
+[colors.blue]
+dark = { main = "#31748f", moon = "#3e8fb0" }
+light = "#286983"
 
-[colors.foam.dark]
-main = "#9ccfd8"
-moon = "#9ccfd8"
+[colors.purple]
+dark = "#c4a7e7"
+light = "#907aa9"
 
-[colors.foam.light]
-dawn = "#56949f"
+[colors.aqua]
+dark = "#9ccfd8"
+light = "#56949f"
 
-[colors.gold.dark]
-main = "#f6c177"
-moon = "#f6c177"
+[colors.orange]
+dark = { main = "#ebbcba", moon = "#ea9a97" }
+light = "#d7827e"
 
-[colors.gold.light]
-dawn = "#ea9d34"
+[colors.gray]
+dark = "#6e6a86"
+light = "#9893a5"
 
-[colors.highlight_high.dark]
-main = "#524f67"
-moon = "#56526e"
+[colors.fg]
+dark = ["#e0def4", "#908caa", "#6e6a86"]
+light = ["#464261", "#797593", "#9893a5"]
 
-[colors.highlight_high.light]
-dawn = "#cecacd"
-
-[colors.highlight_low.dark]
-main = "#21202e"
-moon = "#2a283e"
-
-[colors.highlight_low.light]
-dawn = "#f4ede8"
-
-[colors.highlight_med.dark]
-main = "#403d52"
-moon = "#44415a"
-
-[colors.highlight_med.light]
-dawn = "#dfdad9"
-
-[colors.iris.dark]
-main = "#c4a7e7"
-moon = "#c4a7e7"
-
-[colors.iris.light]
-dawn = "#907aa9"
-
-[colors.leaf.dark]
-main = "#95b1ac"
-moon = "#95b1ac"
-
-[colors.leaf.light]
-dawn = "#6d8f89"
-
-[colors.love.dark]
-main = "#eb6f92"
-moon = "#eb6f92"
-
-[colors.love.light]
-dawn = "#b4637a"
-
-[colors.muted.dark]
-main = "#6e6a86"
-moon = "#6e6a86"
-
-[colors.muted.light]
-dawn = "#9893a5"
-
-[colors.overlay.dark]
-main = "#26233a"
-moon = "#393552"
-
-[colors.overlay.light]
-dawn = "#f2e9e1"
-
-[colors.pine.dark]
-main = "#31748f"
-moon = "#3e8fb0"
-
-[colors.pine.light]
-dawn = "#286983"
-
-[colors.rose.dark]
-main = "#ebbcba"
-moon = "#ea9a97"
-
-[colors.rose.light]
-dawn = "#d7827e"
-
-[colors.subtle.dark]
-main = "#908caa"
-moon = "#908caa"
-
-[colors.subtle.light]
-dawn = "#797593"
-
-[colors.surface.dark]
-main = "#1f1d2e"
-moon = "#2a273f"
-
-[colors.surface.light]
-dawn = "#fffaf3"
-
-[colors.text.dark]
-main = "#e0def4"
-moon = "#e0def4"
-
-[colors.text.light]
-dawn = "#464261"
+[colors.bg]
+dark = { main = ["#191724", "#16141f", "#1f1d2e", "#26233a", "#21202e"], moon = ["#232136", "#1f1d30", "#2a273f", "#393552", "#2a283e"] }
+light = ["#faf4ed", "#f8f0e7", "#fffaf3", "#f2e9e1", "#f4ede8"]
 
 [base]
-Canvas = { bg = "base" }
-Code = { bg = "_nc" }
-Raised = { bg = "surface" }
-Pending = { bg = "surface" }
-Selection = { bg = "highlight_med" }
-Focus = { bg = "highlight_low" }
-
-Text = { fg = "text" }
-Muted = { fg = "subtle" }
-Faint = { fg = "highlight_low" }
-
-Keyword = { fg = "pine" }
-Function = { fg = "rose" }
-Type = { fg = "foam" }
-String = { fg = "gold" }
-Number = { fg = "gold" }
-Operator = { fg = "subtle" }
-Symbol = { fg = "iris", italic = true }
-Parameter = { fg = "iris", italic = true }
-Property = { fg = "foam", italic = true }
-Builtin = { fg = "love", bold = true, italic = true }
-Regex = { fg = "iris", sp = "iris", underline = true }
-EnumVariant = { fg = "leaf" }
-Attribute = { fg = "gold", italic = true }
-Macro = { fg = "rose", italic = true }
-
-Accent = { fg = "foam" }
-Error = { fg = "love" }
-Warning = { fg = "gold" }
-Info = { fg = "foam" }
-Hint = { fg = "pine" }
+Canvas = { bg = "bg0" }
+Code = { bg = "bg1" }
+Raised = { bg = "bg2" }
+Pending = { bg = "bg2" }
+Selection = { bg = "bg3" }
+Focus = { bg = "bg4" }
+Text = { fg = "fg0" }
+Muted = { fg = "gray" }
+Faint = { fg = "fg4" }
+Keyword = { fg = "blue" }
+Function = { fg = "orange" }
+Type = { fg = "aqua" }
+String = { fg = "yellow" }
+Number = { fg = "yellow" }
+Operator = { fg = "fg3" }
+Symbol = { fg = "purple", italic = true }
+Parameter = { fg = "purple", italic = true }
+Property = { fg = "aqua", italic = true }
+EnumVariant = { fg = "green" }
+Macro = { fg = "orange", italic = true }
+Attribute = { fg = "yellow", italic = true }
+Builtin = { fg = "red", bold = true, italic = true }
+Regex = { fg = "purple", sp = "purple", underline = true }
+Accent = { fg = "aqua" }
+Error = { fg = "red" }
+Warning = { fg = "yellow" }
+Info = { fg = "aqua" }
+Hint = { fg = "blue" }
 
 [overrides]
-Boolean = { fg = "rose" }
-Variable = { fg = "text", italic = true }
-Installation = { fg = "foam" }
-Quote = { fg = "gold" }
-Documentation = { fg = "iris", sp = "iris", underline = true }
+Boolean = { fg = "orange" }
+Variable = { fg = "fg0", italic = true }
+Installation = { fg = "aqua" }
+Quote = { fg = "yellow" }
+Documentation = { fg = "blue_light" }

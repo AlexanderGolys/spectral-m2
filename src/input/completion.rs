@@ -12,8 +12,6 @@ pub struct Completion {
     /// Whether the chosen candidate has replaced the typed text, so `range`
     /// spans it.
     taken: bool,
-    /// Whether the suggestion is drawn as a muted hint rather than as text.
-    hinted: bool,
 }
 
 impl Completion {
@@ -30,20 +28,7 @@ impl Completion {
             candidates,
             chosen: 0,
             taken: false,
-            hinted: false,
         })
-    }
-
-    /// Draw the suggestion as a muted hint, as for a command, rather than as text.
-    pub fn hinted(self) -> Self {
-        Self {
-            hinted: true,
-            ..self
-        }
-    }
-
-    pub fn is_hint(&self) -> bool {
-        self.hinted
     }
 
     pub fn chosen(&self) -> &str {

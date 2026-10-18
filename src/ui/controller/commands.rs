@@ -21,7 +21,7 @@ use crate::ui::action::Action;
 use crate::ui::key::KeyEvent;
 
 /// Prefix that turns input text into a live command query.
-pub const PREFIX: &str = "$";
+pub const PREFIX: &str = "/";
 
 /// What a command's argument is, named as its usage shows it.
 #[discriminated_str(name)]
@@ -363,6 +363,10 @@ mod tests {
             Reaction::Restart
         ));
         assert!(matches!(editor.handle_action(Action::Quit), Reaction::Quit));
+        assert!(matches!(
+            editor.handle_action(Action::ToggleHighlightDebug),
+            Reaction::Continue
+        ));
     }
 
     #[test]

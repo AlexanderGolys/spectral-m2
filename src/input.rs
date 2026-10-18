@@ -33,9 +33,6 @@ use crate::ui::key::KeyEvent;
 use crate::ui::render::{Highlights, Prompt, RenderContext};
 use crate::ui::wrap::{HardWrap, TextLayout, WrapPolicy};
 
-/// The glyph marking the live prompt line.
-const PROMPT_GLYPH: &str = "❯";
-
 /// A text-editing operation owned and interpreted by the input field.
 #[discriminated_str(description)]
 #[non_exhaustive]
@@ -529,13 +526,17 @@ impl InputTextField {
 
     pub fn history_prev(&mut self) {
         if let Some(buffer) = self.history.prev(&self.text, self.cursor) {
-            self.edit(EditKind::Recalling, |field| field.load(buffer.text, buffer.cursor));
+            self.edit(EditKind::Recalling, |field| {
+                field.load(buffer.text, buffer.cursor)
+            });
         }
     }
 
     pub fn history_next(&mut self) {
         if let Some(buffer) = self.history.next(&self.text) {
-            self.edit(EditKind::Recalling, |field| field.load(buffer.text, buffer.cursor));
+            self.edit(EditKind::Recalling, |field| {
+                field.load(buffer.text, buffer.cursor)
+            });
         }
     }
 
@@ -1022,18 +1023,13 @@ impl InputCode {
         let ghost = self.offered().map(|completion| {
             let (row, _) = self.visual_cursor(width);
             let offset = self.field.cursor() - visual_lines[row].range.start;
-            (
-                row,
-                offset,
-                completion.ghost().to_string(),
-                completion.is_hint(),
-            )
+            (row, offset, completion.ghost().to_string())
         });
 
         let mut lines = Vec::new();
         for (index, visual_line) in visual_lines.iter().enumerate() {
             let marker = if index + 1 == visual_lines.len() {
-                PROMPT_GLYPH
+                UI.glyphs.prompt.current()
             } else {
                 ""
             };
@@ -1058,10 +1054,12 @@ impl InputCode {
             if let Some(selection) = selection.as_ref() {
                 line = apply_selection(line, visual_line.range.start, selection, theme.selection());
             }
-            if let Some((_, offset, ghost, hint)) = ghost.as_ref().filter(|(row, ..)| *row == index)
-            {
-                let style = if *hint { theme.hint_text() } else { base };
-                line = insert_span(line, *offset, Span::styled(ghost.clone(), style));
+            if let Some((_, offset, ghost)) = ghost.as_ref().filter(|(row, ..)| *row == index) {
+                line = insert_span(
+                    line,
+                    *offset,
+                    Span::styled(ghost.clone(), theme.hint_text()),
+                );
             }
             spans.extend(line);
             if index == 0 && text.is_empty() {
@@ -1145,7 +1143,7 @@ impl InputCode {
         if context.code_above {
             for x in area.x..area.right() {
                 buffer[(x, area.y)]
-                    .set_symbol("▀")
+                    .set_symbol(UI.glyphs.input_edge.current())
                     .set_style(groups.separator());
             }
         }
@@ -1401,7 +1399,11 @@ mod tests {
         assert_eq!(input.text(), "f = x + y");
         input.handle_key(KeyCode::Char('!').into());
         input.handle_key(KeyCode::Char('z') + Ctrl + Shift);
-        assert_eq!(input.text(), "f = x + y!", "a new edit drops what was undone");
+        assert_eq!(
+            input.text(),
+            "f = x + y!",
+            "a new edit drops what was undone"
+        );
     }
 
     #[test]
@@ -1555,9 +1557,15 @@ mod tests {
 
         let lines = input.highlighted_lines(&context, &mut highlighter, false, None);
         assert_eq!(lines.len(), 3);
-        assert!(!lines[0].spans[0].content.contains(PROMPT_GLYPH));
-        assert!(!lines[1].spans[0].content.contains(PROMPT_GLYPH));
-        assert!(lines[2].spans[0].content.contains(PROMPT_GLYPH));
+        assert!(!lines[0].spans[0]
+            .content
+            .contains(UI.glyphs.prompt.current()));
+        assert!(!lines[1].spans[0]
+            .content
+            .contains(UI.glyphs.prompt.current()));
+        assert!(lines[2].spans[0]
+            .content
+            .contains(UI.glyphs.prompt.current()));
     }
 
     #[test]
@@ -1573,7 +1581,10 @@ mod tests {
             .collect();
 
         let hint = rendered.find(&input.hint.to_string()).unwrap();
-        assert_eq!(rendered[..hint].chars().count(), usize::from(UI.prompt_width()));
+        assert_eq!(
+            rendered[..hint].chars().count(),
+            usize::from(UI.prompt_width())
+        );
     }
 
     #[test]
@@ -1633,7 +1644,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rest_of_a_completion_is_drawn_after_the_cursor_as_text() {
+    fn the_rest_of_a_completion_is_drawn_after_the_cursor_as_a_hint() {
         let mut input = InputCode::new_in_memory();
         input.field_mut().insert_str("f(ide)");
         input.field_mut().move_left();
@@ -1652,7 +1663,7 @@ mod tests {
             .iter()
             .find(|span| span.content == "al")
             .unwrap();
-        assert_eq!(ghost.style, Groups::default().code());
+        assert_eq!(ghost.style, Groups::default().hint_text());
 
         input.handle_key(KeyCode::Tab.into());
         assert_eq!(input.text(), "f(ideal)");
@@ -1668,7 +1679,7 @@ mod tests {
         input.field_mut().insert_str("$se");
         input.set_command_range(Some(0..3));
         let candidates = vec!["$settings".to_string()];
-        input.offer(Completion::new(input.text(), 0..3, candidates).map(Completion::hinted));
+        input.offer(Completion::new(input.text(), 0..3, candidates));
         let context = RenderContext::new(40, UI.prompt_width());
         let groups = Groups::default();
 

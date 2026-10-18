@@ -19,7 +19,7 @@ Use `Shift+Space`, `Shift+Enter`, or `Alt+Enter` when you want a newline regardl
 
 ## Pending and completed cells
 
-Submitted code moves into the feed immediately. As Macaulay2 answers, Spectral appends printed text, values, types, warnings, or errors; consecutive values share one border. Cell numbers remain session metadata but are not displayed until cells become focusable.
+Submitted code moves into the feed immediately. As Macaulay2 answers, Spectral appends printed text, values, types, warnings, or errors; consecutive values share one border. If a cell fails, its code and the unevaluated cells below it sit on a red background; the unevaluated code is muted without syntax highlighting. The error box puts “Error” in its title and shows the message in light red. Cell numbers remain session metadata but are not displayed until cells become focusable.
 
 Only one submission can evaluate in a workspace at a time. Trying to submit another while it is busy produces an input diagnostic and does not disturb the running evaluation.
 
@@ -31,6 +31,12 @@ I = ideal(x^2, x*y, y^2);
 degree I
 ```
 
+## Documentation
+
+Plain-text results such as `net help "arithmetic with complex maps"` use a bounded preview: at most 256 KiB of source text and 262,144 display cells per value. Larger previews retain their beginning and end with a truncation notice. Expanding a result keeps these limits; the full value remains available in Macaulay2.
+
+`help` pages are drawn in the feed: the title over a rule, its name apart from its brief; the usage, inputs and outputs as headers over their entries; and each example as the session draws code and values, without its numbers. A link to another page is underlined while the pointer is over it, and Ctrl+click runs `help` for that page beside what you are typing.
+
 ## History and navigation
 
 `Up` and `Down` move inside multiline input. At the first or last line they recall older or newer submissions. As in a shell's history search, the text before the cursor when you start browsing is a prefix: typing `R =` and pressing `Up` steps only through submissions beginning with `R =`, each distinct one once. Editing a recalled entry starts a new search from what the input then begins with. Stepping past the newest match restores what you had typed. History is shared by every running session: what one submits, the others recall the next time they start browsing. Commands chosen after typing `/` are recorded in the same history, under their whole name however much of it was typed; opening the full command picker with `Ctrl+/` does not add a history entry.
@@ -41,7 +47,7 @@ The usual editing keys are available for horizontal movement, `Ctrl` with the ar
 
 ## Completion
 
-As you type, the rest of a completion is drawn after the cursor like ordinary text. `Tab` takes it, and pressing `Tab` again cycles through the other completions rather than completing further; `Shift+Tab` cycles backwards. A name Macaulay2 already knows is not completed. `Tab` only completes; `Alt+Tab` inserts a tab. What completes depends on where the cursor is, as Macaulay2 reads the code before it:
+As you type, the rest of a completion is drawn after the cursor as a muted hint. `Tab` takes it, and pressing `Tab` again cycles through the other completions rather than completing further; `Shift+Tab` cycles backwards. A name Macaulay2 already knows is not completed. `Tab` only completes; `Alt+Tab` inserts a tab. What completes depends on where the cursor is, as Macaulay2 reads the code before it:
 
 - a name: every symbol Macaulay2 knows, the names its own terminal completes. Names the session bound come first, then shorter names before longer ones. Completion starts once the name is as long as the *complete after* setting (one character by default).
 - a string literal: a file or directory, so `load "ri` completes to `load "ring.m2`.

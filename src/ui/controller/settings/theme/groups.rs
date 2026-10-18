@@ -65,20 +65,24 @@ fn softened(style: Style, saturation: f32, lightening: f32) -> Style {
     // The same position between the darkest and brightest channel as before, which is
     // what keeps the hue where it was.
     let channel = |from: f32| {
-        let along = if chroma == 0.0 { 0.0 } else { (from - low) / chroma };
+        let along = if chroma == 0.0 {
+            0.0
+        } else {
+            (from - low) / chroma
+        };
         let byte = (floor + (value - floor) * along) * 255.0;
         byte.round().clamp(0.0, 255.0) as u8
     };
     style.fg(Color::Rgb(channel(r), channel(g), channel(b)))
 }
 
-/// `style` underlined in its own colour.
-fn underlined(style: Style) -> Style {
-    Style {
-        underline_color: style.fg,
-        ..style
+/// Darken a label's colour while keeping its hue and modifiers.
+fn darkened(style: Style) -> Style {
+    match style.fg {
+        Some(fg) => super::palette::blend(fg, Color::Rgb(0, 0, 0), 0.25)
+            .map_or(style, |color| style.fg(color)),
+        None => style,
     }
-    .underlined()
 }
 
 /// Only an underline, drawn in `style`'s colour, over whatever it marks.
@@ -90,22 +94,25 @@ fn underline_in(style: Style) -> Style {
     .underlined()
 }
 
-/// Declares the group set once, in two layers, and derives from it the [`HLGroup`]
+/// Declares the base, fixed palette, and linked groups once, deriving the [`HLGroup`]
 /// selector enum, the [`Groups`] style table, its resolution and indexing.
 ///
-/// A scheme sets only the `base` styles from its palette. Every `linked` group is a
+/// A scheme sets the `base` styles; fixed palette groups expose all resolved colors.
+/// Every `linked` group is a
 /// Rust expression over the resolved base styles, which a scheme may replace through
 /// its optional overrides; so adding, renaming or relinking a group is one line here.
 macro_rules! highlight_groups {
     (
         base { $($base:ident),+ $(,)? }
-        linked($from:ident) { $($linked:ident = $link:expr),+ $(,)? }
+        palette { $($palette:ident: $channel:ident = $color:literal),+ $(,)? }
+        linked($from:ident, $hue:ident) { $($linked:ident = $link:expr),+ $(,)? }
     ) => {
         /// The complete scheme-independent space of syntax and interface styles.
         #[enum_fn(description: &'static str = stringify)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub enum HLGroup {
             $($base,)+
+            $($palette,)+
             $($linked),+
         }
 
@@ -130,7 +137,8 @@ macro_rules! highlight_groups {
         #[derive(Clone, Copy)]
         pub struct Groups {
             $(pub $base: Style,)+
-            $(pub $linked: Style),+
+            $(pub $palette: Style,)+
+            $(pub $linked: Style,)+
         }
 
         impl Groups {
@@ -148,8 +156,12 @@ macro_rules! highlight_groups {
                 let $from = Base {$(
                     $base: resolve(stringify!($base), &base.$base)?,
                 )+};
+                let $hue = |name| -> Result<Style, String> {
+                    Ok(Style::new().fg(palette.resolve(Some(name))?.expect("fixed palette colors exist")))
+                };
                 Ok(Self {
                     $($base: $from.$base,)+
+                    $($palette: Style::new().$channel(palette.resolve(Some($color))?.expect("fixed palette colors exist")),)+
                     $($linked: match &overrides.$linked {
                         Some(spec) => resolve(stringify!($linked), spec)?,
                         None => $link,
@@ -161,6 +173,7 @@ macro_rules! highlight_groups {
             pub fn highlight_groups(&self) -> Vec<(&'static str, Style)> {
                 vec![
                     $((HLGroup::$base.description(), self.$base),)+
+                    $((HLGroup::$palette.description(), self.$palette),)+
                     $((HLGroup::$linked.description(), self.$linked)),+
                 ]
             }
@@ -172,6 +185,7 @@ macro_rules! highlight_groups {
             fn index(&self, group: HLGroup) -> &Self::Output {
                 match group {
                     $(HLGroup::$base => &self.$base,)+
+                    $(HLGroup::$palette => &self.$palette,)+
                     $(HLGroup::$linked => &self.$linked),+
                 }
             }
@@ -217,7 +231,51 @@ highlight_groups! {
         Info,
         Hint,
     }
-    linked(base) {
+    palette {
+        Red: fg = "red",
+        RedLight: fg = "red_light",
+        RedDark: fg = "red_dark",
+        Green: fg = "green",
+        GreenLight: fg = "green_light",
+        GreenDark: fg = "green_dark",
+        Yellow: fg = "yellow",
+        YellowLight: fg = "yellow_light",
+        YellowDark: fg = "yellow_dark",
+        Blue: fg = "blue",
+        BlueLight: fg = "blue_light",
+        BlueDark: fg = "blue_dark",
+        Purple: fg = "purple",
+        PurpleLight: fg = "purple_light",
+        PurpleDark: fg = "purple_dark",
+        Aqua: fg = "aqua",
+        AquaLight: fg = "aqua_light",
+        AquaDark: fg = "aqua_dark",
+        Orange: fg = "orange",
+        OrangeLight: fg = "orange_light",
+        OrangeDark: fg = "orange_dark",
+        Gray: fg = "gray",
+        GrayLight: fg = "gray_light",
+        GrayDark: fg = "gray_dark",
+        Fg0: fg = "fg0",
+        Fg1: fg = "fg1",
+        Fg2: fg = "fg2",
+        Fg3: fg = "fg3",
+        Fg4: fg = "fg4",
+        Bg0: bg = "bg0",
+        Bg1: bg = "bg1",
+        Bg2: bg = "bg2",
+        Bg3: bg = "bg3",
+        Bg4: bg = "bg4",
+        BgRed: bg = "bg_red",
+        BgGreen: bg = "bg_green",
+        BgYellow: bg = "bg_yellow",
+        BgBlue: bg = "bg_blue",
+        BgPurple: bg = "bg_purple",
+        BgAqua: bg = "bg_aqua",
+        BgOrange: bg = "bg_orange",
+        BgGray: bg = "bg_gray",
+    }
+    linked(base, hue) {
         // Tree-sitter captures of M2 source.
         Comment = base.Muted.italic(),
         Constant = base.Number,
@@ -238,20 +296,19 @@ highlight_groups! {
         // Modules read as types, set apart by italics.
         Namespace = base.Type.italic(),
         Package = base.Type.italic(),
-        Documentation = underlined(base.Info),
-        // Markup keeps syntax colours beneath emphasis, code surfaces and links.
-        MarkupHeading1 = base.Accent.bold(),
+        Documentation = hue("blue_light")?,
+        // Markup keeps syntax colours beneath emphasis, code and links; a link is
+        // underlined only while the pointer is over it.
+        MarkupHeading1 = hue("yellow_light")?.bold(),
+        // A title's brief, beside its name.
+        MarkupBrief = hue("yellow_light")?.italic(),
         MarkupHeading2 = base.Function.bold(),
-        MarkupHeading3 = base.Type.bold(),
+        MarkupHeading3 = hue("aqua")?.bold(),
         MarkupStrong = Style::new().bold(),
         MarkupEmphasis = Style::new().italic(),
         MarkupStrongEmphasis = Style::new().bold().italic(),
         MarkupStrike = Style::new().crossed_out(),
-        MarkupLink = underline_in(base.Info),
-        MarkupCode = Style {
-            bg: base.Code.bg,
-            ..Style::new()
-        },
+        MarkupLinkHover = Style::new().underlined(),
         // Diagnostic underlines, coloured through the special (underline) colour.
         DiagnosticError = underline_in(base.Error),
         DiagnosticWarning = underline_in(base.Warning),
@@ -268,10 +325,13 @@ highlight_groups! {
             ..Style::new()
         },
         ValueBorder = base.Faint,
-        // `oN` labels are plain; the latest three, `oo`, `ooo` and `oooo`, are bold.
+        // The latest three `oN` labels are bold; older labels are plain.
         OutputNumber = base.Accent,
         RecentOutput = base.Accent.bold(),
+        RecentCellNumber = darkened(base.Accent),
         ErrorBorder = base.Error,
+        ErrorMessage = hue("red_light")?,
+        ErrorCode = base.Code.bg(hue("bg_red")?.fg.expect("fixed palette colors exist")),
         WarningBorder = base.Warning,
         InfoBorder = base.Info,
         // Status line segments and key-hint labels.
@@ -286,8 +346,6 @@ highlight_groups! {
         Command = base.Accent,
     }
 }
-
-
 
 /// The one scheme in effect, republished whenever the appearance changes.
 ///
@@ -377,6 +435,7 @@ accessors! {
     border: ValueBorder,
     output_number: OutputNumber,
     recent_output: RecentOutput,
+    recent_cell_number: RecentCellNumber,
     prompt: KeymapHint,
     command: Command,
     selection: Selection,
@@ -384,6 +443,8 @@ accessors! {
     printed: Printed,
     hint_text: HintText,
     error_border: ErrorBorder,
+    error_message: ErrorMessage,
+    error_code: ErrorCode,
     warning_border: WarningBorder,
     info_border: InfoBorder,
     statusline_bg: StatuslineBg,
@@ -402,6 +463,43 @@ mod tests {
 
     use super::*;
     use crate::ui::controller::settings::theme::{Mode, SchemeFile, SCHEMES, SCHEME_FILES};
+
+    #[test]
+    fn every_palette_color_is_used_by_a_highlight_group() {
+        for scheme in SCHEMES.iter() {
+            for variant in scheme.variants() {
+                let groups = variant.groups();
+                let styles = groups.highlight_groups();
+                for (name, color) in variant.palette().colors() {
+                    assert!(
+                        styles.iter().any(|(_, style)| {
+                            let actual = if name.starts_with("bg") {
+                                style.bg
+                            } else {
+                                style.fg
+                            };
+                            actual == Some(color)
+                        }),
+                        "{} {}: {name} needs a group in its intended channel",
+                        scheme.label(),
+                        variant.label()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn palette_groups_are_scheme_independent() {
+        for scheme in SCHEMES.iter() {
+            for variant in scheme.variants() {
+                let groups = variant.groups();
+                assert_eq!(groups.style(HLGroup::Bg0), groups.Bg0);
+                assert_eq!(groups.style(HLGroup::BgRed), groups.BgRed);
+                assert_eq!(groups.style(HLGroup::Green), groups.Green);
+            }
+        }
+    }
 
     /// HSV saturation and hue of an RGB foreground, or None for any other colour.
     fn saturation_and_hue(style: Style) -> Option<(f32, f32)> {
@@ -434,9 +532,15 @@ mod tests {
                 saturation_and_hue(groups.String).expect("schemes colour in RGB"),
                 saturation_and_hue(groups.Printed).expect("schemes colour in RGB"),
             );
-            assert!(printed.0 < string.0, "printed text should be less saturated");
+            assert!(
+                printed.0 < string.0,
+                "printed text should be less saturated"
+            );
             let apart = (printed.1 - string.1).abs();
-            assert!(apart.min(360.0 - apart) < 30.0, "printed text should keep the hue");
+            assert!(
+                apart.min(360.0 - apart) < 30.0,
+                "printed text should keep the hue"
+            );
         }
     }
 
@@ -471,10 +575,7 @@ mod tests {
     fn an_override_replaces_its_link_outright() {
         let scheme: SchemeFile = toml::from_str(SCHEME_FILES[0]).expect("embedded scheme parses");
         let name = &scheme.variants.dark[0];
-        let palette = scheme
-            .colors
-            .palette(Mode::Dark, name)
-            .expect("variant palette");
+        let palette = scheme.colors.palette(Mode::Dark, name).unwrap();
         let overrides = Overrides {
             Conditional: Some(StyleSpec {
                 bold: true,
@@ -534,6 +635,31 @@ mod tests {
     }
 
     #[test]
+    fn documentation_groups_follow_the_requested_palette_colours() {
+        for groups in SCHEMES
+            .iter()
+            .flat_map(|scheme| scheme.variants())
+            .map(|variant| variant.groups())
+        {
+            assert_eq!(
+                groups[HLGroup::Documentation].fg,
+                groups[HLGroup::BlueLight].fg
+            );
+            assert_eq!(
+                groups[HLGroup::MarkupHeading1].fg,
+                groups[HLGroup::YellowLight].fg
+            );
+            assert_eq!(groups[HLGroup::MarkupHeading3].fg, groups[HLGroup::Aqua].fg);
+            assert!(!groups[HLGroup::Documentation]
+                .add_modifier
+                .contains(Modifier::UNDERLINED));
+            assert!(groups[HLGroup::MarkupLinkHover]
+                .add_modifier
+                .contains(Modifier::UNDERLINED));
+        }
+    }
+
+    #[test]
     fn output_numbers_match_the_prompt_colour_and_only_the_recent_ones_are_bold() {
         for groups in SCHEMES
             .iter()
@@ -564,17 +690,6 @@ mod tests {
                 assert!(diagnostic.add_modifier.contains(Modifier::UNDERLINED));
             }
         }
-    }
-
-    #[test]
-    fn group_names_describe_semantics_instead_of_palette_hues() {
-        let groups = Groups::default().highlight_groups();
-        assert!(groups.iter().all(|(name, _)| ![
-            "White", "Gray", "Red", "Orange", "Yellow", "Green", "Aqua", "Teal", "Cyan", "Blue",
-            "Purple", "Magenta", "Pink"
-        ]
-        .iter()
-        .any(|color| name.starts_with(color))));
     }
 
     #[test]

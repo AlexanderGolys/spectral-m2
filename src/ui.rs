@@ -21,5 +21,3 @@ mod statusline;
 mod syntax_tree;
 pub mod terminal;
 pub mod wrap;
-
-pub const DEBUG_POST: &str = "2 + 2\n7;\nprint \"debug post\"";

@@ -418,10 +418,17 @@ impl<'a> Input<'a> {
             font if FONTS.contains(&font) => {
                 let body = self.atom()?;
                 Ok(match font {
-                    "mathbb" => Math::retag(body.lettered(&DOUBLE_STRUCK, self.blackboard), HLGroup::Type),
+                    "mathbb" => Math::retag(
+                        body.lettered(&DOUBLE_STRUCK, self.blackboard),
+                        HLGroup::Type,
+                    ),
                     "texttt" => body.named_in_code(),
-                    "mathfrak" => Math::retag(body.lettered(&FRAKTUR, self.blackboard), HLGroup::Type),
-                    "mathcal" => Math::retag(body.lettered(&SCRIPT, self.blackboard), HLGroup::Type),
+                    "mathfrak" => {
+                        Math::retag(body.lettered(&FRAKTUR, self.blackboard), HLGroup::Type)
+                    }
+                    "mathcal" => {
+                        Math::retag(body.lettered(&SCRIPT, self.blackboard), HLGroup::Type)
+                    }
                     _ => body,
                 })
             }
@@ -628,13 +635,7 @@ const DOUBLE_STRUCK: Alphabet = Alphabet {
 };
 const FRAKTUR: Alphabet = Alphabet {
     first_capital: 0x1D504,
-    letterlike: &[
-        ('C', 'ℭ'),
-        ('H', 'ℌ'),
-        ('I', 'ℑ'),
-        ('R', 'ℜ'),
-        ('Z', 'ℨ'),
-    ],
+    letterlike: &[('C', 'ℭ'), ('H', 'ℌ'), ('I', 'ℑ'), ('R', 'ℜ'), ('Z', 'ℨ')],
     doubled_in_code: false,
 };
 const SCRIPT: Alphabet = Alphabet {
@@ -2176,7 +2177,10 @@ mod tests {
             let rows = Math::from_tex(source, false)
                 .expect("parses")
                 .wrapped(80, FractionStyle::Stacked);
-            rows.iter().flatten().map(|span| span.kind).collect::<Vec<_>>()
+            rows.iter()
+                .flatten()
+                .map(|span| span.kind)
+                .collect::<Vec<_>>()
         };
         assert_eq!(kinds("$\\texttt{image}$"), [HLGroup::Function]);
         assert_eq!(kinds("$\\texttt{CoherentSheaf}$"), [HLGroup::Type]);
@@ -2185,7 +2189,10 @@ mod tests {
     #[test]
     fn a_phantom_reserves_nothing_in_a_terminal() {
         let sheaf = "$\\begin{array}{l}\\left\\{1\\right\\}\\vphantom{-y0}\\end{array}\\left(\\!\\begin{array}{c}\n\\vphantom{\\left\\{1\\right\\}}-y\n\\end{array}\\!\\right)$";
-        assert_eq!(rendered(sheaf, false), rendered(r"$\left\{1\right\}\left(-y\right)$", false));
+        assert_eq!(
+            rendered(sheaf, false),
+            rendered(r"$\left\{1\right\}\left(-y\right)$", false)
+        );
     }
 
     #[test]

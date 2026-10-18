@@ -32,16 +32,6 @@ enum BorderPlacement {
     },
 }
 
-/// A rule `width` columns wide, drawn in `rule`, with `label` centred across it.
-pub fn labelled_rule(label: Span<'static>, width: u16, rule: Style) -> Line<'static> {
-    let line = usize::from(width).saturating_sub(label.width());
-    Line::from(vec![
-        Span::styled("─".repeat(line / 2), rule),
-        label,
-        Span::styled("─".repeat(line - line / 2), rule),
-    ])
-}
-
 /// How many of the latest outputs M2 also names `oo`, `ooo` and `oooo`.
 pub const RECENT_OUTPUTS: usize = 3;
 
@@ -71,7 +61,7 @@ impl RenderContext {
     /// Fold returned values taller than `rows`.
     pub fn with_output_limit(self, rows: usize) -> Self {
         Self {
-            output_limit: Some(rows),
+            output_limit: Some(rows.max(UI.min_output_rows)),
             ..self
         }
     }
@@ -87,7 +77,7 @@ impl RenderContext {
         }
     }
 
-    /// Label the latest outputs, newest first, as M2 recalls them: `oo`, `ooo`, `oooo`.
+    /// Track the latest outputs, newest first, for highlighting.
     pub fn with_recent_outputs(self, recent_outputs: [Option<u32>; RECENT_OUTPUTS]) -> Self {
         Self {
             recent_outputs,
@@ -103,19 +93,6 @@ impl RenderContext {
     /// and `oooo`.
     pub fn is_recent_output(&self, number: u32) -> bool {
         self.recent_outputs.contains(&Some(number))
-    }
-
-    /// What output `number` is called: `o` and as many more as it is recent, or
-    /// `o` and its number once it is not among the latest.
-    pub fn output_label(&self, number: u32) -> String {
-        match self
-            .recent_outputs
-            .iter()
-            .position(|&recent| recent == Some(number))
-        {
-            Some(age) => "o".repeat(age + 2),
-            None => format!("o{number}"),
-        }
     }
 
     /// Draw rings as blackboard glyphs (`ℤ`) rather than by name (`ZZ`).

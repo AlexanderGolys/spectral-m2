@@ -1,9 +1,10 @@
 //! Renderable UI elements and full-width feed blocks.
 
 use std::ops::Range;
+use std::sync::Arc;
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Offset, Rect};
+use ratatui::layout::{Offset, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
@@ -51,6 +52,11 @@ pub trait Block {
     /// Add zero-based regions that copied selections must omit.
     fn local_selection_exclusions(&self, _: &RenderContext, _: &mut Exclusions) {}
 
+    /// The link drawn at local `position`, if any, with every cell it covers.
+    fn link_at(&self, _: &RenderContext, _: Position) -> Option<Link> {
+        None
+    }
+
     /// Restate this block's local exclusions in the coordinates of a placed `area`.
     ///
     /// The one shift applied to selection geometry, mirroring the one [`paste`] applies
@@ -69,6 +75,24 @@ pub trait Block {
     }
 }
 
+/// A drawn link: what it points to and the cells it covers, which may run over
+/// several rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Link {
+    pub target: Arc<str>,
+    pub cells: Vec<Rect>,
+}
+
+impl Link {
+    /// The same link drawn `offset` away.
+    pub fn moved(self, offset: Offset) -> Self {
+        Self {
+            cells: self.cells.into_iter().map(|cells| cells + offset).collect(),
+            ..self
+        }
+    }
+}
+
 /// Semantic content whose style is resolved from a highlight group at render time.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HLSpan<T = Range<usize>> {
@@ -77,6 +101,9 @@ pub struct HLSpan<T = Range<usize>> {
     /// A group laid over `kind` without replacing it, such as the underline that
     /// rules a fraction's numerator.
     pub mark: Option<HLGroup>,
+    /// What the span links to. Every piece of one link shares the one target, so
+    /// the pieces a wrap leaves are still known as one link.
+    pub target: Option<Arc<str>>,
 }
 
 impl<T> HLSpan<T> {
@@ -85,6 +112,7 @@ impl<T> HLSpan<T> {
             content: content.into(),
             kind,
             mark: None,
+            target: None,
         }
     }
 
@@ -101,6 +129,7 @@ impl<T> HLSpan<T> {
             content: content.into(),
             kind: self.kind,
             mark: self.mark,
+            target: self.target.clone(),
         }
     }
 

@@ -70,7 +70,8 @@ announceReady := (() -> (
     -- table naming the variant:
     --
     --     net => text                   tex => {source, fallback}
-    --     markup => {html, fallback}    hashtable => {{key, value}, ...}
+    --     markup => {html, fallback,    hashtable => {{key, value}, ...}
+    --         exampleWidth}
     --     collection => {kind, items}
     --
     -- A value is either drawn whole by one of M2's own formatters, or it is a
@@ -114,10 +115,41 @@ announceReady := (() -> (
         "function"
     );
     -- Every documentation node at once: DIV, TABLE, UL and the rest all descend
-    -- from Hypertext.
+    -- from Hypertext. Its examples were run with the print width M2 gives every
+    -- example, so their wide values were wrapped to it.
+    exampleWidth := value Core#"private dictionary"#"ArgPrintWidthN";
+    -- A link to another node points at the page M2 writes it to, named by
+    -- `toFilename` of the node's key. Read back through the same encoding, each
+    -- such link instead carries the key as an M2 string, which is what the
+    -- shell asks `help` for when the link is clicked. Links elsewhere stay.
+    toFilename := value Core#"private dictionary"#"toFilename";
+    filenameCodes := hashTable apply(1..127, i -> (substring(toFilename ascii i, 1), ascii i));
+    nodeKey := name -> (
+        codes := characters substring(name, 1);
+        key := {};
+        i := 0;
+        while i < #codes do (
+            code := if codes#i == "_" then concatenate codes_{i..min(i + 2, #codes - 1)}
+                else codes#i;
+            if not filenameCodes#?code then return null;
+            key = append(key, filenameCodes#code);
+            i = i + #code);
+        concatenate key);
+    escapeAttribute := text -> replace(">", "&gt;", replace("<", "&lt;",
+        replace("\"", "&quot;", replace("&", "&amp;", text))));
+    linkedKeys := page -> (
+        pattern := ///href="(?:[^"]*/)?(_[^"/]*)\.html"///;
+        linked := "";
+        while (match := regex(pattern, page)) =!= null do (
+            key := nodeKey substring(match#1, page);
+            linked = linked | substring(page, 0, match#0#0)
+                | (if key === null then substring(match#0, page)
+                   else "href=\"" | escapeAttribute format key | "\"");
+            page = substring(page, match#0#0 + match#0#1));
+        linked | page);
     render hypertextType := HashTable => value -> hashTable {
-        symbol markup => hashTable {symbol html => html value, symbol fallback =>
-                toString net value}
+        symbol markup => hashTable {symbol html => linkedKeys html value, symbol fallback =>
+                toString net value, symbol exampleWidth => exampleWidth}
     };
     -- Only what M2 itself draws as a plain table: a class that still uses
     -- HashTable's own `net`. Inheritance alone says far too much -- matrices,

@@ -351,7 +351,10 @@ impl Block for SyntaxTreeBlock {
                 groups.border(),
             )))
             .style(groups.code())
-            .render(Rect::new(area.x, area.y.saturating_add(row), area.width, 1), buf);
+            .render(
+                Rect::new(area.x, area.y.saturating_add(row), area.width, 1),
+                buf,
+            );
         };
         let below_source = SOURCE_LEAD.saturating_add(source_height);
         rule(0);

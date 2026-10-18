@@ -13,6 +13,7 @@ use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -95,6 +96,9 @@ pub struct Settings {
     pub math_fonts: bool,
     /// Rows a returned value shows before its middle folds away.
     pub output_rows: usize,
+    /// Seconds each documentation example may take to be computed again, so
+    /// its value is drawn from its structure; none computes nothing.
+    pub example_seconds: u16,
 }
 
 impl Default for Settings {
@@ -104,13 +108,14 @@ impl Default for Settings {
             fractions: FractionStyle::default(),
             math_fonts: false,
             output_rows: UI.max_output_rows,
+            example_seconds: 0,
         }
     }
 }
 
 impl Settings {
     /// Move the output fold threshold by picker steps, keeping room for a head, the
-    /// fold row, and a tail.
+    /// three fold rows, and a tail.
     pub fn adjust_output_rows(&mut self, delta: i8) {
         let step = usize::from(delta.unsigned_abs());
         self.output_rows = match delta > 0 {
@@ -118,6 +123,21 @@ impl Settings {
             false => self.output_rows.saturating_sub(step),
         }
         .max(UI.min_output_rows);
+    }
+
+    /// Move the examples timeout by picker steps of a second, down to off.
+    pub fn adjust_example_seconds(&mut self, delta: i8) {
+        let step = u16::from(delta.unsigned_abs());
+        self.example_seconds = match delta > 0 {
+            true => self.example_seconds.saturating_add(step),
+            false => self.example_seconds.saturating_sub(step),
+        };
+    }
+
+    /// How long each documentation example may take to be computed again; zero
+    /// when they are not.
+    pub fn example_timeout(&self) -> Duration {
+        Duration::from_secs(self.example_seconds.into())
     }
 
     /// Whether returned values lay out differently, moving their heights.
@@ -159,6 +179,23 @@ mod tests {
     use super::keymap::Keymaps;
     use super::*;
     use crate::ui::key::KeyMod::Alt;
+
+    #[test]
+    fn the_examples_timeout_steps_by_seconds_and_stops_at_off() {
+        let mut settings = Settings::default();
+        settings.adjust_example_seconds(1);
+        let on = settings.example_timeout();
+        assert!(!on.is_zero());
+        settings.adjust_example_seconds(1);
+        assert!(settings.example_timeout() > on);
+
+        settings.adjust_example_seconds(-2);
+        settings.adjust_example_seconds(-1);
+        assert!(
+            settings.example_timeout().is_zero(),
+            "off is as low as it goes"
+        );
+    }
 
     /// A record written by one session reads back whole in the next, and the
     /// rebinds it replays restore the swap a taken key caused.

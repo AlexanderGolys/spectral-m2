@@ -207,14 +207,22 @@ impl Editor {
         let buffer = frame.buffer_mut();
         for y in area.top()..area.bottom() {
             buffer[(area.x, y)]
-                .set_symbol(UI.split_divider)
+                .set_symbol(UI.glyphs.split_divider.current())
                 .set_style(style);
         }
     }
 
-    /// Fill `area`, the margin around the views, with their background.
+    /// Match each margin row to the view beside it after that view is drawn.
     pub fn draw_margin(&self, frame: &mut Frame, area: Rect) {
-        frame.render_widget(TuiBlock::default().style(self.view_canvas()), area);
+        if area.right() >= frame.area().right() {
+            return;
+        }
+        for y in area.top()..area.bottom() {
+            let bg = frame.buffer_mut()[(area.right(), y)].bg;
+            for x in area.left()..area.right() {
+                frame.buffer_mut()[(x, y)].set_bg(bg);
+            }
+        }
     }
 
     /// The one background of every view: the code block's, under code and output
@@ -371,6 +379,23 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    #[test]
+    fn outer_margin_follows_each_adjacent_row_background() {
+        let editor = Editor::new(String::new());
+        let mut terminal = Terminal::new(TestBackend::new(5, 2)).unwrap();
+        terminal
+            .draw(|frame| {
+                frame.buffer_mut()[(1, 0)].set_bg(Color::Rgb(10, 20, 30));
+                frame.buffer_mut()[(1, 1)].set_bg(Color::Rgb(40, 50, 60));
+                editor.draw_margin(frame, Rect::new(0, 0, 1, 2));
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        for y in 0..2 {
+            assert_eq!(buffer[(0, y)].bg, buffer[(1, y)].bg);
+        }
     }
 
     #[test]

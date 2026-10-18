@@ -10,7 +10,7 @@ mod view;
 
 use std::time::{Duration, Instant};
 
-use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, Clear, Paragraph, Widget};
@@ -37,7 +37,6 @@ use super::key::{KeyEvent, KeyMod};
 use super::render::selection::Exclusions;
 use super::render::RenderContext;
 use super::statusline::{StatusLine, StatusLineContext, StatusLineEvent};
-use super::DEBUG_POST;
 use crate::code::highlight::Highlighter;
 use crate::input::{InputCode, InputContext, InputSetting, InputSettings};
 
@@ -46,7 +45,8 @@ pub enum Reaction {
     Continue,
     Submit,
     ResumeIncomplete,
-    Post(&'static str),
+    /// Run source beside the input, leaving what is typed there alone.
+    Post(String),
     Restart,
     Quit,
     /// Put the current selection on the system clipboard.
@@ -94,6 +94,9 @@ pub enum EditorUpdate {
     KnownNames(Vec<String>),
     /// Names the session bound since M2 last reported.
     BoundNames(Vec<String>),
+    /// Documentation examples were computed again, so the pages showing them
+    /// draw them differently.
+    ExamplesComputed,
     Pending {
         id: u64,
         cells: Vec<(String, Vec<HLSpan>)>,
@@ -189,6 +192,7 @@ const SHELL_ITEMS: &[ShellItem] = &[
     ShellItem::Fractions,
     ShellItem::MathFonts,
     ShellItem::OutputRows,
+    ShellItem::ExampleTimeout,
     ShellItem::RestoreDefault,
 ];
 
@@ -201,6 +205,7 @@ enum ShellItem {
     Fractions,
     MathFonts,
     OutputRows,
+    ExampleTimeout,
     RestoreDefault,
 }
 
@@ -214,6 +219,7 @@ impl ShellItem {
             Self::Fractions => "fractions",
             Self::MathFonts => "math fonts",
             Self::OutputRows => "max output height",
+            Self::ExampleTimeout => "compute examples",
             Self::RestoreDefault => "restore default",
         }
     }
@@ -227,6 +233,9 @@ impl ShellItem {
             Self::Fractions => "how rational values are drawn",
             Self::MathFonts => "use TeX math fonts like mathbb, mathcal",
             Self::OutputRows => "rows a value shows before its middle folds away",
+            Self::ExampleTimeout => {
+                "run documentation examples again, each for at most this long, to draw their values"
+            }
             Self::RestoreDefault => "reset settings, keymaps and appearance",
         }
     }
@@ -269,6 +278,8 @@ pub struct Editor {
     frame_stats: FrameStats,
     /// When and where the previous left click landed, to recognise a double click.
     last_click: Option<(Instant, Position)>,
+    /// Where the mouse last was, so the link under it is underlined.
+    pointer: Option<Position>,
 }
 
 impl Editor {
@@ -302,6 +313,7 @@ impl Editor {
             highlight_debug_scroll: 0,
             frame_stats: FrameStats::default(),
             last_click: None,
+            pointer: None,
         };
         editor.refresh_status_line();
         editor
@@ -322,6 +334,11 @@ impl Editor {
             self.feed.on_event(&Ticked);
         }
         self.processing
+    }
+
+    /// How long each documentation example may take to be computed again.
+    pub fn example_timeout(&self) -> Duration {
+        self.settings.example_timeout()
     }
 
     pub fn submission(&self) -> &str {
@@ -403,6 +420,7 @@ impl Editor {
                 self.names.bind(names);
                 self.input.forget_completion();
             }
+            EditorUpdate::ExamplesComputed => self.feed.on_event(&Reformatted),
             EditorUpdate::Pending { id, cells } => {
                 self.continuation = None;
                 self.input.accept_submission();
@@ -493,6 +511,16 @@ impl Editor {
     /// the pane, everywhere else it scrolls the feed. A double click on a folded
     /// value expands it, and on an expanded one folds it back.
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Reaction {
+        let pointer = Position::new(event.column, event.row);
+        self.pointer = Some(pointer);
+        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
+            && event.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            if let Some(link) = self.feed.link_at(pointer) {
+                self.screen_selection = None;
+                return Reaction::Post(format!("help {}", link.target));
+            }
+        }
         if self.double_clicked(event)
             && self
                 .feed
@@ -909,6 +937,17 @@ impl Editor {
                             EditorEvent::SetSettings(settings)
                         })
                     }
+                    ShellItem::ExampleTimeout => {
+                        let mut settings = self.settings;
+                        let value = match settings.example_seconds {
+                            0 => "off".to_string(),
+                            seconds => format!("{seconds}s"),
+                        };
+                        Row::adjust(cells(&value), move |delta| {
+                            settings.adjust_example_seconds(delta);
+                            EditorEvent::SetSettings(settings)
+                        })
+                    }
                     ShellItem::RestoreDefault => {
                         Row::enter(cells(""), || EditorEvent::RestoreDefaults)
                     }
@@ -1171,12 +1210,7 @@ impl Editor {
     fn toggle_highlight_debug(&mut self) -> Reaction {
         self.highlight_debug = !self.highlight_debug;
         self.highlight_debug_scroll = 0;
-        self.feed.follow();
-        if self.highlight_debug {
-            Reaction::Post(DEBUG_POST)
-        } else {
-            Reaction::Continue
-        }
+        Reaction::Continue
     }
 
     fn highlight_debug_entries(&self) -> Vec<(String, ratatui::style::Style)> {
@@ -1455,6 +1489,65 @@ impl Editor {
         );
         self.feed_top = -(self.feed.offset() as i64);
         self.selection_exclusions.extend(exclusions);
+        if let Some(link) = self.pointer.and_then(|pointer| self.feed.link_at(pointer)) {
+            let hovered = context.groups().style(HLGroup::MarkupLinkHover);
+            for cells in link.cells {
+                frame.buffer_mut().set_style(cells, hovered);
+            }
+        }
         underfilled
+    }
+}
+
+#[cfg(test)]
+mod mouse_tests {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::{Position, Rect};
+    use ratatui::style::Style;
+
+    use super::{Editor, Reaction};
+    use crate::backend::M2Value;
+    use crate::ui::cell::OutputBlock;
+    use crate::ui::feed::Feed;
+    use crate::ui::render::RenderContext;
+
+    #[test]
+    fn only_control_click_opens_a_documentation_link() {
+        let mut editor = Editor::new(String::new());
+        editor.feed = Feed::new(Box::new(OutputBlock::rendered(
+            M2Value::Markup {
+                html: "<p>See <a href='&quot;isPrime&quot;'>isPrime</a>.</p>".into(),
+                fallback: "See isPrime.".into(),
+                example_width: 60,
+            },
+            None,
+        )));
+        let area = Rect::new(0, 0, 60, 10);
+        editor.feed.render(
+            &RenderContext::new(area.width, 0),
+            area,
+            &mut Buffer::empty(area),
+            Style::default(),
+        );
+        let pointer = (0..area.height)
+            .flat_map(|row| (0..area.width).map(move |column| Position::new(column, row)))
+            .find(|&position| editor.feed.link_at(position).is_some())
+            .expect("the documentation link is visible");
+        let click = |modifiers| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: pointer.x,
+            row: pointer.y,
+            modifiers,
+        };
+
+        assert!(matches!(
+            editor.handle_mouse(click(KeyModifiers::NONE)),
+            Reaction::Continue
+        ));
+        assert!(matches!(
+            editor.handle_mouse(click(KeyModifiers::CONTROL)),
+            Reaction::Post(command) if command == "help \"isPrime\""
+        ));
     }
 }

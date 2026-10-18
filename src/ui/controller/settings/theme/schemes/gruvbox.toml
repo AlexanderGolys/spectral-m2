@@ -4,572 +4,79 @@ name = "gruvbox"
 dark = ["hard", "medium", "soft"]
 light = ["hard", "medium", "soft"]
 
-[colors.accent_aqua.dark]
-hard = "#8ec07c"
-medium = "#8ec07c"
-soft = "#8ec07c"
-
-[colors.accent_aqua.light]
-hard = "#427b58"
-medium = "#427b58"
-soft = "#427b58"
-
-[colors.accent_blue.dark]
-hard = "#83a598"
-medium = "#83a598"
-soft = "#83a598"
-
-[colors.accent_blue.light]
-hard = "#076678"
-medium = "#076678"
-soft = "#076678"
-
-[colors.accent_green.dark]
-hard = "#b8bb26"
-medium = "#b8bb26"
-soft = "#b8bb26"
-
-[colors.accent_green.light]
-hard = "#79740e"
-medium = "#79740e"
-soft = "#79740e"
-
-[colors.accent_orange.dark]
-hard = "#fe8019"
-medium = "#fe8019"
-soft = "#fe8019"
-
-[colors.accent_orange.light]
-hard = "#af3a03"
-medium = "#af3a03"
-soft = "#af3a03"
-
-[colors.accent_purple.dark]
-hard = "#d3869b"
-medium = "#d3869b"
-soft = "#d3869b"
-
-[colors.accent_purple.light]
-hard = "#8f3f71"
-medium = "#8f3f71"
-soft = "#8f3f71"
-
-[colors.accent_red.dark]
-hard = "#fb4934"
-medium = "#fb4934"
-soft = "#fb4934"
-
-[colors.accent_red.light]
-hard = "#9d0006"
-medium = "#9d0006"
-soft = "#9d0006"
-
-[colors.accent_yellow.dark]
-hard = "#fabd2f"
-medium = "#fabd2f"
-soft = "#fabd2f"
-
-[colors.accent_yellow.light]
-hard = "#b57614"
-medium = "#b57614"
-soft = "#b57614"
-
-[colors.background.dark]
-hard = "#1d2021"
-medium = "#282828"
-soft = "#32302f"
-
-[colors.background.light]
-hard = "#f9f5d7"
-medium = "#fbf1c7"
-soft = "#f2e5bc"
-
-[colors.code_background.dark]
-hard = "#161819"
-medium = "#1d2021"
-soft = "#282828"
-
-[colors.code_background.light]
-hard = "#d5c4a1"
-medium = "#d5c4a1"
-soft = "#d5c4a1"
-
-[colors.printed_background.dark]
-hard = "#3c3836"
-medium = "#3c3836"
-soft = "#3c3836"
-
-[colors.printed_background.light]
-hard = "#ebdbb2"
-medium = "#ebdbb2"
-soft = "#ebdbb2"
-
-[colors.border_background.dark]
-hard = "#1d2021"
-medium = "#282828"
-soft = "#32302f"
-
-[colors.border_background.light]
-hard = "#ebdbb2"
-medium = "#ebdbb2"
-soft = "#ebdbb2"
-
-[colors.bright_aqua.dark]
-hard = "#8ec07c"
-medium = "#8ec07c"
-soft = "#8ec07c"
-
-[colors.bright_aqua.light]
-hard = "#8ec07c"
-medium = "#8ec07c"
-soft = "#8ec07c"
-
-[colors.bright_blue.dark]
-hard = "#83a598"
-medium = "#83a598"
-soft = "#83a598"
-
-[colors.bright_blue.light]
-hard = "#83a598"
-medium = "#83a598"
-soft = "#83a598"
-
-[colors.bright_green.dark]
-hard = "#b8bb26"
-medium = "#b8bb26"
-soft = "#b8bb26"
-
-[colors.bright_green.light]
-hard = "#b8bb26"
-medium = "#b8bb26"
-soft = "#b8bb26"
-
-[colors.bright_orange.dark]
-hard = "#fe8019"
-medium = "#fe8019"
-soft = "#fe8019"
-
-[colors.bright_orange.light]
-hard = "#fe8019"
-medium = "#fe8019"
-soft = "#fe8019"
-
-[colors.bright_purple.dark]
-hard = "#d3869b"
-medium = "#d3869b"
-soft = "#d3869b"
-
-[colors.bright_purple.light]
-hard = "#d3869b"
-medium = "#d3869b"
-soft = "#d3869b"
-
-[colors.bright_red.dark]
-hard = "#fb4934"
-medium = "#fb4934"
-soft = "#fb4934"
-
-[colors.bright_red.light]
-hard = "#fb4934"
-medium = "#fb4934"
-soft = "#fb4934"
-
-[colors.bright_yellow.dark]
-hard = "#fabd2f"
-medium = "#fabd2f"
-soft = "#fabd2f"
-
-[colors.bright_yellow.light]
-hard = "#fabd2f"
-medium = "#fabd2f"
-soft = "#fabd2f"
-
-[colors.dark0.dark]
-hard = "#282828"
-medium = "#282828"
-soft = "#282828"
-
-[colors.dark0.light]
-hard = "#282828"
-medium = "#282828"
-soft = "#282828"
-
-[colors.dark0_hard.dark]
-hard = "#1d2021"
-medium = "#1d2021"
-soft = "#1d2021"
-
-[colors.dark0_hard.light]
-hard = "#1d2021"
-medium = "#1d2021"
-soft = "#1d2021"
-
-[colors.dark0_soft.dark]
-hard = "#32302f"
-medium = "#32302f"
-soft = "#32302f"
-
-[colors.dark0_soft.light]
-hard = "#32302f"
-medium = "#32302f"
-soft = "#32302f"
-
-[colors.dark1.dark]
-hard = "#3c3836"
-medium = "#3c3836"
-soft = "#3c3836"
-
-[colors.dark1.light]
-hard = "#3c3836"
-medium = "#3c3836"
-soft = "#3c3836"
-
-[colors.dark2.dark]
-hard = "#504945"
-medium = "#504945"
-soft = "#504945"
-
-[colors.dark2.light]
-hard = "#504945"
-medium = "#504945"
-soft = "#504945"
-
-[colors.dark3.dark]
-hard = "#665c54"
-medium = "#665c54"
-soft = "#665c54"
-
-[colors.dark3.light]
-hard = "#665c54"
-medium = "#665c54"
-soft = "#665c54"
-
-[colors.dark4.dark]
-hard = "#7c6f64"
-medium = "#7c6f64"
-soft = "#7c6f64"
-
-[colors.dark4.light]
-hard = "#7c6f64"
-medium = "#7c6f64"
-soft = "#7c6f64"
-
-[colors.dark4_256.dark]
-hard = "#7c6f64"
-medium = "#7c6f64"
-soft = "#7c6f64"
-
-[colors.dark4_256.light]
-hard = "#7c6f64"
-medium = "#7c6f64"
-soft = "#7c6f64"
-
-[colors.faded_aqua.dark]
-hard = "#427b58"
-medium = "#427b58"
-soft = "#427b58"
-
-[colors.faded_aqua.light]
-hard = "#427b58"
-medium = "#427b58"
-soft = "#427b58"
-
-[colors.faded_blue.dark]
-hard = "#076678"
-medium = "#076678"
-soft = "#076678"
-
-[colors.faded_blue.light]
-hard = "#076678"
-medium = "#076678"
-soft = "#076678"
-
-[colors.faded_green.dark]
-hard = "#79740e"
-medium = "#79740e"
-soft = "#79740e"
-
-[colors.faded_green.light]
-hard = "#79740e"
-medium = "#79740e"
-soft = "#79740e"
-
-[colors.faded_orange.dark]
-hard = "#af3a03"
-medium = "#af3a03"
-soft = "#af3a03"
-
-[colors.faded_orange.light]
-hard = "#af3a03"
-medium = "#af3a03"
-soft = "#af3a03"
-
-[colors.faded_purple.dark]
-hard = "#8f3f71"
-medium = "#8f3f71"
-soft = "#8f3f71"
-
-[colors.faded_purple.light]
-hard = "#8f3f71"
-medium = "#8f3f71"
-soft = "#8f3f71"
-
-[colors.faded_red.dark]
-hard = "#9d0006"
-medium = "#9d0006"
-soft = "#9d0006"
-
-[colors.faded_red.light]
-hard = "#9d0006"
-medium = "#9d0006"
-soft = "#9d0006"
-
-[colors.faded_yellow.dark]
-hard = "#b57614"
-medium = "#b57614"
-soft = "#b57614"
-
-[colors.faded_yellow.light]
-hard = "#b57614"
-medium = "#b57614"
-soft = "#b57614"
-
-[colors.gray_244.dark]
-hard = "#928374"
-medium = "#928374"
-soft = "#928374"
-
-[colors.gray_244.light]
-hard = "#928374"
-medium = "#928374"
-soft = "#928374"
-
-[colors.gray_245.dark]
-hard = "#928374"
-medium = "#928374"
-soft = "#928374"
-
-[colors.gray_245.light]
-hard = "#928374"
-medium = "#928374"
-soft = "#928374"
-
-[colors.light0.dark]
-hard = "#fbf1c7"
-medium = "#fbf1c7"
-soft = "#fbf1c7"
-
-[colors.light0.light]
-hard = "#fbf1c7"
-medium = "#fbf1c7"
-soft = "#fbf1c7"
-
-[colors.light0_hard.dark]
-hard = "#f9f5d7"
-medium = "#f9f5d7"
-soft = "#f9f5d7"
-
-[colors.light0_hard.light]
-hard = "#f9f5d7"
-medium = "#f9f5d7"
-soft = "#f9f5d7"
-
-[colors.light0_soft.dark]
-hard = "#f2e5bc"
-medium = "#f2e5bc"
-soft = "#f2e5bc"
-
-[colors.light0_soft.light]
-hard = "#f2e5bc"
-medium = "#f2e5bc"
-soft = "#f2e5bc"
-
-[colors.light1.dark]
-hard = "#ebdbb2"
-medium = "#ebdbb2"
-soft = "#ebdbb2"
-
-[colors.light1.light]
-hard = "#ebdbb2"
-medium = "#ebdbb2"
-soft = "#ebdbb2"
-
-[colors.light2.dark]
-hard = "#d5c4a1"
-medium = "#d5c4a1"
-soft = "#d5c4a1"
-
-[colors.light2.light]
-hard = "#d5c4a1"
-medium = "#d5c4a1"
-soft = "#d5c4a1"
-
-[colors.light3.dark]
-hard = "#bdae93"
-medium = "#bdae93"
-soft = "#bdae93"
-
-[colors.light3.light]
-hard = "#bdae93"
-medium = "#bdae93"
-soft = "#bdae93"
-
-[colors.light4.dark]
-hard = "#a89984"
-medium = "#a89984"
-soft = "#a89984"
-
-[colors.light4.light]
-hard = "#a89984"
-medium = "#a89984"
-soft = "#a89984"
-
-[colors.light4_256.dark]
-hard = "#a89984"
-medium = "#a89984"
-soft = "#a89984"
-
-[colors.light4_256.light]
-hard = "#a89984"
-medium = "#a89984"
-soft = "#a89984"
-
-[colors.neutral_aqua.dark]
-hard = "#689d6a"
-medium = "#689d6a"
-soft = "#689d6a"
-
-[colors.neutral_aqua.light]
-hard = "#689d6a"
-medium = "#689d6a"
-soft = "#689d6a"
-
-[colors.neutral_blue.dark]
-hard = "#458588"
-medium = "#458588"
-soft = "#458588"
-
-[colors.neutral_blue.light]
-hard = "#458588"
-medium = "#458588"
-soft = "#458588"
-
-[colors.neutral_green.dark]
-hard = "#98971a"
-medium = "#98971a"
-soft = "#98971a"
-
-[colors.neutral_green.light]
-hard = "#98971a"
-medium = "#98971a"
-soft = "#98971a"
-
-[colors.neutral_orange.dark]
-hard = "#d65d0e"
-medium = "#d65d0e"
-soft = "#d65d0e"
-
-[colors.neutral_orange.light]
-hard = "#d65d0e"
-medium = "#d65d0e"
-soft = "#d65d0e"
-
-[colors.neutral_purple.dark]
-hard = "#b16286"
-medium = "#b16286"
-soft = "#b16286"
-
-[colors.neutral_purple.light]
-hard = "#b16286"
-medium = "#b16286"
-soft = "#b16286"
-
-[colors.neutral_red.dark]
-hard = "#cc241d"
-medium = "#cc241d"
-soft = "#cc241d"
-
-[colors.neutral_red.light]
-hard = "#cc241d"
-medium = "#cc241d"
-soft = "#cc241d"
-
-[colors.neutral_yellow.dark]
-hard = "#d79921"
-medium = "#d79921"
-soft = "#d79921"
-
-[colors.neutral_yellow.light]
-hard = "#d79921"
-medium = "#d79921"
-soft = "#d79921"
-
-[colors.selection.dark]
-hard = "#665c54"
-medium = "#665c54"
-soft = "#665c54"
-
-[colors.selection.light]
-hard = "#bdae93"
-medium = "#bdae93"
-soft = "#bdae93"
-
-[colors.statusline.dark]
-hard = "#504945"
-medium = "#504945"
-soft = "#504945"
-
-[colors.statusline.light]
-hard = "#d5c4a1"
-medium = "#d5c4a1"
-soft = "#d5c4a1"
-
-[colors.text.dark]
-hard = "#ebdbb2"
-medium = "#ebdbb2"
-soft = "#ebdbb2"
-
-[colors.text.light]
-hard = "#3c3836"
-medium = "#3c3836"
-soft = "#3c3836"
+[colors.red]
+dark = { base = "#fb4934", dark = "#9d0006" }
+light = { base = "#9d0006", light = "#fb4934" }
+
+[colors.green]
+dark = { base = "#b8bb26", dark = "#79740e" }
+light = { base = "#79740e", light = "#b8bb26" }
+
+[colors.yellow]
+dark = { base = "#fabd2f", dark = "#b57614" }
+light = { base = "#b57614", light = "#fabd2f" }
+
+[colors.blue]
+dark = { base = "#83a598", dark = "#076678" }
+light = { base = "#076678", light = "#83a598" }
+
+[colors.purple]
+dark = { base = "#d3869b", dark = "#8f3f71" }
+light = { base = "#8f3f71", light = "#d3869b" }
+
+[colors.aqua]
+dark = { base = "#8ec07c", dark = "#427b58" }
+light = { base = "#427b58", light = "#8ec07c" }
+
+[colors.orange]
+dark = { base = "#fe8019", dark = "#af3a03" }
+light = { base = "#af3a03", light = "#fe8019" }
+
+[colors.gray]
+dark = "#928374"
+light = "#928374"
+
+[colors.fg]
+dark = ["#ebdbb2", "#928374", "#928374"]
+light = ["#3c3836", "#928374", "#928374"]
+
+[colors.bg]
+dark = { hard = ["#1d2021", "#161819", "#3c3836", "#665c54", "#504945"], medium = ["#282828", "#1d2021", "#3c3836", "#665c54", "#504945"], soft = ["#32302f", "#282828", "#3c3836", "#665c54", "#504945"] }
+light = { hard = ["#f9f5d7", "#d5c4a1", "#ebdbb2", "#bdae93", "#d5c4a1"], medium = ["#fbf1c7", "#d5c4a1", "#ebdbb2", "#bdae93", "#d5c4a1"], soft = ["#f2e5bc", "#d5c4a1", "#ebdbb2", "#bdae93", "#d5c4a1"] }
 
 [base]
-Canvas = { bg = "background" }
-Code = { bg = "code_background" }
-Raised = { bg = "printed_background" }
-Pending = { bg = "printed_background" }
-Selection = { bg = "selection" }
-Focus = { bg = "dark1" }
-
-Text = { fg = "text" }
-Muted = { fg = "gray_244" }
-Faint = { fg = "selection" }
-
-Keyword = { fg = "accent_red" }
-Function = { fg = "accent_green", bold = true }
-Type = { fg = "accent_yellow" }
-String = { fg = "accent_green", italic = true }
-Number = { fg = "accent_purple" }
-Operator = { fg = "accent_orange" }
-Symbol = { fg = "accent_orange" }
-Parameter = { fg = "accent_blue" }
-Property = { fg = "accent_blue" }
-Builtin = { fg = "accent_orange" }
-Regex = { fg = "accent_blue", sp = "accent_blue", underline = true }
-EnumVariant = { fg = "accent_aqua" }
-Attribute = { fg = "accent_purple" }
-Macro = { fg = "accent_green", italic = true }
-
-Accent = { fg = "accent_aqua" }
-Error = { fg = "accent_red" }
-Warning = { fg = "accent_yellow" }
-Info = { fg = "accent_blue" }
-Hint = { fg = "accent_aqua" }
+Canvas = { bg = "bg0" }
+Code = { bg = "bg1" }
+Raised = { bg = "bg2" }
+Pending = { bg = "bg2" }
+Selection = { bg = "bg3" }
+Focus = { bg = "bg3" }
+Text = { fg = "fg0" }
+Muted = { fg = "gray" }
+Faint = { fg = "fg4" }
+Keyword = { fg = "red" }
+Function = { fg = "green" }
+Type = { fg = "yellow" }
+String = { fg = "green", italic = true }
+Number = { fg = "purple" }
+Operator = { fg = "orange" }
+Symbol = { fg = "orange" }
+Parameter = { fg = "blue" }
+Property = { fg = "blue" }
+EnumVariant = { fg = "aqua" }
+Macro = { fg = "green", italic = true }
+Attribute = { fg = "purple" }
+Builtin = { fg = "orange" }
+Regex = { fg = "blue", sp = "blue", underline = true }
+Accent = { fg = "aqua" }
+Error = { fg = "red" }
+Warning = { fg = "yellow" }
+Info = { fg = "blue" }
+Hint = { fg = "aqua" }
 
 [overrides]
-Constant = { fg = "accent_orange" }
-Delimiter = { fg = "accent_orange" }
-Punctuation = { fg = "accent_orange" }
-Installation = { fg = "accent_red" }
-CompiledFunction = { fg = "accent_orange" }
+Constant = { fg = "orange" }
+Delimiter = { fg = "orange" }
+Punctuation = { fg = "orange" }
+Installation = { fg = "red" }
+CompiledFunction = { fg = "orange" }

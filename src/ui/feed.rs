@@ -1,11 +1,11 @@
-//! Eagerly retained transcript rendering with viewport-sized copying.
+//! Retained transcript rendering and interaction limited to the viewport.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Offset, Position, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{Block as TuiBlock, Paragraph, Widget};
 
-use super::block::{Block, Reformatted, Resized, Rethemed, Ticked};
+use super::block::{Block, Link, Reformatted, Resized, Rethemed, Ticked};
 use super::cell::{EvaluationBlock, IncompleteBlock};
 use super::config::UI;
 use super::element::{paste, EventListener};
@@ -415,6 +415,31 @@ impl Feed {
         toggled
     }
 
+    /// The link drawn at a screen position, with the cells of it on screen.
+    pub fn link_at(&self, position: Position) -> Option<Link> {
+        let surface = self.surface.as_ref()?;
+        let &(index, area, start) = surface
+            .placements
+            .iter()
+            .find(|(_, area, _)| area.contains(position))?;
+        let link = self.blocks[index].content.block().link_at(
+            &surface.context,
+            Position::new(position.x - area.x, start + position.y - area.y),
+        )?;
+        let visible = start..start + area.height;
+        let cells = link
+            .cells
+            .iter()
+            .filter(|cells| visible.contains(&cells.y))
+            .map(|cells| Rect {
+                x: cells.x + area.x,
+                y: cells.y - start + area.y,
+                ..*cells
+            })
+            .collect();
+        Some(Link { cells, ..link })
+    }
+
     /// Move by signed rows, positive toward older content.
     pub fn scroll(&mut self, rows: i8) {
         self.anchor = None;
@@ -443,12 +468,6 @@ impl Feed {
                 })
     }
 
-    /// Return to the newest transcript row.
-    pub fn follow(&mut self) {
-        self.scroll = 0;
-        self.anchor = None;
-    }
-
     /// Render the current viewport and return whether it is underfilled.
     pub fn render(
         &mut self,
@@ -467,14 +486,15 @@ impl Feed {
             area.width.saturating_sub(UI.feed_margin),
             area.height,
         );
+        if area.is_empty() {
+            self.surface = None;
+            return (true, Exclusions::default());
+        }
         let context = context.with_width(area.width);
         // A new output relabels the ones before it, which moves no row but repaints.
         if self.labelled != context.recent_outputs() {
             self.labelled = context.recent_outputs();
             self.blocks.iter_mut().for_each(|block| block.cells = None);
-        }
-        for block in &mut self.blocks {
-            block.render(&context, canvas);
         }
         let anchor = self.anchor.take().or_else(|| {
             self.surface.as_ref().and_then(|surface| {
@@ -684,6 +704,55 @@ mod tests {
         }
     }
 
+    /// A block counting hover queries independently of rendering and layout.
+    struct Hovered(Arc<AtomicUsize>);
+
+    impl Block for Hovered {
+        fn height(&self, _: &RenderContext) -> u16 {
+            10
+        }
+
+        fn render_local(&self, _: &RenderContext, _: &mut Buffer) {}
+
+        fn link_at(&self, _: &RenderContext, position: Position) -> Option<Link> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            assert!(position.y >= 7, "only the bottom three rows are visible");
+            None
+        }
+    }
+
+    #[test]
+    fn hover_queries_only_the_visible_block_under_the_pointer() {
+        let counts = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
+        let mut feed = Feed::new(Box::new(Hovered(counts[0].clone())));
+        feed.push(Box::new(Hovered(counts[1].clone())));
+        let context = RenderContext::new(30, 0);
+        let area = Rect::new(4, 5, 30, 3);
+        feed.render(
+            &context,
+            area,
+            &mut Buffer::empty(Rect::new(0, 0, 40, 12)),
+            Style::default(),
+        );
+        for pointer in [
+            Position::new(5, 4),
+            Position::new(5, 8),
+            Position::new(0, 5),
+            Position::new(39, 5),
+        ] {
+            assert!(feed.link_at(pointer).is_none());
+        }
+        assert_eq!(
+            counts.each_ref().map(|count| count.load(Ordering::Relaxed)),
+            [0, 0]
+        );
+        let _ = feed.link_at(Position::new(10, 6));
+        assert_eq!(
+            counts.each_ref().map(|count| count.load(Ordering::Relaxed)),
+            [0, 1]
+        );
+    }
+
     /// A block whose height doubles in narrow viewports.
     struct Responsive(char);
 
@@ -763,7 +832,7 @@ mod tests {
     }
 
     #[test]
-    fn rendering_prepares_every_block_before_scrolling() {
+    fn rendering_prepares_only_visible_blocks_and_keeps_them_when_scrolling() {
         let counts = (0..3)
             .map(|_| Arc::new(AtomicUsize::new(0)))
             .collect::<Vec<_>>();
@@ -781,7 +850,7 @@ mod tests {
                 .iter()
                 .map(|count| count.load(Ordering::Relaxed))
                 .collect::<Vec<_>>(),
-            vec![1, 1, 1]
+            vec![0, 0, 1]
         );
 
         feed.scroll(1);
@@ -793,7 +862,7 @@ mod tests {
                 .iter()
                 .map(|count| count.load(Ordering::Relaxed))
                 .collect::<Vec<_>>(),
-            vec![1, 1, 1]
+            vec![0, 1, 1]
         );
     }
 
@@ -886,12 +955,18 @@ mod tests {
         feed.render(&context, area, &mut target, Style::default());
         let marker = |target: &Buffer| {
             (0..area.height)
-                .map(|row| target[(UI.feed_margin + UI.cell_margin, row)].symbol().to_string())
+                .map(|row| {
+                    target[(UI.feed_margin + UI.cell_margin, row)]
+                        .symbol()
+                        .to_string()
+                })
                 .collect::<Vec<_>>()
         };
         let before = marker(&target);
 
-        std::thread::sleep(std::time::Duration::from_millis(UI.busy_frame_ms * 3 / 2));
+        std::thread::sleep(std::time::Duration::from_millis(
+            UI.spinner.frame_ms * 3 / 2,
+        ));
         feed.on_event(&Ticked);
         feed.render(&context, area, &mut target, Style::default());
 
@@ -1044,7 +1119,7 @@ mod tests {
     }
 
     #[test]
-    fn a_newer_output_relabels_the_retained_older_one() {
+    fn retained_output_keeps_its_label_and_updates_its_bold_style() {
         let mut evaluation = EvaluationBlock::new(1, [("x".into(), Vec::new())]);
         evaluation.succeed(
             0,
@@ -1061,15 +1136,24 @@ mod tests {
             let mut target = Buffer::empty(area);
             let context = RenderContext::new(30, 0).with_recent_outputs(recent);
             feed.render(&context, area, &mut target, Style::default());
-            (0..area.height)
+            let text = (0..area.height)
                 .flat_map(|y| (0..area.width).map(move |x| (x, y)))
                 .map(|position| target[position].symbol().to_string())
-                .collect::<String>()
+                .collect::<String>();
+            let bold_label = target.content.iter().any(|cell| {
+                cell.symbol() == "o" && cell.modifier.contains(ratatui::style::Modifier::BOLD)
+            });
+            (text, bold_label)
         };
 
-        assert!(drawn(&mut feed, [Some(1), None, None]).contains("oo"));
-        let later = drawn(&mut feed, [Some(2), Some(1), None]);
-        assert!(later.contains("ooo") && !later.contains("o1"));
+        for recent in [[Some(1), None, None], [Some(2), Some(1), None]] {
+            let (text, bold) = drawn(&mut feed, recent);
+            assert!(text.contains("o1"));
+            assert!(bold);
+        }
+        let (text, bold) = drawn(&mut feed, [Some(4), Some(3), Some(2)]);
+        assert!(text.contains("o1"));
+        assert!(!bold);
     }
 
     #[test]

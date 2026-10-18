@@ -4,14 +4,16 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::LazyLock;
 
-use ratatui::style::{Color, Style};
+#[cfg(test)]
+use ratatui::style::Color;
+use ratatui::style::Style;
 use serde::{Deserialize, Serialize};
 
 pub mod groups;
-mod palette;
+pub mod palette;
 
 use self::groups::{Base, Groups, Overrides, StyleSpec};
-use self::palette::Palette;
+use self::palette::{ColorSet, Palette};
 use super::Persisted;
 use crate::ui::controller::cycled;
 
@@ -119,39 +121,53 @@ struct Variants {
 #[serde(deny_unknown_fields)]
 struct VariantColors {
     #[serde(default)]
-    dark: HashMap<String, Color>,
+    dark: Option<ModeColors>,
     #[serde(default)]
-    light: HashMap<String, Color>,
+    light: Option<ModeColors>,
+}
+
+/// A mode-wide color, or colors keyed by variant when they differ.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ModeColors {
+    Shared(ColorSet),
+    Variants(HashMap<String, ColorSet>),
 }
 
 impl VariantColors {
-    fn get(&self, mode: Mode, variant: &str) -> Option<Color> {
+    fn get(&self, mode: Mode, variant: &str) -> Option<&ColorSet> {
         match mode {
             Mode::Dark => &self.dark,
             Mode::Light => &self.light,
         }
-        .get(variant)
-        .copied()
+        .as_ref()
+        .and_then(|colors| match colors {
+            ModeColors::Shared(color) => Some(color),
+            ModeColors::Variants(colors) => colors.get(variant),
+        })
     }
 }
 
-/// The complete color matrix keyed first by palette name.
+/// Named colors, each available in the modes and variants that define it.
 #[derive(Deserialize)]
 #[serde(transparent)]
 struct Colors(HashMap<String, VariantColors>);
 
 impl Colors {
     fn palette(&self, mode: Mode, variant: &str) -> Result<Palette, String> {
-        self.0
+        let sets = self
+            .0
             .iter()
             .map(|(name, colors)| {
                 colors
                     .get(mode, variant)
-                    .map(|color| (name.clone(), color))
-                    .ok_or_else(|| format!("color `{name}` has no `{variant}` value"))
+                    .map(|colors| (name.clone(), colors))
+                    .ok_or_else(|| {
+                        format!("palette family `{name}` has no {mode} `{variant}` value")
+                    })
             })
-            .collect::<Result<_, _>>()
-            .map(Palette::new)
+            .collect::<Result<_, _>>()?;
+        Palette::build(sets)
     }
 }
 
@@ -419,6 +435,28 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
+    fn mode_colors_accept_shared_shades_and_explicit_variant_entries() {
+        let colors: VariantColors = toml::from_str(
+            r##"dark = { base = "#dbbc7f", light = "#ffffff" }
+light = { hard = "#dfa000", soft = "#ffffff" }"##,
+        )
+        .unwrap();
+        for variant in ["hard", "medium", "soft"] {
+            assert!(matches!(
+                colors.get(Mode::Dark, variant),
+                Some(ColorSet::Shades(_))
+            ));
+        }
+        assert!(matches!(
+            colors.get(Mode::Light, "hard"),
+            Some(ColorSet::Single(Color::Rgb(0xdf, 0xa0, 0x00)))
+        ));
+        assert!(colors.get(Mode::Light, "medium").is_none());
+        let absent: VariantColors = toml::from_str(r##"dark = "#dbbc7f""##).unwrap();
+        assert!(absent.get(Mode::Light, "hard").is_none());
+    }
+
+    #[test]
     fn every_configured_variant_paints_every_syntax_role() {
         for scheme in SCHEMES.iter() {
             for variant in scheme.variants() {
@@ -612,7 +650,7 @@ mod tests {
             Some(Color::Rgb(0x2d, 0x35, 0x3b))
         );
         assert_eq!(
-            palette.resolve(Some("fg")).unwrap(),
+            palette.resolve(Some("fg0")).unwrap(),
             Some(Color::Rgb(0xd3, 0xc6, 0xaa))
         );
     }
@@ -631,27 +669,23 @@ mod tests {
                 .palette()
         };
         assert_eq!(
-            palette("gruvbox", "soft")
-                .resolve(Some("bright_red"))
-                .unwrap(),
+            palette("gruvbox", "soft").resolve(Some("red")).unwrap(),
             Some(Color::Rgb(0xfb, 0x49, 0x34))
         );
         assert_eq!(
             palette("catppuccin", "latte")
-                .resolve(Some("mauve"))
+                .resolve(Some("purple"))
                 .unwrap(),
             Some(Color::Rgb(0x88, 0x39, 0xef))
         );
         assert_eq!(
             palette("everforest", "medium")
-                .resolve(Some("bg_dim"))
+                .resolve(Some("bg1"))
                 .unwrap(),
             Some(Color::Rgb(0x23, 0x2a, 0x2e))
         );
         assert_eq!(
-            palette("kanagawa", "wave")
-                .resolve(Some("lotusWhite5"))
-                .unwrap(),
+            palette("kanagawa", "lotus").resolve(Some("bg4")).unwrap(),
             Some(Color::Rgb(0xe4, 0xd7, 0x94))
         );
     }
@@ -671,7 +705,9 @@ mod tests {
                 .filter(|variant| variant.mode() == Mode::Dark)
             {
                 for (name, style) in variant.groups().highlight_groups() {
-                    if style.bg.and_then(luma).is_some_and(|value| value > 140) {
+                    if !name.starts_with("Bg")
+                        && style.bg.and_then(luma).is_some_and(|value| value > 140)
+                    {
                         assert!(
                             style.fg.and_then(luma).is_some_and(|value| value < 80),
                             "{} {}: {name} has a bright background without dark text",
@@ -685,13 +721,25 @@ mod tests {
     }
 
     #[test]
-    fn every_variant_defines_the_same_complete_color_matrix() {
+    fn every_variant_has_the_same_fixed_palette() {
+        let expected = SCHEMES[0].variants()[0]
+            .palette()
+            .colors()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
+        assert_eq!(expected.len(), 42);
         for scheme in SCHEMES.iter() {
-            let expected = scheme.variants()[0].palette().colors();
             for variant in scheme.variants() {
-                let palette = variant.palette();
-                assert_eq!(palette.color_count(), expected.len());
-                assert!(expected.iter().all(|&(name, _)| palette.defines(name)));
+                assert_eq!(
+                    variant
+                        .palette()
+                        .colors()
+                        .into_iter()
+                        .map(|(name, _)| name)
+                        .collect::<Vec<_>>(),
+                    expected
+                );
             }
         }
     }

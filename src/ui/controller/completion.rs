@@ -144,13 +144,12 @@ pub fn complete(request: Request<'_>) -> Option<Completion> {
         complete_after,
     } = request;
     if let Some(command) = picked.filter(|_| cursor == text.len()) {
-        return Completion::new(text, 0..text.len(), vec![commands::completed(command)])
-            .map(Completion::hinted);
+        return Completion::new(text, 0..text.len(), vec![commands::completed(command)]);
     }
     if text.starts_with(commands::PREFIX) {
         let (Operand::File, range) = commands::operand(text).filter(|_| cursor == text.len())?;
         let candidates = file::completions(&text[range.clone()], Entries::Code);
-        return Completion::new(text, range, candidates).map(Completion::hinted);
+        return Completion::new(text, range, candidates);
     }
     let pending = pending.map_or(String::new(), |pending| format!("{pending}\n"));
     let in_text = |range: Range<usize>| range.start.max(pending.len()) - pending.len()..cursor;
@@ -356,21 +355,6 @@ mod tests {
 
         assert!(!editor.picker_open());
         assert_eq!(editor.submission(), format!("{}sa", commands::PREFIX));
-    }
-
-    #[test]
-    fn a_command_is_completed_as_a_hint_and_a_name_as_text() {
-        let mut names = Names::default();
-        names.reset(vec!["ideal".to_string()]);
-        assert!(!complete(request("ide", &names)).unwrap().is_hint());
-
-        let (save, _) = commands::exact(&format!("{}save", commands::PREFIX)).unwrap();
-        let typed = format!("{}sa", commands::PREFIX);
-        let picked = Request {
-            picked: Some(save),
-            ..request(&typed, &names)
-        };
-        assert!(complete(picked).unwrap().is_hint());
     }
 
     #[test]
