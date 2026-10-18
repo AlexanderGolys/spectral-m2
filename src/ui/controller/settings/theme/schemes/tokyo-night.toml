@@ -407,7 +407,13 @@ String = { fg = "green" }
 Number = { fg = "orange" }
 Operator = { fg = "blue5" }
 Symbol = { fg = "blue1" }
-Module = { fg = "cyan" }
+Parameter = { fg = "yellow" }
+Property = { fg = "green1" }
+Builtin = { fg = "red" }
+Regex = { fg = "fg", sp = "fg", underline = true }
+EnumVariant = { fg = "teal" }
+Attribute = { fg = "magenta" }
+Macro = { fg = "green2" }
 
 Accent = { fg = "cyan" }
 Error = { fg = "error" }
@@ -419,9 +425,5 @@ Hint = { fg = "cyan" }
 Comment = { fg = "comment", italic = true }
 Constant = { fg = "blue1" }
 Delimiter = { fg = "blue5" }
-Parameter = { fg = "yellow" }
-Property = { fg = "green1" }
 CompiledFunction = { fg = "blue1" }
-Builtin = { fg = "red" }
-Regex = { fg = "fg", sp = "fg", underline = true }
 Documentation = { fg = "fg", sp = "fg", underline = true }

@@ -221,7 +221,7 @@ Selection = { bg = "surface2" }
 Focus = { bg = "crust" }
 
 Text = { fg = "text" }
-Muted = { fg = "overlay0" }
+Muted = { fg = "overlay1" }
 Faint = { fg = "surface2" }
 
 Keyword = { fg = "mauve" }
@@ -230,8 +230,14 @@ Type = { fg = "yellow" }
 String = { fg = "green" }
 Number = { fg = "peach" }
 Operator = { fg = "sky" }
-Symbol = { fg = "pink" }
-Module = { fg = "yellow", italic = true }
+Symbol = { fg = "red" }
+Parameter = { fg = "maroon" }
+Property = { fg = "blue" }
+Builtin = { fg = "red" }
+Regex = { fg = "pink" }
+EnumVariant = { fg = "teal" }
+Attribute = { fg = "yellow" }
+Macro = { fg = "rosewater" }
 
 Accent = { fg = "teal" }
 Error = { fg = "red" }
@@ -243,10 +249,6 @@ Hint = { fg = "teal" }
 Comment = { fg = "overlay2", italic = true }
 Delimiter = { fg = "overlay2" }
 Punctuation = { fg = "overlay2" }
-Parameter = { fg = "maroon" }
-Property = { fg = "lavender" }
 Installation = { fg = "sapphire" }
 CompiledFunction = { fg = "peach" }
-Builtin = { fg = "red" }
-Regex = { fg = "pink" }
 Documentation = { fg = "blue", sp = "blue", italic = true, underline = true }

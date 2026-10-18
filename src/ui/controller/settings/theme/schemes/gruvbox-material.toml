@@ -358,12 +358,18 @@ Faint = { fg = "bg3" }
 
 Keyword = { fg = "red" }
 Function = { fg = "green", bold = true }
-Type = { fg = "yellow", italic = true }
+Type = { fg = "yellow" }
 String = { fg = "aqua" }
 Number = { fg = "purple" }
 Operator = { fg = "orange" }
 Symbol = { fg = "blue" }
-Module = { fg = "yellow", italic = true }
+Parameter = { fg = "fg0" }
+Property = { fg = "blue" }
+Builtin = { fg = "purple", italic = true }
+Regex = { fg = "blue", sp = "blue", underline = true }
+EnumVariant = { fg = "aqua" }
+Attribute = { fg = "orange" }
+Macro = { fg = "green", italic = true }
 
 Accent = { fg = "aqua" }
 Error = { fg = "red" }
@@ -374,7 +380,5 @@ Hint = { fg = "aqua" }
 [overrides]
 Constant = { fg = "purple", italic = true }
 Punctuation = { fg = "grey2" }
-Property = { fg = "blue" }
 Installation = { fg = "orange" }
-Builtin = { fg = "purple", italic = true }
 Quote = { fg = "yellow" }

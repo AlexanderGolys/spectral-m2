@@ -7,7 +7,7 @@
 use crate::ui::block::{Element, HLSpan, Text};
 use crate::ui::config::UI;
 use crate::ui::controller::settings::theme::groups::{scheme, Groups};
-use crate::ui::render::maths::FractionStyle;
+use crate::ui::render::maths::{FractionStyle, MathStyle};
 use crate::ui::render::selection::Exclusions;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -15,10 +15,11 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, BorderType, Padding, Paragraph, Widget};
 
-pub(crate) mod maths;
-pub(crate) mod selection;
+pub mod markup;
+pub mod maths;
+pub mod selection;
 #[allow(dead_code)] // groundwork: not yet wired into the running UI
-mod spin;
+pub mod spin;
 
 /// Horizontal placement of a bordered feed element.
 #[derive(Clone, Copy)]
@@ -26,30 +27,49 @@ enum BorderPlacement {
     Gutter,
     /// Centred over the middle third, widened into the margins as far as `content`
     /// columns of text need.
-    MiddleThird { content: u16 },
+    MiddleThird {
+        content: u16,
+    },
 }
+
+/// A rule `width` columns wide, drawn in `rule`, with `label` centred across it.
+pub fn labelled_rule(label: Span<'static>, width: u16, rule: Style) -> Line<'static> {
+    let line = usize::from(width).saturating_sub(label.width());
+    Line::from(vec![
+        Span::styled("─".repeat(line / 2), rule),
+        label,
+        Span::styled("─".repeat(line - line / 2), rule),
+    ])
+}
+
+/// How many of the latest outputs M2 also names `oo`, `ooo` and `oooo`.
+pub const RECENT_OUTPUTS: usize = 3;
 
 /// Runtime rendering inputs shared by every block without owning application state.
 #[derive(Clone, Copy)]
-pub(crate) struct RenderContext {
+pub struct RenderContext {
     width: u16,
     prefix: u16,
     output_limit: Option<usize>,
-    fractions: FractionStyle,
+    math: MathStyle,
+    recent_outputs: [Option<u32>; RECENT_OUTPUTS],
+    numbers_printed: bool,
 }
 
 impl RenderContext {
-    pub(crate) fn new(width: u16, prefix: u16) -> Self {
+    pub fn new(width: u16, prefix: u16) -> Self {
         Self {
             width,
             prefix,
             output_limit: Some(UI.max_output_rows),
-            fractions: FractionStyle::default(),
+            math: MathStyle::default(),
+            recent_outputs: [None; RECENT_OUTPUTS],
+            numbers_printed: false,
         }
     }
 
     /// Fold returned values taller than `rows`.
-    pub(crate) fn with_output_limit(self, rows: usize) -> Self {
+    pub fn with_output_limit(self, rows: usize) -> Self {
         Self {
             output_limit: Some(rows),
             ..self
@@ -57,53 +77,114 @@ impl RenderContext {
     }
 
     /// Set returned maths with fractions in `fractions`.
-    pub(crate) fn with_fractions(self, fractions: FractionStyle) -> Self {
-        Self { fractions, ..self }
+    pub fn with_fractions(self, fractions: FractionStyle) -> Self {
+        Self {
+            math: MathStyle {
+                fractions,
+                ..self.math
+            },
+            ..self
+        }
     }
 
-    pub(crate) fn width(&self) -> u16 {
+    /// Label the latest outputs, newest first, as M2 recalls them: `oo`, `ooo`, `oooo`.
+    pub fn with_recent_outputs(self, recent_outputs: [Option<u32>; RECENT_OUTPUTS]) -> Self {
+        Self {
+            recent_outputs,
+            ..self
+        }
+    }
+
+    pub fn recent_outputs(&self) -> [Option<u32>; RECENT_OUTPUTS] {
+        self.recent_outputs
+    }
+
+    /// Whether output `number` is one of the latest, which M2 recalls as `oo`, `ooo`
+    /// and `oooo`.
+    pub fn is_recent_output(&self, number: u32) -> bool {
+        self.recent_outputs.contains(&Some(number))
+    }
+
+    /// What output `number` is called: `o` and as many more as it is recent, or
+    /// `o` and its number once it is not among the latest.
+    pub fn output_label(&self, number: u32) -> String {
+        match self
+            .recent_outputs
+            .iter()
+            .position(|&recent| recent == Some(number))
+        {
+            Some(age) => "o".repeat(age + 2),
+            None => format!("o{number}"),
+        }
+    }
+
+    /// Draw rings as blackboard glyphs (`ℤ`) rather than by name (`ZZ`).
+    pub fn with_blackboard(self, blackboard: bool) -> Self {
+        Self {
+            math: MathStyle {
+                blackboard,
+                ..self.math
+            },
+            ..self
+        }
+    }
+
+    /// Label printed text with the number of the cell that printed it, as the
+    /// views apart from the shell do.
+    pub fn with_printed_numbers(self) -> Self {
+        Self {
+            numbers_printed: true,
+            ..self
+        }
+    }
+
+    pub fn numbers_printed(&self) -> bool {
+        self.numbers_printed
+    }
+
+    pub fn width(&self) -> u16 {
         self.width
     }
 
     /// Retain rendering services at a nested element's local width.
-    pub(crate) fn with_width(&self, width: u16) -> Self {
+    pub fn with_width(&self, width: u16) -> Self {
         Self { width, ..*self }
     }
 
-    pub(crate) fn fractions(&self) -> FractionStyle {
-        self.fractions
+    pub fn math(&self) -> MathStyle {
+        self.math
     }
 
     /// Render returned values without the shell's row limit.
-    pub(crate) fn full_output(&self) -> Self {
+    pub fn full_output(&self) -> Self {
         Self {
             output_limit: None,
             ..*self
         }
     }
 
-    pub(crate) fn output_limit(&self) -> Option<usize> {
+    pub fn output_limit(&self) -> Option<usize> {
         self.output_limit
     }
 
-    pub(crate) fn prefix(&self) -> u16 {
+    pub fn prefix(&self) -> u16 {
         self.prefix
     }
 
     /// The scheme in effect, read rather than retained.
-    pub(crate) fn groups(&self) -> &'static Groups {
+    pub fn groups(&self) -> &'static Groups {
         scheme()
     }
 }
 
 /// Styled prefix containing the live input prompt.
-pub(crate) struct Prompt {
+pub struct Prompt {
     label: String,
     style: Style,
 }
 
 impl Prompt {
-    pub(crate) fn new(label: impl Into<String>, style: Style) -> Self {
+    pub fn new(label: impl Into<String>, style: Style) -> Self {
         Self {
             label: label.into(),
             style,
@@ -128,7 +209,7 @@ impl Text for Prompt {
 }
 
 /// Semantic highlight ranges that paint source text into styled spans.
-pub(crate) trait Highlights {
+pub trait Highlights {
     fn paint(
         &self,
         abs_start: usize,
@@ -179,7 +260,7 @@ impl Highlights for [HLSpan] {
 
 /// Content geometry for a generic bordered element.
 #[derive(Clone, Copy)]
-pub(crate) struct FrameLayout {
+pub struct FrameLayout {
     prefix: u16,
     inset: u16,
     placement: BorderPlacement,
@@ -187,7 +268,7 @@ pub(crate) struct FrameLayout {
 
 impl FrameLayout {
     /// Place a frame at an explicit inset with independent content padding.
-    pub(crate) const fn gutter(prefix: u16, inset: u16) -> Self {
+    pub const fn gutter(prefix: u16, inset: u16) -> Self {
         Self {
             prefix,
             inset,
@@ -197,7 +278,7 @@ impl FrameLayout {
 
     /// Centre a box over the middle third of its available width, giving up margin
     /// rather than wrapping text up to `content` columns wide.
-    pub(crate) const fn middle_third(content: u16) -> Self {
+    pub const fn middle_third(content: u16) -> Self {
         Self {
             prefix: 0,
             inset: 0,
@@ -206,12 +287,12 @@ impl FrameLayout {
     }
 
     /// Width reserved before bordered content.
-    pub(crate) const fn prefix(self) -> u16 {
+    pub const fn prefix(self) -> u16 {
         self.prefix
     }
 
     /// Horizontal coordinate of the frame's left edge.
-    pub(crate) const fn inset(self) -> u16 {
+    pub const fn inset(self) -> u16 {
         self.inset
     }
 }
@@ -222,9 +303,7 @@ impl Bordered {
             let left = area.width / 3;
             let third = (area.width.saturating_mul(2) / 3 - left + 1).min(area.width - left);
             let chrome = third.saturating_sub(Self::content_width(third, layout));
-            let width = third
-                .max(content.saturating_add(chrome))
-                .min(area.width);
+            let width = third.max(content.saturating_add(chrome)).min(area.width);
             let start = match width > third {
                 true => (area.width - width) / 2,
                 false => left,
@@ -238,7 +317,7 @@ impl Bordered {
         Rect::new(area.x + layout.inset, area.y, width, area.height)
     }
 
-    pub(crate) fn inner(area: Rect, layout: FrameLayout) -> Rect {
+    pub fn inner(area: Rect, layout: FrameLayout) -> Rect {
         Self::frame(layout).inner(Self::area(area, layout))
     }
 
@@ -254,17 +333,15 @@ impl Bordered {
 
     /// Columns left for content inside a frame `width` wide.
     fn content_width(width: u16, layout: FrameLayout) -> u16 {
-        Self::frame(layout)
-            .inner(Rect::new(0, 0, width, 1))
-            .width
+        Self::frame(layout).inner(Rect::new(0, 0, width, 1)).width
     }
 
-    pub(crate) fn text_width(context: &RenderContext, layout: FrameLayout) -> u16 {
+    pub fn text_width(context: &RenderContext, layout: FrameLayout) -> u16 {
         Self::inner(Rect::new(0, 0, context.width(), 0), layout).width
     }
 
     /// Exclude the frame and its padding while retaining rendered body glyphs.
-    pub(crate) fn exclude_frame(area: Rect, layout: FrameLayout, exclusions: &mut Exclusions) {
+    pub fn exclude_frame(area: Rect, layout: FrameLayout, exclusions: &mut Exclusions) {
         let frame = Self::area(area, layout);
         let inner = Self::inner(area, layout);
         match (frame.width, frame.height) {
@@ -285,7 +362,7 @@ impl Bordered {
 }
 
 /// Styled text decorated by the shared rounded feed border.
-pub(crate) struct Bordered {
+pub struct Bordered {
     layout: FrameLayout,
     surface: Style,
     border_style: Style,
@@ -294,7 +371,7 @@ pub(crate) struct Bordered {
 }
 
 impl Bordered {
-    pub(crate) fn new(
+    pub fn new(
         layout: FrameLayout,
         surface: Style,
         border_style: Style,

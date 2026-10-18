@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::LazyLock;
 use std::time::Duration;
-use std::{env, fs, thread};
+use std::{env, fs, mem, thread};
 
 use crate::errors::{Error, Result};
 use regex::Regex;
@@ -26,8 +26,10 @@ const STARTUP_FILE: &str = "backend.m2";
 const FRAME_MARK: u8 = 0x1D;
 
 /// Appended to every submission. The statement that closes an input -- see the
-/// M2 side for why the hooks cannot do it alone for a statement that errored.
-const CELL_TERMINATOR: &str = r#"(User#"spectral end of cell")();"#;
+/// M2 side for why the hooks cannot do it alone for a statement that errored. It
+/// hands over the top level's local dictionaries, which only a statement typed
+/// at the top level can reach, so the names bound there are reported too.
+const CELL_TERMINATOR: &str = r#"(User#"spectral end of cell")(localDictionaries());"#;
 
 static M2_ARRAY: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\\begin\{array\}\{[clr]+\}").expect("valid M2 array pattern"));
@@ -72,6 +74,9 @@ struct Frame {
     has_value: bool,
     #[serde(default)]
     depth: u32,
+    /// Names M2 had not reported before: all of them on the startup frame.
+    #[serde(default)]
+    names: Vec<String>,
 }
 
 /// A displayed M2 value in its preferred TeX form or its original Net form.
@@ -104,6 +109,11 @@ pub enum Role {
     Boolean,
     String,
     Function,
+    Type,
+    Package,
+    Keyword,
+    Operator,
+    Command,
 }
 
 /// The M2 list class a collection was drawn as, named exactly as M2 names it.
@@ -157,18 +167,23 @@ impl M2Value {
         RenderedBlock::new(block.cells().to_vec(), block.height() / 2)
     }
 
+    /// A curly brace `height` rows tall. An odd one has its cusp on the middle
+    /// row; an even one, having no middle row, splits the cusp across the two
+    /// rows about its middle, which at height two is the whole brace.
     fn curly(height: usize, left: bool, baseline: usize) -> RenderedBlock {
-        let glyphs = match left {
-            true => ("{", "⎧", "⎨", "⎩"),
-            false => ("}", "⎫", "⎬", "⎭"),
+        let (single, top, cusp, bottom, upper_cusp, lower_cusp) = match left {
+            true => ("{", "⎧", "⎨", "⎩", "⎰", "⎱"),
+            false => ("}", "⎫", "⎬", "⎭", "⎱", "⎰"),
         };
         let cells = (0..height)
             .map(|row| {
-                vec![match (height, row) {
-                    (1, _) => glyphs.0,
-                    (_, 0) => glyphs.1,
-                    (_, row) if row + 1 == height => glyphs.3,
-                    (_, row) if row == height / 2 => glyphs.2,
+                vec![match (height % 2, row) {
+                    _ if height == 1 => single,
+                    (0, row) if row + 1 == height / 2 => upper_cusp,
+                    (0, row) if row == height / 2 => lower_cusp,
+                    (_, 0) => top,
+                    (_, row) if row + 1 == height => bottom,
+                    (1, row) if row == height / 2 => cusp,
                     _ => "⎪",
                 }
                 .to_string()]
@@ -288,6 +303,8 @@ pub struct M2Response {
     /// M2's interpreter depth after the evaluation. Anything above 1 means a
     /// nested interpreter, which is what being in the debugger looks like.
     pub depth: u32,
+    /// Names the statement bound that M2 had not reported before.
+    pub names: Vec<String>,
 }
 
 impl M2Response {
@@ -304,6 +321,8 @@ pub struct M2Backend {
     input: ChildStdin,
     chunks: Receiver<Chunk>,
     version: String,
+    /// Every name M2 started with, until it is taken.
+    names: Vec<String>,
 }
 
 impl M2Backend {
@@ -326,10 +345,9 @@ impl M2Backend {
     /// The startup script is loaded with `-e` *before* the top level begins, so
     /// the hooks are installed by the time the first cell can arrive. Deliberately
     /// not `--script`, which would evaluate the file and exit rather than going on
-    /// to read stdin. `-q` is kept, as `--script` implied it: the shell's config
-    /// file is its own `init.m2`, and reading `~/.Macaulay2/init.m2` as well would
-    /// change what a session starts with -- packages included -- as a side effect
-    /// of how it is driven.
+    /// to read stdin. Normal M2 initialization is preserved: `-q` would also
+    /// remove the user's installed packages from the search path. Spectral's
+    /// own `init.m2` runs after M2's initialization and before the backend hooks.
     ///
     /// Both output streams are handed the same pipe. Printed text, diagnostics
     /// and result frames then share one ordering, which is what lets a cell's
@@ -339,8 +357,8 @@ impl M2Backend {
         let (reader, writer) = std::io::pipe()?;
 
         let mut command = Command::new("M2");
-        command.arg("--silent").arg("--no-readline").arg("-q");
-        // The user's init file first, so that the startup frame really is the
+        command.arg("--silent").arg("--no-readline");
+        // Spectral's init file first, so that the startup frame really is the
         // last thing to arrive before the session opens. `load` rather than a
         // submitted cell: it gives the file its own dictionary, the way every
         // other loaded file gets one, and costs it no input number -- numbering
@@ -366,8 +384,11 @@ impl M2Backend {
             input,
             chunks: split_stream(reader),
             version: String::new(),
+            names: Vec::new(),
         };
-        backend.version = backend.wait_for_ready()?;
+        let ready = backend.wait_for_ready()?;
+        backend.version = ready.ready.unwrap_or_default();
+        backend.names = ready.names;
         Ok(backend)
     }
 
@@ -415,21 +436,24 @@ impl M2Backend {
         }
     }
 
-    /// Wait for the startup frame, and report the M2 version it carries.
+    /// Wait for the startup frame, which carries the M2 version and its names.
     ///
     /// M2 sends it once the hooks are installed and before it can read a cell, so
     /// receiving it is the readiness signal. A child that dies during startup
     /// closes the pipe instead, which arrives here as a disconnect.
-    fn wait_for_ready(&mut self) -> Result<String> {
+    fn wait_for_ready(&mut self) -> Result<Frame> {
         let mut said = String::new();
         loop {
             match self.chunks.recv_timeout(STARTUP_TIMEOUT) {
                 Ok(Chunk::Text(text)) => said.push_str(&text),
                 Ok(Chunk::Frame(frame)) => {
                     let frame: Frame = serde_json::from_str(&frame)?;
-                    return frame.ready.ok_or_else(|| {
-                        Error::Process("Macaulay2 answered before it was ready".to_string())
-                    });
+                    return match frame.ready {
+                        Some(_) => Ok(frame),
+                        None => Err(Error::Process(
+                            "Macaulay2 answered before it was ready".to_string(),
+                        )),
+                    };
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     return Err(Error::Timeout(STARTUP_TIMEOUT.as_secs()))
@@ -484,6 +508,7 @@ impl M2Backend {
                         type_parts: frame.type_parts.unwrap_or_default(),
                         has_value: frame.has_value,
                         depth: frame.depth,
+                        names: frame.names,
                     });
                 }
                 Err(RecvTimeoutError::Timeout) => {
@@ -499,6 +524,11 @@ impl M2Backend {
     /// The M2 version, as reported by the startup frame.
     pub fn version(&self) -> Result<String> {
         Ok(self.version.clone())
+    }
+
+    /// Every name M2 started with; later names arrive with each response.
+    pub fn take_names(&mut self) -> Vec<String> {
+        mem::take(&mut self.names)
     }
 }
 
@@ -569,6 +599,22 @@ impl Drop for M2Backend {
 mod tests {
     use super::*;
     use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn an_even_brace_splits_its_cusp_over_the_two_middle_rows() {
+        let column = |height, left| {
+            let brace = M2Value::curly(height, left, 0);
+            brace
+                .cells()
+                .iter()
+                .map(|row| row[0].clone())
+                .collect::<String>()
+        };
+        assert_eq!(column(2, true), "⎰⎱");
+        assert_eq!(column(2, false), "⎱⎰");
+        assert_eq!(column(4, true), "⎧⎰⎱⎩");
+        assert_eq!(column(5, true), "⎧⎪⎨⎪⎩");
+    }
 
     #[test]
     fn tex_values_render_as_plain_unicode_blocks() {
@@ -760,6 +806,50 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         assert_eq!(boolean.rendered_value().as_deref(), Some("true"));
         assert_eq!(boolean.type_info.as_deref(), Some("Boolean"));
 
+        let kind = backend.evaluate("Type", Some(5)).expect("evaluate a type");
+        assert!(matches!(
+            kind.value,
+            Some(M2Value::Token {
+                role: Role::Type,
+                ..
+            })
+        ));
+        let wrapper = backend
+            .evaluate("WrapperType", Some(8))
+            .expect("evaluate a type of types");
+        assert!(matches!(
+            wrapper.value,
+            Some(M2Value::Token {
+                role: Role::Type,
+                ..
+            })
+        ));
+        let contained = backend
+            .evaluate("{Type, WrapperType, Core}", Some(9))
+            .expect("evaluate types in a list");
+        let Some(M2Value::Collection { items, .. }) = &contained.value else {
+            panic!("a list arrives as a collection");
+        };
+        assert!(matches!(
+            items.as_slice(),
+            [
+                M2Value::Token {
+                    role: Role::Type,
+                    ..
+                },
+                M2Value::Token {
+                    role: Role::Type,
+                    ..
+                },
+                M2Value::Token {
+                    role: Role::Package,
+                    ..
+                },
+            ]
+        ));
+        let ring = backend.evaluate("ZZ", Some(6)).expect("evaluate a ring");
+        assert!(!matches!(ring.value, Some(M2Value::Token { .. })));
+
         let function = backend
             .evaluate("Thing#{SpectralTopLevelMode, Print}", Some(13))
             .expect("evaluate function closure");
@@ -782,6 +872,38 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             .expect("evaluate command");
         assert_eq!(command.rendered_value().as_deref(), Some("print"));
 
+        for (code, word, role) in [
+            ("symbol ^", "^", Role::Operator),
+            ("symbol SPACE", "SPACE", Role::Operator),
+            ("symbol if", "if", Role::Keyword),
+            ("Ext", "Ext", Role::Function),
+        ] {
+            let evaluated = backend.evaluate(code, Some(15)).expect("evaluate a word");
+            assert!(
+                matches!(&evaluated.value, Some(M2Value::Token { text, role: found }) if text == word && *found == role),
+                "{code} should be the {role:?} token {word}"
+            );
+        }
+        // A functor with a TeX spelling of its own is set in it, not as a name.
+        let structure_sheaf = backend
+            .evaluate("OO", Some(15))
+            .expect("evaluate a functor with TeX");
+        assert!(
+            matches!(&structure_sheaf.value, Some(M2Value::Tex { source, .. }) if source.contains(r"\mathcal O")),
+            "OO should arrive as its calligraphic TeX: {:?}",
+            structure_sheaf.value
+        );
+
+        // Typed bare, a Command runs; held in a list it is only drawn.
+        let held = backend
+            .evaluate("{help}", Some(16))
+            .expect("evaluate a list holding a command");
+        assert!(matches!(
+            held.value,
+            Some(M2Value::Collection { ref items, .. })
+                if matches!(items.as_slice(), [M2Value::Token { role: Role::Command, .. }])
+        ));
+
         let fraction = backend.evaluate("1/2", Some(8)).expect("evaluate fraction");
         assert_eq!(fraction.rendered_value().as_deref(), Some(" 1\n───\n 2"));
 
@@ -803,7 +925,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             .expect("evaluate hash table");
         assert_eq!(
             table.rendered_value().as_deref(),
-            Some("⎧ a ⇒ 1 ⎫\n⎩ b ⇒ 2 ⎭")
+            Some("⎰ a ⇒ 1 ⎱\n⎱ b ⇒ 2 ⎰")
         );
 
         let vertical = backend
@@ -811,7 +933,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             .expect("evaluate vertical list");
         assert_eq!(
             vertical.rendered_value().as_deref(),
-            Some("⎧ {1} ⎫\n⎩ {1} ⎭")
+            Some("⎰ {1} ⎱\n⎱ {1} ⎰")
         );
 
         let spoofed_code = "print \"\\no184 = 11\"";
@@ -862,7 +984,10 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             lines.iter().any(|line| line.starts_with("# List")),
             "{rendered}"
         );
-        assert!(lines.iter().any(|line| line.starts_with("* ")), "{rendered}");
+        assert!(
+            lines.iter().any(|line| line.starts_with("* ")),
+            "{rendered}"
+        );
         assert!(!rendered.contains("<div"), "{rendered}");
         assert!(
             lines
@@ -870,6 +995,36 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
                 .all(|line| UnicodeWidthStr::width(*line) <= width),
             "{rendered}"
         );
+    }
+
+    #[test]
+    fn text_documentation_examples_render_as_native_session_blocks() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        let response = backend
+            .evaluate("help det", None)
+            .expect("read real documentation");
+        let Some(M2Value::Markup { html, .. }) = response.value else {
+            panic!("documentation did not return markup");
+        };
+        for width in [28, 60, 100] {
+            let context = crate::ui::render::RenderContext::new(width, 0);
+            let lines =
+                crate::ui::render::markup::lines(&html, &context).expect("render documentation");
+            let text = lines
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("Description"), "{text}");
+            assert!(text.contains("o1"), "{text}");
+            assert!(text.contains("o5"), "{text}");
+            assert!(!text.contains("i1 :"), "{text}");
+            assert!(!text.contains("o1 ="), "{text}");
+            assert!(
+                lines.iter().all(|line| line.width() <= usize::from(width)),
+                "{text}"
+            );
+        }
     }
 
     // One reader means M2's own `lineNumber` is the session's input number, so
@@ -973,6 +1128,33 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     // interactive M2 does, so a top-level `:=` is still bound at the next input.
     // Evaluating each cell through `capture` gave every cell a dictionary of its
     // own and the binding never survived.
+    #[test]
+    fn names_arrive_once_as_m2_comes_to_know_them() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        let started = backend.take_names();
+        assert!(started.iter().any(|name| name == "ideal"));
+        assert!(
+            started.iter().all(|name| name != "toJSON"),
+            "the transport's names are given back"
+        );
+
+        let bound = backend
+            .evaluate("spectralGlobal = 1; spectralLocal := 2", Some(1))
+            .expect("bind names");
+        for name in ["spectralGlobal", "spectralLocal"] {
+            assert!(
+                bound.names.iter().any(|bound| bound == name),
+                "{name} is reported"
+            );
+        }
+        assert!(!bound.names.iter().any(|name| name == "ideal"));
+
+        let unchanged = backend
+            .evaluate("spectralGlobal + 1", Some(2))
+            .expect("use names");
+        assert!(unchanged.names.is_empty());
+    }
+
     #[test]
     fn local_assignments_outlive_their_cell() {
         let mut backend = M2Backend::spawn().expect("spawn M2");
@@ -1146,6 +1328,19 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     }
 
     #[test]
+    fn user_package_paths_are_available() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        let response = backend
+            .evaluate(
+                r#"assert isMember(toAbsolutePath(applicationDirectory() | "code/"), apply(path, toAbsolutePath)); assert isMember(toAbsolutePath(applicationDirectory() | "local/"), apply(prefixPath, toAbsolutePath));"#,
+                None,
+            )
+            .expect("check user package paths");
+
+        assert!(!response.is_error, "{}", response.transcript);
+    }
+
+    #[test]
     fn init_file_is_loaded() {
         let base = env::temp_dir().join(format!("spectral-m2-init-test-{}", std::process::id()));
         let config = base.join("spectral-m2");
@@ -1189,6 +1384,33 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             bare.number, bare.transcript
         );
         assert!(!fine.is_error, "`1` reported an error");
+    }
+
+    /// `capture`, which `installPackage` uses to run examples, evaluates through
+    /// the shell's mode hooks; a statement it completes must neither stand in
+    /// for the cell that called it nor lose the values M2 prints into its output.
+    #[test]
+    fn nested_capture_is_not_the_cell() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+
+        let thrown = backend
+            .evaluate("(capture \"1+1\"; 1/0)", None)
+            .expect("evaluate");
+        assert!(
+            thrown.is_error,
+            "a cell throwing after `capture` reported success: {:?}",
+            thrown.transcript
+        );
+
+        let captured = backend
+            .evaluate("last capture \"1+1\"", None)
+            .expect("evaluate");
+        assert!(!captured.is_error, "{}", captured.transcript);
+        let value = captured.value.as_ref().map(|value| format!("{value:?}"));
+        assert!(
+            value.as_deref().is_some_and(|value| value.contains("= 2")),
+            "captured output lost its value: {value:?}"
+        );
     }
 
     #[test]

@@ -223,25 +223,4 @@ pre.treesitter > code {
 .ts-attribute { color: var(--ts-attribute); }
 .ts-label { color: var(--ts-namespace); }
 
-/* ---- Per-language overrides -------------------------------------------- */
-/*
- * Each block is `<code class="language-<fence>">`, so a `code.language-<x>`
- * selector retints only that language. Point captures at hue variables
- * (`var(--ts-blue)`) rather than raw colours so the override still adapts to
- * every theme. Copy a block below to tune another language.
- */
 
-/* Rust — macros read as keywords (rust-analyzer convention); lifetimes stand
-   out as their own colour rather than sharing the namespace hue. */
-code.language-rust .ts-function-macro { color: var(--ts-keyword); }
-code.language-rust .ts-label { color: var(--ts-special); }
-
-/* Haskell — operators are legible in their own hue since Haskell is
-   operator-dense. */
-code.language-haskell .ts-operator { color: var(--ts-cyan); opacity: 0.9; }
-
-/* Macaulay2 — operators (`:=`, `=>`, `->`, `_`, …) carry real meaning, so give
-   them the declaration hue (shared with definitions) rather than leaving them
-   the bare text colour. That hue keeps them distinct from the already-blue
-   calls, fields, and index numbers that fill an M2 expression. */
-code.language-m2 .ts-operator { color: var(--ts-declaration); }

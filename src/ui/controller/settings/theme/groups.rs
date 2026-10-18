@@ -2,7 +2,7 @@ use std::ops::Index;
 #[cfg(not(test))]
 use std::sync::{LazyLock, RwLock};
 
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use serde::Deserialize;
 use these_macros_should_be_illegal::enum_fn;
 
@@ -42,6 +42,34 @@ impl StyleSpec {
         }
         Ok(style)
     }
+}
+
+/// How much of a string's saturation printed text keeps, in percent.
+const PRINTED_SATURATION: f32 = 55.0;
+/// How far printed text's value rises toward white, in percent of what remains.
+const PRINTED_LIGHTENING: f32 = 15.0;
+
+/// `style` with its foreground desaturated to `saturation` percent of what it was and
+/// lightened by `lightening` percent of the way to white, its hue untouched. A colour
+/// that is not RGB has no channels to move and is left as it is.
+fn softened(style: Style, saturation: f32, lightening: f32) -> Style {
+    let Some(Color::Rgb(r, g, b)) = style.fg else {
+        return style;
+    };
+    let [r, g, b] = [r, g, b].map(|channel| f32::from(channel) / 255.0);
+    let (high, low) = (r.max(g).max(b), r.min(g).min(b));
+    let chroma = high - low;
+    let value = high + (1.0 - high) * lightening / 100.0;
+    let kept = if high == 0.0 { 0.0 } else { chroma / high } * saturation / 100.0;
+    let floor = value * (1.0 - kept);
+    // The same position between the darkest and brightest channel as before, which is
+    // what keeps the hue where it was.
+    let channel = |from: f32| {
+        let along = if chroma == 0.0 { 0.0 } else { (from - low) / chroma };
+        let byte = (floor + (value - floor) * along) * 255.0;
+        byte.round().clamp(0.0, 255.0) as u8
+    };
+    style.fg(Color::Rgb(channel(r), channel(g), channel(b)))
 }
 
 /// `style` underlined in its own colour.
@@ -173,7 +201,15 @@ highlight_groups! {
         Number,
         Operator,
         Symbol,
-        Module,
+        // Named after Neovim's semantic-token roles where one exists (`@lsp.type.*`);
+        // the rest follow the tree-sitter captures they are styled from.
+        Parameter,
+        Property,
+        EnumVariant,
+        Macro,
+        Attribute,
+        Builtin,
+        Regex,
         // Signals: what asks for attention, and each severity.
         Accent,
         Error,
@@ -196,16 +232,26 @@ highlight_groups! {
         Delimiter = base.Muted,
         Punctuation = base.Muted,
         Variable = base.Text,
-        Parameter = base.Text,
-        Property = base.Text,
         Installation = base.Function,
         CompiledFunction = base.Function,
-        Builtin = base.Symbol,
         Quote = base.Symbol,
-        Namespace = base.Module,
-        Package = base.Module,
-        Regex = underlined(base.Info),
+        // Modules read as types, set apart by italics.
+        Namespace = base.Type.italic(),
+        Package = base.Type.italic(),
         Documentation = underlined(base.Info),
+        // Markup keeps syntax colours beneath emphasis, code surfaces and links.
+        MarkupHeading1 = base.Accent.bold(),
+        MarkupHeading2 = base.Function.bold(),
+        MarkupHeading3 = base.Type.bold(),
+        MarkupStrong = Style::new().bold(),
+        MarkupEmphasis = Style::new().italic(),
+        MarkupStrongEmphasis = Style::new().bold().italic(),
+        MarkupStrike = Style::new().crossed_out(),
+        MarkupLink = underline_in(base.Info),
+        MarkupCode = Style {
+            bg: base.Code.bg,
+            ..Style::new()
+        },
         // Diagnostic underlines, coloured through the special (underline) colour.
         DiagnosticError = underline_in(base.Error),
         DiagnosticWarning = underline_in(base.Warning),
@@ -214,14 +260,17 @@ highlight_groups! {
         // Transcript: values, printed text and the frames around them.
         Value = base.Text,
         FractionRule = underline_in(base.Operator),
-        Printed = base.String.patch(base.Raised),
+        Printed = softened(base.String, PRINTED_SATURATION, PRINTED_LIGHTENING).patch(base.Raised),
         HintText = base.Muted,
+        // @##Trash
         Separator = Style {
             fg: base.Canvas.bg,
             ..Style::new()
         },
         ValueBorder = base.Faint,
-        OutputNumber = base.Accent.bold(),
+        // `oN` labels are plain; the latest three, `oo`, `ooo` and `oooo`, are bold.
+        OutputNumber = base.Accent,
+        RecentOutput = base.Accent.bold(),
         ErrorBorder = base.Error,
         WarningBorder = base.Warning,
         InfoBorder = base.Info,
@@ -233,8 +282,12 @@ highlight_groups! {
         StatuslineError = base.Error,
         StatuslineWarning = base.Warning,
         KeymapHint = base.Accent,
+        // A command typed after the command prefix, and its name in the picker.
+        Command = base.Accent,
     }
 }
+
+
 
 /// The one scheme in effect, republished whenever the appearance changes.
 ///
@@ -306,6 +359,7 @@ macro_rules! accessors {
 }
 
 // Interface role -> the group a scheme styles it with.
+// @##Trash
 accessors! {
     transcript: Canvas,
     code: Code,
@@ -322,7 +376,9 @@ accessors! {
     type_info: Type,
     border: ValueBorder,
     output_number: OutputNumber,
+    recent_output: RecentOutput,
     prompt: KeymapHint,
+    command: Command,
     selection: Selection,
     muted: Muted,
     printed: Printed,
@@ -346,6 +402,43 @@ mod tests {
 
     use super::*;
     use crate::ui::controller::settings::theme::{Mode, SchemeFile, SCHEMES, SCHEME_FILES};
+
+    /// HSV saturation and hue of an RGB foreground, or None for any other colour.
+    fn saturation_and_hue(style: Style) -> Option<(f32, f32)> {
+        let Some(Color::Rgb(r, g, b)) = style.fg else {
+            return None;
+        };
+        let [r, g, b] = [r, g, b].map(|channel| f32::from(channel) / 255.0);
+        let (high, low) = (r.max(g).max(b), r.min(g).min(b));
+        let chroma = high - low;
+        let hue = if chroma == 0.0 {
+            0.0
+        } else if high == r {
+            ((g - b) / chroma).rem_euclid(6.0)
+        } else if high == g {
+            (b - r) / chroma + 2.0
+        } else {
+            (r - g) / chroma + 4.0
+        } * 60.0;
+        Some((if high == 0.0 { 0.0 } else { chroma / high }, hue))
+    }
+
+    #[test]
+    fn printed_text_is_a_quieter_shade_of_a_string() {
+        for groups in SCHEMES
+            .iter()
+            .flat_map(|scheme| scheme.variants())
+            .map(|variant| variant.groups())
+        {
+            let (string, printed) = (
+                saturation_and_hue(groups.String).expect("schemes colour in RGB"),
+                saturation_and_hue(groups.Printed).expect("schemes colour in RGB"),
+            );
+            assert!(printed.0 < string.0, "printed text should be less saturated");
+            let apart = (printed.1 - string.1).abs();
+            assert!(apart.min(360.0 - apart) < 30.0, "printed text should keep the hue");
+        }
+    }
 
     #[test]
     fn every_scheme_fills_the_complete_group_space() {
@@ -441,14 +534,16 @@ mod tests {
     }
 
     #[test]
-    fn output_numbers_match_the_prompt_colour_with_bold_emphasis() {
+    fn output_numbers_match_the_prompt_colour_and_only_the_recent_ones_are_bold() {
         for groups in SCHEMES
             .iter()
             .flat_map(|scheme| scheme.variants())
             .map(|variant| variant.groups())
         {
             assert_eq!(groups.output_number().fg, groups.prompt().fg);
-            assert!(groups.output_number().add_modifier.contains(Modifier::BOLD));
+            assert_eq!(groups.recent_output().fg, groups.prompt().fg);
+            assert!(!groups.output_number().add_modifier.contains(Modifier::BOLD));
+            assert!(groups.recent_output().add_modifier.contains(Modifier::BOLD));
         }
     }
 

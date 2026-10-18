@@ -1,18 +1,21 @@
 //! Evaluated source history with a browse cursor. The in-progress draft is stashed on
 //! first browse and restored when you step back past the newest entry.
+//!
+//! Every session appends to one history file and takes in what the others appended,
+//! so input submitted in any session can be recalled in all of them.
 
 use std::collections::HashMap;
 use std::env;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 /// Input text and cursor position restored from history.
-pub(crate) struct HistoryBuffer {
-    pub(crate) text: String,
-    pub(crate) cursor: usize,
+pub struct HistoryBuffer {
+    pub text: String,
+    pub cursor: usize,
 }
 
 impl HistoryBuffer {
@@ -24,50 +27,107 @@ impl HistoryBuffer {
 
 /// The recorded submissions, the browse position (`None` = editing the live draft), and
 /// the draft stashed when browsing began.
-pub(crate) struct History {
+pub struct History {
     entries: Vec<String>,
     /// Where each distinct entry last occurs, the one occurrence a search visits.
     newest: HashMap<String, usize>,
     pos: Option<usize>,
     draft: Option<HistoryBuffer>,
     path: Option<PathBuf>,
+    /// How many bytes of the history file have been read into `entries`.
+    synced: u64,
 }
 
 impl History {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::from_path(history_file_path())
     }
 
     #[cfg(test)]
-    pub(crate) fn in_memory() -> Self {
+    pub fn in_memory() -> Self {
         Self::from_path(None)
     }
 
     fn from_path(path: Option<PathBuf>) -> Self {
-        let entries = path.as_deref().map(load_entries).unwrap_or_default();
-        let newest = entries
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| (entry.clone(), index))
-            .collect();
-        History {
-            entries,
-            newest,
+        let mut history = History {
+            entries: Vec::new(),
+            newest: HashMap::new(),
             pos: None,
             draft: None,
             path,
-        }
+            synced: 0,
+        };
+        history.sync();
+        history
     }
 
-    pub(crate) fn record(&mut self, entry: &str) {
+    /// Record a submission in the shared file, then read it back with whatever
+    /// other sessions appended before it, so every session keeps one order.
+    pub fn record(&mut self, entry: &str) {
         let entry = entry.trim_end();
-        if Self::keeps(entry) && self.entries.last().map(String::as_str) != Some(entry) {
-            self.newest.insert(entry.to_string(), self.entries.len());
-            self.entries.push(entry.to_string());
-            self.append(entry);
+        self.sync();
+        if self.continues_with(entry) {
+            let appended = self
+                .path
+                .as_deref()
+                .is_some_and(|path| append(path, entry).is_ok());
+            if appended {
+                self.sync();
+            } else {
+                self.push(entry);
+            }
         }
         self.pos = None;
         self.draft = None;
+    }
+
+    /// Whether `entry` is worth keeping and not a repeat of the newest one.
+    fn continues_with(&self, entry: &str) -> bool {
+        Self::keeps(entry) && self.entries.last().map(String::as_str) != Some(entry)
+    }
+
+    fn push(&mut self, entry: &str) {
+        if self.continues_with(entry) {
+            self.newest.insert(entry.to_string(), self.entries.len());
+            self.entries.push(entry.to_string());
+        }
+    }
+
+    /// Take in the complete records appended to the history file since it was
+    /// last read. A file shorter than what was read has been rewritten, so it is
+    /// read again from the start. Malformed records are skipped.
+    fn sync(&mut self) {
+        let Some(path) = &self.path else {
+            return;
+        };
+        let Ok(mut file) = File::open(path) else {
+            return;
+        };
+        let Ok(metadata) = file.metadata() else {
+            return;
+        };
+        if metadata.len() < self.synced {
+            self.entries.clear();
+            self.newest.clear();
+            self.synced = 0;
+        }
+        let mut appended = Vec::new();
+        let read = file
+            .seek(SeekFrom::Start(self.synced))
+            .and_then(|_| file.read_to_end(&mut appended));
+        if read.is_err() {
+            return;
+        }
+        let complete = appended
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .map_or(0, |index| index + 1);
+        self.synced += complete as u64;
+        for line in String::from_utf8_lossy(&appended[..complete]).lines() {
+            if let Ok(entry) = serde_json::from_str::<String>(line) {
+                self.push(entry.trim_end());
+            }
+        }
     }
 
     fn keeps(entry: &str) -> bool {
@@ -82,6 +142,7 @@ impl History {
     pub fn prev(&mut self, current: &str, cursor: usize) -> Option<HistoryBuffer> {
         self.end_search_if_edited(current);
         if self.pos.is_none() {
+            self.sync();
             self.draft = Some(HistoryBuffer {
                 text: current.to_string(),
                 cursor,
@@ -134,53 +195,33 @@ impl History {
             && self.newest.get(entry) == Some(&index)
             && *entry != draft.text
     }
-
-    fn append(&self, entry: &str) {
-        let Some(path) = &self.path else {
-            return;
-        };
-        let Some(parent) = path.parent() else {
-            return;
-        };
-        if fs::create_dir_all(parent).is_err() {
-            return;
-        }
-        let mut options = OpenOptions::new();
-        options.create(true).append(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let Ok(mut file) = options.open(path) else {
-            return;
-        };
-        if let Ok(encoded) = serde_json::to_string(entry) {
-            let _ = writeln!(file, "{encoded}");
-        }
-    }
 }
 
+/// Append one record to the history file, creating it private to the user.
+fn append(path: &Path, entry: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path)?;
+    writeln!(file, "{}", serde_json::to_string(entry)?)
+}
+
+/// Tests keep no history file, so what they submit never reaches a developer's.
+#[cfg(test)]
+fn history_file_path() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(not(test))]
 fn history_file_path() -> Option<PathBuf> {
     let state_dir = env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))?;
     Some(state_dir.join("spectral-m2").join("history.jsonl"))
-}
-
-fn load_entries(path: &Path) -> Vec<String> {
-    let Ok(contents) = fs::read_to_string(path) else {
-        return Vec::new();
-    };
-
-    let mut entries = Vec::new();
-    for line in contents.lines() {
-        let Ok(entry) = serde_json::from_str::<String>(line) else {
-            continue;
-        };
-        let entry = entry.trim_end().to_string();
-        if History::keeps(&entry) && entries.last().map(String::as_str) != Some(entry.as_str()) {
-            entries.push(entry);
-        }
-    }
-    entries
 }
 
 #[cfg(test)]
@@ -224,6 +265,25 @@ mod tests {
     }
 
     #[test]
+    fn sessions_recall_what_each_other_submitted() {
+        let path = temporary_history_path();
+        let mut first = History::from_path(Some(path.clone()));
+        let mut second = History::from_path(Some(path.clone()));
+        let text = |buffer: Option<HistoryBuffer>| buffer.map(|buffer| buffer.text);
+
+        first.record("R = QQ[x]");
+        second.record("f = x^2");
+        first.record("g = 1");
+
+        assert_eq!(text(second.prev("", 0)), Some("g = 1".into()));
+        assert_eq!(text(second.prev("g = 1", 0)), Some("f = x^2".into()));
+        assert_eq!(text(second.prev("f = x^2", 0)), Some("R = QQ[x]".into()));
+        assert_eq!(text(first.prev("f", 1)), Some("f = x^2".into()));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn browsing_visits_only_entries_starting_with_the_typed_prefix() {
         let mut history = History::in_memory();
         for entry in ["R = QQ[x]", "f = 1", "R = ZZ[y]", "g = 2", "R = ZZ[y]"] {
@@ -238,7 +298,11 @@ mod tests {
         assert_eq!(text(history.next("R = ZZ[y]")), Some("R =".into()));
 
         assert_eq!(text(history.prev("h", 1)), None);
-        assert_eq!(text(history.next("h")), None, "a failed search leaves the draft alone");
+        assert_eq!(
+            text(history.next("h")),
+            None,
+            "a failed search leaves the draft alone"
+        );
         assert_eq!(text(history.prev("", 0)), Some("R = ZZ[y]".into()));
         assert_eq!(text(history.prev("R = ZZ[y]", 9)), Some("g = 2".into()));
         assert_eq!(text(history.prev("g = 2", 5)), Some("f = 1".into()));

@@ -102,9 +102,6 @@ impl From<Row> for Box<dyn PickerItem> {
     }
 }
 
-/// Heterogeneous picker rows in display order.
-pub type PickerItems = Vec<Box<dyn PickerItem>>;
-
 /// Keyboard behavior attached to a picker presentation.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PickerMode {
@@ -114,18 +111,17 @@ pub enum PickerMode {
     Keymaps,
 }
 
-
 /// Presentation and selection state for a list of picker items.
 pub struct Picker {
     title: &'static str,
-    items: PickerItems,
+    items: Vec<Box<dyn PickerItem>>,
     selected: usize,
     /// Widest cell seen in each column while open, so tab stops stay put as values change.
     column_widths: Vec<usize>,
 }
 
 impl Picker {
-    pub fn new(title: &'static str, items: PickerItems) -> Self {
+    pub fn new(title: &'static str, items: Vec<Box<dyn PickerItem>>) -> Self {
         let mut picker = Self {
             title,
             items: Vec::new(),
@@ -136,22 +132,13 @@ impl Picker {
         picker
     }
 
-    #[cfg(test)]
-    pub const fn title(&self) -> &'static str {
-        self.title
-    }
-
-    #[cfg(test)]
-    pub fn len(&self) -> usize {
-        self.items.len()
-    }
-
     pub fn selected(&self) -> usize {
         self.selected
     }
 
     pub fn height(&self) -> u16 {
-        (self.items.len() as u16).max(UI.picker_min_rows) + 2
+        // A row per item, so a filtered list leaves no empty ones; an empty list keeps one.
+        (self.items.len() as u16).max(1) + 2
     }
 
     /// Select an item, or zero when the picker has no items.
@@ -168,7 +155,7 @@ impl Picker {
     }
 
     /// Replace the items while retaining the selection where possible.
-    pub fn set_items(&mut self, items: PickerItems) {
+    pub fn set_items(&mut self, items: Vec<Box<dyn PickerItem>>) {
         for cells in items.iter().map(|item| item.cells()) {
             if self.column_widths.len() < cells.len() {
                 self.column_widths.resize(cells.len(), 0);
@@ -353,9 +340,17 @@ impl PickerController {
             (PickerMode::FilteredCommands, KeyCode::Char(_)) if printable => {
                 Some(EditorEvent::EditCommand(key))
             }
-            (PickerMode::FilteredCommands, KeyCode::Backspace | KeyCode::Delete) => {
-                Some(EditorEvent::EditCommand(key))
-            }
+            (
+                PickerMode::FilteredCommands,
+                KeyCode::Backspace
+                | KeyCode::Delete
+                | KeyCode::Tab
+                | KeyCode::BackTab
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Home
+                | KeyCode::End,
+            ) => Some(EditorEvent::EditCommand(key)),
             (_, KeyCode::Char(character)) if printable => {
                 Some(EditorEvent::ResumeTyping(character))
             }
@@ -403,7 +398,7 @@ mod tests {
         Box::new(TestItem { label, value })
     }
 
-    fn picker(items: PickerItems) -> Picker {
+    fn picker(items: Vec<Box<dyn PickerItem>>) -> Picker {
         Picker::new("test", items)
     }
 
@@ -506,7 +501,7 @@ mod tests {
         assert_eq!(buffer[(16, 2)].bg, groups.picker().bg.unwrap());
         assert_eq!(groups.picker().bg, groups.printed().bg);
         assert!(groups.picker_selected().fg.is_none());
-        assert_eq!(buffer.area().height, UI.picker_min_rows + 2);
+        assert_eq!(buffer.area().height, 2 + 2);
     }
 
     #[test]

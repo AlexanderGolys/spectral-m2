@@ -21,6 +21,9 @@ pub struct Resized {
 /// Carries nothing: a scheme is ambient, read at paint time rather than handed down.
 pub struct Rethemed;
 
+/// Time passed, so whatever animates must be drawn again.
+pub struct Ticked;
+
 /// Returned values are set differently -- fractions in another style -- so their
 /// heights move as well as their cells.
 pub struct Reformatted;
@@ -39,6 +42,11 @@ pub trait Block {
 
     /// Render into a zero-based buffer matching this block's measured extent.
     fn render_local(&self, context: &RenderContext, buf: &mut Buffer);
+
+    /// Whether this block's cells change with the clock, and so go stale on every tick.
+    fn animated(&self) -> bool {
+        false
+    }
 
     /// Add zero-based regions that copied selections must omit.
     fn local_selection_exclusions(&self, _: &RenderContext, _: &mut Exclusions) {}

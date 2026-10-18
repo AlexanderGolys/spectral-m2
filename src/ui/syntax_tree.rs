@@ -13,7 +13,7 @@ use super::render::RenderContext;
 use crate::ui::controller::settings::theme::groups::HLGroup;
 
 /// One committed cell followed by its typed syntax presentation.
-pub(crate) struct SyntaxTreeBlock {
+pub struct SyntaxTreeBlock {
     code: CodeBlock,
     tree: PrettyNode,
 }
@@ -59,9 +59,23 @@ fn push_tree_children<'a>(node: &'a PrettyNode, label: String, entries: &mut Vec
     }
 }
 
+/// Rows in the order their source reads, which puts an opening bracket before what it
+/// holds and its closing one after. The tree stores brackets apart from the contents
+/// they enclose, so it lists them last. Rows with no location keep the order they have.
+fn in_source_order(entries: &mut [TreeEntry<'_>]) {
+    let starts = entries
+        .iter()
+        .map(|entry| entry.node.span().and_then(m2_syn::Span::start))
+        .collect::<Option<Vec<_>>>();
+    if starts.is_some() {
+        entries.sort_by_key(|entry| entry.node.span().and_then(m2_syn::Span::start));
+    }
+}
+
 fn tree_children(node: &PrettyNode) -> Vec<TreeEntry<'_>> {
     let mut entries = Vec::new();
     push_tree_children(node, String::new(), &mut entries);
+    in_source_order(&mut entries);
     entries
 }
 
@@ -105,7 +119,7 @@ fn delimiter_text(node: &PrettyNode) -> &str {
 
 impl SyntaxTreeBlock {
     /// Create a highlighted committed cell and its `m2-syn` pretty tree.
-    pub(crate) fn new(text: String, spans: Vec<HLSpan>, tree: PrettyNode) -> Self {
+    pub fn new(text: String, spans: Vec<HLSpan>, tree: PrettyNode) -> Self {
         Self {
             code: CodeBlock::new([Cell::new(text, None, spans)]),
             tree,
@@ -114,7 +128,7 @@ impl SyntaxTreeBlock {
 
     /// Resolve the tree into styled display rows, each row's source range set in one
     /// column after the widest row so the ranges read down the page.
-    pub(crate) fn tree_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
+    pub fn tree_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
         /// A row's structure, and the source range it covers.
         type Row = (Line<'static>, Option<String>);
 
@@ -214,7 +228,7 @@ impl SyntaxTreeBlock {
                     context,
                 ));
                 let prefix = format!("{prefix}{}", if last { "  " } else { "│ " });
-                let children: Vec<_> = entry
+                let mut children: Vec<_> = entry
                     .node
                     .children()
                     .iter()
@@ -225,6 +239,7 @@ impl SyntaxTreeBlock {
                         entries
                     })
                     .collect();
+                in_source_order(&mut children);
                 let trailing = closing.is_some();
                 for (index, child) in children.iter().enumerate() {
                     walk_entry(
@@ -283,12 +298,14 @@ impl SyntaxTreeBlock {
             .into_iter()
             .map(|(mut structure, location)| {
                 if let Some(location) = location {
-                    let room = usize::from(context.width()).saturating_sub(location.chars().count());
-                    let start = column.min(room).max(structure.width() + UI.tree_location_gap);
-                    structure.spans.push(Span::styled(
-                        " ".repeat(start - structure.width()),
-                        muted,
-                    ));
+                    let room =
+                        usize::from(context.width()).saturating_sub(location.chars().count());
+                    let start = column
+                        .min(room)
+                        .max(structure.width() + UI.tree_location_gap);
+                    structure
+                        .spans
+                        .push(Span::styled(" ".repeat(start - structure.width()), muted));
                     structure.spans.push(Span::styled(location, muted));
                 }
                 structure
@@ -298,41 +315,63 @@ impl SyntaxTreeBlock {
         lines
     }
 
+    /// The block's rows inside the margin kept clear to its left.
     fn lines(&self, context: &RenderContext) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
-        (self.code.preview_lines(context), self.tree_lines(context))
+        let inner = context.with_width(context.width().saturating_sub(UI.feed_margin));
+        (self.code.preview_lines(&inner), self.tree_lines(&inner))
     }
 }
+
+/// Rows above the source taken by a rule and the margin inside it. The source brings
+/// the matching margin and rule below itself, so both sides are the same.
+const SOURCE_LEAD: u16 = 2;
 
 impl Block for SyntaxTreeBlock {
     fn height(&self, context: &RenderContext) -> u16 {
         let (source, tree) = self.lines(context);
-        u16::try_from(
-            1usize
-                .saturating_add(source.len())
-                .saturating_add(tree.len()),
-        )
-        .unwrap_or(u16::MAX)
+        let rows = |lines: &[Line<'static>]| u16::try_from(lines.len()).unwrap_or(u16::MAX);
+        // A rule and an empty row above the source, a rule below its own empty row.
+        SOURCE_LEAD
+            .saturating_add(rows(&source))
+            .saturating_add(1)
+            .saturating_add(rows(&tree))
     }
 
     fn render_local(&self, context: &RenderContext, buf: &mut Buffer) {
         let area = *buf.area();
         let groups = context.groups();
         let (source, tree) = self.lines(context);
-        let separator = Line::from(Span::styled("─".repeat(area.width.into()), groups.border()));
-        Paragraph::new(vec![separator])
-            .style(groups.code())
-            .render(Rect::new(area.x, area.y, area.width, 1), buf);
+        buf.set_style(area, groups.code());
         let source_height = u16::try_from(source.len()).unwrap_or(u16::MAX);
+        let margin = UI.feed_margin.min(area.width);
+        let inner_width = area.width - margin;
+        let mut rule = |row: u16| {
+            Paragraph::new(Line::from(Span::styled(
+                "─".repeat(area.width.into()),
+                groups.border(),
+            )))
+            .style(groups.code())
+            .render(Rect::new(area.x, area.y.saturating_add(row), area.width, 1), buf);
+        };
+        let below_source = SOURCE_LEAD.saturating_add(source_height);
+        rule(0);
+        rule(below_source);
         Paragraph::new(source).style(groups.code()).render(
-            Rect::new(area.x, area.y.saturating_add(1), area.width, source_height),
+            Rect::new(
+                area.x + margin,
+                area.y.saturating_add(SOURCE_LEAD),
+                inner_width,
+                source_height,
+            ),
             buf,
         );
+        let tree_top = below_source.saturating_add(1);
         Paragraph::new(tree).style(groups.code()).render(
             Rect::new(
-                area.x,
-                area.y.saturating_add(1).saturating_add(source_height),
-                area.width,
-                area.height.saturating_sub(1 + source_height),
+                area.x + margin,
+                area.y.saturating_add(tree_top),
+                inner_width,
+                area.height.saturating_sub(tree_top),
             ),
             buf,
         );

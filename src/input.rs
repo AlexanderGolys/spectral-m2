@@ -1,10 +1,14 @@
 //! Live input model.
 //!
-//! - [`InputTextField`] — raw code, a char-boundary cursor, and submission history.
+//! - [`InputTextField`] — raw code, a char-boundary cursor, submission history, and
+//!   undo.
 //! - [`InputCode`] — the field and its transient presentation state.
+//! - [`Completion`] — what the text before the cursor may be completed to.
 
+mod completion;
 mod hints;
 mod history;
+mod undo;
 
 use std::iter;
 use std::ops::Range;
@@ -18,8 +22,10 @@ use ratatui::widgets::{Paragraph, Widget};
 use serde::{Deserialize, Serialize};
 use these_macros_should_be_illegal::discriminated_str;
 
+pub use self::completion::Completion;
 use self::hints::Hint;
-use self::history::{History, HistoryBuffer};
+use self::history::History;
+use self::undo::{EditKind, Snapshot, Undo};
 use crate::code::highlight::Highlighter;
 use crate::ui::block::{HLSpan, Text};
 use crate::ui::config::UI;
@@ -37,20 +43,34 @@ const PROMPT_GLYPH: &str = "❯";
 pub enum InputAction {
     InsertNewline = "insert a line break",
     InsertTab = "insert a tab",
+    NextCompletion = "take the completion shown after the cursor, or the next one",
+    PreviousCompletion = "take the previous completion",
     DeleteBack = "delete before the cursor",
     DeleteForward = "delete under the cursor",
+    DeleteWordBack = "delete back to where a word-wise move left lands",
+    DeleteWordForward = "delete on to where a word-wise move right lands",
+    Undo = "undo the last edit",
+    Redo = "redo the last undone edit",
 
     MoveLeft = "move left",
     MoveRight = "move right",
     MoveUp = "move up, or recall older input",
     MoveDown = "move down, or recall newer input",
+    MoveWordLeft = "move left by a word",
+    MoveWordRight = "move right by a word",
     MoveLineStart = "move to line start",
     MoveLineEnd = "move to line end",
+    MoveTextStart = "move to the start of the input",
+    MoveTextEnd = "move to the end of the input",
 
     SelectLeft = "extend selection left",
     SelectRight = "extend selection right",
+    SelectWordLeft = "extend selection left by a word",
+    SelectWordRight = "extend selection right by a word",
     SelectLineStart = "extend selection to line start",
     SelectLineEnd = "extend selection to line end",
+    SelectTextStart = "extend selection to the start of the input",
+    SelectTextEnd = "extend selection to the end of the input",
 
     Clear = "clear input text",
 }
@@ -63,6 +83,8 @@ pub struct InputSettings {
     pub max_height_percent: u8,
     /// Context rows retained around the cursor.
     pub scrolloff: u8,
+    /// Characters of a name typed before it is completed.
+    pub complete_after: u8,
 }
 
 impl Default for InputSettings {
@@ -70,6 +92,7 @@ impl Default for InputSettings {
         Self {
             max_height_percent: 75,
             scrolloff: 2,
+            complete_after: 1,
         }
     }
 }
@@ -81,6 +104,8 @@ pub enum InputSetting {
     MaxHeight,
     /// Cursor context rows.
     Scrolloff,
+    /// Name length that starts completion.
+    CompleteAfter,
 }
 
 impl InputSetting {
@@ -89,6 +114,7 @@ impl InputSetting {
         match self {
             Self::MaxHeight => "max input height",
             Self::Scrolloff => "scrolloff",
+            Self::CompleteAfter => "complete after",
         }
     }
 
@@ -97,6 +123,7 @@ impl InputSetting {
         match self {
             Self::MaxHeight => "share of the pane multiline input may grow into",
             Self::Scrolloff => "context rows kept around the input cursor",
+            Self::CompleteAfter => "characters of a name typed before it is completed",
         }
     }
 
@@ -105,6 +132,7 @@ impl InputSetting {
         match self {
             Self::MaxHeight => format!("{}%", settings.max_height_percent),
             Self::Scrolloff => format!("{} rows", settings.scrolloff),
+            Self::CompleteAfter => format!("{} characters", settings.complete_after),
         }
     }
 
@@ -113,6 +141,7 @@ impl InputSetting {
         let field = match self {
             Self::MaxHeight => &mut settings.max_height_percent,
             Self::Scrolloff => &mut settings.scrolloff,
+            Self::CompleteAfter => &mut settings.complete_after,
         };
         let step = delta.unsigned_abs()
             * if matches!(self, Self::MaxHeight) {
@@ -126,10 +155,11 @@ impl InputSetting {
             field.saturating_sub(step)
         };
         settings.max_height_percent = settings.max_height_percent.min(100);
+        settings.complete_after = settings.complete_after.max(1);
     }
 }
 
-/// Editable source, its byte-offset cursor, and submission history.
+/// Editable source, its byte-offset cursor, submission history, and undo.
 pub struct InputTextField {
     text: String,
     cursor: usize,
@@ -138,6 +168,7 @@ pub struct InputTextField {
     /// so extending a selection is just moving the cursor.
     anchor: Option<usize>,
     history: History,
+    edits: Undo,
 }
 
 impl InputTextField {
@@ -148,6 +179,7 @@ impl InputTextField {
             revision: 0,
             anchor: None,
             history: History::new(),
+            edits: Undo::default(),
         }
     }
 
@@ -156,7 +188,7 @@ impl InputTextField {
     }
 
     /// The cursor's byte offset into the source.
-    fn cursor(&self) -> usize {
+    pub fn cursor(&self) -> usize {
         self.cursor
     }
 
@@ -214,6 +246,71 @@ impl InputTextField {
         });
     }
 
+    /// The cursor moved left over any whitespace, then over the run of word or
+    /// punctuation characters before it.
+    fn word_start(&self) -> usize {
+        let before = &self.text[..self.cursor];
+        let trimmed = before.trim_end();
+        let class = trimmed.chars().next_back().map(CharClass::of);
+        let run = trimmed
+            .chars()
+            .rev()
+            .take_while(|&character| Some(CharClass::of(character)) == class)
+            .map(char::len_utf8)
+            .sum::<usize>();
+        trimmed.len() - run
+    }
+
+    /// The cursor moved right over any whitespace, then over the run of word or
+    /// punctuation characters after it.
+    fn word_end(&self) -> usize {
+        let after = &self.text[self.cursor..];
+        let trimmed = after.trim_start();
+        let class = trimmed.chars().next().map(CharClass::of);
+        let run = trimmed
+            .chars()
+            .take_while(|&character| Some(CharClass::of(character)) == class)
+            .map(char::len_utf8)
+            .sum::<usize>();
+        self.text.len() - trimmed.len() + run
+    }
+
+    pub fn move_word_left(&mut self) {
+        self.clear_selection();
+        self.cursor = self.word_start();
+    }
+
+    pub fn move_word_right(&mut self) {
+        self.clear_selection();
+        self.cursor = self.word_end();
+    }
+
+    pub fn select_word_left(&mut self) {
+        self.extend_selection(|field| field.cursor = field.word_start());
+    }
+
+    pub fn select_word_right(&mut self) {
+        self.extend_selection(|field| field.cursor = field.word_end());
+    }
+
+    pub fn move_text_start(&mut self) {
+        self.clear_selection();
+        self.cursor = 0;
+    }
+
+    pub fn move_text_end(&mut self) {
+        self.clear_selection();
+        self.cursor = self.text.len();
+    }
+
+    pub fn select_text_start(&mut self) {
+        self.extend_selection(|field| field.cursor = 0);
+    }
+
+    pub fn select_text_end(&mut self) {
+        self.extend_selection(|field| field.cursor = field.text.len());
+    }
+
     pub fn select_home(&mut self) {
         self.extend_selection(|field| {
             field.cursor = field.text[..field.cursor]
@@ -237,57 +334,126 @@ impl InputTextField {
             self.clear_selection();
             return false;
         };
-        self.text.replace_range(range.clone(), "");
-        self.cursor = range.start;
+        self.delete(range);
         self.clear_selection();
-        self.changed();
         true
     }
 
-    pub fn insert_char(&mut self, ch: char) {
-        self.delete_selection();
-        self.text.insert(self.cursor, ch);
-        self.cursor += ch.len_utf8();
+    /// Remove `range`, leaving the cursor at its start.
+    fn delete(&mut self, range: Range<usize>) {
+        if range.is_empty() {
+            return;
+        }
+        self.text.replace_range(range.clone(), "");
+        self.cursor = range.start;
         self.changed();
+    }
+
+    /// Apply one undoable edit. An edit that changes nothing leaves no step,
+    /// and one that replaces a selection never joins the step before it.
+    fn edit(&mut self, kind: EditKind, apply: impl FnOnce(&mut Self)) {
+        if self.selection().is_some() {
+            self.edits.break_run();
+        }
+        let before = self.snapshot();
+        let revision = self.revision;
+        apply(self);
+        if self.revision != revision {
+            self.edits.record(kind, before, self.cursor);
+        }
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            text: self.text.clone(),
+            cursor: self.cursor,
+        }
+    }
+
+    pub fn undo(&mut self) {
+        if let Some(previous) = self.edits.undo(self.snapshot()) {
+            self.load(previous.text, previous.cursor);
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if let Some(next) = self.edits.redo(self.snapshot()) {
+            self.load(next.text, next.cursor);
+        }
+    }
+
+    /// Typing undoes a word at a time: a word begun after whitespace starts a
+    /// new step.
+    pub fn insert_char(&mut self, ch: char) {
+        if !ch.is_whitespace() && self.text[..self.cursor].ends_with(char::is_whitespace) {
+            self.edits.break_run();
+        }
+        self.edit(EditKind::Typing, |field| {
+            field.delete_selection();
+            field.text.insert(field.cursor, ch);
+            field.cursor += ch.len_utf8();
+            field.changed();
+        });
+    }
+
+    /// Replace `range` with a completion, leaving the cursor after it.
+    fn replace(&mut self, range: Range<usize>, replacement: &str) {
+        self.edit(EditKind::Completing, |field| {
+            field.clear_selection();
+            field.text.replace_range(range.clone(), replacement);
+            field.cursor = range.start + replacement.len();
+            field.changed();
+        });
     }
 
     pub fn insert_str(&mut self, s: &str) {
-        self.delete_selection();
-        self.text.insert_str(self.cursor, s);
-        self.cursor += s.len();
-        self.changed();
+        self.edit(EditKind::Replacing, |field| {
+            field.delete_selection();
+            field.text.insert_str(field.cursor, s);
+            field.cursor += s.len();
+            field.changed();
+        });
     }
 
     fn clear(&mut self) {
-        self.text.clear();
-        self.cursor = 0;
-        self.anchor = None;
-        self.changed();
+        self.edit(EditKind::Replacing, |field| {
+            field.anchor = None;
+            field.delete(0..field.text.len());
+        });
     }
 
     pub fn backspace(&mut self) {
-        if self.delete_selection() {
-            return;
-        }
-        if self.cursor == 0 {
-            return;
-        }
-        let prev = self.previous_boundary();
-        self.text.replace_range(prev..self.cursor, "");
-        self.cursor = prev;
-        self.changed();
+        self.edit(EditKind::DeletingBack, |field| {
+            if !field.delete_selection() {
+                field.delete(field.previous_boundary()..field.cursor);
+            }
+        });
     }
 
     pub fn delete_forward(&mut self) {
-        if self.delete_selection() {
-            return;
-        }
-        if self.cursor >= self.text.len() {
-            return;
-        }
-        let next = self.next_boundary(self.cursor);
-        self.text.replace_range(self.cursor..next, "");
-        self.changed();
+        self.edit(EditKind::DeletingForward, |field| {
+            if !field.delete_selection() {
+                field.delete(field.cursor..field.next_boundary(field.cursor));
+            }
+        });
+    }
+
+    /// Delete what a word-wise move left crosses.
+    pub fn delete_word_back(&mut self) {
+        self.edit(EditKind::DeletingBack, |field| {
+            if !field.delete_selection() {
+                field.delete(field.word_start()..field.cursor);
+            }
+        });
+    }
+
+    /// Delete what a word-wise move right crosses.
+    pub fn delete_word_forward(&mut self) {
+        self.edit(EditKind::DeletingForward, |field| {
+            if !field.delete_selection() {
+                field.delete(field.cursor..field.word_end());
+            }
+        });
     }
 
     pub fn move_left(&mut self) {
@@ -363,34 +529,39 @@ impl InputTextField {
 
     pub fn history_prev(&mut self) {
         if let Some(buffer) = self.history.prev(&self.text, self.cursor) {
-            self.load(buffer);
+            self.edit(EditKind::Recalling, |field| field.load(buffer.text, buffer.cursor));
         }
     }
 
     pub fn history_next(&mut self) {
         if let Some(buffer) = self.history.next(&self.text) {
-            self.load(buffer);
+            self.edit(EditKind::Recalling, |field| field.load(buffer.text, buffer.cursor));
         }
     }
 
-    /// Replace the whole buffer. The anchor indexes the text it was set in, so
-    /// every wholesale replacement has to drop it -- a stale anchor left pointing
-    /// past the new end makes the next edit or copy slice out of bounds.
+    /// Replace the whole buffer with source from elsewhere, as one undoable step.
     fn replace_text(&mut self, text: String) {
-        self.cursor = text.len();
-        self.text = text;
-        self.clear_selection();
-        self.changed();
+        self.edit(EditKind::Replacing, |field| {
+            let cursor = text.len();
+            field.load(text, cursor);
+        });
     }
 
+    /// Record the submission and start a fresh input with nothing to undo.
     fn accept_submission(&mut self) {
         self.history.record(&self.text);
-        self.replace_text(String::new());
+        self.load(String::new(), 0);
+        self.edits = Undo::default();
     }
 
-    fn load(&mut self, buffer: HistoryBuffer) {
-        self.text = buffer.text;
-        self.cursor = buffer.cursor.min(self.text.len());
+    /// Replace the whole buffer, placing the cursor at `cursor` when it lands on
+    /// a character boundary and at the end otherwise. The anchor indexes the
+    /// text it was set in, so every wholesale replacement has to drop it -- a
+    /// stale anchor left pointing past the new end makes the next edit or copy
+    /// slice out of bounds.
+    fn load(&mut self, text: String, cursor: usize) {
+        self.text = text;
+        self.cursor = cursor.min(self.text.len());
         if !self.text.is_char_boundary(self.cursor) {
             self.cursor = self.text.len();
         }
@@ -454,6 +625,27 @@ impl InputTextField {
             revision: 0,
             anchor: None,
             history: History::in_memory(),
+            edits: Undo::default(),
+        }
+    }
+}
+
+/// What a word-wise cursor motion treats alike: it crosses a run of one class.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CharClass {
+    Word,
+    Punctuation,
+    Space,
+}
+
+impl CharClass {
+    fn of(character: char) -> Self {
+        if character.is_whitespace() {
+            Self::Space
+        } else if character.is_alphanumeric() || character == '_' || character == '\'' {
+            Self::Word
+        } else {
+            Self::Punctuation
         }
     }
 }
@@ -462,9 +654,15 @@ impl InputTextField {
 pub struct InputCode {
     field: InputTextField,
     hint: Hint,
+    completion: Option<Completion>,
+    /// The revision and cursor the completion was offered for; once either
+    /// moves it no longer applies.
+    completed_for: Option<(u64, usize)>,
     settings: InputSettings,
     diagnostic: Option<String>,
     diagnostic_range: Option<Range<usize>>,
+    /// The command typed so far, drawn in the command colour.
+    command_range: Option<Range<usize>>,
     selecting: bool,
     highlighted_revision: u64,
     highlighted_pending: Option<String>,
@@ -497,9 +695,12 @@ impl InputCode {
         Self {
             field: InputTextField::new(),
             hint: Hint::default(),
+            completion: None,
+            completed_for: None,
             settings: InputSettings::default(),
             diagnostic: None,
             diagnostic_range: None,
+            command_range: None,
             selecting: false,
             highlighted_revision: u64::MAX,
             highlighted_pending: None,
@@ -516,6 +717,33 @@ impl InputCode {
 
     pub fn field_mut(&mut self) -> &mut InputTextField {
         &mut self.field
+    }
+
+    fn edit_state(&self) -> (u64, usize) {
+        (self.field.revision, self.field.cursor)
+    }
+
+    /// Whether the text or cursor moved since a completion was last offered.
+    pub fn needs_completion(&self) -> bool {
+        self.completed_for != Some(self.edit_state())
+    }
+
+    /// Offer `completion` for the text and cursor as they stand.
+    pub fn offer(&mut self, completion: Option<Completion>) {
+        self.completion = completion;
+        self.completed_for = Some(self.edit_state());
+    }
+
+    /// Drop the offered completion, so the next one is computed afresh.
+    pub fn forget_completion(&mut self) {
+        self.completed_for = None;
+    }
+
+    /// The completion offered for the text and cursor as they stand.
+    pub fn offered(&self) -> Option<&Completion> {
+        self.completion
+            .as_ref()
+            .filter(|_| !self.needs_completion() && self.field.selection().is_none())
     }
 
     /// Return the component's adjustable layout policy.
@@ -545,6 +773,11 @@ impl InputCode {
         self.diagnostic_range = range;
     }
 
+    /// Mark the part of the text that is a command being typed, if any is.
+    pub fn set_command_range(&mut self, range: Option<Range<usize>>) {
+        self.command_range = range;
+    }
+
     pub fn clear_diagnostic(&mut self) {
         self.diagnostic = None;
         self.diagnostic_range = None;
@@ -566,12 +799,23 @@ impl InputCode {
         use InputAction::*;
         if matches!(
             action,
-            InsertNewline | InsertTab | DeleteBack | DeleteForward | Clear
+            InsertNewline
+                | InsertTab
+                | DeleteBack
+                | DeleteForward
+                | DeleteWordBack
+                | DeleteWordForward
+                | Undo
+                | Redo
+                | Clear
         ) {
             self.clear_diagnostic();
         }
         if action == Clear {
             return self.clear();
+        }
+        if matches!(action, NextCompletion | PreviousCompletion) {
+            return self.complete(action);
         }
         let field = &mut self.field;
         match action {
@@ -579,20 +823,47 @@ impl InputCode {
             InsertTab => field.insert_char('\t'),
             DeleteBack => field.backspace(),
             DeleteForward => field.delete_forward(),
+            DeleteWordBack => field.delete_word_back(),
+            DeleteWordForward => field.delete_word_forward(),
+            Undo => field.undo(),
+            Redo => field.redo(),
             MoveLeft => field.move_left(),
             MoveRight => field.move_right(),
+            MoveWordLeft => field.move_word_left(),
+            MoveWordRight => field.move_word_right(),
             MoveLineStart => field.move_home(),
             MoveLineEnd => field.move_end(),
+            MoveTextStart => field.move_text_start(),
+            MoveTextEnd => field.move_text_end(),
             MoveUp if field.cursor_on_first_line() => field.history_prev(),
             MoveUp => field.move_up(),
             MoveDown if field.cursor_on_last_line() => field.history_next(),
             MoveDown => field.move_down(),
             SelectLeft => field.select_left(),
             SelectRight => field.select_right(),
+            SelectWordLeft => field.select_word_left(),
+            SelectWordRight => field.select_word_right(),
             SelectLineStart => field.select_home(),
             SelectLineEnd => field.select_end(),
-            Clear => unreachable!(),
+            SelectTextStart => field.select_text_start(),
+            SelectTextEnd => field.select_text_end(),
+            Clear | NextCompletion | PreviousCompletion => unreachable!(),
         }
+    }
+
+    /// Take the offered completion in place of the typed text; taking again
+    /// cycles through the candidates instead of completing further.
+    fn complete(&mut self, action: InputAction) {
+        if self.offered().is_none() {
+            return;
+        }
+        let Some(completion) = self.completion.as_mut() else {
+            return;
+        };
+        let (range, chosen) = completion.take(action == InputAction::NextCompletion);
+        let chosen = chosen.to_string();
+        self.field.replace(range, &chosen);
+        self.completed_for = Some(self.edit_state());
     }
 
     /// Interpret one unbound terminal key as editor input.
@@ -600,11 +871,31 @@ impl InputCode {
         use InputAction::*;
         let action = match key.code {
             KeyCode::Char('l') if key.ctrl() => Some(Clear),
+            KeyCode::Char('z' | 'Z') if key.ctrl() && key.shift() => Some(Redo),
+            KeyCode::Char('z') if key.ctrl() => Some(Undo),
+            // The backspace control character, which is what a terminal sends
+            // for Ctrl+Backspace when it cannot report the modifier.
+            KeyCode::Char('h') if key.ctrl() => Some(DeleteWordBack),
+            KeyCode::Backspace if key.ctrl() || key.alt() => Some(DeleteWordBack),
+            KeyCode::Delete if key.ctrl() || key.alt() => Some(DeleteWordForward),
             KeyCode::Char(' ') if key.shift() => Some(InsertNewline),
             KeyCode::Enter if key.shift() || key.alt() => Some(InsertNewline),
-            KeyCode::Tab => Some(InsertTab),
+            // The newline control character itself, which is what a terminal
+            // sends for Shift+Enter when it cannot report the modifier.
+            KeyCode::Char('j') if key.ctrl() => Some(InsertNewline),
+            KeyCode::Tab if key.alt() => Some(InsertTab),
+            KeyCode::Tab => Some(NextCompletion),
+            KeyCode::BackTab => Some(PreviousCompletion),
             KeyCode::Backspace => Some(DeleteBack),
             KeyCode::Delete => Some(DeleteForward),
+            KeyCode::Left if key.ctrl() && key.shift() => Some(SelectWordLeft),
+            KeyCode::Right if key.ctrl() && key.shift() => Some(SelectWordRight),
+            KeyCode::Home if key.ctrl() && key.shift() => Some(SelectTextStart),
+            KeyCode::End if key.ctrl() && key.shift() => Some(SelectTextEnd),
+            KeyCode::Left if key.ctrl() => Some(MoveWordLeft),
+            KeyCode::Right if key.ctrl() => Some(MoveWordRight),
+            KeyCode::Home if key.ctrl() => Some(MoveTextStart),
+            KeyCode::End if key.ctrl() => Some(MoveTextEnd),
             KeyCode::Left if key.shift() => Some(SelectLeft),
             KeyCode::Right if key.shift() => Some(SelectRight),
             KeyCode::Home if key.shift() => Some(SelectLineStart),
@@ -679,9 +970,12 @@ impl InputCode {
         Self {
             field: InputTextField::new_in_memory(),
             hint: Hint::default(),
+            completion: None,
+            completed_for: None,
             settings: InputSettings::default(),
             diagnostic: None,
             diagnostic_range: None,
+            command_range: None,
             selecting: false,
             highlighted_revision: u64::MAX,
             highlighted_pending: None,
@@ -723,7 +1017,18 @@ impl InputCode {
             theme.prompt().patch(base)
         };
         let text = self.text();
-        let visual_lines = self.lines(context.width().saturating_sub(context.prefix()));
+        let width = context.width().saturating_sub(context.prefix());
+        let visual_lines = self.lines(width);
+        let ghost = self.offered().map(|completion| {
+            let (row, _) = self.visual_cursor(width);
+            let offset = self.field.cursor() - visual_lines[row].range.start;
+            (
+                row,
+                offset,
+                completion.ghost().to_string(),
+                completion.is_hint(),
+            )
+        });
 
         let mut lines = Vec::new();
         for (index, visual_line) in visual_lines.iter().enumerate() {
@@ -747,12 +1052,20 @@ impl InputCode {
                     theme.diagnostic(),
                 );
             }
+            if let Some(command) = self.command_range.as_ref() {
+                line = apply_selection(line, visual_line.range.start, command, theme.command());
+            }
             if let Some(selection) = selection.as_ref() {
                 line = apply_selection(line, visual_line.range.start, selection, theme.selection());
             }
+            if let Some((_, offset, ghost, hint)) = ghost.as_ref().filter(|(row, ..)| *row == index)
+            {
+                let style = if *hint { theme.hint_text() } else { base };
+                line = insert_span(line, *offset, Span::styled(ghost.clone(), style));
+            }
             spans.extend(line);
             if index == 0 && text.is_empty() {
-                spans.push(Span::styled(format!(" {}", self.hint), theme.hint_text()));
+                spans.push(Span::styled(self.hint.to_string(), theme.hint_text()));
             }
             lines.push(Line::from(spans));
         }
@@ -850,25 +1163,6 @@ impl InputCode {
         self.text_area = Rect::ZERO;
     }
 
-    /// Return the input pane's last rendered rectangle.
-    #[cfg(test)]
-    pub fn area(&self) -> Rect {
-        self.area
-    }
-
-    /// Return the editable text's last rendered rectangle.
-    #[cfg(test)]
-    pub fn text_area(&self) -> Rect {
-        self.text_area
-    }
-
-    /// Supply layout rectangles without rendering in mouse-routing tests.
-    #[cfg(test)]
-    pub fn set_test_area(&mut self, area: Rect, text_area: Rect) {
-        self.area = area;
-        self.text_area = text_area;
-    }
-
     fn scroll_start(&self, cursor: usize, rows: usize, viewport: usize) -> usize {
         let last = rows.saturating_sub(viewport);
         let scrolloff = usize::from(self.settings.scrolloff);
@@ -882,6 +1176,40 @@ impl InputCode {
             )
             .min(last)
     }
+}
+
+/// `inserted` placed `offset` bytes into a row, splitting the span it falls in.
+fn insert_span(
+    spans: Vec<Span<'static>>,
+    offset: usize,
+    inserted: Span<'static>,
+) -> Vec<Span<'static>> {
+    let mut placed = Vec::with_capacity(spans.len() + 2);
+    let mut start = 0;
+    let mut inserted = Some(inserted);
+    for span in spans {
+        let end = start + span.content.len();
+        if (start..end).contains(&offset) && offset > start {
+            let content = span.content.into_owned();
+            placed.push(Span::styled(
+                content[..offset - start].to_string(),
+                span.style,
+            ));
+            placed.extend(inserted.take());
+            placed.push(Span::styled(
+                content[offset - start..].to_string(),
+                span.style,
+            ));
+        } else {
+            if offset == start {
+                placed.extend(inserted.take());
+            }
+            placed.push(span);
+        }
+        start = end;
+    }
+    placed.extend(inserted);
+    placed
 }
 
 /// Repaint the part of a row covered by `selection`, splitting spans at the
@@ -968,7 +1296,7 @@ mod tests {
     use crate::code::highlight::SyntaxHighlighter;
     use crate::ui::config::UI;
     use crate::ui::controller::settings::theme::groups::Groups;
-    use crate::ui::key::KeyMod::{Alt, Shift};
+    use crate::ui::key::KeyMod::{self, Alt, Ctrl, Shift};
     use ratatui::style::Modifier;
 
     #[test]
@@ -978,12 +1306,122 @@ mod tests {
             KeyCode::Char(' ') + Shift,
             KeyCode::Enter + Shift,
             KeyCode::Enter + Alt,
-            KeyCode::Tab.into(),
+            KeyCode::Tab + Alt,
         ] {
             input.handle_key(key);
         }
 
         assert_eq!(input.text(), "\n\n\n\t");
+    }
+
+    #[test]
+    fn ctrl_arrows_jump_a_word_and_ctrl_home_end_the_whole_input() {
+        let mut input = InputCode::new_in_memory();
+        input.insert("R = ZZ[x, y]\nf(a)");
+        let key = |code: KeyCode, modifiers: &[KeyMod]| {
+            modifiers
+                .iter()
+                .fold(KeyEvent::from(code), |key, modifier| key + *modifier)
+        };
+        let word = |input: &mut InputCode, code, modifiers: &[KeyMod]| {
+            input.handle_key(key(code, modifiers));
+            input.text()[..input.field().cursor()].to_string()
+        };
+
+        assert_eq!(
+            word(&mut input, KeyCode::Left, &[Ctrl]),
+            "R = ZZ[x, y]\nf(a"
+        );
+        assert_eq!(word(&mut input, KeyCode::Left, &[Ctrl]), "R = ZZ[x, y]\nf(");
+        assert_eq!(word(&mut input, KeyCode::Left, &[Ctrl]), "R = ZZ[x, y]\nf");
+        assert_eq!(word(&mut input, KeyCode::Left, &[Ctrl]), "R = ZZ[x, y]\n");
+        assert_eq!(word(&mut input, KeyCode::Left, &[Ctrl]), "R = ZZ[x, y");
+        assert_eq!(word(&mut input, KeyCode::Left, &[Ctrl]), "R = ZZ[x, ");
+        assert_eq!(word(&mut input, KeyCode::Home, &[Ctrl]), "");
+        assert_eq!(word(&mut input, KeyCode::Right, &[Ctrl]), "R");
+        assert_eq!(word(&mut input, KeyCode::Right, &[Ctrl]), "R =");
+        assert_eq!(word(&mut input, KeyCode::Right, &[Ctrl]), "R = ZZ");
+        assert_eq!(word(&mut input, KeyCode::Right, &[Ctrl]), "R = ZZ[");
+        input.handle_key(key(KeyCode::Right, &[Ctrl, Shift]));
+        assert_eq!(
+            input.field().selection().map(|range| &input.text()[range]),
+            Some("x")
+        );
+        assert_eq!(
+            word(&mut input, KeyCode::End, &[Ctrl]),
+            "R = ZZ[x, y]\nf(a)"
+        );
+    }
+
+    #[test]
+    fn ctrl_deletion_removes_what_the_ctrl_arrow_crosses() {
+        let source = "R = ZZ[x, y]\nf(a)  ";
+        let (mut moved, mut deleted) = (InputCode::new_in_memory(), InputCode::new_in_memory());
+        moved.insert(source);
+        deleted.insert(source);
+        while !deleted.text().is_empty() {
+            moved.handle_key(KeyCode::Left + Ctrl);
+            deleted.handle_key(KeyCode::Backspace + Ctrl);
+            assert_eq!(deleted.text(), &moved.text()[..moved.field().cursor()]);
+        }
+
+        deleted.insert(source);
+        deleted.field_mut().move_text_start();
+        moved.field_mut().move_text_start();
+        while !deleted.text().is_empty() {
+            moved.handle_key(KeyCode::Right + Ctrl);
+            deleted.handle_key(KeyCode::Delete + Ctrl);
+            assert_eq!(deleted.text(), &moved.text()[moved.field().cursor()..]);
+        }
+    }
+
+    #[test]
+    fn undo_restores_deletions_and_typing_a_word_at_a_time() {
+        let mut input = InputCode::new_in_memory();
+        for character in "f = x + y".chars() {
+            input.handle_key(KeyCode::Char(character).into());
+        }
+        input.handle_key(KeyCode::Backspace + Ctrl);
+        input.handle_key(KeyCode::Backspace + Ctrl);
+        input.handle_key(KeyCode::Char('l') + Ctrl);
+        assert_eq!(input.text(), "");
+
+        input.handle_key(KeyCode::Char('z') + Ctrl);
+        assert_eq!(input.text(), "f = x ");
+        input.handle_key(KeyCode::Char('z') + Ctrl);
+        assert_eq!(input.text(), "f = x + y", "a run of deletions is one step");
+        assert_eq!(input.field().cursor(), input.text().len());
+        input.handle_key(KeyCode::Char('z') + Ctrl);
+        assert_eq!(input.text(), "f = x + ");
+        input.handle_key(KeyCode::Char('z') + Ctrl);
+        assert_eq!(input.text(), "f = x ");
+
+        input.handle_key(KeyCode::Char('z') + Ctrl + Shift);
+        input.handle_key(KeyCode::Char('z') + Ctrl + Shift);
+        assert_eq!(input.text(), "f = x + y");
+        input.handle_key(KeyCode::Char('!').into());
+        input.handle_key(KeyCode::Char('z') + Ctrl + Shift);
+        assert_eq!(input.text(), "f = x + y!", "a new edit drops what was undone");
+    }
+
+    #[test]
+    fn a_submission_leaves_nothing_to_undo() {
+        let mut input = InputCode::new_in_memory();
+        input.insert("1 + 1");
+        input.accept_submission();
+
+        input.handle_key(KeyCode::Char('z') + Ctrl);
+
+        assert_eq!(input.text(), "");
+    }
+
+    #[test]
+    fn the_newline_character_a_terminal_sends_for_shift_enter_is_a_newline() {
+        let mut input = InputCode::new_in_memory();
+        input.insert("1");
+        input.handle_key(KeyCode::Char('j') + Ctrl);
+
+        assert_eq!(input.text(), "1\n");
     }
 
     #[test]
@@ -1123,7 +1561,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_input_leaves_one_cell_between_the_prompt_and_hint() {
+    fn the_hint_of_an_empty_input_starts_at_the_cursor() {
         let mut input = InputCode::new_in_memory();
         let context = RenderContext::new(40, UI.prompt_width());
         let mut highlighter = SyntaxHighlighter::new();
@@ -1134,9 +1572,8 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
 
-        assert!(rendered.starts_with("  ❯   "));
         let hint = rendered.find(&input.hint.to_string()).unwrap();
-        assert_eq!(rendered[..hint].chars().count(), 6);
+        assert_eq!(rendered[..hint].chars().count(), usize::from(UI.prompt_width()));
     }
 
     #[test]
@@ -1193,6 +1630,59 @@ mod tests {
         assert_eq!(text[1].style.underline_color, theme.error().fg);
         assert_eq!(text[1].style.fg, text[0].style.fg);
         assert_eq!(text[1].style.bg, text[0].style.bg);
+    }
+
+    #[test]
+    fn the_rest_of_a_completion_is_drawn_after_the_cursor_as_text() {
+        let mut input = InputCode::new_in_memory();
+        input.field_mut().insert_str("f(ide)");
+        input.field_mut().move_left();
+        let candidates = vec!["ideal".to_string()];
+        input.offer(Completion::new(input.text(), 2..5, candidates));
+        let context = RenderContext::new(40, UI.prompt_width());
+
+        let lines = input.highlighted_lines(&context, &mut SyntaxHighlighter::new(), false, None);
+        let rendered: String = lines[0].spans[1..]
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(rendered, "f(ideal)");
+        let ghost = lines[0]
+            .spans
+            .iter()
+            .find(|span| span.content == "al")
+            .unwrap();
+        assert_eq!(ghost.style, Groups::default().code());
+
+        input.handle_key(KeyCode::Tab.into());
+        assert_eq!(input.text(), "f(ideal)");
+        assert!(
+            !input.needs_completion(),
+            "taking cycles the candidates, it does not complete further"
+        );
+    }
+
+    #[test]
+    fn a_command_is_drawn_in_its_colour_and_its_completion_as_a_hint() {
+        let mut input = InputCode::new_in_memory();
+        input.field_mut().insert_str("$se");
+        input.set_command_range(Some(0..3));
+        let candidates = vec!["$settings".to_string()];
+        input.offer(Completion::new(input.text(), 0..3, candidates).map(Completion::hinted));
+        let context = RenderContext::new(40, UI.prompt_width());
+        let groups = Groups::default();
+
+        let lines = input.highlighted_lines(&context, &mut SyntaxHighlighter::new(), false, None);
+        let style_of = |text: &str| {
+            lines[0]
+                .spans
+                .iter()
+                .find(|span| span.content == text)
+                .unwrap_or_else(|| panic!("{text} is drawn on its own"))
+                .style
+        };
+        assert_eq!(style_of("$se").fg, groups.command().fg);
+        assert_eq!(style_of("ttings"), groups.hint_text());
     }
 
     #[test]

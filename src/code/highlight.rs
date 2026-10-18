@@ -67,7 +67,7 @@ impl SyntaxHighlighter {
         ("keyword.repeat", HLGroup::Repeat),
         ("keyword.return", HLGroup::Statement),
         ("keyword.exception", HLGroup::Exception),
-        ("keyword.modifier", HLGroup::StorageClass),
+        ("keyword.modifier", HLGroup::Keyword),
         ("keyword.debug", HLGroup::Debug),
         ("keyword.operator", HLGroup::Operator),
         ("keyword", HLGroup::Keyword),
@@ -86,6 +86,9 @@ impl SyntaxHighlighter {
         ("string.special.url", HLGroup::Documentation),
         ("module", HLGroup::Package),
         ("namespace", HLGroup::Namespace),
+        ("attribute", HLGroup::Attribute),
+        ("function.macro", HLGroup::Macro),
+        ("string.regexp", HLGroup::Regex),
     ];
 
     /// Configure highlighting from the query shipped with the grammar version.

@@ -24,6 +24,8 @@ use crate::ui::controller::settings::theme::groups::HLGroup;
 use crate::ui::present::{wrap, SpanLine};
 use crate::ui::wrap::WordWrap;
 
+use super::markup;
+
 /// A piece of parsed maths, tagged with the role that decides its colour.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Math {
@@ -109,6 +111,24 @@ impl FractionStyle {
     }
 }
 
+/// How returned maths is set, as chosen in settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MathStyle {
+    pub fractions: FractionStyle,
+    /// Whether a ring such as `\mathbb Z` is drawn with its blackboard glyph `ℤ`
+    /// rather than the name `ZZ` it has in code.
+    pub blackboard: bool,
+}
+
+impl From<FractionStyle> for MathStyle {
+    fn from(fractions: FractionStyle) -> Self {
+        Self {
+            fractions,
+            ..Self::default()
+        }
+    }
+}
+
 impl Role {
     /// The group code paints the same thing with, so a value reads as it would
     /// typed: `null` as a constant, `true` as a Boolean, a name as a function.
@@ -118,6 +138,11 @@ impl Role {
             Self::Boolean => HLGroup::Boolean,
             Self::String => HLGroup::String,
             Self::Function => HLGroup::Function,
+            Self::Type => HLGroup::Type,
+            Self::Package => HLGroup::Package,
+            Self::Keyword => HLGroup::Keyword,
+            Self::Operator => HLGroup::Operator,
+            Self::Command => HLGroup::Macro,
         }
     }
 }
@@ -131,15 +156,18 @@ impl Role {
 pub fn spans(
     value: &M2Value,
     width: usize,
-    fractions: FractionStyle,
+    style: impl Into<MathStyle>,
 ) -> Result<Vec<SpanLine>, Unsupported> {
+    let style = style.into();
     match value {
-        M2Value::Tex { source, .. } => Ok(Math::from_tex(source)?.wrapped(width, fractions)),
+        M2Value::Tex { source, .. } => {
+            Ok(Math::from_tex(source, style.blackboard)?.wrapped(width, style.fractions))
+        }
         M2Value::Collection { kind, items } if *kind != CollectionKind::VerticalList => Ok(
-            MathBlock::fitted(MathBlock::listed(*kind, items, width, fractions), width),
+            MathBlock::fitted(MathBlock::listed(*kind, items, width, style), width),
         ),
         M2Value::Collection { .. } | M2Value::HashTable(_) => Ok(MathBlock::fitted(
-            vec![MathBlock::value(value, fractions)],
+            vec![MathBlock::value(value, style)],
             width,
         )),
         // A string can run long, so it breaks at words like any prose.
@@ -150,16 +178,17 @@ pub fn spans(
                 wrap(&[TextSpan::new(line, role.group())], width, &WordWrap)
             })
             .collect()),
-        M2Value::Net(_) | M2Value::Markup { .. } => {
-            Err(Unsupported("plain text carries nothing to colour".into()))
-        }
+        M2Value::Markup { html, .. } => markup::spans(html, width)
+            .ok_or_else(|| Unsupported("markup that does not read as HTML".into())),
+        M2Value::Net(_) => Err(Unsupported("plain text carries nothing to colour".into())),
     }
 }
 
 /// A value's type annotation as rows no wider than `width`, its pieces set side by
 /// side from their own structure and painted in the type's colour throughout.
-pub fn annotation(parts: &[M2Value], width: usize, fractions: FractionStyle) -> Vec<SpanLine> {
-    let line = MathBlock::row(parts.iter().map(|part| MathBlock::value(part, fractions)));
+pub fn annotation(parts: &[M2Value], width: usize, style: impl Into<MathStyle>) -> Vec<SpanLine> {
+    let style = style.into();
+    let line = MathBlock::row(parts.iter().map(|part| MathBlock::value(part, style)));
     MathBlock::fitted(vec![line], width)
         .into_iter()
         .map(|row| {
@@ -177,13 +206,15 @@ pub fn annotation(parts: &[M2Value], width: usize, fractions: FractionStyle) -> 
 struct Input<'a> {
     source: &'a str,
     at: usize,
+    blackboard: bool,
 }
 
 impl<'a> Input<'a> {
-    fn new(source: &'a str) -> Self {
+    fn new(source: &'a str, blackboard: bool) -> Self {
         Self {
             source: source.trim(),
             at: 0,
+            blackboard,
         }
     }
 
@@ -206,6 +237,10 @@ impl<'a> Input<'a> {
                 }
                 _ => {}
             }
+            if self.eat(PHANTOM) {
+                self.skip_group();
+                continue;
+            }
             match SPACING
                 .iter()
                 .find(|space| self.rest().starts_with(**space))
@@ -213,6 +248,24 @@ impl<'a> Input<'a> {
                 Some(space) => self.at += space.len(),
                 None => return,
             }
+        }
+    }
+
+    /// Step over one braced group, nested braces included, and whatever whitespace
+    /// precedes it. M2 pads matrix rows with phantoms that only reserve height in a
+    /// typeset page, so the text they hold is never drawn.
+    fn skip_group(&mut self) {
+        self.at += self.rest().len() - self.rest().trim_start().len();
+        if !self.eat("{") {
+            return;
+        }
+        let mut depth = 1;
+        while depth > 0 {
+            let Some(next) = self.rest().chars().next() else {
+                return;
+            };
+            self.at += next.len_utf8();
+            depth += i32::from(next == '{') - i32::from(next == '}');
         }
     }
 
@@ -287,6 +340,15 @@ impl<'a> Input<'a> {
                 self.at += next.len_utf8();
                 Ok(Math::atom(next, HLGroup::Operator))
             }
+            // A comma is followed by one space, whatever spacing TeX sets after it.
+            ',' => {
+                self.at += 1;
+                self.skip_trivia();
+                while self.eat(THIN_SPACE) {
+                    self.skip_trivia();
+                }
+                Ok(Math::atom(", ", HLGroup::Punctuation))
+            }
             _ if DELIMITERS.contains(next) => {
                 self.at += next.len_utf8();
                 Ok(Math::atom(next, HLGroup::Delimiter))
@@ -356,12 +418,29 @@ impl<'a> Input<'a> {
             font if FONTS.contains(&font) => {
                 let body = self.atom()?;
                 Ok(match font {
-                    "mathbb" => Math::retag(body.doubled(), HLGroup::Type),
+                    "mathbb" => Math::retag(body.lettered(&DOUBLE_STRUCK, self.blackboard), HLGroup::Type),
+                    "texttt" => body.named_in_code(),
+                    "mathfrak" => Math::retag(body.lettered(&FRAKTUR, self.blackboard), HLGroup::Type),
+                    "mathcal" => Math::retag(body.lettered(&SCRIPT, self.blackboard), HLGroup::Type),
                     _ => body,
                 })
             }
-            other => Err(Unsupported(format!("\\{other}"))),
+            other => self
+                .operator(other)
+                .ok_or_else(|| Unsupported(format!("\\{other}"))),
         }
+    }
+
+    /// The operator a command name spells, which may run on into the next word:
+    /// M2 writes `x|y` as `x\midy`, so the name read is `midy`. The longest operator
+    /// the name starts with is taken and the rest handed back to the input.
+    fn operator(&mut self, name: &str) -> Option<Math> {
+        let (command, glyph) = OPERATOR_COMMANDS
+            .iter()
+            .filter(|(command, _)| name.starts_with(command))
+            .max_by_key(|(command, _)| command.len())?;
+        self.at -= name.len() - command.len();
+        Some(Math::atom(*glyph, HLGroup::Operator))
     }
 
     /// The alphabetic name after a backslash, or the single punctuation character.
@@ -469,11 +548,109 @@ impl<'a> Input<'a> {
 /// unlike U+00B7 MIDDLE DOT, which is East Asian Ambiguous and would shift a border.
 const PRODUCT: &str = "\u{22C5}";
 const THIN_SPACE: &str = "\\,";
+/// Reserves height for its argument without drawing it.
+const PHANTOM: &str = "\\vphantom";
 /// How many digits M2 sets between the thin spaces of a long numeral.
 const DIGIT_GROUP: usize = 3;
-const SPACING: [&str; 5] = ["\\qquad", "\\quad", "\\;", "\\!", "\\ "];
-const OPERATORS: &str = "+-=<>/*";
+const SPACING: [&str; 8] = [
+    "\\qquad",
+    "\\quad",
+    "\\;",
+    "\\:",
+    "\\!",
+    "\\ ",
+    // Empty groups M2 sets around fences to keep their spacing; they carry nothing.
+    "\\mathopen{}",
+    "\\mathclose{}",
+];
+const OPERATORS: &str = "+-=<>/*@:~?!%";
+/// Operators TeX spells as a command, with the glyph a terminal draws for each.
+const OPERATOR_COMMANDS: [(&str, &str); 17] = [
+    ("wedge", "\u{2227}"),
+    ("vee", "\u{2228}"),
+    ("otimes", "\u{2297}"),
+    ("oplus", "\u{2295}"),
+    ("circ", "\u{2218}"),
+    ("cap", "\u{2229}"),
+    ("cup", "\u{222A}"),
+    ("times", "\u{00D7}"),
+    ("ast", "\u{2217}"),
+    ("mid", "|"),
+    ("Rightarrow", "\u{21D2}"),
+    ("Leftarrow", "\u{21D0}"),
+    ("Leftrightarrow", "\u{21D4}"),
+    ("Longrightarrow", "\u{27F9}"),
+    ("Longleftarrow", "\u{27F8}"),
+    ("leq", "\u{2264}"),
+    ("geq", "\u{2265}"),
+];
 const DELIMITERS: &str = "()[]{}|.";
+/// A TeX math alphabet as Unicode sets it: capitals in a run of the Mathematical
+/// Alphanumeric Symbols block, bar the few Unicode had already placed among the
+/// letterlike symbols.
+struct Alphabet {
+    first_capital: u32,
+    letterlike: &'static [(char, char)],
+    /// Whether M2 spells a letter in this alphabet twice in code, `\mathbb Q` as `QQ`,
+    /// rather than a lone `Q` that reads as a variable.
+    doubled_in_code: bool,
+}
+
+impl Alphabet {
+    fn glyph(&self, letter: char) -> Option<char> {
+        letter.is_ascii_uppercase().then(|| {
+            self.letterlike
+                .iter()
+                .find(|(plain, _)| *plain == letter)
+                .map_or_else(
+                    || {
+                        char::from_u32(self.first_capital + u32::from(letter) - u32::from('A'))
+                            .expect("a capital of the alphabet")
+                    },
+                    |(_, glyph)| *glyph,
+                )
+        })
+    }
+}
+
+const DOUBLE_STRUCK: Alphabet = Alphabet {
+    first_capital: 0x1D538,
+    letterlike: &[
+        ('C', 'ℂ'),
+        ('H', 'ℍ'),
+        ('N', 'ℕ'),
+        ('P', 'ℙ'),
+        ('Q', 'ℚ'),
+        ('R', 'ℝ'),
+        ('Z', 'ℤ'),
+    ],
+    doubled_in_code: true,
+};
+const FRAKTUR: Alphabet = Alphabet {
+    first_capital: 0x1D504,
+    letterlike: &[
+        ('C', 'ℭ'),
+        ('H', 'ℌ'),
+        ('I', 'ℑ'),
+        ('R', 'ℜ'),
+        ('Z', 'ℨ'),
+    ],
+    doubled_in_code: false,
+};
+const SCRIPT: Alphabet = Alphabet {
+    first_capital: 0x1D49C,
+    letterlike: &[
+        ('B', 'ℬ'),
+        ('E', 'ℰ'),
+        ('F', 'ℱ'),
+        ('H', 'ℋ'),
+        ('I', 'ℐ'),
+        ('L', 'ℒ'),
+        ('M', 'ℳ'),
+        ('R', 'ℛ'),
+    ],
+    doubled_in_code: false,
+};
 /// Font commands M2 wraps names in. All are transparent to layout: they change how a
 /// name is *set*, never what it is. `mathit` marks multi-character names, which is how
 /// M2 keeps `x2` from reading as a power; the parser gets that from structure instead.
@@ -483,8 +660,14 @@ const FONTS: [&str; 9] = [
 
 impl Math {
     /// Parse one M2 TeX expression.
+    #[cfg(test)]
     pub fn parse(source: &str) -> Result<Self, Unsupported> {
-        let mut input = Input::new(source);
+        Self::parse_with(source, false)
+    }
+
+    /// Parse one M2 TeX expression, drawing rings as blackboard glyphs when asked.
+    fn parse_with(source: &str, blackboard: bool) -> Result<Self, Unsupported> {
+        let mut input = Input::new(source, blackboard);
         let parsed = input.expression(&[])?;
         match input.rest().is_empty() {
             true => Ok(parsed),
@@ -499,16 +682,31 @@ impl Math {
         }
     }
 
-    /// A blackboard letter as M2 spells the ring it names: `\mathbb Q` is `QQ`, the
-    /// name typed in code, rather than a lone `Q` that reads as a variable.
-    fn doubled(self) -> Self {
+    /// A letter set in `alphabet`: its glyph when `glyphs` are asked for, else as code
+    /// spells it.
+    fn lettered(self, alphabet: &Alphabet, glyphs: bool) -> Self {
         match self {
-            Self::Atom { text, kind } if text.chars().count() == 1 => Self::Atom {
-                text: text.repeat(2),
-                kind,
-            },
+            Self::Atom { text, kind } if text.chars().count() == 1 => {
+                let letter = text.chars().next().expect("one character");
+                let text = match alphabet.glyph(letter).filter(|_| glyphs) {
+                    Some(glyph) => glyph.to_string(),
+                    None if alphabet.doubled_in_code => text.repeat(2),
+                    None => text,
+                };
+                Self::Atom { text, kind }
+            }
             other => other,
         }
+    }
+
+    /// A name M2 sets in typewriter face is one from code: a type when capitalised, as
+    /// M2 names its types, else a function.
+    fn named_in_code(self) -> Self {
+        let kind = match &self {
+            Self::Atom { text, .. } if text.starts_with(char::is_uppercase) => HLGroup::Type,
+            _ => HLGroup::Function,
+        };
+        self.retag(kind)
     }
 
     /// Give every atom in a subtree a different role.
@@ -563,16 +761,18 @@ impl Math {
                 let base = base.layout(fractions);
                 match subscript.inline_script(Shift::Lowered) {
                     Some(inline) => base.beside(inline),
+                    // A subscript with no lowered form is written out after an
+                    // underscore on the base's row, braced when it is several pieces,
+                    // as M2 writes the name `x_{1,1}`.
                     None => {
-                        let base_height = base.height();
-                        let baseline = base.baseline;
-                        let mut stacked = MathBlock::stack(
-                            vec![base, subscript.layout(fractions)],
-                            baseline,
-                            Align::Left,
-                        );
-                        stacked.baseline = baseline.min(base_height - 1);
-                        stacked
+                        let written = match subscript.as_ref() {
+                            Self::Row(_) => {
+                                subscript.layout(FractionStyle::Inline).fenced("{", "}")
+                            }
+                            _ => subscript.inline_operand(FractionStyle::Inline),
+                        };
+                        base.beside(MathBlock::atom("_", HLGroup::Operator))
+                            .beside(written)
                     }
                 }
             }
@@ -606,12 +806,12 @@ impl Math {
     ///
     /// For a String, a Net or null M2 answers `tex` with the raw text instead, which
     /// is not maths -- read as TeX, `hello world` would set as the name `helloworld`.
-    fn from_tex(source: &str) -> Result<Self, Unsupported> {
+    fn from_tex(source: &str, blackboard: bool) -> Result<Self, Unsupported> {
         let maths = source
             .strip_prefix('$')
             .and_then(|tex| tex.strip_suffix('$'))
             .ok_or_else(|| Unsupported("not maths: no $ delimiters".into()))?;
-        Self::parse(maths)
+        Self::parse_with(maths, blackboard)
     }
 
     /// A row's pieces laid out in order, split wherever a long row may break.
@@ -698,15 +898,17 @@ impl Math {
 
 /// Which way a script moves off its base's row.
 #[derive(Clone, Copy)]
-enum Shift {
+pub enum Shift {
+    /// Superscript characters above the text baseline.
     Raised,
+    /// Subscript characters below the text baseline.
     Lowered,
 }
 
 impl Shift {
     /// `text` in its shifted form, when every character of it has one. A script that
     /// does rides its base's row, which keeps polynomials compact.
-    fn form(self, text: &str) -> Option<String> {
+    pub fn form(self, text: &str) -> Option<String> {
         text.chars()
             .map(|character| {
                 Some(match (self, character) {
@@ -866,12 +1068,13 @@ impl MathBlock {
     /// A value M2 sent, laid out whole: TeX from its structure, a container from its
     /// entries, a token in its role's colour, and whatever M2 drew as plain text as
     /// that text.
-    fn value(value: &M2Value, fractions: FractionStyle) -> Self {
+    fn value(value: &M2Value, style: MathStyle) -> Self {
         match value {
-            M2Value::Tex { source, fallback } => Math::from_tex(source).map_or_else(
-                |_| Self::text(fallback, HLGroup::Value),
-                |math| math.layout(fractions),
-            ),
+            M2Value::Tex { source, fallback } => Math::from_tex(source, style.blackboard)
+                .map_or_else(
+                    |_| Self::text(fallback, HLGroup::Value),
+                    |math| math.layout(style.fractions),
+                ),
             M2Value::Net(text) | M2Value::Markup { fallback: text, .. } => {
                 Self::text(text, HLGroup::Value)
             }
@@ -879,26 +1082,19 @@ impl MathBlock {
             M2Value::Collection {
                 kind: CollectionKind::VerticalList,
                 items,
-            } => Self::braced(
-                items
-                    .iter()
-                    .map(|item| Self::value(item, fractions))
-                    .collect(),
-            ),
-            M2Value::Collection { kind, items } => {
-                Self::listed(*kind, items, usize::MAX, fractions)
-                    .into_iter()
-                    .next()
-                    .expect("an unbounded width takes a collection on one line")
-            }
+            } => Self::braced(items.iter().map(|item| Self::value(item, style)).collect()),
+            M2Value::Collection { kind, items } => Self::listed(*kind, items, usize::MAX, style)
+                .into_iter()
+                .next()
+                .expect("an unbounded width takes a collection on one line"),
             M2Value::HashTable(entries) => Self::braced(
                 entries
                     .iter()
                     .map(|[key, value]| {
                         Self::row([
-                            Self::value(key, fractions),
+                            Self::value(key, style),
                             Self::atom(" \u{21D2} ", HLGroup::Operator),
-                            Self::value(value, fractions),
+                            Self::value(value, style),
                         ])
                     })
                     .collect(),
@@ -916,7 +1112,7 @@ impl MathBlock {
         kind: CollectionKind,
         items: &[M2Value],
         width: usize,
-        fractions: FractionStyle,
+        style: MathStyle,
     ) -> Vec<Self> {
         let (open, close) = kind.delimiters();
         let last = items.len().saturating_sub(1);
@@ -924,7 +1120,7 @@ impl MathBlock {
             .iter()
             .enumerate()
             .map(|(index, item)| {
-                let entry = Self::value(item, fractions);
+                let entry = Self::value(item, style);
                 match index == last {
                     true => entry,
                     false => Self::row([entry, Self::atom(",", HLGroup::Punctuation), Self::gap()]),
@@ -1616,6 +1812,7 @@ mod tests {
                 token("true", Role::Boolean),
                 token("hi", Role::String),
                 token("print", Role::Function),
+                token("Type", Role::Type),
             ],
         );
         let roles = roles(&spans(&list, 80, FractionStyle::Stacked).expect("renders"));
@@ -1625,6 +1822,7 @@ mod tests {
             ("true", HLGroup::Boolean),
             ("hi", HLGroup::String),
             ("print", HLGroup::Function),
+            ("Type", HLGroup::Type),
         ] {
             assert!(
                 roles.contains(&(text.to_string(), group)),
@@ -1890,7 +2088,7 @@ mod tests {
         }
         for (source, blamed) in [
             (r"x^{\alpha}", r"\alpha"),
-            (r"a \otimes b", r"\otimes"),
+            (r"a \nabla b", r"\nabla"),
             (r"\sqrt{2}", r"\sqrt"),
         ] {
             assert_eq!(
@@ -1899,5 +2097,111 @@ mod tests {
                 "{source} should blame {blamed} rather than failing anonymously"
             );
         }
+    }
+
+    /// What M2 sends for `CC[x_{1,1}]`, spacing groups and all.
+    const POLYNOMIAL_RING: &str =
+        r"${\mathbb C}_{53}\mathopen{}\left[x_{\left\{1,\:1\right\}}\right]$";
+
+    fn rendered(source: &str, blackboard: bool) -> String {
+        Math::from_tex(source, blackboard)
+            .expect("parses")
+            .wrapped(80, FractionStyle::Stacked)
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|span| span.content.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_subscript_without_a_lowered_form_stays_on_its_bases_row() {
+        assert_eq!(rendered(POLYNOMIAL_RING, false), "CC₅₃[x_{1, 1}]");
+        assert_eq!(rendered("$x_{a}$", false), "x_a");
+        assert_eq!(rendered("$x_{12}$", false), "x₁₂");
+    }
+
+    #[test]
+    fn blackboard_glyphs_are_drawn_only_when_asked_for() {
+        assert_eq!(rendered("${\\mathbb Z}$", false), "ZZ");
+        assert_eq!(rendered("${\\mathbb Z}$", true), "ℤ");
+        assert_eq!(rendered("${\\mathbb P}$", true), "ℙ");
+        assert_eq!(rendered("${\\mathbb A}$", true), "𝔸");
+    }
+
+    /// What M2 sends for `x ^^ y`, `x ** y`, `x @@ y`, `x | y` and `x => y` over a symbol.
+    #[test]
+    fn the_operators_macaulay2_spells_are_drawn_and_coloured_as_operators() {
+        for (source, drawn) in [
+            (r"$x\wedge\wedge x$", "x∧∧x"),
+            (r"${x}\otimes {x}$", "x⊗x"),
+            (r"$x@@x$", "x@@x"),
+            (r"$x\midx$", "x|x"),
+            (r"$x\mid\midx$", "x||x"),
+            (r"$x\ \Rightarrow \ x$", "x⇒x"),
+            (r"$x\Longrightarrow x$", "x⟹x"),
+        ] {
+            assert_eq!(rendered(source, false), drawn);
+            let kinds = Math::from_tex(source, false)
+                .expect("parses")
+                .wrapped(80, FractionStyle::Stacked)
+                .into_iter()
+                .flatten()
+                .filter(|span| span.content != "x")
+                .map(|span| span.kind)
+                .collect::<Vec<_>>();
+            assert!(
+                kinds.iter().all(|kind| *kind == HLGroup::Operator),
+                "{source} should colour its operators alone, got {kinds:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn script_capitals_are_drawn_only_when_asked_for() {
+        assert_eq!(rendered("${\\mathcal O}_{X}$", false), "O_X");
+        assert_eq!(rendered("${\\mathcal O}_{X}$", true), "𝒪_X");
+        assert_eq!(rendered("${\\mathcal L}$", true), "ℒ");
+        assert_eq!(rendered("${\\mathfrak g}$", true), "g");
+        assert_eq!(rendered("${\\mathfrak P}$", true), "𝔓");
+        assert_eq!(rendered("${\\mathfrak R}$", true), "ℜ");
+    }
+
+    #[test]
+    fn a_name_in_typewriter_face_is_coloured_as_code_names_it() {
+        let kinds = |source| {
+            let rows = Math::from_tex(source, false)
+                .expect("parses")
+                .wrapped(80, FractionStyle::Stacked);
+            rows.iter().flatten().map(|span| span.kind).collect::<Vec<_>>()
+        };
+        assert_eq!(kinds("$\\texttt{image}$"), [HLGroup::Function]);
+        assert_eq!(kinds("$\\texttt{CoherentSheaf}$"), [HLGroup::Type]);
+    }
+
+    #[test]
+    fn a_phantom_reserves_nothing_in_a_terminal() {
+        let sheaf = "$\\begin{array}{l}\\left\\{1\\right\\}\\vphantom{-y0}\\end{array}\\left(\\!\\begin{array}{c}\n\\vphantom{\\left\\{1\\right\\}}-y\n\\end{array}\\!\\right)$";
+        assert_eq!(rendered(sheaf, false), rendered(r"$\left\{1\right\}\left(-y\right)$", false));
+    }
+
+    #[test]
+    fn a_quotient_ring_is_parsed_and_so_coloured_by_structure() {
+        let ring = r"$\frac{{\mathbb Q}\mathopen{}\left[x\right]}{x^{3}-1}$";
+        let rows = Math::from_tex(ring, false)
+            .expect("a quotient ring parses")
+            .wrapped(80, FractionStyle::Stacked);
+
+        assert_eq!(rows.len(), 3);
+        let kinds: Vec<_> = rows.iter().flatten().map(|span| span.kind).collect();
+        assert!(kinds.contains(&HLGroup::Type) && kinds.contains(&HLGroup::Number));
+        assert!(Math::from_tex(
+            r"$\frac{{\mathbb Z}\mathopen{}\left[x\,{.}{.}\,y\right]}{x^{2}}$",
+            false
+        )
+        .is_ok());
     }
 }

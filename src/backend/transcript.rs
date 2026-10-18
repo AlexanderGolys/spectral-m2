@@ -27,9 +27,8 @@ pub struct CapturedError {
 
 /// Warning lines carried beside otherwise successful output: only ones M2 stamped
 /// with its location, so printed text that merely mentions a warning stays printed.
-static WARNING: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!("^{LOCATION}warning: ")).expect("valid pattern")
-});
+static WARNING: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!("^{LOCATION}warning: ")).expect("valid pattern"));
 
 /// Debugger trace markers emitted after the useful error diagnostic.
 static BACKTRACE: LazyLock<Regex> =

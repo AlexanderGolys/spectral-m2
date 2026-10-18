@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect;
 
+use crate::ui::config::UI;
 use crate::ui::element::EventListener;
 
 type Ms = u64;
@@ -112,6 +113,13 @@ fn millis(span: Duration) -> Ms {
     Ms::try_from(span.as_millis()).unwrap_or(Ms::MAX)
 }
 
+/// The frame of the marker of a cell still evaluating at `tick`.
+pub fn busy_frame(tick: &Tick) -> &'static str {
+    let frames = UI.busy_frames;
+    let index = tick.t() / UI.busy_frame_ms;
+    frames[usize::try_from(index).unwrap_or_default() % frames.len()]
+}
+
 pub trait SpinningRod<Output = Cell> {
     fn call(&self, tick: &Tick) -> Output;
 }
@@ -204,6 +212,16 @@ mod tests {
     use super::*;
 
     const FRAMES: [char; 4] = ['|', '/', '-', '\\'];
+
+    #[test]
+    fn the_busy_marker_advances_with_the_clock_and_wraps() {
+        let frames = UI.busy_frames;
+        let at = |frame: usize| busy_frame(&Tick::at(frame as Ms * UI.busy_frame_ms, 0));
+        assert_ne!(at(0), at(1));
+        assert_eq!(at(0), frames[0]);
+        assert_eq!(at(frames.len()), frames[0]);
+        assert_eq!(at(frames.len() + 1), frames[1]);
+    }
 
     /// Reads the clock and answers; keeps nothing between calls.
     struct Clockwise {

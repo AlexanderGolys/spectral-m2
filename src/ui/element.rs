@@ -35,7 +35,7 @@ pub trait EventListener<Event> {
 }
 
 /// Everything an animation must supply, and nothing it shares with other animations.
-pub(crate) trait Animation {
+pub trait Animation {
     /// Extent required to draw everything.
     fn size(&self) -> Size;
 
@@ -53,7 +53,7 @@ pub(crate) trait Animation {
 /// remainder below one period is what makes that hold — discarding it would let one
 /// long tick differ from the several short ticks composing it, so a stutter in the
 /// event loop would quietly slow the animation instead of catching it up.
-pub(crate) struct Animated<T: Animation> {
+pub struct Animated<T: Animation> {
     content: T,
     buffer: Buffer,
     period: NonZeroUsize,
@@ -61,7 +61,7 @@ pub(crate) struct Animated<T: Animation> {
 }
 
 impl<T: Animation> Animated<T> {
-    pub(crate) fn new(content: T, period: NonZeroUsize) -> Self {
+    pub fn new(content: T, period: NonZeroUsize) -> Self {
         let mut animated = Self {
             content,
             buffer: Buffer::empty(Rect::ZERO),
@@ -73,15 +73,15 @@ impl<T: Animation> Animated<T> {
     }
 
     /// The cells, unchanged until the next step falls due.
-    pub(crate) fn buffer(&self) -> &Buffer {
+    pub fn buffer(&self) -> &Buffer {
         &self.buffer
     }
 
-    pub(crate) fn size(&self) -> Size {
+    pub fn size(&self) -> Size {
         self.buffer.area().as_size()
     }
 
-    pub(crate) fn height(&self) -> u16 {
+    pub fn height(&self) -> u16 {
         self.size().height
     }
 
@@ -110,7 +110,7 @@ impl<T: Animation> EventListener<TickEvent> for Animated<T> {
 /// and never learns where it sits, so the shift is applied once, by the owner that
 /// chose it. Anything falling outside either the destination or the parent is dropped
 /// rather than wrapped, so a viewport can paste a slice of a child larger than itself.
-pub(crate) fn paste(child: &Buffer, rows: Range<u16>, into: Rect, parent: &mut Buffer) {
+pub fn paste(child: &Buffer, rows: Range<u16>, into: Rect, parent: &mut Buffer) {
     let source = *child.area();
     let clip = into.intersection(*parent.area());
     let width = usize::from(source.width.min(clip.width));

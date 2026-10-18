@@ -4,7 +4,7 @@ use std::io;
 /// Syntax failures are not here: they are a verdict about the user's input
 /// (a parser verdict), not a fault in the session.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum Error {
+pub enum Error {
     #[error(transparent)]
     System(#[from] io::Error),
     #[error(transparent)]
@@ -18,4 +18,4 @@ pub(crate) enum Error {
 }
 
 /// The result type shared by Spectral's fallible operations.
-pub(crate) type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;

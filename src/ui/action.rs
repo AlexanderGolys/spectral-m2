@@ -1,12 +1,12 @@
 //! Operations emitted by keymaps and other UI event sources.
 
 use serde::{Deserialize, Serialize};
-use these_macros_should_be_illegal::enum_fn;
+use these_macros_should_be_illegal::discriminated_str;
 
 /// A small by-value operation routed through the focused UI hierarchy.
-#[enum_fn(description: &'static str)]
+#[discriminated_str(description)]
 #[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Action {
     FocusPaneLeft = "focus the left pane",
     FocusPaneRight = "focus the right pane",
@@ -21,32 +21,15 @@ pub enum Action {
     OpenKeymaps = "open keymaps",
     ClearFeed = "clear the feed",
     OpenCode = "open code",
-    OpenOutput = "open output",
+    OpenValues = "open returned values",
+    OpenStdOut = "open printed output",
+    OpenOutput = "open all output",
     OpenSyntaxTree = "open syntax tree",
+    SaveSession = "save the session's code to a file",
+    LoadCode = "run the code in a file",
+    ResumeSession = "run the previous session's code",
     Restart = "restart Macaulay2",
     ClosePane = "close the view",
     ToggleHighlightDebug = "toggle highlight groups",
     CopySelection = "copy the selection",
-}
-
-impl Action {
-    /// Actions whose user binding may be replaced.
-    pub const REMAPPABLE: &'static [Self] = &[
-        Self::OpenCommands,
-        Self::OpenSettings,
-        Self::OpenKeymaps,
-        Self::ClearFeed,
-        Self::OpenCode,
-        Self::OpenOutput,
-        Self::OpenSyntaxTree,
-        Self::Restart,
-        Self::ClosePane,
-        Self::Quit,
-        Self::ToggleHighlightDebug,
-        Self::CopySelection,
-    ];
-
-    pub fn is_remappable(self) -> bool {
-        Self::REMAPPABLE.contains(&self)
-    }
 }

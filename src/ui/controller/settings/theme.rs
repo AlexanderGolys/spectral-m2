@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::LazyLock;
 
-
 use ratatui::style::{Color, Style};
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +13,7 @@ mod palette;
 use self::groups::{Base, Groups, Overrides, StyleSpec};
 use self::palette::Palette;
 use super::Persisted;
+use crate::ui::controller::cycled;
 
 /// One palette leaf exposed by the flat appearance picker.
 pub struct Variant {
@@ -194,15 +194,6 @@ impl SchemeFile {
             variants,
         })
     }
-}
-
-/// The choice `delta` steps after `current`, wrapping around `choices`.
-fn cycled<T: Copy + PartialEq>(choices: &[T], current: T, delta: i8) -> T {
-    let position = choices
-        .iter()
-        .position(|choice| *choice == current)
-        .expect("the current choice is among the choices");
-    choices[(position as isize + isize::from(delta)).rem_euclid(choices.len() as isize) as usize]
 }
 
 const SCHEME_FILES: &[&str] = &[

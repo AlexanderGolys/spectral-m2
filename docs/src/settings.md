@@ -12,8 +12,10 @@ Changes are kept between sessions. The appearance is saved to `appearance.json` 
 | Background | An opaque or transparent empty canvas. |
 | Max input height | Percentage of the pane available to growing multiline input, in 5% steps. |
 | Scrolloff | Context rows retained above and below the input cursor. |
+| Complete after | Characters of a name, or of a file name in a string, typed before it is completed. |
 | Status line | Below input, above input, or off. |
 | Fractions | Stacked, underlined, or inline. |
+| Math fonts | Off by default, which draws a ring by the name it has in code, `ZZ`; on draws its blackboard glyph, `ℤ`, and sets `\mathcal` and `\mathfrak` capitals as script and fraktur glyphs. |
 | Max output height | Rows a returned value shows before its middle folds away. |
 | Restore default | Resets settings, keymaps, and appearance. |
 
@@ -25,7 +27,7 @@ The installed families are Catppuccin, Tokyo Night, Gruvbox, Gruvbox Material, E
 
 ## Highlight debug view
 
-Press `Ctrl+D` or run `/debug` to open the one-column inspector at the lower right. It lists all active UI and Macaulay2 highlight groups, followed by the current variant's native palette names and colors. Opening it submits a real three-cell value/muted/null probe through the active Macaulay2 session and leaves that post in the feed. Scroll the inspector with arrow or page keys. `Esc` closes only the inspector; `Ctrl+D` toggles it from any shell, preview, or picker.
+Press `Ctrl+D` to open the one-column inspector at the lower right. It lists all active UI and Macaulay2 highlight groups, followed by the current variant's native palette names and colors. Opening it submits a real three-cell value/muted/null probe through the active Macaulay2 session and leaves that post in the feed. Scroll the inspector with arrow or page keys. `Esc` closes only the inspector; `Ctrl+D` toggles it from any shell, preview, or picker.
 
 ## Keymaps
 

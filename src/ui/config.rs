@@ -1,21 +1,29 @@
 //! Compile-time presentation configuration for the complete interface.
 
 /// Geometry values shared by UI elements.
-pub(crate) struct UiConfig {
-    pub(crate) feed_margin: u16,
-    pub(crate) prompt_margin: u16,
-    pub(crate) cell_margin: u16,
-    pub(crate) cell_gap: u16,
-    pub(crate) prompt_text_gap: u16,
-    pub(crate) right_margin: u16,
-    pub(crate) min_box_width: u16,
-    pub(crate) min_input_height: u16,
-    pub(crate) picker_min_rows: u16,
-    pub(crate) picker_tab_width: usize,
+pub struct UiConfig {
+    /// Columns kept clear down the whole screen's left edge, around every pane.
+    pub screen_margin: u16,
+    pub feed_margin: u16,
+    /// The frames the marker of a cell still evaluating cycles through.
+    pub busy_frames: &'static [&'static str],
+    /// Milliseconds each of those frames is shown.
+    pub busy_frame_ms: u64,
+    pub prompt_margin: u16,
+    pub cell_margin: u16,
+    pub cell_gap: u16,
+    /// Digits every cell number is laid out for, however few it has, so a number
+    /// growing a digit never moves a block.
+    pub min_number_digits: u16,
+    pub prompt_text_gap: u16,
+    pub right_margin: u16,
+    pub min_box_width: u16,
+    pub min_input_height: u16,
+    pub picker_tab_width: usize,
     pub picker_column_gap: usize,
-    pub(crate) picker_right_margin: usize,
-    pub(crate) statusline_margin: u16,
-    pub(crate) max_output_rows: usize,
+    pub picker_right_margin: usize,
+    pub statusline_margin: u16,
+    pub max_output_rows: usize,
     /// The fewest rows a folded value may keep: a head row, the fold row, and a tail.
     pub min_output_rows: usize,
     /// The glyph drawn down the column between a split's panes.
@@ -27,16 +35,19 @@ pub(crate) struct UiConfig {
 }
 
 /// Presentation configuration used by every UI element.
-pub(crate) const UI: UiConfig = UiConfig {
+pub const UI: UiConfig = UiConfig {
+    screen_margin: 1,
     feed_margin: 1,
+    busy_frames: &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+    busy_frame_ms: 80,
     prompt_margin: 2,
-    cell_margin: 1,
-    cell_gap: 2,
+    cell_margin: 0,
+    cell_gap: 3,
+    min_number_digits: 3,
     prompt_text_gap: 2,
     right_margin: 3,
     min_box_width: 8,
     min_input_height: 3,
-    picker_min_rows: 5,
     picker_tab_width: 4,
     picker_column_gap: 2,
     picker_right_margin: 2,
@@ -54,7 +65,7 @@ impl UiConfig {
         (width + self.picker_column_gap).next_multiple_of(self.picker_tab_width)
     }
 
-    pub(crate) const fn prompt_width(&self) -> u16 {
+    pub const fn prompt_width(&self) -> u16 {
         self.prompt_margin + 1 + self.prompt_text_gap
     }
 }

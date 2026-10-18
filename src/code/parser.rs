@@ -15,16 +15,16 @@ use m2_syn::{LexErrorKind, PrettyNode, PrettyTree, Spanned};
 
 /// One parsed evaluation unit and its rendered syntax tree.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ParsedCell {
-    pub(crate) range: Range<usize>,
-    pub(crate) tree: PrettyNode,
+pub struct ParsedCell {
+    pub range: Range<usize>,
+    pub tree: PrettyNode,
 }
 
 /// A syntax error message paired with its exact source range when available.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct SyntaxDiagnostic {
-    pub(crate) message: String,
-    pub(crate) range: Option<Range<usize>>,
+pub struct SyntaxDiagnostic {
+    pub message: String,
+    pub range: Option<Range<usize>>,
 }
 
 /// How a submitted buffer classifies.
@@ -33,7 +33,7 @@ pub(crate) struct SyntaxDiagnostic {
 /// parse already did: splitting them out separately would parse the source a
 /// second time and leave the two answers free to disagree.
 #[derive(Debug, PartialEq)]
-pub(crate) enum ParseVerdict {
+pub enum ParseVerdict {
     Complete(Vec<ParsedCell>),
     Incomplete(String),
     SyntaxError(SyntaxDiagnostic),
@@ -70,7 +70,7 @@ fn ran_out_of_input(error: &NativeParseError, source: &str) -> bool {
     }
 }
 
-pub(crate) fn incomplete_reason(error: &NativeParseError) -> String {
+pub fn incomplete_reason(error: &NativeParseError) -> String {
     let message = error.to_string().replace("unterminated", "unclosed");
     message
         .split_once(": expected")
@@ -80,7 +80,7 @@ pub(crate) fn incomplete_reason(error: &NativeParseError) -> String {
 }
 
 /// Classify a buffer without evaluating it.
-pub(crate) fn check(source: &str) -> ParseVerdict {
+pub fn check(source: &str) -> ParseVerdict {
     match parse_native(source) {
         Ok(file) => ParseVerdict::Complete(parsed_cells(&file, source.len())),
         Err(error) if ran_out_of_input(&error, source) => {

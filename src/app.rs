@@ -1,29 +1,33 @@
 //! The application's session, its panes, and the terminal event loop.
 
+mod panes;
 pub mod session;
 
+use std::fs;
 use std::io;
+use std::path::Path;
 use std::time::Duration;
 
 use crossterm::clipboard::CopyToClipboard;
-use crossterm::event::{Event, KeyCode, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{Event, MouseButton, MouseEvent, MouseEventKind};
 use crossterm::execute;
 use ratatui::layout::{Position, Rect};
 use ratatui::Frame;
 
+use self::panes::{pane_layout, ratio_for_width, Panes, MIN_PANE_WIDTH};
 use self::session::Session;
 use crate::backend::M2Backend;
+use crate::code::file as code_file;
 use crate::code::highlight::SyntaxHighlighter;
 use crate::errors::Result;
 use crate::ui::action::Action;
-use crate::ui::controller::{CommittedCells, Editor, OpenTarget, Reaction, ViewKind, Viewport};
+use crate::ui::cell::TextBlock;
+use crate::ui::config::UI;
+use crate::ui::controller::{CommittedCells, Editor, EditorUpdate, Reaction, ViewKind};
 use crate::ui::key::{KeyEvent, Keyboard};
 use crate::ui::terminal::ReplTerminal;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(80);
-const MIN_PANE_WIDTH: u16 = 40;
-const MIN_SPLIT_WIDTH: u16 = MIN_PANE_WIDTH * 2 + 1;
-
 /// The M2 process behind the shell, with its transcript, draft, history, and syntax state.
 struct Workspace {
     session: Session,
@@ -32,158 +36,16 @@ struct Workspace {
 }
 
 impl Workspace {
-    fn new(backend: M2Backend) -> Self {
+    fn new(mut backend: M2Backend) -> Self {
+        let names = backend.take_names();
         let session = Session::new(backend);
         let version = session.version().unwrap_or_else(|_| "unknown".to_string());
+        let mut editor = Editor::new(welcome_message(&version));
+        editor.apply(EditorUpdate::KnownNames(names));
         Self {
             session,
-            editor: Editor::new(welcome_message(&version)),
+            editor,
             highlighter: SyntaxHighlighter::new(),
-        }
-    }
-}
-
-/// One visible or width-collapsed window onto the session.
-struct Pane {
-    view: ViewKind,
-    viewport: Viewport,
-}
-
-impl Pane {
-    fn new(view: ViewKind) -> Self {
-        Self {
-            view,
-            viewport: Viewport::at_bottom(),
-        }
-    }
-
-    /// Consume a command owned by the current preview, or return it unchanged.
-    fn handle_action(&mut self, action: Action) -> Option<Action> {
-        if self.view == ViewKind::Shell {
-            return Some(action);
-        }
-        match action {
-            Action::ScrollFeedUp => self.viewport.scroll = self.viewport.scroll.saturating_sub(10),
-            Action::ScrollFeedDown => self.viewport.scroll += 10,
-            _ => return Some(action),
-        }
-        None
-    }
-
-    /// Interpret unbound navigation as private input for the current preview.
-    fn handle_key(&mut self, key: KeyEvent) -> bool {
-        if self.view == ViewKind::Shell {
-            return false;
-        }
-        match key.code {
-            KeyCode::Left if self.view == ViewKind::Output => self.viewport.cycle_output(-1),
-            KeyCode::Right if self.view == ViewKind::Output => self.viewport.cycle_output(1),
-            KeyCode::Up => self.viewport.scroll = self.viewport.scroll.saturating_sub(1),
-            KeyCode::Down => self.viewport.scroll += 1,
-            _ => return false,
-        }
-        true
-    }
-}
-
-/// The session's panes and which one has focus.
-///
-/// The first pane is the session itself, its shell or a view shown in place. A
-/// second pane exists only to show another view of the same session beside it;
-/// an independent session is a new terminal pane away.
-struct Panes {
-    list: Vec<Pane>,
-    active: usize,
-    /// Whether the last layout had a split too narrow to show side by side.
-    collapsed: bool,
-}
-
-impl Panes {
-    /// Index of the pane that shows a view beside the session.
-    const SPLIT: usize = 1;
-
-    fn new() -> Self {
-        Self {
-            list: vec![Pane::new(ViewKind::Shell)],
-            active: 0,
-            collapsed: false,
-        }
-    }
-
-    fn focused(&self) -> &Pane {
-        &self.list[self.active]
-    }
-
-    fn focused_mut(&mut self) -> &mut Pane {
-        &mut self.list[self.active]
-    }
-
-    fn split(&self) -> bool {
-        self.list.len() > Self::SPLIT
-    }
-
-    /// Show `view` beside the session or in place of the focused pane; showing the
-    /// view a pane already has takes it back down.
-    fn open_view(&mut self, view: ViewKind, target: OpenTarget) {
-        let pane = match target {
-            OpenTarget::Split if !self.split() => {
-                self.list.push(Pane::new(view));
-                return;
-            }
-            OpenTarget::Split => Self::SPLIT,
-            OpenTarget::InPlace => self.active,
-        };
-        let shown = if self.list[pane].view == view {
-            ViewKind::Shell
-        } else {
-            view
-        };
-        if pane == Self::SPLIT && shown == ViewKind::Shell {
-            self.close_split();
-        } else {
-            self.list[pane] = Pane::new(shown);
-        }
-    }
-
-    /// Return the focused pane to the session: the split view closes, an in-place
-    /// view gives way to the shell.
-    fn leave_preview(&mut self) {
-        if self.active == Self::SPLIT {
-            self.close_split();
-        } else {
-            *self.focused_mut() = Pane::new(ViewKind::Shell);
-        }
-    }
-
-    /// Close the view on screen, whichever pane has focus: the one beside the
-    /// session, or else the one shown in place of it.
-    fn close_view(&mut self) {
-        if self.split() {
-            self.close_split();
-        } else if self.focused().view != ViewKind::Shell {
-            self.leave_preview();
-        }
-    }
-
-    fn close_split(&mut self) {
-        self.list.truncate(Self::SPLIT);
-        self.active = 0;
-    }
-
-    /// Fit the panes to `width` columns. A split too narrow to show side by side
-    /// shows the view full width instead, from the moment it opens or the window
-    /// narrows; `Ctrl+Left` still brings the shell back.
-    fn fit(&mut self, width: u16) {
-        let collapsed = self.split() && width < MIN_SPLIT_WIDTH;
-        if collapsed && !self.collapsed {
-            self.focus(Self::SPLIT);
-        }
-        self.collapsed = collapsed;
-    }
-
-    fn focus(&mut self, pane: usize) {
-        if pane < self.list.len() {
-            self.active = pane;
         }
     }
 }
@@ -273,7 +135,7 @@ impl App {
                 return true;
             }
             Action::Quit if self.panes.focused().view != ViewKind::Shell => {
-                self.panes.leave_preview();
+                self.panes.close_view();
                 return true;
             }
             _ => {}
@@ -353,20 +215,91 @@ impl App {
                 self.follow_new_input();
                 running
             }
-            Reaction::Restart => workspace.editor.apply(workspace.session.restart()),
+            Reaction::Restart => {
+                self.keep_session();
+                let workspace = &mut self.workspace;
+                workspace.editor.apply(workspace.session.restart())
+            }
             Reaction::Copy(text) => {
                 let _ = execute!(io::stdout(), CopyToClipboard::to_clipboard_from(text));
                 true
             }
-            Reaction::Open(view, target) => {
-                self.panes.open_view(view, target);
+            Reaction::Open(view) => {
+                self.panes.open_view(view);
                 true
             }
             Reaction::ClosePane => {
                 self.panes.close_view();
                 true
             }
+            Reaction::Save(Some(typed)) => self.save(&code_file::resolve(&typed)),
+            Reaction::Save(None) => {
+                match code_file::previous_session().filter(|_| !workspace.session.code().is_empty())
+                {
+                    Some(path) => self.save(&path),
+                    None => workspace.editor.apply(EditorUpdate::Diagnostic(
+                        "the session has no code to keep".to_string(),
+                    )),
+                }
+            }
+            Reaction::Load(typed) => match read_code(&code_file::resolve(&typed)) {
+                Ok(code) => {
+                    self.keep_session();
+                    let workspace = &mut self.workspace;
+                    workspace.editor.apply(workspace.session.restart_with(code))
+                }
+                Err(update) => workspace.editor.apply(update),
+            },
+            Reaction::Resume => {
+                let code = code_file::previous_session()
+                    .filter(|path| path.exists())
+                    .ok_or_else(|| {
+                        EditorUpdate::Diagnostic("no previous session to resume".to_string())
+                    })
+                    .and_then(|path| read_code(&path));
+                match code {
+                    Ok(code) => self.run_code(&code),
+                    Err(update) => workspace.editor.apply(update),
+                }
+            }
             Reaction::Quit => false,
+        }
+    }
+
+    /// Evaluate `code` as if each submission of it had been typed into the shell
+    /// in turn, so the feed reads as it did when the code was first entered.
+    fn run_code(&mut self, code: &str) -> bool {
+        let workspace = &mut self.workspace;
+        let mut running = true;
+        for block in Session::blocks(code) {
+            let update = workspace.session.submit(&block, &mut workspace.highlighter);
+            running &= workspace.editor.post(update);
+        }
+        self.follow_new_input();
+        running
+    }
+
+    /// Write the session's code to `path`, reporting where it went.
+    fn save(&mut self, path: &Path) -> bool {
+        let workspace = &mut self.workspace;
+        let update = match code_file::write(path, &workspace.session.code()) {
+            Ok(()) => EditorUpdate::Message(Box::new(TextBlock::system(format!(
+                "saved the session's code to {}",
+                path.display()
+            )))),
+            Err(error) => {
+                EditorUpdate::Diagnostic(format!("cannot save {}: {error}", path.display()))
+            }
+        };
+        workspace.editor.apply(update)
+    }
+
+    /// Keep the session's code for the next session to resume, unless it has
+    /// none, so an empty session never replaces the one before it.
+    fn keep_session(&self) {
+        let code = self.workspace.session.code();
+        if let Some(path) = code_file::previous_session().filter(|_| !code.is_empty()) {
+            let _ = code_file::write(&path, &code);
         }
     }
 
@@ -414,7 +347,20 @@ impl App {
         let split = self.panes.split();
         let workspace = &mut self.workspace;
         workspace.editor.set_processing(workspace.session.busy());
-        let mut area = frame.area();
+        let screen = frame.area();
+        let margin = Rect::new(
+            screen.x,
+            screen.y,
+            UI.screen_margin.min(screen.width),
+            screen.height,
+        );
+        workspace.editor.draw_margin(frame, margin);
+        let mut area = Rect::new(
+            margin.right(),
+            screen.y,
+            screen.width - margin.width,
+            screen.height,
+        );
         let shared_status = (split && workspace.editor.statusline_shown()).then(|| {
             area.height = area.height.saturating_sub(1);
             Rect::new(area.x, area.bottom(), area.width, 1)
@@ -458,17 +404,18 @@ impl App {
         }
         if let Some(status) = shared_status {
             let beside = &self.panes.list[Panes::SPLIT];
-            workspace.editor.draw_shared_status(
-                frame,
-                status,
-                beside.view,
-                &beside.viewport,
-                active == Panes::SPLIT,
-            );
+            workspace
+                .editor
+                .draw_shared_status(frame, status, beside.view, active == Panes::SPLIT);
         }
     }
 
     /// Bring every view to its newest content, as the shell follows its own feed.
+    /// Advance whatever the shell animates while M2 works; whether anything did.
+    fn animate(&mut self) -> bool {
+        self.workspace.session.busy() && self.workspace.editor.animate()
+    }
+
     fn follow_new_input(&mut self) {
         for pane in &mut self.panes.list {
             pane.viewport.follow_bottom();
@@ -482,6 +429,10 @@ impl App {
             dirty = true;
             running &= self.workspace.editor.apply(update);
         }
+        if let Some(code) = self.workspace.session.take_after_restart() {
+            dirty = true;
+            running &= self.run_code(&code);
+        }
         if dirty {
             self.follow_new_input();
         }
@@ -489,29 +440,11 @@ impl App {
     }
 }
 
-fn ratio_for_width(width: u16, total: u16) -> u16 {
-    (u32::from(width) * 1000).div_ceil(u32::from(total)) as u16
-}
-
-fn pane_layout(area: Rect, panes: usize, active: usize, ratio: u16) -> (Vec<Rect>, Option<Rect>) {
-    if panes == 1 {
-        return (vec![area], None);
-    }
-    if area.width < MIN_SPLIT_WIDTH {
-        let mut areas = vec![Rect::ZERO; 2];
-        areas[active] = area;
-        return (areas, None);
-    }
-    let content = area.width - 1;
-    let left = ((u32::from(content) * u32::from(ratio) / 1000) as u16)
-        .clamp(MIN_PANE_WIDTH, content - MIN_PANE_WIDTH);
-    (
-        vec![
-            Rect::new(area.x, area.y, left, area.height),
-            Rect::new(area.x + left + 1, area.y, content - left, area.height),
-        ],
-        Some(Rect::new(area.x + left, area.y, 1, area.height)),
-    )
+/// The code in `path`, or the diagnostic saying why it cannot be read.
+fn read_code(path: &Path) -> std::result::Result<String, EditorUpdate> {
+    fs::read_to_string(path).map_err(|error| {
+        EditorUpdate::Diagnostic(format!("cannot read {}: {error}", path.display()))
+    })
 }
 
 fn welcome_message(m2_version: &str) -> String {
@@ -529,7 +462,6 @@ pub fn run(backend: M2Backend) -> Result<()> {
     loop {
         if dirty {
             terminal.draw(|frame| app.draw(frame))?;
-            dirty = false;
         }
         let (running, updated) = app.poll();
         if !running {
@@ -541,6 +473,7 @@ pub fn run(backend: M2Backend) -> Result<()> {
         }
         let events = terminal.next_events(EVENT_POLL_INTERVAL)?;
         if events.is_empty() {
+            dirty = app.animate();
             continue;
         }
         let mut running = true;
@@ -552,139 +485,6 @@ pub fn run(backend: M2Backend) -> Result<()> {
         }
         dirty = true;
     }
+    app.keep_session();
     terminal.leave()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn previews_consume_scroll_actions_and_forward_quit() {
-        let mut preview = Pane::new(ViewKind::SyntaxTree);
-        let mut shell = Pane::new(ViewKind::Shell);
-        preview.viewport.scroll = 0;
-
-        assert!(preview.handle_action(Action::ScrollFeedDown).is_none());
-        assert_eq!(preview.viewport.scroll, 10);
-        assert!(preview.handle_action(Action::Quit) == Some(Action::Quit));
-        assert!(shell.handle_action(Action::ScrollFeedDown) == Some(Action::ScrollFeedDown));
-    }
-
-    fn views(panes: &Panes) -> Vec<ViewKind> {
-        panes.list.iter().map(|pane| pane.view).collect()
-    }
-
-    #[test]
-    fn a_view_opens_beside_the_session_and_keeps_the_shell_focused() {
-        let mut panes = Panes::new();
-        panes.open_view(ViewKind::Code, OpenTarget::Split);
-
-        assert_eq!(views(&panes), [ViewKind::Shell, ViewKind::Code]);
-        assert_eq!(panes.active, 0);
-
-        panes.open_view(ViewKind::SyntaxTree, OpenTarget::Split);
-        assert_eq!(views(&panes), [ViewKind::Shell, ViewKind::SyntaxTree]);
-    }
-
-    #[test]
-    fn opening_the_view_already_beside_the_session_closes_the_split() {
-        let mut panes = Panes::new();
-        panes.open_view(ViewKind::Output, OpenTarget::Split);
-        panes.focus(Panes::SPLIT);
-        panes.open_view(ViewKind::Output, OpenTarget::Split);
-
-        assert_eq!(views(&panes), [ViewKind::Shell]);
-        assert_eq!(panes.active, 0);
-    }
-
-    /// Closing acts on the view on screen, whichever pane has focus.
-    #[test]
-    fn closing_the_view_works_from_either_pane() {
-        let mut panes = Panes::new();
-        panes.open_view(ViewKind::Output, OpenTarget::Split);
-        panes.close_view();
-        assert_eq!(views(&panes), [ViewKind::Shell]);
-
-        panes.open_view(ViewKind::Output, OpenTarget::Split);
-        panes.focus(Panes::SPLIT);
-        panes.close_view();
-        assert_eq!(views(&panes), [ViewKind::Shell]);
-
-        panes.open_view(ViewKind::Code, OpenTarget::InPlace);
-        panes.close_view();
-        assert_eq!(views(&panes), [ViewKind::Shell]);
-        panes.close_view();
-        assert_eq!(views(&panes), [ViewKind::Shell]);
-    }
-
-    #[test]
-    fn leaving_any_view_never_loses_the_shell() {
-        let mut panes = Panes::new();
-        panes.open_view(ViewKind::Code, OpenTarget::InPlace);
-        panes.open_view(ViewKind::Output, OpenTarget::Split);
-        assert_eq!(views(&panes), [ViewKind::Code, ViewKind::Output]);
-
-        panes.focus(Panes::SPLIT);
-        panes.leave_preview();
-        assert_eq!(views(&panes), [ViewKind::Code]);
-        panes.leave_preview();
-        assert_eq!(views(&panes), [ViewKind::Shell]);
-    }
-
-    #[test]
-    fn a_view_in_place_of_the_split_toggles_without_a_second_shell() {
-        let mut panes = Panes::new();
-        panes.open_view(ViewKind::Code, OpenTarget::Split);
-        panes.focus(Panes::SPLIT);
-        panes.open_view(ViewKind::Code, OpenTarget::InPlace);
-
-        assert_eq!(views(&panes), [ViewKind::Shell]);
-    }
-
-    #[test]
-    fn a_split_too_narrow_to_show_side_by_side_shows_the_view() {
-        let mut panes = Panes::new();
-        panes.open_view(ViewKind::SyntaxTree, OpenTarget::Split);
-        let narrow = Rect::new(0, 0, MIN_SPLIT_WIDTH - 1, 10);
-        let layout = |panes: &mut Panes| {
-            panes.fit(narrow.width);
-            pane_layout(narrow, panes.list.len(), panes.active, 500).0
-        };
-
-        let areas = layout(&mut panes);
-        assert_eq!(panes.active, Panes::SPLIT);
-        assert_eq!(areas[Panes::SPLIT], narrow);
-        panes.focus(0);
-        assert_eq!(layout(&mut panes)[0], narrow, "the shell stays reachable");
-    }
-
-    #[test]
-    fn split_collapses_below_two_minimum_panes_without_losing_either() {
-        let area = Rect::new(0, 0, MIN_SPLIT_WIDTH - 1, 20);
-        let (left, divider) = pane_layout(area, 2, 0, 500);
-        let (right, _) = pane_layout(area, 2, 1, 500);
-
-        assert_eq!(left, [area, Rect::ZERO]);
-        assert_eq!(right, [Rect::ZERO, area]);
-        assert!(divider.is_none());
-    }
-
-    #[test]
-    fn wide_split_keeps_both_panes_at_least_forty_columns() {
-        let area = Rect::new(4, 2, MIN_SPLIT_WIDTH, 20);
-        let (panes, divider) = pane_layout(area, 2, 0, 100);
-
-        assert_eq!(panes[0].width, MIN_PANE_WIDTH);
-        assert_eq!(panes[1].width, MIN_PANE_WIDTH);
-        assert_eq!(divider.unwrap().x, panes[0].right());
-    }
-
-    #[test]
-    fn ratio_roundtrip_preserves_one_column_resizes() {
-        for width in MIN_PANE_WIDTH..=60 {
-            let ratio = ratio_for_width(width, 99);
-            assert_eq!(99 * u32::from(ratio) / 1000, u32::from(width));
-        }
-    }
 }

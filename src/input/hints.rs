@@ -4,7 +4,7 @@ use rand::seq::IteratorRandom;
 
 /// A randomly selected Macaulay2 editing or language hint.
 #[derive(Clone, Copy)]
-pub(crate) struct Hint(&'static str);
+pub struct Hint(&'static str);
 
 impl Hint {
     const ITEMS: &'static [&'static str] = &[

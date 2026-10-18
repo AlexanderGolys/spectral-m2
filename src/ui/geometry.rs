@@ -64,22 +64,22 @@ macro_rules! forward_binop {
 
 /// A cell position, always inside some buffer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub(crate) struct Coords {
-    pub(crate) x: u16,
-    pub(crate) y: u16,
+pub struct Coords {
+    pub x: u16,
+    pub y: u16,
 }
 
 impl Coords {
-    pub(crate) const fn new(x: u16, y: u16) -> Self {
+    pub const fn new(x: u16, y: u16) -> Self {
         Self { x, y }
     }
 
-    pub(crate) const fn is_in(self, rect: Rect) -> bool {
+    pub const fn is_in(self, rect: Rect) -> bool {
         self.x >= rect.x && self.x < rect.right() && self.y >= rect.y && self.y < rect.bottom()
     }
 
     /// The rectangle spanned by this position and an opposite corner, in either order.
-    pub(crate) fn rect(self, opposite: Self) -> Rect {
+    pub fn rect(self, opposite: Self) -> Rect {
         Rect::new(
             self.x.min(opposite.x),
             self.y.min(opposite.y),
@@ -91,13 +91,13 @@ impl Coords {
 
 /// A signed displacement between two positions.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub(crate) struct AffineShift {
-    pub(crate) x: i16,
-    pub(crate) y: i16,
+pub struct AffineShift {
+    pub x: i16,
+    pub y: i16,
 }
 
 impl AffineShift {
-    pub(crate) const fn new(x: i16, y: i16) -> Self {
+    pub const fn new(x: i16, y: i16) -> Self {
         Self { x, y }
     }
 }

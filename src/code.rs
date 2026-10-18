@@ -1,5 +1,6 @@
-//! Macaulay2 parsing and syntax highlighting.
+//! Macaulay2 code: parsing, syntax highlighting, and the files it is kept in.
 
-pub(crate) mod highlight;
+pub mod file;
+pub mod highlight;
 #[cfg(test)]
-pub(crate) mod parser;
+pub mod parser;

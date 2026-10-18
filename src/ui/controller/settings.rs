@@ -91,6 +91,8 @@ impl Persisted for SavedSettings {
 pub struct Settings {
     pub statusline: StatusLinePosition,
     pub fractions: FractionStyle,
+    /// Whether rings are drawn as blackboard glyphs (`ℤ`) rather than by name (`ZZ`).
+    pub math_fonts: bool,
     /// Rows a returned value shows before its middle folds away.
     pub output_rows: usize,
 }
@@ -100,6 +102,7 @@ impl Default for Settings {
         Self {
             statusline: StatusLinePosition::default(),
             fractions: FractionStyle::default(),
+            math_fonts: false,
             output_rows: UI.max_output_rows,
         }
     }
@@ -119,7 +122,8 @@ impl Settings {
 
     /// Whether returned values lay out differently, moving their heights.
     pub fn reformats(&self, other: &Self) -> bool {
-        (self.fractions, self.output_rows) != (other.fractions, other.output_rows)
+        (self.fractions, self.math_fonts, self.output_rows)
+            != (other.fractions, other.math_fonts, other.output_rows)
     }
 }
 

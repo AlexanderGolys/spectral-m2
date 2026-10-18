@@ -12,23 +12,23 @@ use ratatui::layout::{Offset, Position, Rect};
 
 /// Rectangular regions omitted from copied UI selections.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Exclusions(Vec<Rect>);
+pub struct Exclusions(Vec<Rect>);
 
 impl Exclusions {
-    pub(crate) fn push(&mut self, exclusion: Rect) {
+    pub fn push(&mut self, exclusion: Rect) {
         self.0.push(exclusion);
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.0.clear();
     }
 
-    pub(crate) fn contains(&self, position: Position) -> bool {
+    pub fn contains(&self, position: Position) -> bool {
         self.0.iter().any(|area| area.contains(position))
     }
 
     /// Clip to source rows and make the first retained row local zero.
-    pub(crate) fn project(&self, rows: Range<u16>) -> Self {
+    pub fn project(&self, rows: Range<u16>) -> Self {
         self.0
             .iter()
             .filter_map(|area| {

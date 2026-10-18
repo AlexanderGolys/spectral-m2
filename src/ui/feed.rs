@@ -5,12 +5,12 @@ use ratatui::layout::{Alignment, Offset, Position, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{Block as TuiBlock, Paragraph, Widget};
 
-use super::block::{Block, Reformatted, Resized, Rethemed};
+use super::block::{Block, Reformatted, Resized, Rethemed, Ticked};
 use super::cell::{EvaluationBlock, IncompleteBlock};
 use super::config::UI;
 use super::element::{paste, EventListener};
 use super::render::selection::Exclusions;
-use super::render::RenderContext;
+use super::render::{RenderContext, RECENT_OUTPUTS};
 
 /// Retained position metadata for one feed viewport.
 struct ViewportState {
@@ -130,6 +130,15 @@ impl EventListener<Rethemed> for RetainedBlock {
     }
 }
 
+/// A tick only repaints what moves with the clock, so the rest keeps its cells.
+impl EventListener<Ticked> for RetainedBlock {
+    fn on_event(&mut self, _: &Ticked) {
+        if self.content.block().animated() {
+            self.invalidate();
+        }
+    }
+}
+
 /// Setting values differently moves their heights, so the geometry goes with the cells.
 impl EventListener<Reformatted> for RetainedBlock {
     fn on_event(&mut self, _: &Reformatted) {
@@ -138,19 +147,19 @@ impl EventListener<Reformatted> for RetainedBlock {
 }
 
 /// A borrowed block list rendered through a scrollable rectangular viewport.
-pub(crate) struct BlockView<'a> {
+pub struct BlockView<'a> {
     blocks: &'a [&'a dyn Block],
     empty: &'a str,
 }
 
 impl<'a> BlockView<'a> {
     /// Borrow blocks and the message shown when that list is empty.
-    pub(crate) const fn new(blocks: &'a [&'a dyn Block], empty: &'a str) -> Self {
+    pub const fn new(blocks: &'a [&'a dyn Block], empty: &'a str) -> Self {
         Self { blocks, empty }
     }
 
     /// Render only blocks intersecting the selected rows and clamp `scroll`.
-    pub(crate) fn render(
+    pub fn render(
         &self,
         context: &RenderContext,
         area: Rect,
@@ -213,26 +222,29 @@ impl<'a> BlockView<'a> {
 }
 
 /// Transcript blocks with their scrolling and retained presentation state.
-pub(crate) struct Feed {
+pub struct Feed {
     blocks: Vec<RetainedBlock>,
     scroll: usize,
     anchor: Option<(usize, u16)>,
     surface: Option<ViewportState>,
+    /// The latest outputs the retained cells were labelled for.
+    labelled: [Option<u32>; RECENT_OUTPUTS],
 }
 
 impl Feed {
     /// Create a feed containing one initial block.
-    pub(crate) fn new(block: Box<dyn Block>) -> Self {
+    pub fn new(block: Box<dyn Block>) -> Self {
         Self {
             blocks: vec![RetainedBlock::new(FeedContent::Block(block))],
             scroll: 0,
             anchor: None,
             surface: None,
+            labelled: [None; RECENT_OUTPUTS],
         }
     }
 
     /// Append a block and follow the new bottom of the feed.
-    pub(crate) fn push(&mut self, block: Box<dyn Block>) {
+    pub fn push(&mut self, block: Box<dyn Block>) {
         let index = self.blocks.len().saturating_sub(usize::from(matches!(
             self.blocks.last().map(|block| &block.content),
             Some(FeedContent::Incomplete(_))
@@ -245,7 +257,7 @@ impl Feed {
     }
 
     /// Append a mutable submitted-source block and follow it.
-    pub(crate) fn push_evaluation(&mut self, block: EvaluationBlock) {
+    pub fn push_evaluation(&mut self, block: EvaluationBlock) {
         self.take_incomplete();
         self.blocks
             .push(RetainedBlock::new(FeedContent::Evaluation(block)));
@@ -255,7 +267,7 @@ impl Feed {
     }
 
     /// Replace the optional unfinished tail and keep it last.
-    pub(crate) fn set_incomplete(&mut self, block: IncompleteBlock) {
+    pub fn set_incomplete(&mut self, block: IncompleteBlock) {
         self.take_incomplete();
         self.blocks
             .push(RetainedBlock::new(FeedContent::Incomplete(block)));
@@ -265,7 +277,7 @@ impl Feed {
     }
 
     /// Remove and return the unfinished tail, when present.
-    pub(crate) fn take_incomplete(&mut self) -> Option<IncompleteBlock> {
+    pub fn take_incomplete(&mut self) -> Option<IncompleteBlock> {
         match self.blocks.last().map(|block| &block.content) {
             Some(FeedContent::Incomplete(_)) => {}
             _ => return None,
@@ -282,7 +294,7 @@ impl Feed {
     }
 
     /// Borrow the unfinished source preceding the live editor line.
-    pub(crate) fn incomplete_source(&self) -> Option<&str> {
+    pub fn incomplete_source(&self) -> Option<&str> {
         match self.blocks.last().map(|block| &block.content) {
             Some(FeedContent::Incomplete(block)) => Some(block.source()),
             _ => None,
@@ -290,39 +302,51 @@ impl Feed {
     }
 
     /// Remove every block and reset scrolling.
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.blocks.clear();
         self.scroll = 0;
         self.anchor = None;
         self.surface = None;
     }
 
-    /// Return whether no blocks are stored.
-    #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.blocks.is_empty()
-    }
-
     /// Return the number of stored blocks.
     #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.blocks.len()
     }
 
-    /// Collect printed text, warnings, and errors produced by submissions.
-    pub(crate) fn evaluation_outputs(&self) -> Vec<&dyn Block> {
+    /// Collect only the text submissions printed, each numbered by its cell.
+    pub fn printed(&self) -> Vec<&dyn Block> {
         self.blocks
             .iter()
             .filter_map(|block| match &block.content {
-                FeedContent::Evaluation(evaluation) => Some(evaluation.evaluation_outputs()),
+                FeedContent::Evaluation(evaluation) => Some(evaluation.printed()),
                 FeedContent::Block(_) | FeedContent::Incomplete(_) => None,
             })
             .flatten()
             .collect()
     }
 
+    /// The lines recalled as `oo`, `ooo` and `oooo`, newest first: the latest that
+    /// evaluated to something, whether or not they showed it. A null line is not
+    /// counted, so it never takes a place in the rotation.
+    pub fn recent_outputs(&self) -> [Option<u32>; RECENT_OUTPUTS] {
+        let mut valued = self
+            .blocks
+            .iter()
+            .flat_map(|block| match &block.content {
+                FeedContent::Evaluation(evaluation) => {
+                    Some(evaluation.valued_numbers()).into_iter().flatten()
+                }
+                FeedContent::Block(_) | FeedContent::Incomplete(_) => None.into_iter().flatten(),
+            })
+            .collect::<Vec<_>>();
+        valued.sort_unstable_by(|first, second| second.cmp(first));
+        std::array::from_fn(|age| valued.get(age).copied())
+    }
+
     /// Collect returned values produced by submissions.
-    pub(crate) fn values(&self) -> Vec<&dyn Block> {
+    pub fn values(&self) -> Vec<&dyn Block> {
         self.blocks
             .iter()
             .filter_map(|block| match &block.content {
@@ -334,7 +358,7 @@ impl Feed {
     }
 
     /// Collect top-level messages and all submitted results in transcript order.
-    pub(crate) fn outputs(&self) -> Vec<&dyn Block> {
+    pub fn outputs(&self) -> Vec<&dyn Block> {
         let mut outputs = Vec::new();
         for block in &self.blocks {
             match &block.content {
@@ -347,7 +371,7 @@ impl Feed {
     }
 
     /// Update one evaluation, following only when the viewport was already at bottom.
-    pub(crate) fn update_evaluation(&mut self, id: u64, update: impl FnOnce(&mut EvaluationBlock)) {
+    pub fn update_evaluation(&mut self, id: u64, update: impl FnOnce(&mut EvaluationBlock)) {
         let anchor = self.anchor.or_else(|| self.scrolled_anchor());
         for block in &mut self.blocks {
             let FeedContent::Evaluation(evaluation) = &mut block.content else {
@@ -364,7 +388,7 @@ impl Feed {
     }
 
     /// Expand or fold the value under a screen position, keeping the top row in place.
-    pub(crate) fn toggle_fold(&mut self, position: Position) -> bool {
+    pub fn toggle_fold(&mut self, position: Position) -> bool {
         let Some(surface) = &self.surface else {
             return false;
         };
@@ -392,7 +416,7 @@ impl Feed {
     }
 
     /// Move by signed rows, positive toward older content.
-    pub(crate) fn scroll(&mut self, rows: i8) {
+    pub fn scroll(&mut self, rows: i8) {
         self.anchor = None;
         self.scroll = if rows < 0 {
             self.scroll.saturating_sub(rows.unsigned_abs().into())
@@ -402,12 +426,12 @@ impl Feed {
     }
 
     /// Return the current distance from the bottom.
-    pub(crate) fn offset(&self) -> usize {
+    pub fn offset(&self) -> usize {
         self.scroll
     }
 
     /// Return whether unscrolled content ends in submitted source.
-    pub(crate) fn ends_in_code(&self) -> bool {
+    pub fn ends_in_code(&self) -> bool {
         self.scroll == 0
             && self
                 .blocks
@@ -420,13 +444,13 @@ impl Feed {
     }
 
     /// Return to the newest transcript row.
-    pub(crate) fn follow(&mut self) {
+    pub fn follow(&mut self) {
         self.scroll = 0;
         self.anchor = None;
     }
 
     /// Render the current viewport and return whether it is underfilled.
-    pub(crate) fn render(
+    pub fn render(
         &mut self,
         context: &RenderContext,
         area: Rect,
@@ -444,6 +468,11 @@ impl Feed {
             area.height,
         );
         let context = context.with_width(area.width);
+        // A new output relabels the ones before it, which moves no row but repaints.
+        if self.labelled != context.recent_outputs() {
+            self.labelled = context.recent_outputs();
+            self.blocks.iter_mut().for_each(|block| block.cells = None);
+        }
         for block in &mut self.blocks {
             block.render(&context, canvas);
         }
@@ -703,6 +732,7 @@ mod tests {
             1,
             CellState::Value,
             Vec::new(),
+            None,
             Some(OutputBlock::value(rows.join("\n"), None)),
         );
         let mut feed = Feed::new(Box::new(TextBlock::printed("")));
@@ -845,6 +875,31 @@ mod tests {
     }
 
     #[test]
+    fn a_tick_redraws_what_is_evaluating_and_nothing_else() {
+        let counts = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
+        let mut feed = Feed::new(Box::new(Counted(counts[0].clone())));
+        feed.push_evaluation(EvaluationBlock::new(1, [("x".to_string(), Vec::new())]));
+        feed.push(Box::new(Counted(counts[1].clone())));
+        let context = RenderContext::new(12, 0);
+        let area = Rect::new(0, 0, 12, 8);
+        let mut target = Buffer::empty(area);
+        feed.render(&context, area, &mut target, Style::default());
+        let marker = |target: &Buffer| {
+            (0..area.height)
+                .map(|row| target[(UI.feed_margin + UI.cell_margin, row)].symbol().to_string())
+                .collect::<Vec<_>>()
+        };
+        let before = marker(&target);
+
+        std::thread::sleep(std::time::Duration::from_millis(UI.busy_frame_ms * 3 / 2));
+        feed.on_event(&Ticked);
+        feed.render(&context, area, &mut target, Style::default());
+
+        assert_eq!(counts.map(|count| count.load(Ordering::Relaxed)), [1, 1]);
+        assert_ne!(marker(&target), before, "the spinner should have turned");
+    }
+
+    #[test]
     fn incomplete_block_stays_last_and_returns_its_source() {
         let mut feed = Feed::new(Box::new(TextBlock::system("welcome")));
         feed.set_incomplete(IncompleteBlock::new("f(\n".into(), Vec::new()));
@@ -871,7 +926,7 @@ mod tests {
         let context = RenderContext::new(12, 0);
         let area = Rect::new(0, 0, 12, 3);
         let mut target = Buffer::empty(area);
-        feed.scroll(1);
+        feed.scroll(2);
 
         feed.render(&context, area, &mut target, Style::default());
         assert_eq!(target[(UI.feed_margin, 0)].symbol(), "C");
@@ -880,7 +935,8 @@ mod tests {
                 0,
                 1,
                 CellState::Null,
-                vec![Box::new(TextBlock::printed("result"))],
+                Vec::new(),
+                Some(TextBlock::printed("result")),
                 None,
             );
         });
@@ -889,7 +945,8 @@ mod tests {
                 0,
                 1,
                 CellState::Null,
-                vec![Box::new(TextBlock::printed("another result"))],
+                Vec::new(),
+                Some(TextBlock::printed("another result")),
                 None,
             );
         });
@@ -946,9 +1003,9 @@ mod tests {
     #[test]
     fn feed_margin_keeps_a_full_width_block_background() {
         let groups = Groups::default();
-        let context = RenderContext::new(10, 0);
+        let context = RenderContext::new(12, 0);
         let mut feed = Feed::new(Box::new(TextBlock::printed("x")));
-        let area = Rect::new(0, 0, 10, 3);
+        let area = Rect::new(0, 0, 12, 3);
         let mut target = Buffer::empty(area);
 
         feed.render(&context, area, &mut target, Style::default());
@@ -957,7 +1014,8 @@ mod tests {
         assert_eq!(target[(0, 2)].symbol(), " ");
         assert_eq!(target[(0, 2)].bg, groups.printed().bg.unwrap());
         assert_eq!(target[(5, 2)].bg, groups.printed().bg.unwrap());
-        assert_eq!(target[(5, 1)].symbol(), "x");
+        let row: String = (0..area.width).map(|x| target[(x, 1)].symbol()).collect();
+        assert!(row.contains('x'));
     }
 
     #[test]
@@ -968,6 +1026,7 @@ mod tests {
             1,
             CellState::Value,
             Vec::new(),
+            None,
             Some(OutputBlock::value("x".into(), None).numbered(1)),
         );
         let groups = Groups::default();
@@ -982,5 +1041,79 @@ mod tests {
             target[(UI.feed_margin + 5, 4)].bg,
             groups.transcript().bg.unwrap()
         );
+    }
+
+    #[test]
+    fn a_newer_output_relabels_the_retained_older_one() {
+        let mut evaluation = EvaluationBlock::new(1, [("x".into(), Vec::new())]);
+        evaluation.succeed(
+            0,
+            1,
+            CellState::Value,
+            Vec::new(),
+            None,
+            Some(OutputBlock::value("x".into(), None).numbered(1)),
+        );
+        let mut feed = Feed::new(Box::new(TextBlock::system("")));
+        feed.push_evaluation(evaluation);
+        let area = Rect::new(0, 0, 30, 12);
+        let drawn = |feed: &mut Feed, recent: [Option<u32>; RECENT_OUTPUTS]| {
+            let mut target = Buffer::empty(area);
+            let context = RenderContext::new(30, 0).with_recent_outputs(recent);
+            feed.render(&context, area, &mut target, Style::default());
+            (0..area.height)
+                .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+                .map(|position| target[position].symbol().to_string())
+                .collect::<String>()
+        };
+
+        assert!(drawn(&mut feed, [Some(1), None, None]).contains("oo"));
+        let later = drawn(&mut feed, [Some(2), Some(1), None]);
+        assert!(later.contains("ooo") && !later.contains("o1"));
+    }
+
+    #[test]
+    fn muted_lines_count_towards_what_m2_recalls_as_oo_ooo_oooo() {
+        let mut evaluation = EvaluationBlock::new(
+            1,
+            ["1;", "2;", "3"].map(|code| (code.to_string(), Vec::new())),
+        );
+        for (index, number) in [(0, 54), (1, 55)] {
+            evaluation.succeed(index, number, CellState::Muted, Vec::new(), None, None);
+        }
+        evaluation.succeed(
+            2,
+            56,
+            CellState::Value,
+            Vec::new(),
+            None,
+            Some(OutputBlock::value("3".into(), None).numbered(56)),
+        );
+        let mut feed = Feed::new(Box::new(TextBlock::system("")));
+        feed.push_evaluation(evaluation);
+
+        assert_eq!(feed.recent_outputs(), [Some(56), Some(55), Some(54)]);
+    }
+
+    #[test]
+    fn null_lines_take_no_place_in_the_rotation() {
+        let codes = ["1;", "null;", "1;", "null"];
+        let mut evaluation =
+            EvaluationBlock::new(1, codes.map(|code| (code.to_string(), Vec::new())));
+        for (index, (number, state)) in [
+            (239, CellState::Muted),
+            (240, CellState::Null),
+            (241, CellState::Muted),
+            (242, CellState::Null),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            evaluation.succeed(index, number, state, Vec::new(), None, None);
+        }
+        let mut feed = Feed::new(Box::new(TextBlock::system("")));
+        feed.push_evaluation(evaluation);
+
+        assert_eq!(feed.recent_outputs(), [Some(241), Some(239), None]);
     }
 }

@@ -142,7 +142,13 @@ String = { fg = "gold" }
 Number = { fg = "gold" }
 Operator = { fg = "subtle" }
 Symbol = { fg = "iris", italic = true }
-Module = { fg = "text" }
+Parameter = { fg = "iris", italic = true }
+Property = { fg = "foam", italic = true }
+Builtin = { fg = "love", bold = true, italic = true }
+Regex = { fg = "iris", sp = "iris", underline = true }
+EnumVariant = { fg = "leaf" }
+Attribute = { fg = "gold", italic = true }
+Macro = { fg = "rose", italic = true }
 
 Accent = { fg = "foam" }
 Error = { fg = "love" }
@@ -153,10 +159,6 @@ Hint = { fg = "pine" }
 [overrides]
 Boolean = { fg = "rose" }
 Variable = { fg = "text", italic = true }
-Parameter = { fg = "iris", italic = true }
-Property = { fg = "foam", italic = true }
 Installation = { fg = "foam" }
-Builtin = { fg = "love", bold = true, italic = true }
 Quote = { fg = "gold" }
-Regex = { fg = "iris", sp = "iris", underline = true }
 Documentation = { fg = "iris", sp = "iris", underline = true }

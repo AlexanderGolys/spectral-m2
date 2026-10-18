@@ -12,25 +12,16 @@ use crate::ui::action::Action;
 use crate::ui::key::{KeyEvent, KeyMod};
 use KeyMod::{Alt, Ctrl, Shift};
 
-/// One action attached to a normalized key.
+/// One action attached to a normalized key, and whether the user may move it.
 #[derive(Clone, Copy)]
 struct Keymap {
     action: Action,
     remappable: bool,
 }
 
-impl Keymap {
-    fn new(action: Action) -> Self {
-        Self {
-            action,
-            remappable: action.is_remappable(),
-        }
-    }
-}
-
 /// The editor's exact normalized-key bindings.
 #[derive(Clone)]
-pub(crate) struct Keymaps {
+pub struct Keymaps {
     bindings: HashMap<KeyEvent, Keymap>,
     reserved: HashSet<KeyEvent>,
     rebinds: Vec<(Action, KeyEvent)>,
@@ -38,7 +29,7 @@ pub(crate) struct Keymaps {
 
 impl Keymaps {
     /// Resolve a terminal key to an action, after which the key is discarded.
-    pub(crate) fn action(&self, key: KeyEvent, remapping: bool) -> Option<Action> {
+    pub fn action(&self, key: KeyEvent, remapping: bool) -> Option<Action> {
         self.bindings
             .get(&key.binding())
             .filter(|binding| {
@@ -55,7 +46,7 @@ impl Keymaps {
     }
 
     /// The key that triggers `action`, labelled for hints and help.
-    pub(crate) fn key_for(&self, action: Action) -> Option<String> {
+    pub fn key_for(&self, action: Action) -> Option<String> {
         self.key(action).map(|key| key.to_string())
     }
 
@@ -73,28 +64,32 @@ impl Keymaps {
         &self.rebinds
     }
 
-    pub(crate) fn rebind(&mut self, action: Action, key: KeyEvent) -> bool {
+    /// The bindings the user may move, with their current keys, in action order.
+    pub fn remappable(&self) -> Vec<(Action, KeyEvent)> {
+        let mut remappable: Vec<_> = self
+            .bindings
+            .iter()
+            .filter(|(_, binding)| binding.remappable)
+            .map(|(key, binding)| (binding.action, *key))
+            .collect();
+        remappable.sort_by_key(|(action, _)| *action);
+        remappable
+    }
+
+    /// Move `action`'s remappable binding onto `key`, swapping with a remappable
+    /// binding already there. Fixed bindings and reserved keys never move.
+    pub fn rebind(&mut self, action: Action, key: KeyEvent) -> bool {
         let key = key.binding();
-        if !action.is_remappable()
-            || self.reserved.contains(&key)
+        let Some(target) = self.bindings.iter().find_map(|(bound, binding)| {
+            (binding.action == action && binding.remappable).then_some(*bound)
+        }) else {
+            return false;
+        };
+        if self.reserved.contains(&key)
             || self
                 .bindings
                 .get(&key)
                 .is_some_and(|binding| !binding.remappable)
-        {
-            return false;
-        }
-        let Some(target) = self
-            .bindings
-            .iter()
-            .find_map(|(key, binding)| (binding.action == action).then_some(*key))
-        else {
-            return false;
-        };
-        if self
-            .bindings
-            .get(&key)
-            .is_some_and(|binding| !binding.remappable)
         {
             return false;
         }
@@ -111,9 +106,22 @@ impl Keymaps {
     }
 }
 
+/// A default binding: `fixed` ones hold their key, the rest may be remapped.
 macro_rules! keymap {
+    (fixed $action:ident <- $key:expr) => {
+        keymap!(@ $action, $key, false)
+    };
     ($action:ident <- $key:expr) => {
-        (key!($key), Keymap::new(Action::$action))
+        keymap!(@ $action, $key, true)
+    };
+    (@ $action:ident, $key:expr, $remappable:expr) => {
+        (
+            key!($key),
+            Keymap {
+                action: Action::$action,
+                remappable: $remappable,
+            },
+        )
     };
 }
 
@@ -127,32 +135,48 @@ impl Default for Keymaps {
     fn default() -> Self {
         Self {
             bindings: HashMap::from([
-                keymap!(FocusPaneLeft <- Left + Ctrl),
-                keymap!(FocusPaneRight <- Right + Ctrl),
-                keymap!(ResizePaneLeft <- Left + Ctrl + Shift),
-                keymap!(ResizePaneRight <- Right + Ctrl + Shift),
+                keymap!(fixed FocusPaneLeft <- Left + Alt),
+                keymap!(fixed FocusPaneRight <- Right + Alt),
+                keymap!(fixed ResizePaneLeft <- Left + Alt + Shift),
+                keymap!(fixed ResizePaneRight <- Right + Alt + Shift),
                 keymap!(Quit <- Char('c') + Ctrl),
                 keymap!(OpenCommands <- Char('/') + Ctrl),
                 keymap!(OpenSettings <- Char('o') + Ctrl),
                 keymap!(OpenKeymaps <- Char('k') + Alt),
                 keymap!(ClearFeed <- Char('l') + Alt),
                 keymap!(OpenCode <- Char('c') + Alt),
+                keymap!(OpenValues <- Char('v') + Alt),
+                keymap!(OpenStdOut <- Char('p') + Alt),
                 keymap!(OpenOutput <- Char('o') + Alt),
                 keymap!(OpenSyntaxTree <- Char('t') + Alt),
                 keymap!(Restart <- Char('r') + Alt),
                 keymap!(ClosePane <- Char('q') + Ctrl),
                 keymap!(ToggleHighlightDebug <- Char('d') + Ctrl),
                 keymap!(CopySelection <- Char('y') + Ctrl),
-                keymap!(Submit <- Enter),
-                keymap!(ScrollFeedUp <- PageUp),
-                keymap!(ScrollFeedDown <- PageDown),
+                keymap!(fixed Submit <- Enter),
+                keymap!(fixed ScrollFeedUp <- PageUp),
+                keymap!(fixed ScrollFeedDown <- PageDown),
             ]),
             reserved: HashSet::from([
-                key!(Char('v') + Alt),
                 key!(Char('l') + Ctrl),
                 key!(Char(' ') + Shift),
                 key!(Enter + Shift),
                 key!(Enter + Alt),
+                key!(Char('j') + Ctrl),
+                key!(Char('z') + Ctrl),
+                key!(Char('h') + Ctrl),
+                key!(Backspace + Ctrl),
+                key!(Backspace + Alt),
+                key!(Delete + Ctrl),
+                key!(Delete + Alt),
+                key!(Left + Ctrl),
+                key!(Right + Ctrl),
+                key!(Left + Ctrl + Shift),
+                key!(Right + Ctrl + Shift),
+                key!(Home + Ctrl),
+                key!(End + Ctrl),
+                key!(Home + Ctrl + Shift),
+                key!(End + Ctrl + Shift),
                 key!(Left + Shift),
                 key!(Right + Shift),
                 key!(Home + Shift),
@@ -166,6 +190,7 @@ impl Default for Keymaps {
                 key!(Backspace),
                 key!(Delete),
                 key!(Tab),
+                key!(BackTab),
             ]),
             rebinds: Vec::new(),
         }
@@ -204,10 +229,7 @@ mod tests {
     fn shortcuts_leave_their_plain_characters_to_typing() {
         let keymaps = Keymaps::default();
 
-        for &command in Action::REMAPPABLE {
-            let Some(bound) = keymaps.key(command) else {
-                continue;
-            };
+        for (_, bound) in keymaps.remappable() {
             if let Char(character) = bound.code {
                 assert!(
                     action(&keymaps, key!(Char(character))).is_none(),
@@ -249,7 +271,7 @@ mod tests {
         assert_eq!(key!(Left + Ctrl + Shift).to_string(), format!("{ctrl}+⇧+←"));
 
         let keymaps = Keymaps::default();
-        for &command in Action::REMAPPABLE {
+        for (command, _) in keymaps.remappable() {
             assert_eq!(
                 keymaps.key_for(command),
                 keymaps.key(command).map(|key| key.to_string())
@@ -261,7 +283,9 @@ mod tests {
     fn remapping_swaps_remappable_conflicts_and_preserves_fixed_keys() {
         let mut keymaps = Keymaps::default();
         let clear = Action::ClearFeed;
-        let copy = keymaps.key(Action::CopySelection).expect("copying is bound");
+        let copy = keymaps
+            .key(Action::CopySelection)
+            .expect("copying is bound");
         let cleared_by = keymaps.key(clear).expect("clearing is bound");
         let submit = keymaps.key(Action::Submit).expect("submitting is bound");
 
@@ -273,20 +297,24 @@ mod tests {
     }
 
     #[test]
+    fn a_fixed_binding_keeps_its_key_and_stays_out_of_the_remappable_list() {
+        let mut keymaps = Keymaps::default();
+        let submit = keymaps.key(Action::Submit).expect("submitting is bound");
+
+        assert!(!keymaps.rebind(Action::Submit, key!(Char('a'))));
+        assert!(action(&keymaps, submit) == Some(Action::Submit));
+        assert!(keymaps
+            .remappable()
+            .iter()
+            .all(|(remappable, _)| *remappable != Action::Submit));
+    }
+
+    #[test]
     fn plain_typing_can_be_claimed_by_a_remapping() {
         let mut keymaps = Keymaps::default();
         let letter = key!(Char('a'));
 
         assert!(keymaps.rebind(Action::ClearFeed, letter));
         assert!(action(&keymaps, letter) == Some(Action::ClearFeed));
-    }
-
-    #[test]
-    fn alternative_view_cannot_be_claimed_by_a_remapping() {
-        let mut keymaps = Keymaps::default();
-        let alternative = key!(Char('v') + Alt);
-
-        assert!(!keymaps.rebind(Action::ClearFeed, alternative));
-        assert!(action(&keymaps, alternative).is_none());
     }
 }

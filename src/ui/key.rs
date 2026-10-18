@@ -91,7 +91,8 @@ impl KeyEvent {
         !self.ctrl() && !self.alt()
     }
 
-    fn with(mut self, modifier: KeyMod) -> Self {
+    /// This event with `modifier` held as well.
+    pub const fn with(mut self, modifier: KeyMod) -> Self {
         self.modifiers |= modifier as u8;
         self
     }
@@ -122,6 +123,28 @@ impl Add<KeyMod> for KeyEvent {
     fn add(self, modifier: KeyMod) -> Self::Output {
         self.with(modifier)
     }
+}
+
+/// A key event written as its chord, usable in `const` items:
+/// `key!(ctrl + alt + k)`, or `key!(ctrl + '/')` for a character that is not a
+/// letter.
+#[macro_export]
+macro_rules! key {
+    (alt + $($rest:tt)+) => {
+        $crate::key!($($rest)+).with($crate::ui::key::KeyMod::Alt)
+    };
+    (ctrl + $($rest:tt)+) => {
+        $crate::key!($($rest)+).with($crate::ui::key::KeyMod::Ctrl)
+    };
+    (shift + $($rest:tt)+) => {
+        $crate::key!($($rest)+).with($crate::ui::key::KeyMod::Shift)
+    };
+    ($letter:ident) => {
+        $crate::key!(stringify!($letter).as_bytes()[0] as char)
+    };
+    ($character:expr) => {
+        $crate::ui::key::KeyEvent::new(::crossterm::event::KeyCode::Char($character))
+    };
 }
 
 literally_literal_string! {
@@ -202,6 +225,15 @@ impl From<CrosstermKeyEvent> for KeyEvent {
 mod tests {
     use super::*;
     use KeyMod::*;
+
+    #[test]
+    fn a_written_chord_is_the_event_its_keys_make() {
+        const CHORDS: [KeyEvent; 3] = [key!(ctrl + o), key!(ctrl + alt + k), key!(ctrl + '/')];
+
+        assert_eq!(CHORDS[0], KeyCode::Char('o') + Ctrl);
+        assert_eq!(CHORDS[1], KeyCode::Char('k') + Ctrl + Alt);
+        assert_eq!(CHORDS[2], KeyCode::Char('/') + Ctrl);
+    }
 
     #[test]
     fn crossterm_primary_modifier_becomes_logical_ctrl() {

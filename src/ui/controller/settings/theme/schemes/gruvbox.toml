@@ -553,7 +553,13 @@ String = { fg = "accent_green", italic = true }
 Number = { fg = "accent_purple" }
 Operator = { fg = "accent_orange" }
 Symbol = { fg = "accent_orange" }
-Module = { fg = "text" }
+Parameter = { fg = "accent_blue" }
+Property = { fg = "accent_blue" }
+Builtin = { fg = "accent_orange" }
+Regex = { fg = "accent_blue", sp = "accent_blue", underline = true }
+EnumVariant = { fg = "accent_aqua" }
+Attribute = { fg = "accent_purple" }
+Macro = { fg = "accent_green", italic = true }
 
 Accent = { fg = "accent_aqua" }
 Error = { fg = "accent_red" }
@@ -565,7 +571,5 @@ Hint = { fg = "accent_aqua" }
 Constant = { fg = "accent_orange" }
 Delimiter = { fg = "accent_orange" }
 Punctuation = { fg = "accent_orange" }
-Parameter = { fg = "accent_blue" }
-Property = { fg = "accent_blue" }
 Installation = { fg = "accent_red" }
 CompiledFunction = { fg = "accent_orange" }

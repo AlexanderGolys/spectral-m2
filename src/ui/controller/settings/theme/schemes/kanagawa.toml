@@ -905,7 +905,13 @@ String = { fg = "string" }
 Number = { fg = "number" }
 Operator = { fg = "operator" }
 Symbol = { fg = "boolean" }
-Module = { fg = "type" }
+Parameter = { fg = "parameter" }
+Property = { fg = "property" }
+Builtin = { fg = "builtin", italic = true }
+Regex = { fg = "url", sp = "url", underline = true }
+EnumVariant = { fg = "dragonAqua" }
+Attribute = { fg = "carpYellow" }
+Macro = { fg = "springViolet1" }
 
 Accent = { fg = "property" }
 Error = { fg = "error" }
@@ -918,9 +924,6 @@ Constant = { fg = "boolean" }
 Boolean = { fg = "boolean", bold = true }
 Delimiter = { fg = "operator" }
 Punctuation = { fg = "punctuation" }
-Parameter = { fg = "parameter" }
-Property = { fg = "property" }
 Installation = { fg = "label", bold = true }
 CompiledFunction = { fg = "function", bold = true }
-Builtin = { fg = "builtin", italic = true }
 Quote = { fg = "string" }

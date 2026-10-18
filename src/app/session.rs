@@ -1,6 +1,7 @@
 //! One independently evaluated Macaulay2 workspace.
 
 use std::collections::VecDeque;
+use std::mem;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -14,17 +15,18 @@ use crate::code::highlight::Highlighter;
 use crate::errors::Result;
 use crate::ui::block::Block;
 use crate::ui::cell::{CellState, OutputBlock, TextBlock, WarningBlock};
-use crate::ui::controller::commands::{submitted_command, SubmittedCommand};
 use crate::ui::controller::EditorUpdate;
 
 /// One successfully evaluated input cell retained by its workspace.
 #[derive(Clone)]
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct CommittedCell {
-    pub(crate) number: u32,
-    pub(crate) state: CellState,
-    pub(crate) code: String,
-    pub(crate) tree: PrettyNode,
+pub struct CommittedCell {
+    pub number: u32,
+    pub state: CellState,
+    pub code: String,
+    pub tree: PrettyNode,
+    /// The submission it was entered with, which cells of one share.
+    pub block: u64,
 }
 
 /// A parsed cell waiting for its worker to evaluate it.
@@ -33,6 +35,9 @@ struct SubmittedCell {
     code: String,
     tree: PrettyNode,
 }
+
+/// What divides the submissions in code kept as a file.
+const BLOCK_SEPARATOR: char = '\u{c}';
 
 /// One submitted evaluation, active at the queue front and queued otherwise.
 struct Evaluation {
@@ -60,11 +65,12 @@ enum WorkerEvent {
         number: u32,
         result: std::result::Result<M2Response, String>,
     },
-    Restarted(std::result::Result<String, String>),
+    /// The fresh process's version and every name it started with.
+    Restarted(std::result::Result<(String, Vec<String>), String>),
 }
 
 /// A live M2 worker and the source state committed through it.
-pub(crate) struct Session {
+pub struct Session {
     requests: Sender<WorkerRequest>,
     events: Receiver<WorkerEvent>,
     version: String,
@@ -77,10 +83,12 @@ pub(crate) struct Session {
     parser: NativeCellParser,
     evaluations: VecDeque<Evaluation>,
     restarting: bool,
+    /// Code to run in the fresh session once the restart it waits for succeeds.
+    after_restart: Option<String>,
 }
 
 impl Session {
-    pub(crate) fn new(backend: M2Backend) -> Self {
+    pub fn new(backend: M2Backend) -> Self {
         let version = backend.version().unwrap_or_else(|_| "unknown".to_string());
         let (request_tx, request_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
@@ -98,36 +106,83 @@ impl Session {
             parser: NativeCellParser::new(),
             evaluations: VecDeque::new(),
             restarting: false,
+            after_restart: None,
         }
     }
 
-    pub(crate) fn version(&self) -> Result<String> {
+    pub fn version(&self) -> Result<String> {
         Ok(self.version.clone())
     }
 
     #[cfg(test)]
-    pub(crate) fn next_input_number(&self) -> u32 {
+    pub fn next_input_number(&self) -> u32 {
         self.next_input_number
     }
 
-    pub(crate) fn in_debugger(&self) -> bool {
+    pub fn in_debugger(&self) -> bool {
         self.in_debugger
     }
 
-    pub(crate) fn committed(&self) -> &[CommittedCell] {
+    pub fn committed(&self) -> &[CommittedCell] {
         &self.committed
     }
 
+    /// The code of every committed cell in evaluation order, as a file of it
+    /// reads: a form feed line, which is whitespace to Macaulay2, divides the
+    /// cells entered together from those entered after them.
+    pub fn code(&self) -> String {
+        let mut code = String::new();
+        let mut previous = None;
+        for cell in &self.committed {
+            if previous.is_some_and(|block| block != cell.block) {
+                code.push(BLOCK_SEPARATOR);
+                code.push('\n');
+            }
+            code.push_str(&cell.code);
+            code.push('\n');
+            previous = Some(cell.block);
+        }
+        code
+    }
+
+    /// The submissions `code` was entered as: what lies between its form feeds,
+    /// each to be submitted whole. Code with none, such as a hand-written file,
+    /// is read as a submission per cell.
+    pub fn blocks(code: &str) -> Vec<String> {
+        if !code.contains(BLOCK_SEPARATOR) {
+            return Self::cells(code);
+        }
+        code.split(BLOCK_SEPARATOR)
+            .map(|block| block.trim().to_string())
+            .filter(|block| !block.is_empty())
+            .collect()
+    }
+
+    /// The top-level cells `code` divides into, each as it would be typed, so
+    /// code read back can be submitted cell by cell as it was first entered.
+    pub fn cells(code: &str) -> Vec<String> {
+        let mut parser = NativeCellParser::new();
+        parser.push_line(code);
+        let mut cells: Vec<String> = parser
+            .take_completed()
+            .iter()
+            .map(|cell| cell.source().trim().to_string())
+            .collect();
+        cells.push(parser.active_source().trim().to_string());
+        cells.retain(|cell| !cell.is_empty());
+        cells
+    }
+
     /// Revision of the immutable committed-cell sequence.
-    pub(crate) const fn committed_revision(&self) -> u64 {
+    pub const fn committed_revision(&self) -> u64 {
         self.committed_revision
     }
 
-    pub(crate) fn busy(&self) -> bool {
+    pub fn busy(&self) -> bool {
         !self.evaluations.is_empty() || self.restarting
     }
 
-    pub(crate) fn restart(&mut self) -> EditorUpdate {
+    pub fn restart(&mut self) -> EditorUpdate {
         if self.busy() {
             return EditorUpdate::Diagnostic("workspace is still evaluating".to_string());
         }
@@ -138,21 +193,27 @@ impl Session {
         EditorUpdate::Ignore
     }
 
-    pub(crate) fn submit(
-        &mut self,
-        source: &str,
-        highlighter: &mut dyn Highlighter,
-    ) -> EditorUpdate {
+    /// Restart, keeping `code` to run in the fresh session once the restart
+    /// succeeds; a restart refused or failed drops it.
+    pub fn restart_with(&mut self, code: String) -> EditorUpdate {
+        let update = self.restart();
+        if self.restarting {
+            self.after_restart = Some(code);
+        }
+        update
+    }
+
+    /// The code kept by [`Self::restart_with`], once its restart has succeeded.
+    pub fn take_after_restart(&mut self) -> Option<String> {
+        match self.restarting {
+            true => None,
+            false => self.after_restart.take(),
+        }
+    }
+
+    pub fn submit(&mut self, source: &str, highlighter: &mut dyn Highlighter) -> EditorUpdate {
         if source.is_empty() {
             return EditorUpdate::Ignore;
-        }
-        if self.parser.active_source().is_empty() {
-            if let Some(command) = submitted_command(source) {
-                return match command {
-                    SubmittedCommand::Quit => EditorUpdate::Quit,
-                    SubmittedCommand::Restart => self.restart(),
-                };
-            }
         }
         if self.restarting {
             return EditorUpdate::Diagnostic("workspace is restarting".to_string());
@@ -226,7 +287,7 @@ impl Session {
     }
 
     /// Discard parser state after the feed transfers its unfinished block back.
-    pub(crate) fn reset_incomplete(&mut self) {
+    pub fn reset_incomplete(&mut self) {
         self.parser.reset_active();
         self.leading_whitespace.clear();
     }
@@ -300,7 +361,15 @@ impl Session {
         id
     }
 
-    fn batch(mut updates: Vec<EditorUpdate>) -> EditorUpdate {
+    /// `updates` as one, a batch among them spliced in so batches never nest.
+    fn batch(updates: Vec<EditorUpdate>) -> EditorUpdate {
+        let mut updates: Vec<EditorUpdate> = updates
+            .into_iter()
+            .flat_map(|update| match update {
+                EditorUpdate::Batch(updates) => updates,
+                update => vec![update],
+            })
+            .collect();
         match updates.len() {
             0 => EditorUpdate::Ignore,
             1 => updates.pop().unwrap(),
@@ -329,7 +398,7 @@ impl Session {
         EditorUpdate::WhitespaceAccepted
     }
 
-    pub(crate) fn poll(&mut self) -> Vec<EditorUpdate> {
+    pub fn poll(&mut self) -> Vec<EditorUpdate> {
         let mut updates = Vec::new();
         while let Ok(event) = self.events.try_recv() {
             match event {
@@ -361,6 +430,28 @@ impl Session {
         else {
             return EditorUpdate::Ignore;
         };
+        let mut result = result;
+        let bound = match &mut result {
+            Ok(response) if !response.names.is_empty() => {
+                Some(EditorUpdate::BoundNames(mem::take(&mut response.names)))
+            }
+            _ => None,
+        };
+        let resolved = self.resolve_response(id, index, number, cell, result);
+        match bound {
+            Some(bound) => Self::batch(vec![bound, resolved]),
+            None => resolved,
+        }
+    }
+
+    fn resolve_response(
+        &mut self,
+        id: u64,
+        index: usize,
+        number: u32,
+        cell: SubmittedCell,
+        result: std::result::Result<M2Response, String>,
+    ) -> EditorUpdate {
         match result {
             Ok(response) if !response.is_error => {
                 self.in_debugger = response.depth > 1;
@@ -375,19 +466,21 @@ impl Session {
                     state,
                     code: cell.code.clone(),
                     tree: cell.tree,
+                    block: id,
                 });
                 self.committed_revision = self.committed_revision.wrapping_add(1);
                 let finished = self
                     .evaluations
                     .front()
                     .is_some_and(|evaluation| index + 1 == evaluation.cells.len());
-                let (outputs, value) = response_blocks(&response, &cell.code, number);
+                let (outputs, printed, value) = response_blocks(&response, &cell.code, number);
                 let resolved = EditorUpdate::CellSucceeded {
                     id,
                     index,
                     number,
                     state,
                     outputs,
+                    printed,
                     value,
                 };
                 match finished {
@@ -406,15 +499,13 @@ impl Session {
             Ok(response) => {
                 self.in_debugger = response.depth > 1;
                 let error = captured_error(&response.transcript, &cell.code);
-                let outputs = (!error.printed.is_empty())
-                    .then(|| Box::new(TextBlock::printed(error.printed)) as Box<dyn Block>)
-                    .into_iter()
-                    .collect();
+                let printed =
+                    (!error.printed.is_empty()).then(|| TextBlock::printed(error.printed));
                 let failed = EditorUpdate::CellFailed {
                     id,
                     index,
                     number,
-                    outputs,
+                    printed,
                     message: error.diagnostic,
                 };
                 Self::batch(
@@ -429,7 +520,7 @@ impl Session {
                     id,
                     index,
                     number,
-                    outputs: Vec::new(),
+                    printed: None,
                     message: format!("Communication error: {message}"),
                 };
                 Self::batch(
@@ -471,10 +562,13 @@ impl Session {
         }
     }
 
-    fn resolve_restart(&mut self, result: std::result::Result<String, String>) -> EditorUpdate {
+    fn resolve_restart(
+        &mut self,
+        result: std::result::Result<(String, Vec<String>), String>,
+    ) -> EditorUpdate {
         self.restarting = false;
         match result {
-            Ok(version) => {
+            Ok((version, names)) => {
                 self.version = version;
                 self.in_debugger = false;
                 self.next_input_number = 1;
@@ -482,11 +576,17 @@ impl Session {
                 self.committed_revision = self.committed_revision.wrapping_add(1);
                 self.leading_whitespace.clear();
                 self.parser.reset_active();
-                EditorUpdate::Message(Box::new(TextBlock::system(
-                    "Macaulay2 restarted -- the session is empty and numbering begins again",
-                )))
+                EditorUpdate::Batch(vec![
+                    EditorUpdate::Message(Box::new(TextBlock::system(
+                        "Macaulay2 restarted -- the session is empty and numbering begins again",
+                    ))),
+                    EditorUpdate::KnownNames(names),
+                ])
             }
-            Err(error) => EditorUpdate::Diagnostic(format!("could not restart M2: {error}")),
+            Err(error) => {
+                self.after_restart = None;
+                EditorUpdate::Diagnostic(format!("could not restart M2: {error}"))
+            }
         }
     }
 }
@@ -534,10 +634,10 @@ fn worker(mut backend: M2Backend, requests: Receiver<WorkerRequest>, events: Sen
                 }
             }
             WorkerRequest::Restart => {
-                let result = M2Backend::spawn().and_then(|replacement| {
-                    let version = replacement.version()?;
+                let result = M2Backend::spawn().and_then(|mut replacement| {
+                    let started = (replacement.version()?, replacement.take_names());
                     backend = replacement;
-                    Ok(version)
+                    Ok(started)
                 });
                 if events
                     .send(WorkerEvent::Restarted(
@@ -557,7 +657,7 @@ fn response_blocks(
     response: &M2Response,
     code: &str,
     number: u32,
-) -> (Vec<Box<dyn Block>>, Option<OutputBlock>) {
+) -> (Vec<Box<dyn Block>>, Option<TextBlock>, Option<OutputBlock>) {
     let value = response.rendered_value();
     let output = captured_output(
         &response.transcript,
@@ -565,25 +665,21 @@ fn response_blocks(
         value.as_deref(),
         response.type_info.as_deref(),
     );
-    let mut blocks: Vec<Box<dyn Block>> = output
+    let warnings: Vec<Box<dyn Block>> = output
         .warnings
         .into_iter()
         .map(|text| Box::new(WarningBlock { text }) as Box<dyn Block>)
         .collect();
-    if !output.printed.is_empty() {
-        blocks.push(Box::new(TextBlock::printed(output.printed)));
-    }
+    let printed = (!output.printed.is_empty()).then(|| TextBlock::printed(output.printed));
     let value = match (response.value.clone(), output.value, response.has_value) {
-        (Some(value), Some(rendered), true) => {
-            Some(
-                OutputBlock::rendered(value, rendered.type_info)
-                    .annotated(response.type_parts.clone())
-                    .numbered(number),
-            )
-        }
+        (Some(value), Some(rendered), true) => Some(
+            OutputBlock::rendered(value, rendered.type_info)
+                .annotated(response.type_parts.clone())
+                .numbered(number),
+        ),
         _ => None,
     };
-    (blocks, value)
+    (warnings, printed, value)
 }
 
 #[cfg(test)]
@@ -620,9 +716,11 @@ mod tests {
                 type_parts: Vec::new(),
                 has_value,
                 depth: 1,
+                names: Vec::new(),
             };
-            let (outputs, value) = response_blocks(&response, "x", 1);
+            let (outputs, printed, value) = response_blocks(&response, "x", 1);
             assert!(outputs.is_empty());
+            assert!(printed.is_none());
             assert!(value.is_none());
         }
     }
@@ -672,6 +770,78 @@ mod tests {
         assert!(!session.busy());
         assert_eq!(session.next_input_number(), 3);
         assert_eq!(session.committed()[1].code, "2 + 2");
+    }
+
+    #[test]
+    fn code_kept_across_a_restart_comes_back_only_once_the_session_is_fresh() {
+        let mut highlighter = SyntaxHighlighter::new();
+        let mut session = Session::new(M2Backend::spawn().expect("spawn M2"));
+        session.submit("a = 1", &mut highlighter);
+        updates_until_idle(&mut session);
+
+        session.restart_with("b = 2".to_string());
+        assert!(session.take_after_restart().is_none());
+        updates_until_idle(&mut session);
+
+        assert_eq!(session.take_after_restart().as_deref(), Some("b = 2"));
+        assert!(session.committed().is_empty());
+        assert!(session.take_after_restart().is_none());
+    }
+
+    #[test]
+    fn saved_code_runs_back_as_the_same_cells() {
+        let mut highlighter = SyntaxHighlighter::new();
+        let cells = |session: &Session| -> Vec<String> {
+            session
+                .committed()
+                .iter()
+                .map(|cell| cell.code.clone())
+                .collect()
+        };
+        let mut first = Session::new(M2Backend::spawn().expect("spawn M2"));
+        first.submit("a = 1\nb = a + 1", &mut highlighter);
+        updates_until_idle(&mut first);
+
+        let mut second = Session::new(M2Backend::spawn().expect("spawn M2"));
+        second.submit(&first.code(), &mut highlighter);
+        updates_until_idle(&mut second);
+
+        assert_eq!(cells(&first).len(), 2);
+        assert_eq!(cells(&second), cells(&first));
+    }
+
+    #[test]
+    fn code_read_back_divides_into_the_submissions_it_was_typed_as() {
+        let separator = format!("\n{BLOCK_SEPARATOR}\n");
+        let code = format!("a = 1;\nb = 2;{separator}c = 3\n{separator}d");
+
+        assert_eq!(Session::blocks(&code), ["a = 1;\nb = 2;", "c = 3", "d"]);
+        assert_eq!(Session::blocks("a = 1\nb = 2\n"), ["a = 1", "b = 2"]);
+    }
+
+    #[test]
+    fn a_submissions_cells_stay_together_in_the_code_kept() {
+        let mut highlighter = SyntaxHighlighter::new();
+        let mut session = Session::new(M2Backend::spawn().expect("spawn M2"));
+        session.submit("a = 1;\nb = 2;", &mut highlighter);
+        updates_until_idle(&mut session);
+        session.submit("c = 3", &mut highlighter);
+        updates_until_idle(&mut session);
+
+        assert_eq!(
+            Session::blocks(&session.code()),
+            ["a = 1;\nb = 2;", "c = 3"]
+        );
+    }
+
+    #[test]
+    fn code_read_back_divides_into_the_cells_it_was_typed_as() {
+        let code = "R = QQ[x]\nf = n -> (\n    n + 1\n)\n-- a comment\nf 2\n";
+
+        assert_eq!(
+            Session::cells(code),
+            ["R = QQ[x]", "f = n -> (\n    n + 1\n)", "-- a comment\nf 2"]
+        );
     }
 
     #[test]
@@ -811,13 +981,13 @@ mod tests {
         session.submit("(print 1; 1/0)", &mut highlighter);
         let updates = updates_until_idle(&mut session);
         let Some(EditorUpdate::CellFailed {
-            outputs, message, ..
+            printed, message, ..
         }) = updates.into_iter().next()
         else {
             panic!("expected a failed cell");
         };
 
-        assert_eq!(outputs.len(), 1);
+        assert!(printed.is_some());
         assert!(!message.lines().any(|line| line == "1"));
         assert!(message.contains("division by zero"));
     }

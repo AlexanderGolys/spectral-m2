@@ -42,11 +42,11 @@ Run the current checkout without installing it:
 cargo run --release
 ```
 
-Type `/` for the filtered command picker, `Ctrl+/` for all commands, or `Ctrl+O` for settings. Views open beside the session; on a view command, `Alt+V` opens it in place instead.
+Type `/` for the filtered command picker, `Ctrl+/` for all commands, or `Ctrl+O` for settings. Views open beside the session.
 
 ## Configuration
 
-Spectral reads `init.m2` and materializes its generated `backend.m2` in `$XDG_CONFIG_HOME/spectral-m2`, falling back to `~/.config/spectral-m2`. The persistent backend source lets Macaulay2's `code` inspect Spectral's hooks; it is replaced whenever the backend embedded in the binary changes.
+Spectral preserves normal Macaulay2 initialization, including `~/.Macaulay2/init.m2` and packages installed in your home directory. It then reads its own `init.m2` and materializes its generated `backend.m2` in `$XDG_CONFIG_HOME/spectral-m2`, falling back to `~/.config/spectral-m2`. The persistent backend source lets Macaulay2's `code` inspect Spectral's hooks; it is replaced whenever the backend embedded in the binary changes.
 
 ## Documentation
 

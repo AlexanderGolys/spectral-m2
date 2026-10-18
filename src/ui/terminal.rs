@@ -17,7 +17,7 @@ use ratatui::{Frame, Terminal};
 use crate::errors::Result;
 
 /// A raw-mode alternate-screen terminal restored automatically on drop.
-pub(crate) struct ReplTerminal {
+pub struct ReplTerminal {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     active: bool,
 }
@@ -25,7 +25,7 @@ pub(crate) struct ReplTerminal {
 impl ReplTerminal {
     const SCROLL_BUFFER: Duration = Duration::from_millis(8);
 
-    pub(crate) fn enter() -> Result<Self> {
+    pub fn enter() -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(
@@ -50,13 +50,13 @@ impl ReplTerminal {
         })
     }
 
-    pub(crate) fn draw(&mut self, render: impl FnOnce(&mut Frame)) -> Result<()> {
+    pub fn draw(&mut self, render: impl FnOnce(&mut Frame)) -> Result<()> {
         self.terminal.draw(render)?;
         Ok(())
     }
 
     /// Read one event, coalescing a burst of wheel reports before the next frame.
-    pub(crate) fn next_events(&self, timeout: Duration) -> Result<Vec<Event>> {
+    pub fn next_events(&self, timeout: Duration) -> Result<Vec<Event>> {
         if !event::poll(timeout)? {
             return Ok(Vec::new());
         }
@@ -79,7 +79,7 @@ impl ReplTerminal {
         Ok(events)
     }
 
-    pub(crate) fn leave(&mut self) -> Result<()> {
+    pub fn leave(&mut self) -> Result<()> {
         self.restore()
     }
 

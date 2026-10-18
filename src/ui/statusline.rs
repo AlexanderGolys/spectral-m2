@@ -11,7 +11,7 @@ use super::config::UI;
 use super::controller::settings::theme::groups::{scheme, Groups, HLGroup};
 
 /// A request to replace or clear the status line.
-pub(crate) enum StatusLineEvent {
+pub enum StatusLineEvent {
     Show {
         alignment: Alignment,
         spans: Vec<TextSpan>,
@@ -26,7 +26,7 @@ struct StatusMessage {
 
 /// The current status message and its left, centered, and right composition.
 #[derive(Default)]
-pub(crate) struct StatusLine {
+pub struct StatusLine {
     message: Option<StatusMessage>,
 }
 
@@ -40,7 +40,7 @@ pub struct StatusLineContext {
 }
 
 impl StatusLine {
-    pub(crate) fn handle(&mut self, event: StatusLineEvent) {
+    pub fn handle(&mut self, event: StatusLineEvent) {
         self.message = match event {
             StatusLineEvent::Show { alignment, spans } => Some(StatusMessage { alignment, spans }),
         };

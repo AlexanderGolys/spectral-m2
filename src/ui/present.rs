@@ -19,14 +19,14 @@ use super::controller::settings::theme::groups::Groups;
 use super::wrap::{WordWrap, WrapPolicy};
 
 /// One logical line of semantic spans, before any width is known.
-pub(crate) type SpanLine = Vec<TextSpan>;
+pub type SpanLine = Vec<TextSpan>;
 
 /// Split one logical line of spans into visual rows no wider than `width`.
 ///
 /// Breaks are chosen by `policy` over the line's combined text, so span boundaries
 /// never constrain where a row ends; a span straddling a break is divided between the
 /// rows it spans and each part keeps the group of the whole.
-pub(crate) fn wrap(line: &[TextSpan], width: u16, policy: &dyn WrapPolicy) -> Vec<SpanLine> {
+pub fn wrap(line: &[TextSpan], width: u16, policy: &dyn WrapPolicy) -> Vec<SpanLine> {
     let mut text = String::new();
     let bounds = line
         .iter()
@@ -57,14 +57,14 @@ pub(crate) fn wrap(line: &[TextSpan], width: u16, policy: &dyn WrapPolicy) -> Ve
 /// The wrapping policy is fixed per presentation rather than per resolution, because
 /// it belongs to the kind of content held: prose breaks at words, code at the token
 /// boundaries its own spans already mark.
-pub(crate) struct Presentation {
+pub struct Presentation {
     lines: Vec<SpanLine>,
     policy: Box<dyn WrapPolicy + Send>,
     cells: Buffer,
 }
 
 impl Presentation {
-    pub(crate) fn new(lines: Vec<SpanLine>, policy: impl WrapPolicy + Send + 'static) -> Self {
+    pub fn new(lines: Vec<SpanLine>, policy: impl WrapPolicy + Send + 'static) -> Self {
         Self {
             lines,
             policy: Box::new(policy),
@@ -73,12 +73,12 @@ impl Presentation {
     }
 
     /// Hold prose, broken at word boundaries.
-    pub(crate) fn prose(lines: Vec<SpanLine>) -> Self {
+    pub fn prose(lines: Vec<SpanLine>) -> Self {
         Self::new(lines, WordWrap)
     }
 
     /// Rebuild the cells by wrapping to `width` and resolving groups through `groups`.
-    pub(crate) fn resolve(&mut self, width: u16, groups: &Groups, base: Style) {
+    pub fn resolve(&mut self, width: u16, groups: &Groups, base: Style) {
         let rows = self
             .lines
             .iter()
@@ -93,7 +93,7 @@ impl Presentation {
             .render(area, &mut self.cells);
     }
 
-    pub(crate) fn cells(&self) -> &Buffer {
+    pub fn cells(&self) -> &Buffer {
         &self.cells
     }
 }
