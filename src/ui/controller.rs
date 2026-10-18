@@ -336,6 +336,16 @@ impl Editor {
         self.processing
     }
 
+    /// How much longer the input shows the typing prompt, if it does.
+    pub fn typing_remaining(&self) -> Option<Duration> {
+        self.input.typing_remaining()
+    }
+
+    /// Return the input to its resting prompt once typing has paused; whether it did.
+    pub fn settle_typing(&mut self) -> bool {
+        self.input.settle_typing()
+    }
+
     /// How long each documentation example may take to be computed again.
     pub fn example_timeout(&self) -> Duration {
         self.settings.example_timeout()
@@ -1051,6 +1061,7 @@ impl Editor {
     fn handle_picker_event(&mut self, event: EditorEvent) -> Reaction {
         match event {
             EditorEvent::EditCommand(key) => {
+                let revision = self.input.revision();
                 match key.code {
                     KeyCode::Tab => {
                         if let Some(command) = self.picked_command() {
@@ -1067,13 +1078,16 @@ impl Editor {
                     KeyCode::End => self.input.field_mut().move_end(),
                     _ => {}
                 }
+                self.input.note_keystroke_since(revision);
                 self.refresh_commands();
             }
             EditorEvent::ResumeTyping(character) => {
                 self.pickers.clear();
                 if !self.previewing {
+                    let revision = self.input.revision();
                     self.input.clear_diagnostic();
                     self.input.field_mut().insert_char(character);
+                    self.input.note_keystroke_since(revision);
                 }
             }
             EditorEvent::ClosePickers => {

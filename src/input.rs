@@ -12,6 +12,7 @@ mod undo;
 
 use std::iter;
 use std::ops::Range;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
@@ -671,6 +672,8 @@ pub struct InputCode {
     area: Rect,
     text_area: Rect,
     scroll: usize,
+    /// When a keystroke last changed the text, while the typing prompt shows.
+    typed_at: Option<Instant>,
 }
 
 /// Transient presentation inputs supplied by the containing editor.
@@ -709,6 +712,7 @@ impl InputCode {
             area: Rect::ZERO,
             text_area: Rect::ZERO,
             scroll: 0,
+            typed_at: None,
         }
     }
 
@@ -867,8 +871,45 @@ impl InputCode {
         self.completed_for = Some(self.edit_state());
     }
 
+    pub fn revision(&self) -> u64 {
+        self.field.revision
+    }
+
+    /// Show the typing prompt if a keystroke changed the text since `revision`.
+    pub fn note_keystroke_since(&mut self, revision: u64) {
+        if self.field.revision != revision {
+            self.typed_at = Some(Instant::now());
+        }
+    }
+
+    /// How much longer the typing prompt shows, if a keystroke changed the text
+    /// recently enough for it.
+    pub fn typing_remaining(&self) -> Option<Duration> {
+        Duration::from_millis(UI.typing_prompt_ms).checked_sub(self.typed_at?.elapsed())
+    }
+
+    fn typing(&self) -> bool {
+        self.typing_remaining().is_some()
+    }
+
+    /// Return to the resting prompt once typing has paused; whether it did.
+    pub fn settle_typing(&mut self) -> bool {
+        let settled = self.typed_at.is_some() && !self.typing();
+        if settled {
+            self.typed_at = None;
+        }
+        settled
+    }
+
     /// Interpret one unbound terminal key as editor input.
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<char> {
+        let revision = self.revision();
+        let typed = self.interpret_key(key);
+        self.note_keystroke_since(revision);
+        typed
+    }
+
+    fn interpret_key(&mut self, key: KeyEvent) -> Option<char> {
         use InputAction::*;
         let action = match key.code {
             KeyCode::Char('l') if key.ctrl() => Some(Clear),
@@ -984,6 +1025,7 @@ impl InputCode {
             area: Rect::ZERO,
             text_area: Rect::ZERO,
             scroll: 0,
+            typed_at: None,
         }
     }
 
@@ -1028,10 +1070,12 @@ impl InputCode {
 
         let mut lines = Vec::new();
         for (index, visual_line) in visual_lines.iter().enumerate() {
-            let marker = if index + 1 == visual_lines.len() {
-                UI.glyphs.prompt.current()
-            } else {
+            let marker = if index + 1 != visual_lines.len() {
                 ""
+            } else if self.typing() {
+                UI.glyphs.prompt_typing.current()
+            } else {
+                UI.glyphs.prompt.current()
             };
             let mut spans = Prompt::new(marker, prompt).spans(&());
             let mut line = self.highlights.paint(
@@ -1566,6 +1610,39 @@ mod tests {
         assert!(lines[2].spans[0]
             .content
             .contains(UI.glyphs.prompt.current()));
+    }
+
+    #[test]
+    fn the_prompt_shows_typing_until_keystrokes_pause() {
+        let mut input = InputCode::new_in_memory();
+        let context = RenderContext::new(40, UI.prompt_width());
+        let mut highlighter = SyntaxHighlighter::new();
+        let mut prompt = |input: &mut InputCode| {
+            let lines = input.highlighted_lines(&context, &mut highlighter, false, None);
+            lines[0].spans[0].content.to_string()
+        };
+        let typing = UI.glyphs.prompt_typing.current();
+        let resting = UI.glyphs.prompt.current();
+
+        input.handle_key(KeyCode::Left.into());
+        assert!(prompt(&mut input).contains(resting), "moving is not typing");
+
+        input.handle_key(KeyCode::Char('x').into());
+        assert!(prompt(&mut input).contains(typing));
+        assert!(!input.settle_typing());
+
+        input.typed_at = input
+            .typed_at
+            .map(|at| at - Duration::from_millis(UI.typing_prompt_ms));
+        assert!(input.settle_typing());
+        assert!(prompt(&mut input).contains(resting));
+    }
+
+    #[test]
+    fn a_typing_prompt_keeps_the_text_in_place() {
+        let resting = Prompt::new(UI.glyphs.prompt.current(), Style::default()).spans(&());
+        let typing = Prompt::new(UI.glyphs.prompt_typing.current(), Style::default()).spans(&());
+        assert_eq!(typing[0].width(), resting[0].width());
     }
 
     #[test]

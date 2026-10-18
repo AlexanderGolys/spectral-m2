@@ -2493,10 +2493,11 @@ mod tests {
         let buffer = rendered_buffer(&block, 24);
         let theme = Groups::default();
 
-        assert_eq!(
-            buffer[(UI.cell_margin, 1)].symbol(),
-            UI.glyphs.rejected_cell.current()
-        );
+        let marker = UI.glyphs.rejected_cell.current();
+        let drawn: String = (0..UnicodeWidthStr::width(marker) as u16)
+            .map(|column| buffer[(UI.cell_margin + column, 1)].symbol())
+            .collect();
+        assert_eq!(drawn, marker);
         assert_eq!(
             buffer[(prefix() as u16, 1)].bg,
             theme.error_code().bg.unwrap()

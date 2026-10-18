@@ -22,7 +22,7 @@ Changes are kept between sessions. The appearance is saved to `appearance.json` 
 
 ## Appearance
 
-On a limited terminal, set `SPECTRAL_M2_BASIC_GLYPHS=1` to use simple one-column prompt, divider, separator, and spinner symbols. `TERM=dumb` selects these symbols automatically.
+On a limited terminal, set `SPECTRAL_M2_BASIC_GLYPHS=1` to use simple ASCII prompt, divider, separator, and spinner symbols. `TERM=dumb` selects these symbols automatically.
 
 Transparent background lets the terminal show through the canvas: otherwise empty feed or preview cells, and the space inside laid-out values. Code bands, output boxes, selections, pickers, and other explicitly styled UI keep their backgrounds.
 

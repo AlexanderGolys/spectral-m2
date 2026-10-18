@@ -17,6 +17,8 @@ f = x -> (
 
 Use `Shift+Space`, `Shift+Enter`, or `Alt+Enter` when you want a newline regardless of completeness.
 
+While you type, the prompt changes to its typing form, and it returns to the resting prompt shortly after the last keystroke that changed the input. Moving the cursor leaves the prompt at rest, and the text stays in place as the prompt changes.
+
 ## Pending and completed cells
 
 Submitted code moves into the feed immediately. As Macaulay2 answers, Spectral appends printed text, values, types, warnings, or errors; consecutive values share one border. If a cell fails, its code and the unevaluated cells below it sit on a red background; the unevaluated code is muted without syntax highlighting. The error box puts “Error” in its title and shows the message in light red. Cell numbers remain session metadata but are not displayed until cells become focusable.

@@ -14,6 +14,7 @@ All notable changes to Spectral M2 are documented here.
 - Added a *compute examples* setting, off by default: a time limit for each documentation example, which is then run again in a Macaulay2 of its own so its value is drawn from its structure, as a live value is.
 - Links in documentation are underlined under the pointer and run `help` for their page on Ctrl+click, without disturbing the input.
 - History is shared by every running session: input submitted in one can be recalled in the others without restarting them.
+- The prompt takes a typing form while you type and returns to rest shortly after the last keystroke that changed the input, without moving the text.
 - Added a *complete after* setting for how much of a name is typed before it completes.
 - Added `/save [file]` and `/load <file>` to write the session's code to an `.m2` file and run one in a fresh session, and `/resume` to run the code of the previous session, which is kept on every exit and restart and by a bare `/save`.
 

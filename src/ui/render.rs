@@ -14,6 +14,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, BorderType, Padding, Paragraph, Widget};
+use unicode_width::UnicodeWidthStr;
 
 pub mod markup;
 pub mod maths;
@@ -172,13 +173,16 @@ impl Prompt {
 impl Text for Prompt {
     type Context = ();
 
+    /// A label wider than one column takes its extra width out of the gap
+    /// after it, so the text never moves when the label changes.
     fn spans(&self, (): &()) -> Vec<Span<'static>> {
+        let overhang = UnicodeWidthStr::width(self.label.as_str()).saturating_sub(1);
         vec![Span::styled(
             format!(
                 "{}{:1}{}",
                 " ".repeat(UI.prompt_margin.into()),
                 self.label,
-                " ".repeat(UI.prompt_text_gap.into())
+                " ".repeat(usize::from(UI.prompt_text_gap).saturating_sub(overhang))
             ),
             self.style,
         )]

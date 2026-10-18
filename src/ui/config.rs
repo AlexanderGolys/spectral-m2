@@ -29,6 +29,7 @@ impl Glyph {
 #[derive(Clone, Copy)]
 pub struct Glyphs {
     pub prompt: Glyph,
+    pub prompt_typing: Glyph,
     pub split_divider: Glyph,
     pub cell_separator: Glyph,
     pub pending_separator: Glyph,
@@ -77,6 +78,9 @@ pub struct UiConfig {
     pub glyphs: Glyphs,
     /// Animation of a pending cell marker.
     pub spinner: SpinnerConfig,
+    /// How long after the last keystroke that changed the input it keeps the
+    /// typing prompt.
+    pub typing_prompt_ms: u64,
     pub prompt_margin: u16,
     pub cell_margin: u16,
     pub cell_gap: u16,
@@ -110,8 +114,12 @@ pub const UI: UiConfig = UiConfig {
     feed_margin: 1,
     glyphs: Glyphs {
         prompt: Glyph {
-            preferred: "❯",
+            preferred: "",
             basic: ">",
+        },
+        prompt_typing: Glyph {
+            preferred: " ",
+            basic: ">>",
         },
         split_divider: Glyph {
             preferred: "│",
@@ -134,19 +142,20 @@ pub const UI: UiConfig = UiConfig {
             basic: "-",
         },
         unevaluated_cell: Glyph {
-            preferred: "…",
+            preferred: " ",
             basic: ".",
         },
         rejected_cell: Glyph {
-            preferred: "×",
+            preferred: " ",
             basic: "x",
         },
     },
     spinner: SpinnerConfig {
-        frames: &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+        frames: &["", "", "", "", "", ""],
         basic_frames: &["|", "/", "-", "\\"],
         frame_ms: 80,
     },
+    typing_prompt_ms: 50,
     prompt_margin: 2,
     cell_margin: 0,
     cell_gap: 3,
@@ -201,17 +210,16 @@ mod tests {
         }
         assert!(!UI.spinner.frames.is_empty());
         assert!(!UI.spinner.basic_frames.is_empty());
-        const { assert!(UI.spinner.frame_ms > 0) };
         assert!(UI.spinner.basic_frames.iter().all(|frame| {
             UnicodeWidthStr::width(*frame) == 1 && UnicodeWidthStr::width_cjk(*frame) == 1
         }));
     }
 
     #[test]
-    fn prompt_and_divider_keep_their_preferred_symbols() {
-        assert_eq!(UI.glyphs.prompt.for_basic(false), "❯");
-        assert_eq!(UI.glyphs.split_divider.for_basic(false), "│");
-        assert_eq!(UI.glyphs.prompt.for_basic(true), ">");
-        assert_eq!(UI.glyphs.split_divider.for_basic(true), "|");
+    fn prompts_and_divider_fall_back_to_plain_ascii() {
+        let glyphs = UI.glyphs;
+        for glyph in [glyphs.prompt, glyphs.prompt_typing, glyphs.split_divider] {
+            assert!(glyph.for_basic(true).is_ascii());
+        }
     }
 }

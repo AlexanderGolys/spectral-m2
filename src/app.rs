@@ -414,9 +414,22 @@ impl App {
     }
 
     /// Bring every view to its newest content, as the shell follows its own feed.
-    /// Advance whatever the shell animates while M2 works; whether anything did.
+    /// Advance whatever the shell animates while M2 works, and settle the typing
+    /// prompt once typing pauses; whether anything changed.
     fn animate(&mut self) -> bool {
-        self.workspace.session.busy() && self.workspace.editor.animate()
+        let settled = self.workspace.editor.settle_typing();
+        let animated = self.workspace.session.busy() && self.workspace.editor.animate();
+        settled || animated
+    }
+
+    /// How long to wait for events before something on screen changes by itself.
+    fn event_timeout(&self) -> Duration {
+        self.workspace
+            .editor
+            .typing_remaining()
+            .map_or(EVENT_POLL_INTERVAL, |remaining| {
+                remaining.min(EVENT_POLL_INTERVAL)
+            })
     }
 
     fn follow_new_input(&mut self) {
@@ -476,7 +489,7 @@ pub fn run(backend: M2Backend) -> Result<()> {
             dirty = true;
             continue;
         }
-        let events = terminal.next_events(EVENT_POLL_INTERVAL)?;
+        let events = terminal.next_events(app.event_timeout())?;
         if events.is_empty() {
             dirty = app.animate();
             continue;
