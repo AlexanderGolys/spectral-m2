@@ -2,7 +2,7 @@
 
 All notable changes to Spectral M2 are documented here.
 
-## [Unreleased]
+## [1.0.0] - 2026-10-19
 
 ### Added
 
@@ -108,5 +108,6 @@ First crates.io release.
 - Reorganized the shell around workspace sessions, typed feed blocks, responsive panes, and independently rendered previews.
 - Made installation Cargo-managed and removed manual binary copying and local-bin symlinks.
 
+[1.0.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v0.4.0...v1.0.0
 [0.4.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/AlexanderGolys/spectral-m2/releases/tag/v0.3.0

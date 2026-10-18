@@ -497,14 +497,14 @@ fn normalize(node: &Handle, in_examples: bool) -> Vec<Handle> {
             let attrs = attrs.borrow();
             let class = |class: &str| {
                 attrs.iter().any(|attr| {
-                    attr.name.local.as_ref() == "class"
+                    &*attr.name.local == "class"
                         && attr
                             .value
                             .split_ascii_whitespace()
                             .any(|value| value == class)
                 })
             };
-            let tag = name.local.as_ref();
+            let tag: &str = &name.local;
             let examples = in_examples || (tag == "table" && class("examples"));
             (
                 match tag {
@@ -754,7 +754,7 @@ fn element(tag: &str, body: &str) -> Handle {
 }
 
 fn find_element(node: &Handle, tag: &str) -> Option<Handle> {
-    if matches!(&node.data, Element { name, .. } if name.local.as_ref() == tag) {
+    if matches!(&node.data, Element { name, .. } if &*name.local == tag) {
         return Some(Rc::clone(node));
     }
     node.children
