@@ -2,7 +2,7 @@
 
 Previews contain committed cells only. They update from the workspace they reference while keeping an independent scroll position. Use `Up`, `Down`, `PageUp`, `PageDown`, or the mouse wheel to navigate, and drag to select text.
 
-`Ctrl+Q` and `Ctrl+C` leave a preview. The command and settings pickers remain available with `Ctrl+/` and `Ctrl+O`.
+`Ctrl+Q` leaves a preview. The command and settings pickers remain available with `Ctrl+/` and `Ctrl+O`.
 
 ## Code
 

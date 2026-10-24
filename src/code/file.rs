@@ -28,6 +28,15 @@ fn expand_home(typed: &str) -> PathBuf {
     }
 }
 
+/// `path` spelled with the home directory as a leading `~`.
+pub fn abbreviate_home(path: &Path) -> String {
+    match env::var_os("HOME").and_then(|home| path.strip_prefix(home).ok()) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
 /// Which directory entries a typed path may complete to.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Entries {
@@ -155,5 +164,15 @@ mod tests {
             resolve("~/work/ring"),
             PathBuf::from(home).join("work/ring.m2")
         );
+    }
+
+    #[test]
+    fn the_home_directory_is_spelled_as_a_tilde() {
+        let Some(home) = env::var_os("HOME").map(PathBuf::from) else {
+            return;
+        };
+        assert_eq!(abbreviate_home(&home), "~");
+        assert_eq!(abbreviate_home(&home.join("work/ring")), "~/work/ring");
+        assert_eq!(abbreviate_home(Path::new("/srv/m2")), "/srv/m2");
     }
 }

@@ -21,6 +21,8 @@ use these_macros_should_be_illegal::discriminated_str;
 use crate::backend::{CollectionKind, M2Value, Role};
 use crate::ui::block::TextSpan;
 use crate::ui::controller::settings::theme::groups::HLGroup;
+use crate::ui::cycle::cyclic;
+use crate::ui::graphics;
 use crate::ui::present::{wrap, SpanLine};
 use crate::ui::wrap::WordWrap;
 
@@ -31,8 +33,8 @@ use super::markup;
 pub enum Math {
     /// One indivisible run of text: a numeral, a name, an operator, a delimiter.
     Atom { text: String, kind: HLGroup },
-    /// The thin space M2 sets between factors: a gap that keeps the product `x y`
-    /// apart from the variable `xy`, and a place a long line may break.
+    /// The thin space M2 sets between factors. Factors are juxtaposed, so it takes no
+    /// column; it only marks where a long line may break.
     Space,
     /// Pieces set side by side, as the terms of a polynomial are.
     Row(Vec<Math>),
@@ -86,28 +88,47 @@ pub enum GridKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Unsupported(pub String);
 
-/// How a fraction is set, as chosen in settings.
-#[discriminated_str(label)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FractionStyle {
-    /// Numerator, rule, denominator: three rows, as M2 sets one itself.
-    #[default]
-    Stacked = "stacked",
-    /// The numerator over its denominator, the rule an underline on the numerator's
-    /// bottom row: two rows.
-    Underlined = "underlined",
-    /// `a/b` along one row, a compound part parenthesised.
-    Inline = "inline",
+cyclic! {
+    /// How a fraction is set, as chosen in settings.
+    #[discriminated_str(label)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum FractionStyle {
+        /// Numerator, rule, denominator: three rows, as M2 sets one itself.
+        #[default]
+        Stacked = "stacked",
+        /// The numerator over its denominator, the rule an underline on the numerator's
+        /// bottom row: two rows.
+        Underlined = "underlined",
+        /// `a/b` along one row, a compound part parenthesised.
+        Inline = "inline",
+    }
 }
 
-impl FractionStyle {
-    pub const fn cycle(self, delta: i8) -> Self {
-        match (self, delta > 0) {
-            (Self::Stacked, true) | (Self::Inline, false) => Self::Underlined,
-            (Self::Underlined, true) | (Self::Stacked, false) => Self::Inline,
-            (Self::Inline, true) | (Self::Underlined, false) => Self::Stacked,
-        }
+cyclic! {
+    /// What returned maths is drawn with, as chosen in settings. Every choice is
+    /// offered whether or not this terminal can draw it, so one it cannot is still
+    /// seen to exist.
+    #[discriminated_str(label)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[non_exhaustive]
+    pub enum MathDisplay {
+        /// Characters laid out in two dimensions: stacked fractions, tall brackets.
+        #[default]
+        Unicode = "unicode",
+        /// Macaulay2's own plain-text spelling.
+        Ascii = "ascii",
+        /// Typeset pictures, on a terminal that shows them.
+        #[serde(alias = "ratex", alias = "latex")]
+        Typeset = "typeset",
+    }
+}
+
+impl MathDisplay {
+    /// Whether this terminal can draw maths this way.
+    pub fn available(self) -> bool {
+        self != Self::Typeset || graphics::available()
     }
 }
 
@@ -118,6 +139,7 @@ pub struct MathStyle {
     /// Whether a ring such as `\mathbb Z` is drawn with its blackboard glyph `ℤ`
     /// rather than the name `ZZ` it has in code.
     pub blackboard: bool,
+    pub display: MathDisplay,
 }
 
 impl From<FractionStyle> for MathStyle {
@@ -725,7 +747,7 @@ impl Math {
     pub fn layout(&self, fractions: FractionStyle) -> MathBlock {
         match self {
             Self::Atom { text, kind } => MathBlock::atom(text, *kind),
-            Self::Space => MathBlock::gap(),
+            Self::Space => MathBlock::empty(),
             Self::Row(pieces) => MathBlock::row(Self::chunks(pieces, fractions)),
             Self::Fraction {
                 numerator,
@@ -818,7 +840,7 @@ impl Math {
     /// A row's pieces laid out in order, split wherever a long row may break.
     ///
     /// A row breaks before a binary operator, so a continued line opens with the `+` that
-    /// says it continues, and after the gap between two factors. Each chunk is everything
+    /// says it continues, and between two factors. Each chunk is everything
     /// between two breaks, already set side by side; a row that fits is just its chunks
     /// set side by side again.
     fn chunks(pieces: &[Self], fractions: FractionStyle) -> Vec<MathBlock> {
@@ -832,7 +854,33 @@ impl Math {
                 .into_iter()
                 .chain(pieces.get(index + 1))
                 .any(Self::is_binary);
-            if *piece == Self::Space && beside_binary {
+            if *piece == Self::Space {
+                if !beside_binary {
+                    // Two numerals juxtaposed would read as one longer numeral.
+                    let between_numerals =
+                        [index.checked_sub(1), Some(index + 1)]
+                            .into_iter()
+                            .all(|neighbour| {
+                                neighbour
+                                    .and_then(|neighbour| pieces.get(neighbour))
+                                    .is_some_and(|neighbour| {
+                                        matches!(
+                                            neighbour,
+                                            Self::Atom {
+                                                kind: HLGroup::Number,
+                                                ..
+                                            }
+                                        )
+                                    })
+                            });
+                    if between_numerals {
+                        chunks
+                            .last_mut()
+                            .expect("a chunk is always open")
+                            .push(MathBlock::gap());
+                    }
+                    chunks.push(Vec::new());
+                }
                 continue;
             }
             // A binary operator is set apart from its operands; a leading sign and a
@@ -849,16 +897,11 @@ impl Math {
             // reads as one over 3x; the gap keeps it the factor it is.
             let runs_into_factor = fractions == FractionStyle::Inline
                 && matches!(piece, Self::Fraction { .. })
-                && pieces
-                    .get(index + 1)
-                    .is_some_and(|next| !next.is_binary() && *next != Self::Space);
+                && pieces.get(index + 1).is_some_and(|next| !next.is_binary());
             let chunk = chunks.last_mut().expect("a chunk is always open");
             chunk.push(piece.layout(fractions));
             if apart || runs_into_factor {
                 chunk.push(MathBlock::gap());
-            }
-            if *piece == Self::Space {
-                chunks.push(Vec::new());
             }
         }
         chunks
@@ -1424,6 +1467,19 @@ mod tests {
     }
 
     #[test]
+    fn cycling_the_display_offers_pictures_the_terminal_cannot_show() {
+        assert!(!graphics::available());
+
+        let forward = MathDisplay::Ascii.cycle(1);
+        let backward = MathDisplay::Unicode.cycle(-1);
+
+        assert_eq!(forward, MathDisplay::Typeset);
+        assert_eq!(backward, MathDisplay::Typeset);
+        assert!(!MathDisplay::Typeset.available());
+        assert!(MathDisplay::Unicode.available());
+    }
+
+    #[test]
     fn a_polynomial_separates_numerals_names_and_operators() {
         let parsed = Math::parse("x^{2} + 3 y").expect("a polynomial parses");
 
@@ -1569,10 +1625,10 @@ mod tests {
             if matches!(pieces[0], Math::Fraction { .. })));
     }
 
-    /// M2 spells a product as a thin space, which renders as the space it is; only an
+    /// M2 spells a product as a thin space, and the factors render juxtaposed; only an
     /// explicit `\cdot` draws a dot.
     #[test]
-    fn a_thin_space_product_keeps_its_factors_apart_without_a_dot() {
+    fn a_thin_space_product_juxtaposes_its_factors() {
         assert_eq!(
             Math::parse(r"xx\,yy").expect("a thin-space product parses"),
             Math::Row(vec![
@@ -1581,7 +1637,7 @@ mod tests {
                 atom("yy", HLGroup::Variable),
             ])
         );
-        assert_eq!(picture(r"3\,x\,y^{2}"), ["3 x y\u{00B2}"]);
+        assert_eq!(picture(r"3\,x\,y^{2}"), ["3xy\u{00B2}"]);
         assert_eq!(picture(r"xx \cdot yy"), ["xx\u{22C5}yy"]);
         // And the variable of the same letters stays one atom, not a product.
         assert_eq!(
@@ -1591,14 +1647,14 @@ mod tests {
     }
 
     /// M2 groups a long integer's digits in threes with thin spaces; the groups are
-    /// one numeral, and the space after one still separates it from the next factor.
+    /// one numeral, juxtaposed with the next factor unless that is a numeral too.
     #[test]
     fn a_digit_grouped_numeral_is_one_number() {
         assert_eq!(
             Math::parse(r"1\,267\,650\,600").expect("a grouped numeral parses"),
             atom("1267650600", HLGroup::Number)
         );
-        assert_eq!(picture(r"12\,345\,678\,x^{2}y"), ["12345678 x\u{00B2}y"]);
+        assert_eq!(picture(r"12\,345\,678\,x^{2}y"), ["12345678x\u{00B2}y"]);
         // A group of any other length is a second factor, not more digits.
         assert_eq!(picture(r"12\,5"), ["12 5"]);
     }

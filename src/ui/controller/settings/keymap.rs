@@ -8,7 +8,12 @@ use std::collections::{HashMap, HashSet};
 use crossterm::event::KeyCode;
 use KeyCode::*;
 
+use ratatui::text::{Line, Span};
+
 use crate::ui::action::Action;
+use crate::ui::controller::picker::{PickerInput, PickerItem};
+use crate::ui::controller::settings::theme::groups::{scheme, HLGroup};
+use crate::ui::controller::EditorEvent;
 use crate::ui::key::{KeyEvent, KeyMod};
 use KeyMod::{Alt, Ctrl, Shift};
 
@@ -76,6 +81,29 @@ impl Keymaps {
         remappable
     }
 
+    /// Whether a shortcut leaves text entry and terminal control keys available.
+    fn valid_shortcut(key: KeyEvent) -> bool {
+        if matches!(key.code, F(2..=24)) {
+            return true;
+        }
+        if matches!(key.code, F(_) | Esc | Tab | BackTab | Null | Modifier(_)) {
+            return false;
+        }
+        if let Char(character) = key.code {
+            if character.is_control() || key.is_text() {
+                return false;
+            }
+            if key.ctrl()
+                && !key.alt()
+                && !key.shift()
+                && matches!(character, 'i' | 'm' | '[' | 's' | 'q')
+            {
+                return false;
+            }
+        }
+        key.ctrl() || key.alt() || key.shift()
+    }
+
     /// Move `action`'s remappable binding onto `key`, swapping with a remappable
     /// binding already there. Fixed bindings and reserved keys never move.
     pub fn rebind(&mut self, action: Action, key: KeyEvent) -> bool {
@@ -85,7 +113,8 @@ impl Keymaps {
         }) else {
             return false;
         };
-        if self.reserved.contains(&key)
+        if !Self::valid_shortcut(key)
+            || self.reserved.contains(&key)
             || self
                 .bindings
                 .get(&key)
@@ -103,6 +132,61 @@ impl Keymaps {
         self.bindings.insert(key, binding);
         self.rebinds.push((action, key));
         true
+    }
+}
+
+/// A shortcut row that captures a replacement only after Enter.
+pub struct KeymapRow {
+    action: Action,
+    key: KeyEvent,
+    capturing: bool,
+}
+
+impl KeymapRow {
+    /// Show an action and its current shortcut.
+    pub fn new(action: Action, key: KeyEvent) -> Self {
+        Self {
+            action,
+            key,
+            capturing: false,
+        }
+    }
+}
+
+impl PickerItem for KeymapRow {
+    fn cells(&self) -> Vec<Line<'static>> {
+        let groups = scheme();
+        let shortcut = if self.capturing {
+            "Type keybind… (Esc cancels)".to_string()
+        } else {
+            self.key.to_string()
+        };
+        vec![
+            Span::styled(self.action.description(), groups.keymap_action_label()).into(),
+            Span::styled(shortcut, groups.style(HLGroup::KeymapHint)).into(),
+        ]
+    }
+
+    fn capturing(&self) -> bool {
+        self.capturing
+    }
+
+    fn handle(&mut self, input: PickerInput) -> Option<EditorEvent> {
+        match input {
+            PickerInput::Key(key) if self.capturing => {
+                if key.code == Esc {
+                    self.capturing = false;
+                    None
+                } else {
+                    Some(EditorEvent::Rebind(self.action, key))
+                }
+            }
+            PickerInput::Action(Action::Submit) => {
+                self.capturing = true;
+                None
+            }
+            _ => None,
+        }
     }
 }
 
@@ -139,19 +223,20 @@ impl Default for Keymaps {
                 keymap!(fixed FocusPaneRight <- Right + Alt),
                 keymap!(fixed ResizePaneLeft <- Left + Alt + Shift),
                 keymap!(fixed ResizePaneRight <- Right + Alt + Shift),
-                keymap!(Quit <- Char('c') + Ctrl),
+                keymap!(fixed Quit <- Char('c') + Ctrl),
                 keymap!(OpenCommands <- Char('/') + Ctrl),
                 keymap!(OpenSettings <- Char('o') + Ctrl),
-                keymap!(OpenKeymaps <- Char('k') + Alt),
+                keymap!(OpenKeymaps <- Char('k') + Ctrl),
                 keymap!(ClearFeed <- Char('l') + Alt),
-                keymap!(OpenCode <- Char('c') + Alt),
-                keymap!(OpenValues <- Char('v') + Alt),
-                keymap!(OpenStdOut <- Char('p') + Alt),
-                keymap!(OpenOutput <- Char('o') + Alt),
-                keymap!(OpenSyntaxTree <- Char('t') + Alt),
-                keymap!(Restart <- Char('r') + Alt),
+                keymap!(OpenCode <- F(2)),
+                keymap!(OpenValues <- F(3)),
+                keymap!(OpenStdOut <- F(4)),
+                keymap!(OpenOutput <- F(5)),
+                keymap!(OpenSyntaxTree <- F(6)),
+                keymap!(Restart <- Char('n') + Ctrl),
+                keymap!(ResumeSession <- Char('r') + Ctrl),
                 keymap!(ClosePane <- Char('q') + Ctrl),
-                keymap!(ToggleHighlightDebug <- Char('d') + Ctrl),
+                keymap!(fixed ToggleHighlightDebug <- Char('d') + Ctrl + Shift),
                 keymap!(CopySelection <- Char('y') + Ctrl),
                 keymap!(fixed Submit <- Enter),
                 keymap!(fixed ScrollFeedUp <- PageUp),
@@ -164,6 +249,7 @@ impl Default for Keymaps {
                 key!(Enter + Alt),
                 key!(Char('j') + Ctrl),
                 key!(Char('z') + Ctrl),
+                key!(Char('z') + Ctrl + Shift),
                 key!(Char('h') + Ctrl),
                 key!(Backspace + Ctrl),
                 key!(Backspace + Alt),
@@ -239,15 +325,31 @@ mod tests {
         }
     }
 
-    // The terminal reports a shifted letter as the letter itself, so a binding on
-    // a character must not demand the shift state match.
+    // Terminals report a shifted letter either as the capital or with Shift held, so
+    // both reach the same binding, apart from the unshifted letter's.
     #[test]
-    fn character_bindings_ignore_shift() {
+    fn shifted_letter_bindings_are_their_own_keys() {
         let mut keymaps = Keymaps::default();
-        let bound = key!(Char('c') + Ctrl);
+        let bound = key!(Char('c') + Ctrl + Shift);
         assert!(keymaps.rebind(Action::ClearFeed, bound));
 
-        assert!(action(&keymaps, bound + Shift) == Some(Action::ClearFeed));
+        assert!(action(&keymaps, key!(Char('C') + Ctrl)) == Some(Action::ClearFeed));
+        assert!(action(&keymaps, key!(Char('c') + Ctrl)) != Some(Action::ClearFeed));
+    }
+
+    #[test]
+    fn highlight_debug_is_fixed_and_leaves_control_d_free() {
+        let keymaps = Keymaps::default();
+        let debug = keymaps
+            .key(Action::ToggleHighlightDebug)
+            .expect("highlight debug is bound");
+
+        assert!(debug.shift());
+        assert!(action(&keymaps, debug.code + Ctrl).is_none());
+        assert!(keymaps
+            .remappable()
+            .iter()
+            .all(|(action, _)| *action != Action::ToggleHighlightDebug));
     }
 
     #[test]
@@ -310,11 +412,80 @@ mod tests {
     }
 
     #[test]
-    fn plain_typing_can_be_claimed_by_a_remapping() {
+    fn unsafe_shortcuts_are_rejected_when_rebound_or_loaded() {
+        let rejected = [
+            key!(Char('a')),
+            key!(Char('A') + Shift),
+            key!(Char('!') + Shift),
+            key!(F(1)),
+            key!(F(25)),
+            key!(Char('i') + Ctrl),
+            key!(Char('m') + Ctrl),
+            key!(Char('[') + Ctrl),
+            key!(Char('s') + Ctrl),
+            key!(Char('q') + Ctrl),
+            key!(Char('c') + Ctrl),
+            key!(Tab + Alt),
+            key!(Esc + Ctrl),
+            key!(Char('\t') + Alt),
+        ];
+        for key in rejected {
+            let mut keymaps = Keymaps::default();
+            let original = keymaps.key(Action::ClearFeed);
+            assert!(!keymaps.rebind(Action::ClearFeed, key), "accepted {key}");
+            let loaded = Keymaps::replaying(&[(Action::ClearFeed, key)]);
+            assert_eq!(loaded.key(Action::ClearFeed), original);
+        }
+    }
+
+    #[test]
+    fn function_keys_and_modified_shortcuts_can_be_assigned() {
+        for key in (2..=24).map(|number| key!(F(number))).chain([
+            key!(Char('a') + Ctrl),
+            key!(Char('a') + Alt),
+            key!(Up + Shift),
+        ]) {
+            let mut keymaps = Keymaps::default();
+            assert!(keymaps.rebind(Action::ClearFeed, key), "rejected {key}");
+            assert!(action(&keymaps, key) == Some(Action::ClearFeed));
+        }
+    }
+
+    #[test]
+    fn quit_is_fixed_even_while_remapping() {
+        let mut keymaps = Keymaps::default();
+        assert!(!keymaps.rebind(Action::Quit, key!(F(24))));
+        assert!(keymaps.action(key!(Char('c') + Ctrl), true) == Some(Action::Quit));
+        assert!(keymaps
+            .remappable()
+            .iter()
+            .all(|(action, _)| *action != Action::Quit));
+    }
+
+    #[test]
+    fn shortcut_capture_requires_enter_and_escape_restores_the_label() {
+        let mut row = KeymapRow::new(Action::ClearFeed, key!(Char('l') + Alt));
+        assert!(row.handle(PickerInput::Key(key!(F(24)))).is_none());
+        assert!(!row.capturing());
+        row.handle(PickerInput::Action(Action::Submit));
+        assert!(row.capturing());
+        assert!(row.cells()[1].to_string().contains("Type keybind"));
+        assert!(matches!(row.handle(PickerInput::Key(key!(F(24)))),
+            Some(EditorEvent::Rebind(Action::ClearFeed, key)) if key == key!(F(24))));
+        row.handle(PickerInput::Key(key!(Esc)));
+        assert!(!row.capturing());
+        assert_eq!(
+            row.cells()[1].to_string(),
+            key!(Char('l') + Alt).to_string()
+        );
+    }
+
+    #[test]
+    fn plain_typing_cannot_be_claimed_by_a_remapping() {
         let mut keymaps = Keymaps::default();
         let letter = key!(Char('a'));
 
-        assert!(keymaps.rebind(Action::ClearFeed, letter));
-        assert!(action(&keymaps, letter) == Some(Action::ClearFeed));
+        assert!(!keymaps.rebind(Action::ClearFeed, letter));
+        assert!(action(&keymaps, letter).is_none());
     }
 }

@@ -1,82 +1,126 @@
+# Native palette source: https://github.com/rose-pine/neovim
+# Palette names are shared by every variant; values retain their upstream RGB identity.
 name = "rosé pine"
 
 [variants]
 dark = ["main", "moon"]
 light = ["dawn"]
 
-[colors.red]
-dark = "#eb6f92"
-light = "#b4637a"
+[palette."base"]
+dark = { main = "#191724", moon = "#232136" }
+light = "#faf4ed"
 
-[colors.green]
-dark = "#95b1ac"
-light = "#6d8f89"
-
-[colors.yellow]
-dark = "#f6c177"
-light = "#ea9d34"
-
-[colors.blue]
-dark = { main = "#31748f", moon = "#3e8fb0" }
-light = "#286983"
-
-[colors.purple]
-dark = "#c4a7e7"
-light = "#907aa9"
-
-[colors.aqua]
+[palette."foam"]
 dark = "#9ccfd8"
 light = "#56949f"
 
-[colors.orange]
-dark = { main = "#ebbcba", moon = "#ea9a97" }
-light = "#d7827e"
+[palette."gold"]
+dark = "#f6c177"
+light = "#ea9d34"
 
-[colors.gray]
+[palette."highlight_high"]
+dark = { main = "#524f67", moon = "#56526e" }
+light = "#cecacd"
+
+[palette."highlight_low"]
+dark = { main = "#21202e", moon = "#2a283e" }
+light = "#f4ede8"
+
+[palette."highlight_med"]
+dark = { main = "#403d52", moon = "#44415a" }
+light = "#dfdad9"
+
+[palette."iris"]
+dark = "#c4a7e7"
+light = "#907aa9"
+
+[palette."love"]
+dark = "#eb6f92"
+light = "#b4637a"
+
+[palette."muted"]
 dark = "#6e6a86"
 light = "#9893a5"
 
-[colors.fg]
-dark = ["#e0def4", "#908caa", "#6e6a86"]
-light = ["#464261", "#797593", "#9893a5"]
+[palette."overlay"]
+dark = { main = "#26233a", moon = "#393552" }
+light = "#f2e9e1"
 
-[colors.bg]
-dark = { main = ["#191724", "#16141f", "#1f1d2e", "#26233a", "#21202e"], moon = ["#232136", "#1f1d30", "#2a273f", "#393552", "#2a283e"] }
-light = ["#faf4ed", "#f8f0e7", "#fffaf3", "#f2e9e1", "#f4ede8"]
+[palette."pine"]
+dark = { main = "#31748f", moon = "#3e8fb0" }
+light = "#286983"
 
-[base]
-Canvas = { bg = "bg0" }
-Code = { bg = "bg1" }
-Raised = { bg = "bg2" }
-Pending = { bg = "bg2" }
-Selection = { bg = "bg3" }
-Focus = { bg = "bg4" }
-Text = { fg = "fg0" }
-Muted = { fg = "gray" }
-Faint = { fg = "fg4" }
-Keyword = { fg = "blue" }
-Function = { fg = "orange" }
-Type = { fg = "aqua" }
-String = { fg = "yellow" }
-Number = { fg = "yellow" }
-Operator = { fg = "fg3" }
-Symbol = { fg = "purple", italic = true }
-Parameter = { fg = "purple", italic = true }
-Property = { fg = "aqua", italic = true }
-EnumVariant = { fg = "green" }
-Macro = { fg = "orange", italic = true }
-Attribute = { fg = "yellow", italic = true }
-Builtin = { fg = "red", bold = true, italic = true }
-Regex = { fg = "purple", sp = "purple", underline = true }
-Accent = { fg = "aqua" }
-Error = { fg = "red" }
-Warning = { fg = "yellow" }
-Info = { fg = "aqua" }
-Hint = { fg = "blue" }
+[palette."rose"]
+dark = { main = "#ebbcba", moon = "#ea9a97" }
+light = "#d7827e"
 
-[overrides]
-Boolean = { fg = "orange" }
-Variable = { fg = "fg0", italic = true }
-Installation = { fg = "aqua" }
-Quote = { fg = "yellow" }
-Documentation = { fg = "blue_light" }
+[palette."subtle"]
+dark = "#908caa"
+light = "#797593"
+
+[palette."surface"]
+dark = { main = "#1f1d2e", moon = "#2a273f" }
+light = "#fffaf3"
+
+[palette."text"]
+dark = "#e0def4"
+light = "#464261"
+
+[groups]
+Accent = { fg = "foam" }
+Attribute = { fg = "iris" }
+Bg0 = { bg = "base" }
+Bg1 = { bg = "surface" }
+Bg2 = { bg = "overlay" }
+Bg3 = { bg = "highlight_med" }
+Bg4 = { bg = "highlight_low" }
+Boolean = { fg = "rose" }
+Builtin = { bold = true, fg = "rose", italic = true }
+Comment = { fg = "muted", italic = true }
+CompiledFunction = { bold = true, fg = "rose" }
+CompletionHint = { fg = "subtle" }
+Conditional = { fg = "pine" }
+Constant = { fg = "gold" }
+Debug = { fg = "rose" }
+Delimiter = { fg = "muted" }
+Documentation = { fg = "iris" }
+EnumVariant = { fg = "gold" }
+Error = { fg = "love" }
+ErrorMessage = { bold = true, fg = "love" }
+Exception = { fg = "pine" }
+Faint = { fg = "muted" }
+Float = { fg = "gold" }
+Function = { fg = "rose" }
+Hint = { fg = "iris" }
+Info = { fg = "foam" }
+Installation = { fg = "foam" }
+Keyword = { fg = "pine" }
+Macro = { fg = "rose" }
+MarkupBrief = { fg = "foam", italic = true }
+MarkupHeading1 = { bold = true, fg = "foam" }
+MarkupHeading2 = { bold = true, fg = "foam" }
+MarkupHeading3 = { bold = true, fg = "foam" }
+Muted = { fg = "muted" }
+Namespace = { fg = "text" }
+Number = { fg = "gold" }
+Operator = { fg = "subtle" }
+Package = { fg = "text" }
+Parameter = { fg = "iris", italic = true }
+Picker = { bg = "surface", fg = "text" }
+PickerSelected = { bg = "highlight_med" }
+PlaceholderHint = { fg = "subtle" }
+Property = { fg = "iris", italic = true }
+Punctuation = { fg = "subtle" }
+Quote = { fg = "iris" }
+Regex = { fg = "iris" }
+Repeat = { fg = "pine" }
+Statement = { fg = "pine" }
+StatuslineBg = { bg = "surface" }
+StorageClass = { fg = "pine" }
+String = { fg = "gold" }
+Symbol = { fg = "text" }
+Text = { fg = "text" }
+Type = { fg = "foam" }
+Variable = { fg = "text", italic = true }
+ViewLabelActive = { fg = "iris" }
+Warning = { fg = "gold" }

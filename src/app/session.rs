@@ -272,11 +272,7 @@ impl Session {
             .map(|(index, cell)| SubmittedCell {
                 code: match index {
                     0 => cell.source().trim_end(),
-                    _ => cell
-                        .source()
-                        .trim_end()
-                        .strip_prefix('\n')
-                        .unwrap_or_else(|| cell.source().trim_end()),
+                    _ => separated(cell.source().trim_end()),
                 }
                 .to_string(),
                 tree: cell.syntax().pretty_tree(),
@@ -699,6 +695,14 @@ fn worker(mut backend: M2Backend, requests: Receiver<WorkerRequest>, events: Sen
     }
 }
 
+/// A later cell's code without what parted it from the cell before: the spaces
+/// left on that cell's line and the break ending it. A cell sharing a line is not
+/// indented by them, while one on a line of its own keeps its indentation.
+fn separated(source: &str) -> &str {
+    let rest = source.trim_start_matches([' ', '\t']);
+    rest.strip_prefix('\n').unwrap_or(rest)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
@@ -849,6 +853,13 @@ mod tests {
             Session::blocks(&session.code()),
             ["a = 1;\nb = 2;", "c = 3"]
         );
+    }
+
+    #[test]
+    fn a_cell_sharing_a_line_is_not_indented_but_one_on_its_own_keeps_its_indent() {
+        assert_eq!(separated(" b = 2"), "b = 2");
+        assert_eq!(separated("  \nb = 2"), "b = 2");
+        assert_eq!(separated("\n    b = 2"), "    b = 2");
     }
 
     #[test]

@@ -22,13 +22,14 @@
 | `Ctrl+L` | Clear the input. |
 | `Ctrl+/` | Toggle commands. |
 | `Ctrl+O` | Toggle settings. |
-| `Alt+K` | Toggle keymaps. |
+| `Ctrl+K` | Toggle keymaps. |
 | `Alt+L` | Clear the feed. |
-| `Alt+C`, `Alt+V`, `Alt+P`, `Alt+O`, `Alt+T` | Show code, values, printed output, all output, or the syntax tree beside the session. |
-| `Alt+R` | Restart Macaulay2. |
+| `F2` … `F6` | Show code, values, printed output, all output, or the syntax tree beside the session. |
+| `Ctrl+N` | Restart Macaulay2. |
+| `Ctrl+R` | Run the previous session's code again. |
 | `Ctrl+Q` | Close the view, from whichever pane has focus. |
-| `Ctrl+D` | Toggle highlight debug. |
-| `Ctrl+C` | Quit from the shell. |
+| `Ctrl+Shift+D` | Toggle highlight debug. |
+| `Ctrl+C` | Quit, from whichever pane has focus. |
 
 ## Split view and previews
 
@@ -38,7 +39,6 @@
 | `Alt+Shift+Left`, `Alt+Shift+Right` | Resize a visible split. |
 | `Up`, `Down`, `PageUp`, `PageDown` | Scroll a preview. |
 | `Left`, `Right` | Step to the previous or next view: code, values, stdout, output, syntax tree. |
-| `Ctrl+C` | Leave a preview instead of quitting Spectral. |
 
 ## Pickers
 
@@ -46,5 +46,6 @@
 | --- | --- |
 | `Up`, `Down` | Change the selected row. |
 | `Left`, `Right` | Adjust a settings row. |
+| `Tab`, `Shift+Tab` | Switch settings tabs. |
 | `Enter` | Open or run the selected row; a view opens beside the session. |
 | `Esc` | Close the current picker or debug overlay. |

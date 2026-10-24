@@ -1,11 +1,11 @@
-//! Tree-sitter query captures projected onto renderer highlight groups.
+//! Tree-sitter query captures projected onto the highlight groups that declare them.
 
 use std::ops::{Add, Sub};
 
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter as TsHighlighter};
 
 use crate::ui::block::HLSpan;
-use crate::ui::controller::settings::theme::groups::HLGroup;
+use crate::ui::controller::settings::theme::groups::{HLGroup, GROUP_DECLARATIONS};
 
 impl Add<u32> for HLSpan {
     type Output = Self;
@@ -49,50 +49,19 @@ pub trait Highlighter {
 /// The Macaulay2 Tree-sitter highlighter using the grammar crate's own query.
 pub struct SyntaxHighlighter {
     config: HighlightConfiguration,
+    /// The group drawing each configured capture, by its configuration index.
+    groups: Vec<HLGroup>,
     highlighter: TsHighlighter,
 }
 
 impl SyntaxHighlighter {
-    const CAPTURES: &[(&str, HLGroup)] = &[
-        ("comment", HLGroup::Comment),
-        ("number", HLGroup::Number),
-        ("number.float", HLGroup::Float),
-        ("string", HLGroup::String),
-        ("character.special", HLGroup::Quote),
-        ("variable", HLGroup::Variable),
-        ("operator", HLGroup::Operator),
-        ("punctuation.bracket", HLGroup::Punctuation),
-        ("punctuation.delimiter", HLGroup::Delimiter),
-        ("keyword.conditional", HLGroup::Conditional),
-        ("keyword.repeat", HLGroup::Repeat),
-        ("keyword.return", HLGroup::Statement),
-        ("keyword.exception", HLGroup::Exception),
-        ("keyword.modifier", HLGroup::Keyword),
-        ("keyword.debug", HLGroup::Debug),
-        ("keyword.operator", HLGroup::Operator),
-        ("keyword", HLGroup::Keyword),
-        ("variable.parameter", HLGroup::Parameter),
-        ("function", HLGroup::Function),
-        ("property", HLGroup::Property),
-        ("type", HLGroup::Type),
-        ("function.call", HLGroup::Function),
-        ("label", HLGroup::Installation),
-        ("type.parameter", HLGroup::Type),
-        ("function.builtin", HLGroup::CompiledFunction),
-        ("variable.builtin", HLGroup::Builtin),
-        ("constant.builtin", HLGroup::Builtin),
-        ("boolean", HLGroup::Boolean),
-        ("error", HLGroup::Error),
-        ("string.special.url", HLGroup::Documentation),
-        ("module", HLGroup::Package),
-        ("namespace", HLGroup::Namespace),
-        ("attribute", HLGroup::Attribute),
-        ("function.macro", HLGroup::Macro),
-        ("string.regexp", HLGroup::Regex),
-    ];
-
-    /// Configure highlighting from the query shipped with the grammar version.
+    /// Configure the grammar's own query with the captures the highlight groups declare.
     pub fn new() -> Self {
+        let (captures, groups): (Vec<_>, Vec<_>) = GROUP_DECLARATIONS
+            .captures()
+            .expect("loaded group declarations have one group per capture")
+            .into_iter()
+            .unzip();
         let mut config = HighlightConfiguration::new(
             tree_sitter_macaulay2::language(),
             "macaulay2",
@@ -101,14 +70,10 @@ impl SyntaxHighlighter {
             "",
         )
         .expect("tree-sitter-macaulay2's highlight query must match its grammar");
-        config.configure(
-            &Self::CAPTURES
-                .iter()
-                .map(|(capture, _)| *capture)
-                .collect::<Vec<_>>(),
-        );
+        config.configure(&captures);
         Self {
             config,
+            groups,
             highlighter: TsHighlighter::new(),
         }
     }
@@ -137,9 +102,7 @@ impl Highlighter for SyntaxHighlighter {
                     stack.pop();
                 }
                 Ok(HighlightEvent::Source { start, end }) => {
-                    if let Some((_, kind)) =
-                        stack.last().and_then(|index| Self::CAPTURES.get(*index))
-                    {
+                    if let Some(kind) = stack.last().and_then(|index| self.groups.get(*index)) {
                         spans.push(HLSpan::new(start..end, *kind));
                     }
                 }
@@ -184,6 +147,7 @@ mod tests {
     #[test]
     fn every_public_query_capture_has_a_theme_group() {
         let highlighter = SyntaxHighlighter::new();
+        let captures = GROUP_DECLARATIONS.captures().unwrap();
 
         for capture in highlighter
             .config
@@ -192,9 +156,7 @@ mod tests {
             .filter(|capture| !capture.starts_with('_'))
         {
             assert!(
-                SyntaxHighlighter::CAPTURES
-                    .iter()
-                    .any(|(mapped, _)| mapped == capture),
+                captures.iter().any(|(mapped, _)| mapped == capture),
                 "unmapped Tree-sitter capture: @{capture}"
             );
         }

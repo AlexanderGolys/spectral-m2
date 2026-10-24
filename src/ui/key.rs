@@ -50,6 +50,11 @@ impl Keyboard {
             key
         })
     }
+
+    /// Whether the platform's primary command modifier is held on its own.
+    pub const fn ctrl(&self) -> bool {
+        self.modifiers & KeyMod::Ctrl as u8 != 0
+    }
 }
 
 impl KeyMod {
@@ -102,8 +107,18 @@ impl KeyEvent {
         if self.code == KeyCode::Char('7') && self.ctrl() {
             self.code = KeyCode::Char('/');
         }
-        if matches!(self.code, KeyCode::Char(character) if character != ' ') && !self.is_text() {
-            self.modifiers &= !(KeyMod::Shift as u8);
+        if let KeyCode::Char(character) = self.code {
+            if character.is_ascii_alphabetic() && !self.is_text() {
+                // A letter's case is its Shift: terminals report Ctrl+Shift+D as `D`,
+                // as `d` with Shift, or as `D` with Shift.
+                if character.is_ascii_uppercase() {
+                    self.modifiers |= KeyMod::Shift as u8;
+                }
+                self.code = KeyCode::Char(character.to_ascii_lowercase());
+            } else if character != ' ' && !self.is_text() {
+                // A symbol already names its shifted key.
+                self.modifiers &= !(KeyMod::Shift as u8);
+            }
         }
         self
     }
@@ -186,6 +201,7 @@ literally_literal_string! {
                 PageUp => @@"page up",
                 PageDown => @@"page down",
                 Esc => @@"esc",
+                F(number) => format!("F{number}"),
                 other => format!("{other:?}").to_lowercase(),
             });
             formatter.write_str(&parts.join("+"))
@@ -248,9 +264,18 @@ mod tests {
 
     #[test]
     fn bindings_normalize_modified_characters() {
+        let shifted = KeyCode::Char('d') + Ctrl + Shift;
+        for reported in [
+            shifted,
+            KeyCode::Char('D') + Ctrl,
+            KeyCode::Char('D') + Ctrl + Shift,
+        ] {
+            assert_eq!(reported.binding(), shifted);
+        }
+        assert_ne!((KeyCode::Char('d') + Ctrl).binding(), shifted);
         assert_eq!(
-            (KeyCode::Char('c') + Ctrl + Shift).binding(),
-            KeyCode::Char('c') + Ctrl
+            (KeyCode::Char('/') + Ctrl + Shift).binding(),
+            KeyCode::Char('/') + Ctrl
         );
         assert_eq!(
             (KeyCode::Char('7') + Ctrl).binding(),

@@ -37,6 +37,13 @@ pub struct Glyphs {
     pub input_edge: Glyph,
     pub unevaluated_cell: Glyph,
     pub rejected_cell: Glyph,
+    /// Stands in for the leading part of text trimmed to fit.
+    pub trimmed: Glyph,
+    /// Either side of a picker value that steps with the horizontal arrows.
+    pub step_back: Glyph,
+    pub step_forward: Glyph,
+    /// Divides a picker's rows from what it shows beneath them.
+    pub picker_rule: Glyph,
 }
 
 impl Glyphs {
@@ -69,6 +76,16 @@ impl SpinnerConfig {
     }
 }
 
+/// How typeset maths is sized against the terminal's text.
+pub struct TypesetConfig {
+    /// A formula's em as a share of one cell's height, so its letters stand as tall
+    /// as the text around them.
+    pub em_per_cell_height: f32,
+    /// The smallest share of its natural size a formula may shrink to fit a width;
+    /// below it the formula is drawn as text instead.
+    pub min_scale: f32,
+}
+
 /// Geometry values shared by UI elements.
 pub struct UiConfig {
     /// Columns kept clear down the whole screen's left edge, around every pane.
@@ -94,6 +111,9 @@ pub struct UiConfig {
     pub picker_tab_width: usize,
     pub picker_column_gap: usize,
     pub picker_right_margin: usize,
+    /// The fewest columns, step arrows included, a value keeps for rows to line
+    /// their values up; with less room each value follows its own row's cells.
+    pub picker_min_value_width: usize,
     pub statusline_margin: u16,
     pub max_output_rows: usize,
     /// Bytes of flat output admitted to synchronous preview formatting.
@@ -106,6 +126,7 @@ pub struct UiConfig {
     pub tree_location_gap: usize,
     /// Blank rows inside the band of printed output, above and below its text.
     pub printed_margin: u16,
+    pub typeset: TypesetConfig,
 }
 
 /// Presentation configuration used by every UI element.
@@ -149,6 +170,22 @@ pub const UI: UiConfig = UiConfig {
             preferred: " ",
             basic: "x",
         },
+        trimmed: Glyph {
+            preferred: "…",
+            basic: "...",
+        },
+        step_back: Glyph {
+            preferred: "‹",
+            basic: "<",
+        },
+        step_forward: Glyph {
+            preferred: "›",
+            basic: ">",
+        },
+        picker_rule: Glyph {
+            preferred: "─",
+            basic: "-",
+        },
     },
     spinner: SpinnerConfig {
         frames: &["", "", "", "", "", ""],
@@ -167,6 +204,7 @@ pub const UI: UiConfig = UiConfig {
     picker_tab_width: 4,
     picker_column_gap: 2,
     picker_right_margin: 2,
+    picker_min_value_width: 14,
     statusline_margin: 2,
     max_output_rows: 40,
     max_output_preview_bytes: 256 * 1024,
@@ -174,6 +212,10 @@ pub const UI: UiConfig = UiConfig {
     min_output_rows: 5,
     tree_location_gap: 2,
     printed_margin: 1,
+    typeset: TypesetConfig {
+        em_per_cell_height: 0.8,
+        min_scale: 0.6,
+    },
 };
 
 impl UiConfig {
@@ -204,6 +246,9 @@ mod tests {
             glyphs.input_edge,
             glyphs.unevaluated_cell,
             glyphs.rejected_cell,
+            glyphs.step_back,
+            glyphs.step_forward,
+            glyphs.picker_rule,
         ] {
             assert_eq!(UnicodeWidthStr::width(glyph.for_basic(true)), 1);
             assert_eq!(UnicodeWidthStr::width_cjk(glyph.for_basic(true)), 1);

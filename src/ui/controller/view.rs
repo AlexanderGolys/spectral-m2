@@ -8,13 +8,14 @@ use ratatui::Frame;
 use these_macros_should_be_illegal::discriminated_str;
 
 use super::settings::theme::groups::{scheme, HLGroup};
-use super::{cycled, Editor};
+use super::Editor;
 use crate::app::session::CommittedCell;
 use crate::code::highlight::Highlighter;
 use crate::ui::action::Action;
 use crate::ui::block::{Block, Element, TextSpan};
 use crate::ui::cell::{Cell, CodeBlock};
 use crate::ui::config::UI;
+use crate::ui::cycle::cycled;
 use crate::ui::feed::BlockView;
 use crate::ui::render::RenderContext;
 use crate::ui::statusline::{StatusLine, StatusLineContext};
@@ -155,8 +156,8 @@ impl Editor {
                 TextSpan::new(
                     format!("{gap}{}", preview.label()),
                     match preview == view {
-                        true => HLGroup::Documentation,
-                        false => HLGroup::Muted,
+                        true => HLGroup::ViewLabelActive,
+                        false => HLGroup::ViewLabelInactive,
                     },
                 )
             })
@@ -168,11 +169,12 @@ impl Editor {
             .map(|key| {
                 vec![
                     TextSpan::new(format!("{key} "), HLGroup::KeymapHint),
-                    TextSpan::new(format!("{action} view"), HLGroup::Muted),
+                    TextSpan::new(format!("{action} view"), HLGroup::StatuslineHintLabel),
                 ]
             })
             .unwrap_or_default();
         StatusLineContext {
+            location: Some(self.location()),
             idle_left: self.shell_state(),
             center: Some(center),
             right,
@@ -203,7 +205,7 @@ impl Editor {
     /// The column between a split's panes, a faint frame line over the canvas of
     /// the view on its right.
     pub fn draw_divider(&self, frame: &mut Frame, area: Rect) {
-        let style = self.view_canvas().patch(scheme().border());
+        let style = self.view_canvas().patch(scheme().view_divider());
         let buffer = frame.buffer_mut();
         for y in area.top()..area.bottom() {
             buffer[(area.x, y)]
@@ -254,7 +256,7 @@ impl Editor {
         let picker_height = self
             .pickers
             .last()
-            .map_or(0, |controller| controller.picker.height())
+            .map_or(0, |controller| controller.picker.height(area.width))
             .min(area.height.saturating_sub(1));
         let status_height = u16::from(!self.split).min(area.height);
         let sections = Layout::vertical([
@@ -485,14 +487,14 @@ mod tests {
         assert_eq!(focused.len(), ViewKind::PREVIEWS.len());
         for (label, group) in focused {
             let expected = match label == view.label() {
-                true => HLGroup::Documentation,
-                false => HLGroup::Muted,
+                true => HLGroup::ViewLabelActive,
+                false => HLGroup::ViewLabelInactive,
             };
             assert_eq!(group, expected, "{label}");
         }
         assert_eq!(
             listed(false),
-            [(view.label().to_string(), HLGroup::Documentation)]
+            [(view.label().to_string(), HLGroup::ViewLabelActive)]
         );
     }
 

@@ -17,12 +17,15 @@ use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use these_macros_should_be_illegal::discriminated_str;
 
+use self::theme::Appearance;
 use crate::input::InputSettings;
 use crate::ui::action::Action;
 use crate::ui::config::UI;
+use crate::ui::cycle::cyclic;
 use crate::ui::key::KeyEvent;
-use crate::ui::render::maths::FractionStyle;
+use crate::ui::render::maths::{FractionStyle, MathDisplay};
 
 /// A settings record kept in a file of its own under the configuration directory.
 pub trait Persisted: Serialize + DeserializeOwned + Default {
@@ -86,11 +89,20 @@ impl Persisted for SavedSettings {
     const FILE: &'static str = "settings.json";
 }
 
+/// Everything the settings picker adjusts, stepped as one value.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Preferences {
+    pub appearance: Appearance,
+    pub input: InputSettings,
+    pub editor: Settings,
+}
+
 /// Presentation choices shared by the editor and its renderers.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub statusline: StatusLinePosition,
+    pub maths: MathDisplay,
     pub fractions: FractionStyle,
     /// Whether rings are drawn as blackboard glyphs (`ℤ`) rather than by name (`ZZ`).
     pub math_fonts: bool,
@@ -105,6 +117,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             statusline: StatusLinePosition::default(),
+            maths: MathDisplay::default(),
             fractions: FractionStyle::default(),
             math_fonts: false,
             output_rows: UI.max_output_rows,
@@ -142,30 +155,30 @@ impl Settings {
 
     /// Whether returned values lay out differently, moving their heights.
     pub fn reformats(&self, other: &Self) -> bool {
-        (self.fractions, self.math_fonts, self.output_rows)
-            != (other.fractions, other.math_fonts, other.output_rows)
+        (
+            self.maths,
+            self.fractions,
+            self.math_fonts,
+            self.output_rows,
+        ) != (
+            other.maths,
+            other.fractions,
+            other.math_fonts,
+            other.output_rows,
+        )
     }
 }
 
-/// Placement of the editor status line.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StatusLinePosition {
-    #[default]
-    BelowInput,
-    AboveInput,
-    Off,
-}
-
-impl StatusLinePosition {
-    pub const fn cycle(self, delta: i8) -> Self {
-        match (self, delta > 0) {
-            (Self::BelowInput, true) | (Self::Off, false) => Self::AboveInput,
-            (Self::AboveInput, true) => Self::Off,
-            (Self::AboveInput, false) => Self::BelowInput,
-            (Self::Off, true) => Self::BelowInput,
-            (Self::BelowInput, false) => Self::Off,
-        }
+cyclic! {
+    /// Placement of the editor status line.
+    #[discriminated_str(label)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum StatusLinePosition {
+        #[default]
+        BelowInput = "below input",
+        AboveInput = "above input",
+        Off = "off",
     }
 }
 

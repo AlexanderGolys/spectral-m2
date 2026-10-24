@@ -2,12 +2,15 @@
 //! cells may be copied, and the text a drag selects. A selection belongs to the
 //! pane it starts in and never leaves it.
 
+use std::collections::HashSet;
+
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use ratatui::Frame;
 
 use super::settings::theme::groups::scheme;
 use super::{Editor, Reaction};
+use crate::ui::graphics::{self, kitty::ImageId};
 
 /// A selectable cell position: a screen column and a content row, so a
 /// selection stays on its text while the pane scrolls.
@@ -29,7 +32,11 @@ pub struct ScreenSelection {
 
 /// Captured terminal content and whether it may be copied.
 pub struct ScreenCell {
+    /// The text the cell copies as: what it shows, or for a piece of a picture
+    /// the TeX of the whole picture.
     symbol: String,
+    /// The picture the cell shows a piece of, copied once however many it covers.
+    picture: Option<ImageId>,
     /// Whether the cell holds text a selection copies.
     selectable: bool,
     /// Whether the cell lies outside every selection exclusion, such as a frame,
@@ -156,24 +163,38 @@ impl Editor {
         }
         let capture = self.capture_of(selection)?;
         let (start, end) = ordered_screen_positions(selection.anchor, selection.focus);
-        let lines: Vec<String> = (start.row..=end.row)
-            .filter_map(|content_row| {
-                let y = capture.line(content_row)?;
-                let cells: Vec<&ScreenCell> = capture
-                    .columns(content_row, start, end)
-                    .filter_map(|x| capture.cell(x, y))
-                    .filter(|cell| cell.copyable)
-                    .collect();
-                (!cells.is_empty()).then(|| {
-                    let line: String = cells
-                        .iter()
-                        .filter(|cell| cell.selectable)
-                        .map(|cell| cell.symbol.as_str())
-                        .collect();
-                    line.trim_end().to_string()
-                })
-            })
-            .collect();
+        let mut copied_pictures = HashSet::new();
+        let mut lines = Vec::new();
+        for content_row in start.row..=end.row {
+            let Some(y) = capture.line(content_row) else {
+                continue;
+            };
+            let cells: Vec<&ScreenCell> = capture
+                .columns(content_row, start, end)
+                .filter_map(|x| capture.cell(x, y))
+                .filter(|cell| cell.copyable)
+                .collect();
+            if cells.is_empty() {
+                continue;
+            }
+            let mut line = String::new();
+            let mut pictured = false;
+            for cell in cells.iter().filter(|cell| cell.selectable) {
+                match cell.picture {
+                    Some(id) => {
+                        pictured = true;
+                        if copied_pictures.insert(id) {
+                            line.push_str(&cell.symbol);
+                        }
+                    }
+                    None => line.push_str(&cell.symbol),
+                }
+            }
+            // A row holding only pieces of pictures already copied adds nothing.
+            if !(pictured && line.trim().is_empty()) {
+                lines.push(line.trim_end().to_string());
+            }
+        }
         let text = lines.join("\n");
         let text = text.trim_matches('\n');
         (!text.is_empty()).then(|| text.to_string())
@@ -186,8 +207,16 @@ impl Editor {
         let buffer = frame.buffer_mut();
         let rows = (area.y..area.bottom())
             .map(|y| {
+                let pictures: Vec<Option<ImageId>> = (area.x..area.right())
+                    .map(|x| ImageId::placed(buffer[(x, y)].symbol(), buffer[(x, y)].fg))
+                    .collect();
                 let symbols: Vec<String> = (area.x..area.right())
-                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .zip(&pictures)
+                    .map(|(x, picture)| {
+                        picture
+                            .and_then(graphics::source)
+                            .unwrap_or_else(|| buffer[(x, y)].symbol().to_string())
+                    })
                     .collect();
                 let allowed: Vec<bool> = (area.x..area.right())
                     .map(|x| {
@@ -198,10 +227,12 @@ impl Editor {
                 let selectable = selectable_columns(&symbols, &allowed);
                 symbols
                     .into_iter()
+                    .zip(pictures)
                     .zip(selectable)
                     .zip(allowed)
-                    .map(|((symbol, selectable), copyable)| ScreenCell {
+                    .map(|(((symbol, picture), selectable), copyable)| ScreenCell {
                         symbol,
+                        picture,
                         selectable,
                         copyable,
                     })
@@ -305,6 +336,7 @@ mod tests {
                 .take(usize::from(area.width))
                 .map(|character| ScreenCell {
                     symbol: character.to_string(),
+                    picture: None,
                     selectable: true,
                     copyable: true,
                 })
@@ -337,6 +369,7 @@ mod tests {
                         .unwrap_or(' ');
                     ScreenCell {
                         symbol: symbol.to_string(),
+                        picture: None,
                         selectable: symbol != ' ',
                         copyable: line.is_some(),
                     }
@@ -366,6 +399,45 @@ mod tests {
             panic!("a drag copies its text");
         };
         assert_eq!(text, "1\n\n1");
+    }
+
+    #[test]
+    fn a_picture_copies_as_its_tex_once_whatever_it_covers() {
+        let area = Rect::new(0, 0, 3, 3);
+        let id = ImageId::from(7);
+        let cell = |picture: Option<ImageId>, symbol: &str| ScreenCell {
+            symbol: symbol.to_string(),
+            picture,
+            selectable: true,
+            copyable: true,
+        };
+        let pictured = || {
+            vec![
+                cell(Some(id), "x^2"),
+                cell(Some(id), "x^2"),
+                cell(None, " "),
+            ]
+        };
+        let mut editor = Editor::new(String::new());
+        editor.captures = vec![ScreenCapture {
+            area,
+            top: 0,
+            rows: vec![
+                pictured(),
+                pictured(),
+                (0..3).map(|_| cell(None, "o")).collect(),
+            ],
+        }];
+
+        let left = MouseButton::Left;
+        editor.handle_screen_mouse(mouse(MouseEventKind::Down(left), 0, 0));
+        editor.handle_screen_mouse(mouse(MouseEventKind::Drag(left), 2, 2));
+        let copied = editor.handle_screen_mouse(mouse(MouseEventKind::Up(left), 2, 2));
+
+        let Some(Reaction::Copy(text)) = copied else {
+            panic!("a drag copies its text");
+        };
+        assert_eq!(text, "x^2\nooo");
     }
 
     #[test]

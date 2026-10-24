@@ -9,6 +9,7 @@ readme = "README.md"
 keywords = ["macaulay2", "repl", "terminal", "syntax-highlighting", "tui"]
 categories = ["command-line-utilities", "development-tools"]
 include = [
+    "build.rs",
     "src/**/*.rs",
     "src/**/*.m2",
     "src/**/*.toml",
@@ -23,12 +24,19 @@ name = "spectral-m2"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.22.1"
 crossterm = { version = "0.29.0", features = ["osc52", "serde"] }
 html2text = "0.17.1"
 m2-syn = { version = "0.3.0", default-features = false, features = ["pretty", "walk"] }
 regex = "1.11"
 ratatui = { version = "0.30.0", features = ["serde"] }
+ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
 rand = "0.8.6"
+ratex-layout = "0.1.15"
+ratex-parser = "0.1.15"
+ratex-svg = { version = "0.1.15", features = ["embed-fonts"] }
+ratex-types = "0.1.15"
+resvg = { version = "0.48.1", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 term-maths = "1.0.0"
@@ -43,3 +51,6 @@ tree-sitter-macaulay2 = "=6.2.0"
 missing_docs = "deny"
 
 [dev-dependencies]
+
+[build-dependencies]
+toml = "1.1.4"

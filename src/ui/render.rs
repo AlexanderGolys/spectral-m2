@@ -7,10 +7,10 @@
 use crate::ui::block::{Element, HLSpan, Text};
 use crate::ui::config::UI;
 use crate::ui::controller::settings::theme::groups::{scheme, Groups};
-use crate::ui::render::maths::{FractionStyle, MathStyle};
+use crate::ui::render::maths::{FractionStyle, MathDisplay, MathStyle};
 use crate::ui::render::selection::Exclusions;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, BorderType, Padding, Paragraph, Widget};
@@ -101,6 +101,17 @@ impl RenderContext {
         Self {
             math: MathStyle {
                 blackboard,
+                ..self.math
+            },
+            ..self
+        }
+    }
+
+    /// Draw returned maths with `display`.
+    pub fn with_display(self, display: MathDisplay) -> Self {
+        Self {
+            math: MathStyle {
+                display,
                 ..self.math
             },
             ..self
@@ -319,6 +330,16 @@ impl Bordered {
 
     pub fn text_width(context: &RenderContext, layout: FrameLayout) -> u16 {
         Self::inner(Rect::new(0, 0, context.width(), 0), layout).width
+    }
+
+    /// Whether `position` lies on the frame's border line itself.
+    pub fn on_border(area: Rect, layout: FrameLayout, position: Position) -> bool {
+        let frame = Self::area(area, layout);
+        frame.contains(position)
+            && (position.x == frame.x
+                || position.x == frame.right() - 1
+                || position.y == frame.y
+                || position.y == frame.bottom() - 1)
     }
 
     /// Exclude the frame and its padding while retaining rendered body glyphs.

@@ -1,82 +1,378 @@
+# Native palette source: https://github.com/morhetz/gruvbox
+# Palette names are shared by every variant; values retain their upstream RGB identity.
 name = "gruvbox"
 
 [variants]
 dark = ["hard", "medium", "soft"]
 light = ["hard", "medium", "soft"]
 
-[colors.red]
-dark = { base = "#fb4934", dark = "#9d0006" }
-light = { base = "#9d0006", light = "#fb4934" }
+[palette."bright_aqua"]
+dark = "#8ec07c"
+light = "#8ec07c"
 
-[colors.green]
-dark = { base = "#b8bb26", dark = "#79740e" }
-light = { base = "#79740e", light = "#b8bb26" }
+[palette."bright_blue"]
+dark = "#83a598"
+light = "#83a598"
 
-[colors.yellow]
-dark = { base = "#fabd2f", dark = "#b57614" }
-light = { base = "#b57614", light = "#fabd2f" }
+[palette."bright_green"]
+dark = "#b8bb26"
+light = "#b8bb26"
 
-[colors.blue]
-dark = { base = "#83a598", dark = "#076678" }
-light = { base = "#076678", light = "#83a598" }
+[palette."bright_orange"]
+dark = "#fe8019"
+light = "#fe8019"
 
-[colors.purple]
-dark = { base = "#d3869b", dark = "#8f3f71" }
-light = { base = "#8f3f71", light = "#d3869b" }
+[palette."bright_purple"]
+dark = "#d3869b"
+light = "#d3869b"
 
-[colors.aqua]
-dark = { base = "#8ec07c", dark = "#427b58" }
-light = { base = "#427b58", light = "#8ec07c" }
+[palette."bright_red"]
+dark = "#fb4934"
+light = "#fb4934"
 
-[colors.orange]
-dark = { base = "#fe8019", dark = "#af3a03" }
-light = { base = "#af3a03", light = "#fe8019" }
+[palette."bright_yellow"]
+dark = "#fabd2f"
+light = "#fabd2f"
 
-[colors.gray]
+[palette."dark0"]
+dark = "#282828"
+light = "#282828"
+
+[palette."dark0_hard"]
+dark = "#1d2021"
+light = "#1d2021"
+
+[palette."dark0_soft"]
+dark = "#32302f"
+light = "#32302f"
+
+[palette."dark1"]
+dark = "#3c3836"
+light = "#3c3836"
+
+[palette."dark2"]
+dark = "#504945"
+light = "#504945"
+
+[palette."dark3"]
+dark = "#665c54"
+light = "#665c54"
+
+[palette."dark4"]
+dark = "#7c6f64"
+light = "#7c6f64"
+
+[palette."dark4_256"]
+dark = "#7c6f64"
+light = "#7c6f64"
+
+[palette."faded_aqua"]
+dark = "#427b58"
+light = "#427b58"
+
+[palette."faded_blue"]
+dark = "#076678"
+light = "#076678"
+
+[palette."faded_green"]
+dark = "#79740e"
+light = "#79740e"
+
+[palette."faded_orange"]
+dark = "#af3a03"
+light = "#af3a03"
+
+[palette."faded_purple"]
+dark = "#8f3f71"
+light = "#8f3f71"
+
+[palette."faded_red"]
+dark = "#9d0006"
+light = "#9d0006"
+
+[palette."faded_yellow"]
+dark = "#b57614"
+light = "#b57614"
+
+[palette."gray_244"]
 dark = "#928374"
 light = "#928374"
 
-[colors.fg]
-dark = ["#ebdbb2", "#928374", "#928374"]
-light = ["#3c3836", "#928374", "#928374"]
+[palette."gray_245"]
+dark = "#928374"
+light = "#928374"
 
-[colors.bg]
-dark = { hard = ["#1d2021", "#161819", "#3c3836", "#665c54", "#504945"], medium = ["#282828", "#1d2021", "#3c3836", "#665c54", "#504945"], soft = ["#32302f", "#282828", "#3c3836", "#665c54", "#504945"] }
-light = { hard = ["#f9f5d7", "#d5c4a1", "#ebdbb2", "#bdae93", "#d5c4a1"], medium = ["#fbf1c7", "#d5c4a1", "#ebdbb2", "#bdae93", "#d5c4a1"], soft = ["#f2e5bc", "#d5c4a1", "#ebdbb2", "#bdae93", "#d5c4a1"] }
+[palette."light0"]
+dark = "#fbf1c7"
+light = "#fbf1c7"
 
-[base]
-Canvas = { bg = "bg0" }
-Code = { bg = "bg1" }
-Raised = { bg = "bg2" }
-Pending = { bg = "bg2" }
-Selection = { bg = "bg3" }
-Focus = { bg = "bg3" }
-Text = { fg = "fg0" }
-Muted = { fg = "gray" }
-Faint = { fg = "fg4" }
-Keyword = { fg = "red" }
-Function = { fg = "green" }
-Type = { fg = "yellow" }
-String = { fg = "green", italic = true }
-Number = { fg = "purple" }
-Operator = { fg = "orange" }
-Symbol = { fg = "orange" }
-Parameter = { fg = "blue" }
-Property = { fg = "blue" }
-EnumVariant = { fg = "aqua" }
-Macro = { fg = "green", italic = true }
-Attribute = { fg = "purple" }
-Builtin = { fg = "orange" }
-Regex = { fg = "blue", sp = "blue", underline = true }
-Accent = { fg = "aqua" }
-Error = { fg = "red" }
-Warning = { fg = "yellow" }
-Info = { fg = "blue" }
-Hint = { fg = "aqua" }
+[palette."light0_hard"]
+dark = "#f9f5d7"
+light = "#f9f5d7"
 
-[overrides]
-Constant = { fg = "orange" }
-Delimiter = { fg = "orange" }
-Punctuation = { fg = "orange" }
-Installation = { fg = "red" }
-CompiledFunction = { fg = "orange" }
+[palette."light0_soft"]
+dark = "#f2e5bc"
+light = "#f2e5bc"
+
+[palette."light1"]
+dark = "#ebdbb2"
+light = "#ebdbb2"
+
+[palette."light2"]
+dark = "#d5c4a1"
+light = "#d5c4a1"
+
+[palette."light3"]
+dark = "#bdae93"
+light = "#bdae93"
+
+[palette."light4"]
+dark = "#a89984"
+light = "#a89984"
+
+[palette."light4_256"]
+dark = "#a89984"
+light = "#a89984"
+
+[palette."neutral_aqua"]
+dark = "#689d6a"
+light = "#689d6a"
+
+[palette."neutral_blue"]
+dark = "#458588"
+light = "#458588"
+
+[palette."neutral_green"]
+dark = "#98971a"
+light = "#98971a"
+
+[palette."neutral_orange"]
+dark = "#d65d0e"
+light = "#d65d0e"
+
+[palette."neutral_purple"]
+dark = "#b16286"
+light = "#b16286"
+
+[palette."neutral_red"]
+dark = "#cc241d"
+light = "#cc241d"
+
+[palette."neutral_yellow"]
+dark = "#d79921"
+light = "#d79921"
+
+[groups]
+Accent = { fg = "bright_aqua" }
+Attribute = { fg = "bright_aqua" }
+Bg0 = { bg = "dark0_hard" }
+Bg1 = { bg = "dark1" }
+Bg2 = { bg = "dark2" }
+Bg3 = { bg = "dark3" }
+Bg4 = { bg = "dark2" }
+Boolean = { fg = "bright_purple" }
+Builtin = { fg = "bright_orange" }
+Comment = { fg = "gray_244", italic = true }
+CompiledFunction = { fg = "bright_orange" }
+Conditional = { fg = "bright_red" }
+Constant = { fg = "bright_purple" }
+Debug = { fg = "bright_orange" }
+Delimiter = { fg = "bright_orange" }
+Documentation = { fg = "bright_blue" }
+EnumVariant = { fg = "bright_purple" }
+Error = { fg = "bright_red" }
+ErrorMessage = { bold = true, fg = "dark0_hard" }
+Exception = { fg = "bright_red" }
+Faint = { fg = "gray_245" }
+Float = { fg = "bright_purple" }
+Function = { bold = true, fg = "bright_green" }
+Hint = { fg = "bright_aqua" }
+Info = { fg = "bright_blue" }
+Installation = { fg = "bright_red" }
+Keyword = { fg = "bright_red" }
+Macro = { fg = "bright_aqua" }
+MarkupBrief = { fg = "bright_green", italic = true }
+MarkupHeading1 = { bold = true, fg = "bright_green" }
+MarkupHeading2 = { bold = true, fg = "bright_green" }
+MarkupHeading3 = { bold = true, fg = "bright_green" }
+Muted = { fg = "gray_244" }
+Namespace = { fg = "light1" }
+Number = { fg = "bright_purple" }
+Operator = { fg = "bright_orange" }
+Package = { fg = "light1" }
+Parameter = { fg = "bright_blue" }
+Property = { fg = "bright_blue" }
+Punctuation = { fg = "bright_orange" }
+Quote = { fg = "bright_orange" }
+Regex = { fg = "bright_green", italic = true }
+Repeat = { fg = "bright_red" }
+Statement = { fg = "bright_red" }
+StorageClass = { fg = "bright_red" }
+String = { fg = "bright_green", italic = true }
+Symbol = { fg = "bright_blue" }
+Text = { fg = "light1" }
+Type = { fg = "bright_yellow" }
+Variable = { fg = "light1" }
+ViewLabelActive = { fg = "bright_blue" }
+Warning = { fg = "bright_yellow" }
+
+[variant_overrides.dark.medium]
+Bg0 = { bg = "dark0" }
+ErrorMessage = { fg = "dark0", bold = true }
+
+[variant_overrides.dark.soft]
+Bg0 = { bg = "dark0_soft" }
+ErrorMessage = { fg = "dark0_soft", bold = true }
+
+[variant_overrides.light.hard]
+Accent = { fg = "faded_aqua" }
+Attribute = { fg = "faded_aqua" }
+Bg0 = { bg = "light0_hard" }
+Bg1 = { bg = "light1" }
+Bg2 = { bg = "light2" }
+Bg3 = { bg = "light3" }
+Bg4 = { bg = "light2" }
+Boolean = { fg = "faded_purple" }
+Builtin = { fg = "faded_orange" }
+CompiledFunction = { fg = "faded_orange" }
+Conditional = { fg = "faded_red" }
+Constant = { fg = "faded_purple" }
+Debug = { fg = "faded_orange" }
+Delimiter = { fg = "faded_orange" }
+Documentation = { fg = "faded_blue" }
+EnumVariant = { fg = "faded_purple" }
+Error = { fg = "faded_red" }
+ErrorMessage = { fg = "light0_hard", bold = true }
+Exception = { fg = "faded_red" }
+Float = { fg = "faded_purple" }
+Function = { fg = "faded_green", bold = true }
+Hint = { fg = "faded_aqua" }
+Info = { fg = "faded_blue" }
+Installation = { fg = "faded_red" }
+Keyword = { fg = "faded_red" }
+Macro = { fg = "faded_aqua" }
+MarkupBrief = { fg = "faded_green", italic = true }
+MarkupHeading1 = { fg = "faded_green", bold = true }
+MarkupHeading2 = { fg = "faded_green", bold = true }
+MarkupHeading3 = { fg = "faded_green", bold = true }
+Namespace = { fg = "dark1" }
+Number = { fg = "faded_purple" }
+Operator = { fg = "faded_orange" }
+Package = { fg = "dark1" }
+Parameter = { fg = "faded_blue" }
+Property = { fg = "faded_blue" }
+Punctuation = { fg = "faded_orange" }
+Quote = { fg = "faded_orange" }
+Regex = { fg = "faded_green", italic = true }
+Repeat = { fg = "faded_red" }
+Statement = { fg = "faded_red" }
+StorageClass = { fg = "faded_red" }
+String = { fg = "faded_green", italic = true }
+Symbol = { fg = "faded_blue" }
+Text = { fg = "dark1" }
+Type = { fg = "faded_yellow" }
+Variable = { fg = "dark1" }
+ViewLabelActive = { fg = "faded_blue" }
+Warning = { fg = "faded_yellow" }
+
+[variant_overrides.light.medium]
+Accent = { fg = "faded_aqua" }
+Attribute = { fg = "faded_aqua" }
+Bg0 = { bg = "light0" }
+Bg1 = { bg = "light1" }
+Bg2 = { bg = "light2" }
+Bg3 = { bg = "light3" }
+Bg4 = { bg = "light2" }
+Boolean = { fg = "faded_purple" }
+Builtin = { fg = "faded_orange" }
+CompiledFunction = { fg = "faded_orange" }
+Conditional = { fg = "faded_red" }
+Constant = { fg = "faded_purple" }
+Debug = { fg = "faded_orange" }
+Delimiter = { fg = "faded_orange" }
+Documentation = { fg = "faded_blue" }
+EnumVariant = { fg = "faded_purple" }
+Error = { fg = "faded_red" }
+ErrorMessage = { fg = "light0", bold = true }
+Exception = { fg = "faded_red" }
+Float = { fg = "faded_purple" }
+Function = { fg = "faded_green", bold = true }
+Hint = { fg = "faded_aqua" }
+Info = { fg = "faded_blue" }
+Installation = { fg = "faded_red" }
+Keyword = { fg = "faded_red" }
+Macro = { fg = "faded_aqua" }
+MarkupBrief = { fg = "faded_green", italic = true }
+MarkupHeading1 = { fg = "faded_green", bold = true }
+MarkupHeading2 = { fg = "faded_green", bold = true }
+MarkupHeading3 = { fg = "faded_green", bold = true }
+Namespace = { fg = "dark1" }
+Number = { fg = "faded_purple" }
+Operator = { fg = "faded_orange" }
+Package = { fg = "dark1" }
+Parameter = { fg = "faded_blue" }
+Property = { fg = "faded_blue" }
+Punctuation = { fg = "faded_orange" }
+Quote = { fg = "faded_orange" }
+Regex = { fg = "faded_green", italic = true }
+Repeat = { fg = "faded_red" }
+Statement = { fg = "faded_red" }
+StorageClass = { fg = "faded_red" }
+String = { fg = "faded_green", italic = true }
+Symbol = { fg = "faded_blue" }
+Text = { fg = "dark1" }
+Type = { fg = "faded_yellow" }
+Variable = { fg = "dark1" }
+ViewLabelActive = { fg = "faded_blue" }
+Warning = { fg = "faded_yellow" }
+
+[variant_overrides.light.soft]
+Accent = { fg = "faded_aqua" }
+Attribute = { fg = "faded_aqua" }
+Bg0 = { bg = "light0_soft" }
+Bg1 = { bg = "light1" }
+Bg2 = { bg = "light2" }
+Bg3 = { bg = "light3" }
+Bg4 = { bg = "light2" }
+Boolean = { fg = "faded_purple" }
+Builtin = { fg = "faded_orange" }
+CompiledFunction = { fg = "faded_orange" }
+Conditional = { fg = "faded_red" }
+Constant = { fg = "faded_purple" }
+Debug = { fg = "faded_orange" }
+Delimiter = { fg = "faded_orange" }
+Documentation = { fg = "faded_blue" }
+EnumVariant = { fg = "faded_purple" }
+Error = { fg = "faded_red" }
+ErrorMessage = { fg = "light0_soft", bold = true }
+Exception = { fg = "faded_red" }
+Float = { fg = "faded_purple" }
+Function = { fg = "faded_green", bold = true }
+Hint = { fg = "faded_aqua" }
+Info = { fg = "faded_blue" }
+Installation = { fg = "faded_red" }
+Keyword = { fg = "faded_red" }
+Macro = { fg = "faded_aqua" }
+MarkupBrief = { fg = "faded_green", italic = true }
+MarkupHeading1 = { fg = "faded_green", bold = true }
+MarkupHeading2 = { fg = "faded_green", bold = true }
+MarkupHeading3 = { fg = "faded_green", bold = true }
+Namespace = { fg = "dark1" }
+Number = { fg = "faded_purple" }
+Operator = { fg = "faded_orange" }
+Package = { fg = "dark1" }
+Parameter = { fg = "faded_blue" }
+Property = { fg = "faded_blue" }
+Punctuation = { fg = "faded_orange" }
+Quote = { fg = "faded_orange" }
+Regex = { fg = "faded_green", italic = true }
+Repeat = { fg = "faded_red" }
+Statement = { fg = "faded_red" }
+StorageClass = { fg = "faded_red" }
+String = { fg = "faded_green", italic = true }
+Symbol = { fg = "faded_blue" }
+Text = { fg = "dark1" }
+Type = { fg = "faded_yellow" }
+Variable = { fg = "dark1" }
+ViewLabelActive = { fg = "faded_blue" }
+Warning = { fg = "faded_yellow" }

@@ -1,0 +1,136 @@
+# The authoritative highlight-group declarations. Rust types are generated from this file.
+# required = true: every scheme must supply a style.
+# link: inherit the resolved style, then apply these modifiers or channel references.
+# References use Group.fg, Group.bg or Group.sp. An explicit scheme style replaces the default.
+# captures: the Tree-sitter query captures drawn with this group; each capture belongs to one group.
+
+Bg0 = { required = true }
+Bg1 = { required = true }
+Bg2 = { required = true }
+Bg3 = { required = true }
+Bg4 = { required = true }
+Text = { required = true }
+Muted = { required = true }
+Faint = { required = true }
+Keyword = { required = true, captures = ["keyword", "keyword.modifier"] }
+Function = { required = true, captures = ["function", "function.call"] }
+Type = { required = true, captures = ["type", "type.parameter"] }
+String = { required = true, captures = ["string"] }
+Number = { required = true, captures = ["number"] }
+Operator = { required = true, captures = ["operator", "keyword.operator"] }
+Symbol = { required = true }
+Parameter = { required = true, captures = ["variable.parameter"] }
+Property = { required = true, captures = ["property"] }
+EnumVariant = { required = true }
+Macro = { required = true, captures = ["function.macro"] }
+Attribute = { required = true, captures = ["attribute"] }
+Builtin = { required = true, captures = ["variable.builtin", "constant.builtin"] }
+Regex = { required = true, captures = ["string.regexp"] }
+Accent = { required = true }
+Error = { required = true, captures = ["error"] }
+Warning = { required = true }
+Info = { required = true }
+Hint = { required = true }
+Canvas = { link = "Bg0" }
+Code = { link = "Bg1" }
+Raised = { link = "Bg2" }
+Pending = { link = "Bg2" }
+Selection = { link = "Bg3" }
+Focus = { link = "Bg4" }
+Comment = { link = "Muted", italic = true, captures = ["comment"] }
+Constant = { link = "Number" }
+Boolean = { link = "Number", captures = ["boolean"] }
+Float = { link = "Number", captures = ["number.float"] }
+Statement = { link = "Keyword", captures = ["keyword.return"] }
+Conditional = { link = "Keyword", captures = ["keyword.conditional"] }
+Repeat = { link = "Keyword", captures = ["keyword.repeat"] }
+Exception = { link = "Keyword", captures = ["keyword.exception"] }
+StorageClass = { link = "Keyword" }
+Debug = { link = "Keyword", captures = ["keyword.debug"] }
+Delimiter = { link = "Muted", captures = ["punctuation.delimiter"] }
+Punctuation = { link = "Muted", captures = ["punctuation.bracket"] }
+Variable = { link = "Text", captures = ["variable"] }
+Installation = { link = "Function", captures = ["label"] }
+CompiledFunction = { link = "Function", captures = ["function.builtin"] }
+Quote = { link = "Symbol", captures = ["character.special"] }
+Namespace = { link = "Type", italic = true, captures = ["namespace"] }
+Package = { link = "Type", italic = true, captures = ["module"] }
+Documentation = { link = "Info", captures = ["string.special.url"] }
+MarkupHeading1 = { link = "Keyword", bold = true }
+MarkupBrief = { link = "Keyword", italic = true }
+MarkupHeading2 = { link = "Function", bold = true }
+MarkupHeading3 = { link = "Type", bold = true }
+MarkupStrong = { bold = true }
+MarkupEmphasis = { italic = true }
+MarkupStrongEmphasis = { bold = true, italic = true }
+MarkupStrike = { crossed_out = true }
+MarkupLinkHover = { underline = true }
+MarkupLinkOpen = { underline = true, bold = true }
+DiagnosticError = { sp_from = "Error.fg", underline = true }
+DiagnosticWarning = { sp_from = "Warning.fg", underline = true }
+DiagnosticInfo = { sp_from = "Info.fg", underline = true }
+DiagnosticHint = { sp_from = "Hint.fg", underline = true }
+Value = { link = "Text" }
+FractionRule = { sp_from = "Operator.fg", underline = true }
+Printed = { link = "String", bg_from = "Raised.bg", saturation = 55.0, lightening = 15.0 }
+Picker = { link = "Raised" }
+PickerSelected = { link = "Focus" }
+InputPrompt = { link = "Accent" }
+CompletionHint = { link = "Muted" }
+PlaceholderHint = { link = "Muted" }
+Separator = { fg_from = "Canvas.bg" }
+ValueBorder = { link = "Faint" }
+OutputNumber = { link = "Accent" }
+RecentOutput = { link = "Accent", bold = true }
+RecentCellNumber = { link = "Accent", darken = 0.25 }
+CellNumber = { link = "Muted" }
+PendingCellMarker = { link = "Muted" }
+QueuedCellMarker = { link = "Muted" }
+FailedCellMarker = { link = "Error" }
+RejectedCellMarker = { link = "Error" }
+PrintedCellNumber = { link = "Muted" }
+PendingSeparator = { link = "Muted" }
+MutedCodeText = { link = "Muted" }
+ErrorBorder = { link = "Error" }
+ErrorMessage = { link = "Error" }
+ErrorCode = { link = "Code", tint_from = "Error.fg", tint = 0.12 }
+WarningBorder = { link = "Warning" }
+InfoBorder = { link = "Info" }
+Statusline1 = { link = "String" }
+Statusline2 = { link = "Warning" }
+Statusline3 = { link = "Error" }
+StatuslineBg = { link = "Code" }
+StatuslineError = { link = "Error" }
+StatuslineWarning = { link = "Warning" }
+KeymapHint = { link = "Accent" }
+PickerMarker = { link = "Muted" }
+PickerSelectedMarker = { link = "Accent" }
+PickerTitle = { link = "Accent" }
+PickerBorder = { link = "Faint" }
+PickerTab = { link = "Accent" }
+PickerTabSelected = { link = "Accent", reverse = true }
+SettingsItemLabel = { link = "Text" }
+SettingsItemValue = { link = "Accent" }
+SettingsItemUnavailable = { link = "Faint", dim = true, crossed_out = true }
+SettingsUnavailableNote = { link = "Faint", italic = true }
+SettingsItemDescription = { link = "Muted" }
+SettingsStepArrow = { link = "Faint" }
+SettingsButton = { link = "SettingsItemLabel" }
+KeymapActionLabel = { link = "Muted" }
+CommandActionDescription = { link = "Text" }
+CommandShortcut = { link = "Accent" }
+FrameStats = { link = "Muted" }
+HighlightInspectorTitle = { link = "Accent" }
+HighlightInspectorBorder = { link = "Faint" }
+ViewDivider = { link = "Faint" }
+SyntaxTreeBranch = { link = "Muted" }
+SyntaxTreeTokenMarker = { link = "Info" }
+SyntaxTreeLabelSeparator = { link = "Muted" }
+SyntaxTreeBorder = { link = "Faint" }
+StatuslineScheme = { link = "Muted" }
+StatuslineSeparator = { link = "Muted" }
+StatuslineHintLabel = { link = "Muted" }
+StatuslineState = { link = "Muted" }
+ViewLabelActive = { link = "Info" }
+ViewLabelInactive = { link = "Muted" }
+Command = { link = "Accent" }

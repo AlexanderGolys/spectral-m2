@@ -22,4 +22,4 @@ Use `Alt+Left` and `Alt+Right` to focus the shell or the view, or click a pane. 
 
 Each visible pane keeps at least 40 columns, so the split needs 81 columns including the divider. Below that width Spectral keeps both panes but displays one at a time: the view takes the full width when it opens or the window narrows, and `Alt+Left` and `Alt+Right` switch between it and the shell.
 
-`Ctrl+Q` closes the view from either pane: the view beside the session closes and focus returns to the shell. In a view, `Ctrl+C` leaves it the same way instead of quitting Spectral.
+`Ctrl+Q` closes the view from either pane: the view beside the session closes and focus returns to the shell.

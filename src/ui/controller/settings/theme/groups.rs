@@ -1,6 +1,18 @@
+//! Highlight groups: their TOML declarations and the resolved styles drawn from them.
+//!
+//! Styles are written as [`StyleDeclaration`]s in two places: the shared
+//! `groups.toml` ([`GroupDeclarations`]), which lists every group with its default
+//! link and Tree-sitter captures, and each scheme file, which colours the required
+//! groups from its palette and may override any other. [`Groups::resolve`] layers
+//! them (variant override, then scheme, then shared default), follows links and
+//! channel references, applies colour adjustments, and yields one ratatui [`Style`]
+//! per [`HLGroup`]. Rendering only ever sees the resolved [`Groups`].
+
+use std::collections::HashMap;
 use std::ops::Index;
+use std::sync::LazyLock;
 #[cfg(not(test))]
-use std::sync::{LazyLock, RwLock};
+use std::sync::RwLock;
 
 use ratatui::style::{Color, Modifier, Style};
 use serde::Deserialize;
@@ -8,46 +20,367 @@ use these_macros_should_be_illegal::enum_fn;
 
 use super::palette::Palette;
 
-/// A serialized style whose colors name entries in its scheme palette.
-#[derive(Default, Deserialize)]
+/// One highlight group's style as written in TOML, before it is resolved into a
+/// [`Style`]. Every key is optional, and a declaration replaces a lower layer's one for
+/// the same group as a whole rather than merging with it.
+///
+/// Keys apply in field order: start from `link`, set the channels, toggle
+/// modifiers, then adjust colours. Colours are native palette names; `Group.fg`,
+/// `Group.bg` and `Group.sp` name another group's resolved channel.
+#[derive(Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct StyleSpec {
+pub struct StyleDeclaration {
+    /// Only in `groups.toml`: every scheme must declare this group itself.
+    required: bool,
+    /// Only in `groups.toml`: the Tree-sitter captures this group draws.
+    captures: Option<Vec<String>>,
+    /// Group whose resolved style this one starts from.
+    link: Option<String>,
+    /// Palette colour for each channel (`sp` is the underline colour); `"none"`
+    /// clears what a link supplied.
     fg: Option<String>,
     bg: Option<String>,
     sp: Option<String>,
-    bold: bool,
-    italic: bool,
-    underline: bool,
-    reverse: bool,
-    crossed_out: bool,
+    /// Channel copied from another group, so one group's colour can serve in a
+    /// different channel here (an error foreground as an underline). Exclusive with
+    /// the direct channel of the same name.
+    fg_from: Option<String>,
+    bg_from: Option<String>,
+    sp_from: Option<String>,
+    /// Modifiers; `false` removes one a link supplied.
+    bold: Option<bool>,
+    italic: Option<bool>,
+    underline: Option<bool>,
+    reverse: Option<bool>,
+    crossed_out: Option<bool>,
+    /// Drawn by the terminal blended toward its background.
+    dim: Option<bool>,
+    /// Foreground kept at this percentage of its saturation, hue unchanged.
+    saturation: Option<f32>,
+    /// Foreground moved this percentage of the way to white.
+    lightening: Option<f32>,
+    /// Foreground blended toward black by this fraction.
+    darken: Option<f32>,
+    /// Background blended toward a palette colour by `bg_blend_amount`, a fraction,
+    /// for schemes whose guidelines specify an overlay's opacity.
+    bg_blend: Option<String>,
+    bg_blend_amount: Option<f32>,
+    /// Background blended toward another group's channel by `tint`, a fraction.
+    tint_from: Option<String>,
+    tint: Option<f32>,
 }
-impl StyleSpec {
-    /// Turn the declared modifiers and palette-named colours into a concrete [`Style`].
-    fn resolve(&self, palette: &Palette) -> Result<Style, String> {
-        let mut modifiers = Modifier::empty();
-        modifiers.set(Modifier::BOLD, self.bold);
-        modifiers.set(Modifier::ITALIC, self.italic);
-        modifiers.set(Modifier::UNDERLINED, self.underline);
-        modifiers.set(Modifier::REVERSED, self.reverse);
-        modifiers.set(Modifier::CROSSED_OUT, self.crossed_out);
-        let mut style = Style::new().add_modifier(modifiers);
-        if let Some(color) = palette.resolve(self.fg.as_deref())? {
-            style = style.fg(color);
+
+/// Declarations keyed by highlight group name, as one TOML table holds them.
+pub type StyleTable = HashMap<String, StyleDeclaration>;
+
+/// The parsed `groups.toml`: the bottom layer of every scheme, declaring each group
+/// once with its default link and captures and marking which groups a scheme must
+/// colour itself. A user's copy may relink groups and move captures but not add
+/// groups or change which are required.
+pub struct GroupDeclarations(StyleTable);
+
+const DEFAULTS: &str = include_str!("groups.toml");
+
+impl GroupDeclarations {
+    fn embedded() -> Self {
+        Self(toml::from_str(DEFAULTS).expect("embedded group declarations must parse"))
+    }
+
+    /// Merge a user's declarations over the built-in defaults.
+    pub fn parse(source: &str) -> Result<Self, String> {
+        let custom: StyleTable = toml::from_str(source).map_err(|e| e.to_string())?;
+        let mut declarations = Self::embedded();
+        for (name, mut declaration) in custom {
+            let original = declarations
+                .0
+                .get(&name)
+                .ok_or_else(|| format!("unknown highlight group `{name}`"))?;
+            if original.required && !declaration.required {
+                return Err(format!(
+                    "required group `{name}` cannot become a default link"
+                ));
+            }
+            if !original.required && declaration.required {
+                return Err(format!("linked group `{name}` cannot become required"));
+            }
+            declaration.required = original.required;
+            if declaration.captures.is_none() {
+                declaration.captures.clone_from(&original.captures);
+            }
+            declarations.0.insert(name, declaration);
         }
-        if let Some(color) = palette.resolve(self.bg.as_deref())? {
-            style = style.bg(color);
+        declarations.captures()?;
+        Ok(declarations)
+    }
+
+    /// Every Tree-sitter capture paired with the group that draws it.
+    pub fn captures(&self) -> Result<Vec<(String, HLGroup)>, String> {
+        let mut owners = HashMap::new();
+        for (name, declaration) in &self.0 {
+            let group = HLGroup::named(name)?;
+            for capture in declaration.captures.iter().flatten() {
+                if let Some(owner) = owners.insert(capture.clone(), group) {
+                    return Err(format!(
+                        "capture `@{capture}` belongs to both `{}` and `{name}`",
+                        owner.description()
+                    ));
+                }
+            }
         }
-        if let Some(color) = palette.resolve(self.sp.as_deref())? {
-            style = style.underline_color(color);
+        Ok(owners.into_iter().collect())
+    }
+
+    fn load() -> Self {
+        match super::config_source("groups.toml", DEFAULTS).and_then(|s| Self::parse(&s)) {
+            Ok(declarations) => {
+                // Validate against every built-in palette before publishing defaults.
+                // A bad user link must not also break the fallback schemes.
+                for (name, source) in super::SCHEME_FILES {
+                    let file: super::SchemeFile =
+                        toml::from_str(source).expect("embedded scheme must parse");
+                    if let Err(error) = file.resolve_with(&declarations) {
+                        eprintln!(
+                            "highlight groups for {name}: {error}; using built-in declarations"
+                        );
+                        return Self::embedded();
+                    }
+                }
+                declarations
+            }
+            Err(error) => {
+                eprintln!("highlight groups: {error}; using built-in declarations");
+                Self::embedded()
+            }
+        }
+    }
+}
+
+/// The user's `groups.toml` over the built-in one, or the built-in one alone when the
+/// user's copy fails to parse or to resolve against any embedded scheme.
+pub static GROUP_DECLARATIONS: LazyLock<GroupDeclarations> = LazyLock::new(GroupDeclarations::load);
+
+/// Generate the selector, fields, reflection and indexing from the sole TOML list.
+macro_rules! highlight_groups {
+    ($($group:ident),+ $(,)?) => {
+        /// Every syntax and interface highlight group.
+        #[enum_fn(description: &'static str = stringify)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum HLGroup {$(
+            #[doc = concat!("The `", stringify!($group), "` highlight group.")]
+            $group,
+        )+}
+
+        impl HLGroup {
+            fn named(name: &str) -> Result<Self, String> {
+                match name {
+                    $(stringify!($group) => Ok(Self::$group),)+
+                    _ => Err(format!("unknown highlight group `{name}`")),
+                }
+            }
+        }
+
+        /// Every highlight group's resolved style.
+        #[allow(non_snake_case)]
+        #[derive(Clone, Copy)]
+        pub struct Groups {$(
+            #[doc = concat!("Resolved style for `", stringify!($group), "`.")]
+            pub $group: Style,
+        )+}
+
+        impl Groups {
+            /// Resolve every group from its topmost declaration: a variant's
+            /// `overrides`, else the scheme's `styles`, else the shared `declarations`.
+            /// Links and channel references resolve against the same layering.
+            pub fn resolve(
+                styles: &StyleTable,
+                overrides: &StyleTable,
+                palette: &Palette,
+                declarations: &GroupDeclarations,
+            ) -> Result<Self, String> {
+                for (name, declaration) in styles.iter().chain(overrides) {
+                    HLGroup::named(name)?;
+                    if declaration.required || declaration.captures.is_some() {
+                        return Err(format!(
+                            "{name}: required and captures belong only in groups.toml"
+                        ));
+                    }
+                }
+                for (name, declaration) in &declarations.0 {
+                    if declaration.required && !styles.contains_key(name) {
+                        return Err(format!("missing required highlight group `{name}`"));
+                    }
+                }
+                let mut resolver = StyleResolver {
+                    declarations, styles, overrides, palette,
+                    resolved: HashMap::new(), visiting: Vec::new(),
+                };
+                Ok(Self {$($group: resolver.group(stringify!($group))?,)+})
+            }
+
+            /// Every group's name and style, in declaration order.
+            pub fn highlight_groups(&self) -> Vec<(&'static str, Style)> {
+                vec![$((HLGroup::$group.description(), self.$group),)+]
+            }
+        }
+
+        impl Index<HLGroup> for Groups {
+            type Output = Style;
+            fn index(&self, group: HLGroup) -> &Self::Output {
+                match group {$(HLGroup::$group => &self.$group,)+}
+            }
+        }
+    };
+}
+
+include!(concat!(env!("OUT_DIR"), "/highlight_groups.rs"));
+
+/// Turns layered declarations into styles group by group, memoising each result and
+/// tracking the link chain in progress to report cycles.
+struct StyleResolver<'a> {
+    declarations: &'a GroupDeclarations,
+    styles: &'a StyleTable,
+    overrides: &'a StyleTable,
+    palette: &'a Palette,
+    resolved: HashMap<String, Style>,
+    visiting: Vec<String>,
+}
+
+impl StyleResolver<'_> {
+    fn channel(&mut self, reference: &str) -> Result<Option<Color>, String> {
+        let (name, channel) = reference
+            .rsplit_once('.')
+            .ok_or_else(|| format!("expected Group.fg, Group.bg or Group.sp: `{reference}`"))?;
+        let style = self.group(name)?;
+        match channel {
+            "fg" => Ok(style.fg),
+            "bg" => Ok(style.bg),
+            "sp" => Ok(style.underline_color),
+            _ => Err(format!("unknown style channel `{reference}`")),
+        }
+    }
+
+    fn group(&mut self, name: &str) -> Result<Style, String> {
+        if let Some(style) = self.resolved.get(name) {
+            return Ok(*style);
+        }
+        HLGroup::named(name)?;
+        if self.visiting.iter().any(|entry| entry == name) {
+            return Err(format!(
+                "cyclic highlight links: {} -> {name}",
+                self.visiting.join(" -> ")
+            ));
+        }
+        let declaration = self
+            .overrides
+            .get(name)
+            .or_else(|| self.styles.get(name))
+            .or_else(|| self.declarations.0.get(name))
+            .cloned()
+            .ok_or_else(|| format!("missing highlight declaration `{name}`"))?;
+        self.visiting.push(name.into());
+        let style = self
+            .style(&declaration)
+            .map_err(|error| format!("{name}: {error}"))?;
+        self.visiting.pop();
+        self.resolved.insert(name.into(), style);
+        Ok(style)
+    }
+
+    fn style(&mut self, declaration: &StyleDeclaration) -> Result<Style, String> {
+        let mut style = match &declaration.link {
+            Some(link) => self.group(link)?,
+            None => Style::new(),
+        };
+        for (direct, reference, channel) in [
+            (&declaration.fg, &declaration.fg_from, "fg"),
+            (&declaration.bg, &declaration.bg_from, "bg"),
+            (&declaration.sp, &declaration.sp_from, "sp"),
+        ] {
+            if direct.is_some() && reference.is_some() {
+                return Err(format!("{channel} and {channel}_from cannot both be set"));
+            }
+            let color = match reference {
+                Some(reference) => Some(self.channel(reference)?),
+                None => direct
+                    .as_deref()
+                    .map(|name| {
+                        if name == "none" {
+                            Ok(None)
+                        } else {
+                            self.palette.resolve(Some(name))
+                        }
+                    })
+                    .transpose()?,
+            };
+            if let Some(color) = color {
+                match channel {
+                    "fg" => style.fg = color,
+                    "bg" => style.bg = color,
+                    _ => style.underline_color = color,
+                }
+            }
+        }
+        for (value, modifier) in [
+            (declaration.bold, Modifier::BOLD),
+            (declaration.italic, Modifier::ITALIC),
+            (declaration.underline, Modifier::UNDERLINED),
+            (declaration.reverse, Modifier::REVERSED),
+            (declaration.crossed_out, Modifier::CROSSED_OUT),
+            (declaration.dim, Modifier::DIM),
+        ] {
+            if let Some(value) = value {
+                style = if value {
+                    style.add_modifier(modifier)
+                } else {
+                    style.remove_modifier(modifier)
+                };
+            }
+        }
+        if declaration.saturation.is_some() || declaration.lightening.is_some() {
+            let saturation = declaration.saturation.unwrap_or(100.0);
+            let lightening = declaration.lightening.unwrap_or(0.0);
+            for amount in [saturation, lightening] {
+                if !amount.is_finite() || !(0.0..=100.0).contains(&amount) {
+                    return Err("saturation and lightening must be between 0 and 100".into());
+                }
+            }
+            style = softened(style, saturation, lightening);
+        }
+        if let Some(amount) = declaration.darken {
+            if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
+                return Err("darken must be between 0 and 1".into());
+            }
+            if let Some(fg) = style.fg {
+                style.fg = Some(super::palette::blend(fg, Color::Rgb(0, 0, 0), amount)?);
+            }
+        }
+        match (&declaration.bg_blend, declaration.bg_blend_amount) {
+            (Some(color), Some(amount)) => {
+                let bg = style.bg.ok_or("bg_blend needs a background")?;
+                let color = self
+                    .palette
+                    .resolve(Some(color))?
+                    .expect("a named palette color exists");
+                style.bg = Some(super::palette::blend(bg, color, amount)?);
+            }
+            (None, None) => {}
+            _ => return Err("bg_blend and bg_blend_amount must be set together".into()),
+        }
+        match (&declaration.tint_from, declaration.tint) {
+            (Some(reference), Some(amount)) => {
+                if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
+                    return Err("tint must be between 0 and 1".into());
+                }
+                if let (Some(bg), Some(fg)) = (style.bg, self.channel(reference)?) {
+                    style.bg = Some(super::palette::blend(bg, fg, amount)?);
+                }
+            }
+            (None, None) => {}
+            _ => return Err("tint_from and tint must be set together".into()),
         }
         Ok(style)
     }
 }
-
-/// How much of a string's saturation printed text keeps, in percent.
-const PRINTED_SATURATION: f32 = 55.0;
-/// How far printed text's value rises toward white, in percent of what remains.
-const PRINTED_LIGHTENING: f32 = 15.0;
 
 /// `style` with its foreground desaturated to `saturation` percent of what it was and
 /// lightened by `lightening` percent of the way to white, its hue untouched. A colour
@@ -74,277 +407,6 @@ fn softened(style: Style, saturation: f32, lightening: f32) -> Style {
         byte.round().clamp(0.0, 255.0) as u8
     };
     style.fg(Color::Rgb(channel(r), channel(g), channel(b)))
-}
-
-/// Darken a label's colour while keeping its hue and modifiers.
-fn darkened(style: Style) -> Style {
-    match style.fg {
-        Some(fg) => super::palette::blend(fg, Color::Rgb(0, 0, 0), 0.25)
-            .map_or(style, |color| style.fg(color)),
-        None => style,
-    }
-}
-
-/// Only an underline, drawn in `style`'s colour, over whatever it marks.
-fn underline_in(style: Style) -> Style {
-    Style {
-        underline_color: style.fg,
-        ..Style::new()
-    }
-    .underlined()
-}
-
-/// Declares the base, fixed palette, and linked groups once, deriving the [`HLGroup`]
-/// selector enum, the [`Groups`] style table, its resolution and indexing.
-///
-/// A scheme sets the `base` styles; fixed palette groups expose all resolved colors.
-/// Every `linked` group is a
-/// Rust expression over the resolved base styles, which a scheme may replace through
-/// its optional overrides; so adding, renaming or relinking a group is one line here.
-macro_rules! highlight_groups {
-    (
-        base { $($base:ident),+ $(,)? }
-        palette { $($palette:ident: $channel:ident = $color:literal),+ $(,)? }
-        linked($from:ident, $hue:ident) { $($linked:ident = $link:expr),+ $(,)? }
-    ) => {
-        /// The complete scheme-independent space of syntax and interface styles.
-        #[enum_fn(description: &'static str = stringify)]
-        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        pub enum HLGroup {
-            $($base,)+
-            $($palette,)+
-            $($linked),+
-        }
-
-        /// The styles a scheme sets from its palette, which every other group links to.
-        #[allow(non_snake_case)]
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        pub struct Base<S = Style> {$(
-            pub $base: S,
-        )+}
-
-        /// A scheme's own styles for linked groups, each replacing its link outright.
-        #[allow(non_snake_case)]
-        #[derive(Default, Deserialize)]
-        #[serde(default, deny_unknown_fields)]
-        pub struct Overrides {$(
-            $linked: Option<StyleSpec>,
-        )+}
-
-        /// Every highlight group's resolved style.
-        #[allow(non_snake_case)]
-        #[derive(Clone, Copy)]
-        pub struct Groups {
-            $(pub $base: Style,)+
-            $(pub $palette: Style,)+
-            $(pub $linked: Style,)+
-        }
-
-        impl Groups {
-            /// Resolve the base styles from the palette, then every linked group from
-            /// them unless the scheme overrides it, naming the offending group when a
-            /// colour is unknown.
-            pub fn resolve(
-                base: &Base<StyleSpec>,
-                overrides: &Overrides,
-                palette: &Palette,
-            ) -> Result<Self, String> {
-                let resolve = |name: &str, spec: &StyleSpec| {
-                    spec.resolve(palette).map_err(|error| format!("{name}: {error}"))
-                };
-                let $from = Base {$(
-                    $base: resolve(stringify!($base), &base.$base)?,
-                )+};
-                let $hue = |name| -> Result<Style, String> {
-                    Ok(Style::new().fg(palette.resolve(Some(name))?.expect("fixed palette colors exist")))
-                };
-                Ok(Self {
-                    $($base: $from.$base,)+
-                    $($palette: Style::new().$channel(palette.resolve(Some($color))?.expect("fixed palette colors exist")),)+
-                    $($linked: match &overrides.$linked {
-                        Some(spec) => resolve(stringify!($linked), spec)?,
-                        None => $link,
-                    }),+
-                })
-            }
-
-            /// Every group's name paired with its style, in declaration order.
-            pub fn highlight_groups(&self) -> Vec<(&'static str, Style)> {
-                vec![
-                    $((HLGroup::$base.description(), self.$base),)+
-                    $((HLGroup::$palette.description(), self.$palette),)+
-                    $((HLGroup::$linked.description(), self.$linked)),+
-                ]
-            }
-        }
-
-        impl Index<HLGroup> for Groups {
-            type Output = Style;
-
-            fn index(&self, group: HLGroup) -> &Self::Output {
-                match group {
-                    $(HLGroup::$base => &self.$base,)+
-                    $(HLGroup::$palette => &self.$palette,)+
-                    $(HLGroup::$linked => &self.$linked),+
-                }
-            }
-        }
-    };
-}
-
-highlight_groups! {
-    base {
-        // Surfaces: the transcript, code, raised popups and printed text, a pending
-        // cell, selected text and the focused row of a list.
-        Canvas,
-        Code,
-        Raised,
-        Pending,
-        Selection,
-        Focus,
-        // Text: ordinary, receding, and the faint lines that frame blocks.
-        Text,
-        Muted,
-        Faint,
-        // Syntax.
-        Keyword,
-        Function,
-        Type,
-        String,
-        Number,
-        Operator,
-        Symbol,
-        // Named after Neovim's semantic-token roles where one exists (`@lsp.type.*`);
-        // the rest follow the tree-sitter captures they are styled from.
-        Parameter,
-        Property,
-        EnumVariant,
-        Macro,
-        Attribute,
-        Builtin,
-        Regex,
-        // Signals: what asks for attention, and each severity.
-        Accent,
-        Error,
-        Warning,
-        Info,
-        Hint,
-    }
-    palette {
-        Red: fg = "red",
-        RedLight: fg = "red_light",
-        RedDark: fg = "red_dark",
-        Green: fg = "green",
-        GreenLight: fg = "green_light",
-        GreenDark: fg = "green_dark",
-        Yellow: fg = "yellow",
-        YellowLight: fg = "yellow_light",
-        YellowDark: fg = "yellow_dark",
-        Blue: fg = "blue",
-        BlueLight: fg = "blue_light",
-        BlueDark: fg = "blue_dark",
-        Purple: fg = "purple",
-        PurpleLight: fg = "purple_light",
-        PurpleDark: fg = "purple_dark",
-        Aqua: fg = "aqua",
-        AquaLight: fg = "aqua_light",
-        AquaDark: fg = "aqua_dark",
-        Orange: fg = "orange",
-        OrangeLight: fg = "orange_light",
-        OrangeDark: fg = "orange_dark",
-        Gray: fg = "gray",
-        GrayLight: fg = "gray_light",
-        GrayDark: fg = "gray_dark",
-        Fg0: fg = "fg0",
-        Fg1: fg = "fg1",
-        Fg2: fg = "fg2",
-        Fg3: fg = "fg3",
-        Fg4: fg = "fg4",
-        Bg0: bg = "bg0",
-        Bg1: bg = "bg1",
-        Bg2: bg = "bg2",
-        Bg3: bg = "bg3",
-        Bg4: bg = "bg4",
-        BgRed: bg = "bg_red",
-        BgGreen: bg = "bg_green",
-        BgYellow: bg = "bg_yellow",
-        BgBlue: bg = "bg_blue",
-        BgPurple: bg = "bg_purple",
-        BgAqua: bg = "bg_aqua",
-        BgOrange: bg = "bg_orange",
-        BgGray: bg = "bg_gray",
-    }
-    linked(base, hue) {
-        // Tree-sitter captures of M2 source.
-        Comment = base.Muted.italic(),
-        Constant = base.Number,
-        Boolean = base.Number,
-        Float = base.Number,
-        Statement = base.Keyword,
-        Conditional = base.Keyword,
-        Repeat = base.Keyword,
-        Exception = base.Keyword,
-        StorageClass = base.Keyword,
-        Debug = base.Keyword,
-        Delimiter = base.Muted,
-        Punctuation = base.Muted,
-        Variable = base.Text,
-        Installation = base.Function,
-        CompiledFunction = base.Function,
-        Quote = base.Symbol,
-        // Modules read as types, set apart by italics.
-        Namespace = base.Type.italic(),
-        Package = base.Type.italic(),
-        Documentation = hue("blue_light")?,
-        // Markup keeps syntax colours beneath emphasis, code and links; a link is
-        // underlined only while the pointer is over it.
-        MarkupHeading1 = hue("yellow_light")?.bold(),
-        // A title's brief, beside its name.
-        MarkupBrief = hue("yellow_light")?.italic(),
-        MarkupHeading2 = base.Function.bold(),
-        MarkupHeading3 = hue("aqua")?.bold(),
-        MarkupStrong = Style::new().bold(),
-        MarkupEmphasis = Style::new().italic(),
-        MarkupStrongEmphasis = Style::new().bold().italic(),
-        MarkupStrike = Style::new().crossed_out(),
-        MarkupLinkHover = Style::new().underlined(),
-        // Diagnostic underlines, coloured through the special (underline) colour.
-        DiagnosticError = underline_in(base.Error),
-        DiagnosticWarning = underline_in(base.Warning),
-        DiagnosticInfo = underline_in(base.Info),
-        DiagnosticHint = underline_in(base.Hint),
-        // Transcript: values, printed text and the frames around them.
-        Value = base.Text,
-        FractionRule = underline_in(base.Operator),
-        Printed = softened(base.String, PRINTED_SATURATION, PRINTED_LIGHTENING).patch(base.Raised),
-        HintText = base.Muted,
-        // @##Trash
-        Separator = Style {
-            fg: base.Canvas.bg,
-            ..Style::new()
-        },
-        ValueBorder = base.Faint,
-        // The latest three `oN` labels are bold; older labels are plain.
-        OutputNumber = base.Accent,
-        RecentOutput = base.Accent.bold(),
-        RecentCellNumber = darkened(base.Accent),
-        ErrorBorder = base.Error,
-        ErrorMessage = hue("red_light")?,
-        ErrorCode = base.Code.bg(hue("bg_red")?.fg.expect("fixed palette colors exist")),
-        WarningBorder = base.Warning,
-        InfoBorder = base.Info,
-        // Status line segments and key-hint labels.
-        Statusline1 = base.String,
-        Statusline2 = base.Warning,
-        Statusline3 = base.Error,
-        StatuslineBg = base.Code,
-        StatuslineError = base.Error,
-        StatuslineWarning = base.Warning,
-        KeymapHint = base.Accent,
-        // A command typed after the command prefix, and its name in the picker.
-        Command = base.Accent,
-    }
 }
 
 /// The one scheme in effect, republished whenever the appearance changes.
@@ -423,8 +485,8 @@ accessors! {
     code: Code,
     pending: Pending,
     separator: Separator,
-    picker: Raised,
-    picker_selected: Focus,
+    picker: Picker,
+    picker_selected: PickerSelected,
     value: Value,
     error: Error,
     warning: Warning,
@@ -436,12 +498,45 @@ accessors! {
     output_number: OutputNumber,
     recent_output: RecentOutput,
     recent_cell_number: RecentCellNumber,
-    prompt: KeymapHint,
+    prompt: InputPrompt,
     command: Command,
     selection: Selection,
     muted: Muted,
     printed: Printed,
-    hint_text: HintText,
+    completion_hint: CompletionHint,
+    placeholder_hint: PlaceholderHint,
+    picker_marker: PickerMarker,
+    picker_selected_marker: PickerSelectedMarker,
+    picker_title: PickerTitle,
+    picker_border: PickerBorder,
+    picker_tab: PickerTab,
+    picker_tab_selected: PickerTabSelected,
+    cell_number: CellNumber,
+    pending_cell_marker: PendingCellMarker,
+    queued_cell_marker: QueuedCellMarker,
+    failed_cell_marker: FailedCellMarker,
+    rejected_cell_marker: RejectedCellMarker,
+    printed_cell_number: PrintedCellNumber,
+    pending_separator: PendingSeparator,
+    muted_code_text: MutedCodeText,
+    settings_item_label: SettingsItemLabel,
+    settings_item_value: SettingsItemValue,
+    settings_item_unavailable: SettingsItemUnavailable,
+    settings_unavailable_note: SettingsUnavailableNote,
+    settings_item_description: SettingsItemDescription,
+    settings_step_arrow: SettingsStepArrow,
+    settings_button: SettingsButton,
+    keymap_action_label: KeymapActionLabel,
+    command_action_description: CommandActionDescription,
+    command_shortcut: CommandShortcut,
+    frame_stats: FrameStats,
+    highlight_inspector_title: HighlightInspectorTitle,
+    highlight_inspector_border: HighlightInspectorBorder,
+    view_divider: ViewDivider,
+    syntax_tree_branch: SyntaxTreeBranch,
+    syntax_tree_token_marker: SyntaxTreeTokenMarker,
+    syntax_tree_label_separator: SyntaxTreeLabelSeparator,
+    syntax_tree_border: SyntaxTreeBorder,
     error_border: ErrorBorder,
     error_message: ErrorMessage,
     error_code: ErrorCode,
@@ -462,44 +557,7 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
-    use crate::ui::controller::settings::theme::{Mode, SchemeFile, SCHEMES, SCHEME_FILES};
-
-    #[test]
-    fn every_palette_color_is_used_by_a_highlight_group() {
-        for scheme in SCHEMES.iter() {
-            for variant in scheme.variants() {
-                let groups = variant.groups();
-                let styles = groups.highlight_groups();
-                for (name, color) in variant.palette().colors() {
-                    assert!(
-                        styles.iter().any(|(_, style)| {
-                            let actual = if name.starts_with("bg") {
-                                style.bg
-                            } else {
-                                style.fg
-                            };
-                            actual == Some(color)
-                        }),
-                        "{} {}: {name} needs a group in its intended channel",
-                        scheme.label(),
-                        variant.label()
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn palette_groups_are_scheme_independent() {
-        for scheme in SCHEMES.iter() {
-            for variant in scheme.variants() {
-                let groups = variant.groups();
-                assert_eq!(groups.style(HLGroup::Bg0), groups.Bg0);
-                assert_eq!(groups.style(HLGroup::BgRed), groups.BgRed);
-                assert_eq!(groups.style(HLGroup::Green), groups.Green);
-            }
-        }
-    }
+    use crate::ui::controller::settings::theme::SCHEMES;
 
     /// HSV saturation and hue of an RGB foreground, or None for any other colour.
     fn saturation_and_hue(style: Style) -> Option<(f32, f32)> {
@@ -519,6 +577,169 @@ mod tests {
             (r - g) / chroma + 4.0
         } * 60.0;
         Some((if high == 0.0 { 0.0 } else { chroma / high }, hue))
+    }
+
+    fn fixture() -> (StyleTable, Palette) {
+        let file: super::super::SchemeFile =
+            toml::from_str(super::super::SCHEME_FILES[0].1).unwrap();
+        let palette = file
+            .palette
+            .palette(super::super::Mode::Dark, "mocha")
+            .unwrap();
+        (file.groups, palette)
+    }
+
+    #[test]
+    fn overrides_propagate_through_links_and_channel_references() {
+        let (styles, palette) = fixture();
+        let overrides = toml::from_str(
+            r#"
+            Accent = { fg = "red", italic = true }
+            Error = { fg = "blue" }
+            Canvas = { bg = "mantle" }
+        "#,
+        )
+        .unwrap();
+        let groups = Groups::resolve(
+            &styles,
+            &overrides,
+            &palette,
+            &GroupDeclarations::embedded(),
+        )
+        .unwrap();
+        assert_eq!(groups.OutputNumber, groups.Accent);
+        assert_eq!(groups.InputPrompt, groups.Accent);
+        assert!(groups
+            .RecentOutput
+            .add_modifier
+            .contains(Modifier::ITALIC | Modifier::BOLD));
+        assert_eq!(groups.DiagnosticError.underline_color, groups.Error.fg);
+        assert_eq!(groups.Separator.fg, groups.Canvas.bg);
+    }
+
+    #[test]
+    fn explicit_styles_replace_links_and_can_remove_inherited_modifiers() {
+        let (styles, palette) = fixture();
+        let overrides = toml::from_str(
+            r#"
+            Picker = { bold = true }
+            RecentOutput = { link = "Accent", bold = false }
+        "#,
+        )
+        .unwrap();
+        let groups = Groups::resolve(
+            &styles,
+            &overrides,
+            &palette,
+            &GroupDeclarations::embedded(),
+        )
+        .unwrap();
+        assert_eq!(groups.Picker, Style::new().bold());
+        assert!(!groups.RecentOutput.add_modifier.contains(Modifier::BOLD));
+        assert!(groups.RecentOutput.sub_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn older_user_defaults_inherit_new_groups_and_can_relink_existing_ones() {
+        let (styles, palette) = fixture();
+        let declarations =
+            GroupDeclarations::parse("CompletionHint = { link = 'Info', italic = true }").unwrap();
+        let groups = Groups::resolve(&styles, &HashMap::new(), &palette, &declarations).unwrap();
+        assert_eq!(groups.CompletionHint, groups.Info.italic());
+        assert_eq!(groups.PlaceholderHint, groups.Muted);
+        assert!(
+            GroupDeclarations::parse("CompletinoHint = { link = 'Info' }")
+                .err()
+                .unwrap()
+                .contains("CompletinoHint")
+        );
+        assert!(GroupDeclarations::parse("Text = { link = 'Info' }").is_err());
+    }
+
+    #[test]
+    fn captures_are_declared_once_and_inherited_by_older_user_defaults() {
+        let owner = |declarations: &GroupDeclarations, capture: &str| {
+            declarations
+                .captures()
+                .unwrap()
+                .into_iter()
+                .find(|(name, _)| name == capture)
+                .map(|(_, group)| group)
+        };
+        let older = GroupDeclarations::parse("Conditional = { link = 'Statement' }").unwrap();
+        assert_eq!(
+            owner(&older, "keyword.conditional"),
+            owner(&GroupDeclarations::embedded(), "keyword.conditional")
+        );
+        let moved =
+            GroupDeclarations::parse("Conditional = { link = 'Keyword', captures = [] }\nRepeat = { link = 'Keyword', captures = ['keyword.repeat', 'keyword.conditional'] }")
+                .unwrap();
+        assert_eq!(owner(&moved, "keyword.conditional"), Some(HLGroup::Repeat));
+        assert!(GroupDeclarations::parse(
+            "Repeat = { link = 'Keyword', captures = ['keyword.conditional'] }"
+        )
+        .err()
+        .unwrap()
+        .contains("keyword.conditional"));
+
+        let (styles, palette) = fixture();
+        let overrides = toml::from_str("Comment = { fg = 'red', captures = ['comment'] }").unwrap();
+        assert!(Groups::resolve(
+            &styles,
+            &overrides,
+            &palette,
+            &GroupDeclarations::embedded()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn cycles_missing_required_styles_and_bad_references_are_rejected() {
+        let (mut styles, palette) = fixture();
+        let overrides: StyleTable = toml::from_str(
+            r#"
+            CompletionHint = { link = "PlaceholderHint" }
+            PlaceholderHint = { fg_from = "CompletionHint.fg" }
+        "#,
+        )
+        .unwrap();
+        let error = Groups::resolve(
+            &styles,
+            &overrides,
+            &palette,
+            &GroupDeclarations::embedded(),
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("cyclic"), "{error}");
+        for source in [
+            "CompletionHint = { link = 'NoSuchGroup' }",
+            "CompletionHint = { fg_from = 'Text.typo' }",
+            "CompletionHint = { fg = 'invented_color' }",
+            "CompletionHint = { bg = 'base', bg_blend = 'red', bg_blend_amount = 1.5 }",
+        ] {
+            let overrides = toml::from_str(source).unwrap();
+            assert!(
+                Groups::resolve(
+                    &styles,
+                    &overrides,
+                    &palette,
+                    &GroupDeclarations::embedded()
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+        styles.remove("Text");
+        assert!(Groups::resolve(
+            &styles,
+            &HashMap::new(),
+            &palette,
+            &GroupDeclarations::embedded()
+        )
+        .err()
+        .unwrap()
+        .contains("missing required highlight group `Text`"));
     }
 
     #[test]
@@ -572,23 +793,19 @@ mod tests {
     }
 
     #[test]
-    fn an_override_replaces_its_link_outright() {
-        let scheme: SchemeFile = toml::from_str(SCHEME_FILES[0]).expect("embedded scheme parses");
-        let name = &scheme.variants.dark[0];
-        let palette = scheme.colors.palette(Mode::Dark, name).unwrap();
-        let overrides = Overrides {
-            Conditional: Some(StyleSpec {
-                bold: true,
-                ..StyleSpec::default()
-            }),
-            ..Overrides::default()
-        };
-
-        let linked = Groups::resolve(&scheme.base, &Overrides::default(), &palette).unwrap();
-        let overridden = Groups::resolve(&scheme.base, &overrides, &palette).unwrap();
-        assert_eq!(linked.Conditional, linked.Keyword);
-        assert_eq!(overridden.Conditional, Style::new().bold());
-        assert_eq!(overridden.Repeat, linked.Repeat);
+    fn input_hints_have_independent_named_groups() {
+        let groups = Groups::default();
+        assert_eq!(groups.completion_hint(), groups.Muted);
+        assert_eq!(groups.placeholder_hint(), groups.Muted);
+        assert_eq!(groups.prompt(), groups.Accent);
+        assert!(groups
+            .highlight_groups()
+            .iter()
+            .any(|(name, _)| *name == "CompletionHint"));
+        assert!(groups
+            .highlight_groups()
+            .iter()
+            .any(|(name, _)| *name == "PlaceholderHint"));
     }
 
     #[test]
@@ -635,21 +852,12 @@ mod tests {
     }
 
     #[test]
-    fn documentation_groups_follow_the_requested_palette_colours() {
+    fn documentation_links_are_underlined_only_while_hovered() {
         for groups in SCHEMES
             .iter()
             .flat_map(|scheme| scheme.variants())
             .map(|variant| variant.groups())
         {
-            assert_eq!(
-                groups[HLGroup::Documentation].fg,
-                groups[HLGroup::BlueLight].fg
-            );
-            assert_eq!(
-                groups[HLGroup::MarkupHeading1].fg,
-                groups[HLGroup::YellowLight].fg
-            );
-            assert_eq!(groups[HLGroup::MarkupHeading3].fg, groups[HLGroup::Aqua].fg);
             assert!(!groups[HLGroup::Documentation]
                 .add_modifier
                 .contains(Modifier::UNDERLINED));
@@ -708,21 +916,26 @@ mod tests {
                 .into_iter()
                 .collect::<HashSet<_>>()
                 .len(),
-                3
+                3,
+                "surfaces: {:?}",
+                [
+                    groups.transcript().bg,
+                    groups.code().bg,
+                    groups.printed().bg
+                ]
             );
         }
     }
 
     #[test]
-    fn pickers_reuse_printed_backgrounds_and_keep_their_old_selection_surface() {
+    fn pickers_have_their_own_surface_and_selection_groups() {
         for groups in SCHEMES
             .iter()
             .flat_map(|scheme| scheme.variants())
             .map(|variant| variant.groups())
         {
-            assert_eq!(groups.picker().bg, groups.printed().bg);
+            assert!(groups.picker().bg.is_some());
             assert!(groups.picker_selected().bg.is_some());
-            assert!(groups.picker_selected().fg.is_none());
         }
     }
 }

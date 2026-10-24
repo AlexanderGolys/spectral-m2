@@ -1,81 +1,175 @@
+# Native palette source: https://github.com/sainnhe/everforest
+# Palette names are shared by every variant; values retain their upstream RGB identity.
 name = "everforest"
 
 [variants]
 dark = ["hard", "medium", "soft"]
 light = ["hard", "medium", "soft"]
 
-[colors.red]
-dark = "#e67e80"
-light = "#f85552"
-
-[colors.green]
-dark = "#a7c080"
-light = "#8da101"
-
-[colors.yellow]
-dark = "#dbbc7f"
-light = "#dfa000"
-
-[colors.blue]
-dark = "#7fbbb3"
-light = "#3a94c5"
-
-[colors.purple]
-dark = "#d699b6"
-light = "#df69ba"
-
-[colors.aqua]
+[palette."aqua"]
 dark = "#83c092"
 light = "#35a77c"
 
-[colors.orange]
-dark = "#e69875"
-light = "#f57d26"
+[palette."bg0"]
+dark = { hard = "#272e33", medium = "#2d353b", soft = "#333c43" }
+light = { hard = "#fffbef", medium = "#fdf6e3", soft = "#f3ead3" }
 
-[colors.gray]
+[palette."bg1"]
+dark = { hard = "#2e383c", medium = "#343f44", soft = "#3a464c" }
+light = { hard = "#f8f5e4", medium = "#f4f0d9", soft = "#eae4ca" }
+
+[palette."bg2"]
+dark = { hard = "#374145", medium = "#3d484d", soft = "#434f55" }
+light = { hard = "#f2efdf", medium = "#efebd4", soft = "#e5dfc5" }
+
+[palette."bg3"]
+dark = { hard = "#414b50", medium = "#475258", soft = "#4d5960" }
+light = { hard = "#edeada", medium = "#e6e2cc", soft = "#ddd8be" }
+
+[palette."bg4"]
+dark = { hard = "#495156", medium = "#4f585e", soft = "#555f66" }
+light = { hard = "#e8e5d5", medium = "#e0dcc7", soft = "#d8d3ba" }
+
+[palette."bg5"]
+dark = { hard = "#4f5b58", medium = "#56635f", soft = "#5d6b66" }
+light = { hard = "#bec5b2", medium = "#bdc3af", soft = "#b9c0ab" }
+
+[palette."bg_blue"]
+dark = { hard = "#384b55", medium = "#3a515d", soft = "#3f5865" }
+light = { hard = "#ecf5ed", medium = "#e9f0e9", soft = "#e1e7dd" }
+
+[palette."bg_dim"]
+dark = { hard = "#1e2326", medium = "#232a2e", soft = "#293136" }
+light = { hard = "#f2efdf", medium = "#efebd4", soft = "#e5dfc5" }
+
+[palette."bg_green"]
+dark = { hard = "#3c4841", medium = "#425047", soft = "#48584e" }
+light = { hard = "#f3f5d9", medium = "#f0f1d2", soft = "#e5e6c5" }
+
+[palette."bg_purple"]
+dark = { hard = "#463f48", medium = "#4a444e", soft = "#4e4953" }
+light = { hard = "#fceced", medium = "#fae8e2", soft = "#f1ddd4" }
+
+[palette."bg_red"]
+dark = { hard = "#493b40", medium = "#514045", soft = "#59464c" }
+light = { hard = "#ffe7de", medium = "#fde3da", soft = "#fadbd0" }
+
+[palette."bg_visual"]
+dark = { hard = "#4c3743", medium = "#543a48", soft = "#5c3f4f" }
+light = { hard = "#f0f2d4", medium = "#eaedc8", soft = "#e1e4bd" }
+
+[palette."bg_yellow"]
+dark = { hard = "#45443c", medium = "#4d4c43", soft = "#55544a" }
+light = { hard = "#fef2d5", medium = "#faedcd", soft = "#f1e4c5" }
+
+[palette."blue"]
+dark = "#7fbbb3"
+light = "#3a94c5"
+
+[palette."fg"]
+dark = "#d3c6aa"
+light = "#5c6a72"
+
+[palette."green"]
+dark = "#a7c080"
+light = "#8da101"
+
+[palette."grey0"]
+dark = "#7a8478"
+light = "#a6b0a0"
+
+[palette."grey1"]
 dark = "#859289"
 light = "#939f91"
 
-[colors.fg]
-dark = ["#d3c6aa", "#9da9a0", "#859289", "#7a8478"]
-light = ["#5c6a72", "#829181", "#939f91", "#a6b0a0"]
+[palette."grey2"]
+dark = "#9da9a0"
+light = "#829181"
 
-[colors.bg]
-dark = { hard = ["#272e33", "#1e2326", "#2e383c", "#374145", "#414b50"], medium = ["#2d353b", "#232a2e", "#343f44", "#3d484d", "#475258"], soft = ["#333c43", "#293136", "#3a464c", "#434f55", "#4d5960"] }
-light = { hard = ["#fffbef", "#f2efdf", "#f8f5e4", "#f2efdf", "#edeada"], medium = ["#fdf6e3", "#efebd4", "#f4f0d9", "#efebd4", "#e6e2cc"], soft = ["#f3ead3", "#e5dfc5", "#eae4ca", "#e5dfc5", "#ddd8be"] }
+[palette."orange"]
+dark = "#e69875"
+light = "#f57d26"
 
-[base]
-Canvas = { bg = "bg0" }
-Code = { bg = "bg1" }
-Raised = { bg = "bg2" }
-Pending = { bg = "bg2" }
-Selection = { bg = "bg3" }
-Focus = { bg = "bg3" }
-Text = { fg = "fg0" }
-Muted = { fg = "gray" }
-Faint = { fg = "fg4" }
-Keyword = { fg = "red" }
+[palette."purple"]
+dark = "#d699b6"
+light = "#df69ba"
+
+[palette."red"]
+dark = "#e67e80"
+light = "#f85552"
+
+[palette."statusline1"]
+dark = "#a7c080"
+light = "#93b259"
+
+[palette."statusline2"]
+dark = "#d3c6aa"
+light = "#708089"
+
+[palette."statusline3"]
+dark = "#e67e80"
+light = "#e66868"
+
+[palette."yellow"]
+dark = "#dbbc7f"
+light = "#dfa000"
+
+[groups]
+Accent = { fg = "aqua" }
+Attribute = { fg = "purple" }
+Bg0 = { bg = "bg0" }
+Bg1 = { bg = "bg_dim" }
+Bg2 = { bg = "bg1" }
+Bg3 = { bg = "bg_visual" }
+Bg4 = { bg = "bg1" }
+Boolean = { fg = "purple" }
+Builtin = { fg = "purple" }
+Comment = { fg = "grey1", italic = true }
+CompiledFunction = { fg = "green" }
+Conditional = { fg = "red" }
+Constant = { fg = "fg" }
+Debug = { fg = "orange" }
+Delimiter = { fg = "grey1" }
+Documentation = { fg = "fg" }
+EnumVariant = { fg = "orange" }
+Error = { fg = "red" }
+ErrorMessage = { bold = true, fg = "red", underline = true }
+Exception = { fg = "red" }
+Faint = { fg = "grey0" }
+Float = { fg = "purple" }
 Function = { fg = "green" }
-Type = { fg = "yellow" }
-String = { fg = "aqua" }
+Hint = { fg = "green" }
+Info = { fg = "blue" }
+Installation = { fg = "orange" }
+Keyword = { fg = "red" }
+Macro = { fg = "green" }
+MarkupBrief = { fg = "orange", italic = true }
+MarkupHeading1 = { bold = true, fg = "orange" }
+MarkupHeading2 = { bold = true, fg = "orange" }
+MarkupHeading3 = { bold = true, fg = "orange" }
+Muted = { fg = "grey1" }
+Namespace = { fg = "yellow" }
 Number = { fg = "purple" }
 Operator = { fg = "orange" }
-Symbol = { fg = "blue" }
-Parameter = { fg = "fg0" }
-Property = { fg = "purple" }
-EnumVariant = { fg = "aqua" }
-Macro = { fg = "green", italic = true }
-Attribute = { fg = "orange" }
-Builtin = { fg = "purple", italic = true }
-Regex = { fg = "blue", sp = "blue", underline = true }
-Accent = { fg = "aqua" }
-Error = { fg = "red" }
-Warning = { fg = "yellow" }
-Info = { fg = "blue" }
-Hint = { fg = "aqua" }
-
-[overrides]
-Constant = { fg = "purple", italic = true }
-Punctuation = { fg = "fg2" }
-Installation = { fg = "orange" }
+Package = { fg = "yellow" }
+Parameter = { fg = "fg" }
+Picker = { bg = "bg2", fg = "fg" }
+# Preserve the picker's independently styled text and key hints on selection.
+PickerSelected = { bg = "bg_visual" }
+Property = { fg = "fg" }
+Punctuation = { fg = "grey1" }
 Quote = { fg = "yellow" }
+Regex = { fg = "green" }
+Repeat = { fg = "red" }
+Statement = { fg = "red" }
+Statusline1 = { fg = "statusline1" }
+Statusline2 = { fg = "statusline2" }
+Statusline3 = { fg = "statusline3" }
+StorageClass = { fg = "orange" }
+String = { fg = "aqua" }
+Symbol = { fg = "fg" }
+Text = { fg = "fg" }
+Type = { fg = "yellow" }
+Variable = { fg = "fg" }
+ViewLabelActive = { fg = "fg" }
+Warning = { fg = "yellow" }

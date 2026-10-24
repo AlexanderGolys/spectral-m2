@@ -1,84 +1,579 @@
+# Native palette source: https://github.com/rebelot/kanagawa.nvim
+# Palette names are shared by every variant; values retain their upstream RGB identity.
 name = "kanagawa"
 
 [variants]
 dark = ["wave", "dragon"]
 light = ["lotus"]
 
-[colors.red]
-dark = { wave = "#ff5d62", dragon = "#c4746e" }
-light = "#d7474b"
+[palette."autumnGreen"]
+dark = "#76946a"
+light = "#76946a"
 
-[colors.green]
-dark = { wave = "#98bb6c", dragon = "#8a9a7b" }
-light = "#6f894e"
+[palette."autumnRed"]
+dark = "#c34043"
+light = "#c34043"
 
-[colors.yellow]
-dark = { wave = "#e6c384", dragon = "#c4b28a" }
-light = "#77713f"
+[palette."autumnYellow"]
+dark = "#dca561"
+light = "#dca561"
 
-[colors.blue]
-dark = { wave = "#7e9cd8", dragon = "#658594" }
-light = "#4d699b"
+[palette."boatYellow1"]
+dark = "#938056"
+light = "#938056"
 
-[colors.purple]
-dark = { wave = "#957fb8", dragon = "#8992a7" }
-light = "#a09cac"
+[palette."boatYellow2"]
+dark = "#c0a36e"
+light = "#c0a36e"
 
-[colors.aqua]
-dark = { wave = "#7aa89f", dragon = "#8ea4a2" }
+[palette."carpYellow"]
+dark = "#e6c384"
+light = "#e6c384"
+
+[palette."crystalBlue"]
+dark = "#7e9cd8"
+light = "#7e9cd8"
+
+[palette."dragonAqua"]
+dark = "#8ea4a2"
+light = "#8ea4a2"
+
+[palette."dragonAsh"]
+dark = "#737c73"
+light = "#737c73"
+
+[palette."dragonBlack0"]
+dark = "#0d0c0c"
+light = "#0d0c0c"
+
+[palette."dragonBlack1"]
+dark = "#12120f"
+light = "#12120f"
+
+[palette."dragonBlack2"]
+dark = "#1d1c19"
+light = "#1d1c19"
+
+[palette."dragonBlack3"]
+dark = "#181616"
+light = "#181616"
+
+[palette."dragonBlack4"]
+dark = "#282727"
+light = "#282727"
+
+[palette."dragonBlack5"]
+dark = "#393836"
+light = "#393836"
+
+[palette."dragonBlack6"]
+dark = "#625e5a"
+light = "#625e5a"
+
+[palette."dragonBlue"]
+dark = "#658594"
+light = "#658594"
+
+[palette."dragonBlue2"]
+dark = "#8ba4b0"
+light = "#8ba4b0"
+
+[palette."dragonGray"]
+dark = "#a6a69c"
+light = "#a6a69c"
+
+[palette."dragonGray2"]
+dark = "#9e9b93"
+light = "#9e9b93"
+
+[palette."dragonGray3"]
+dark = "#7a8382"
+light = "#7a8382"
+
+[palette."dragonGreen"]
+dark = "#87a987"
+light = "#87a987"
+
+[palette."dragonGreen2"]
+dark = "#8a9a7b"
+light = "#8a9a7b"
+
+[palette."dragonOrange"]
+dark = "#b6927b"
+light = "#b6927b"
+
+[palette."dragonOrange2"]
+dark = "#b98d7b"
+light = "#b98d7b"
+
+[palette."dragonPink"]
+dark = "#a292a3"
+light = "#a292a3"
+
+[palette."dragonRed"]
+dark = "#c4746e"
+light = "#c4746e"
+
+[palette."dragonTeal"]
+dark = "#949fb5"
+light = "#949fb5"
+
+[palette."dragonViolet"]
+dark = "#8992a7"
+light = "#8992a7"
+
+[palette."dragonWhite"]
+dark = "#c5c9c5"
+light = "#c5c9c5"
+
+[palette."dragonYellow"]
+dark = "#c4b28a"
+light = "#c4b28a"
+
+[palette."fujiGray"]
+dark = "#727169"
+light = "#727169"
+
+[palette."fujiWhite"]
+dark = "#dcd7ba"
+light = "#dcd7ba"
+
+[palette."katanaGray"]
+dark = "#717c7c"
+light = "#717c7c"
+
+[palette."lightBlue"]
+dark = "#a3d4d5"
+light = "#a3d4d5"
+
+[palette."lotusAqua"]
+dark = "#597b75"
 light = "#597b75"
 
-[colors.orange]
-dark = { wave = "#ffa066", dragon = "#b6927b" }
-light = "#cc6d00"
+[palette."lotusAqua2"]
+dark = "#5e857a"
+light = "#5e857a"
 
-[colors.gray]
-dark = { wave = "#727169", dragon = "#a6a69c" }
+[palette."lotusBlue1"]
+dark = "#c7d7e0"
+light = "#c7d7e0"
+
+[palette."lotusBlue2"]
+dark = "#b5cbd2"
+light = "#b5cbd2"
+
+[palette."lotusBlue3"]
+dark = "#9fb5c9"
+light = "#9fb5c9"
+
+[palette."lotusBlue4"]
+dark = "#4d699b"
+light = "#4d699b"
+
+[palette."lotusBlue5"]
+dark = "#5d57a3"
+light = "#5d57a3"
+
+[palette."lotusCyan"]
+dark = "#d7e3d8"
+light = "#d7e3d8"
+
+[palette."lotusGray"]
+dark = "#dcd7ba"
+light = "#dcd7ba"
+
+[palette."lotusGray2"]
+dark = "#716e61"
+light = "#716e61"
+
+[palette."lotusGray3"]
+dark = "#8a8980"
 light = "#8a8980"
 
-[colors.fg]
-dark = { wave = ["#dcd7ba", "#727169", "#717c7c"], dragon = ["#c5c9c5", "#a6a69c", "#717c7c"] }
-light = ["#545464", "#8a8980", "#717c7c"]
+[palette."lotusGreen"]
+dark = "#6f894e"
+light = "#6f894e"
 
-[colors.bg]
-dark = { wave = ["#1f1f28", "#181820", "#1a1a22", "#2a2a37", "#363646"], dragon = ["#181616", "#12120f", "#1d1c19", "#282727", "#393836"] }
-light = ["#f2ecbc", "#dcd5ac", "#e5ddb0", "#e7dba0", "#e4d794"]
+[palette."lotusGreen2"]
+dark = "#6e915f"
+light = "#6e915f"
 
-[base]
-Canvas = { bg = "bg0" }
-Code = { bg = "bg1" }
-Raised = { bg = "bg2" }
-Pending = { bg = "bg2" }
-Selection = { bg = "bg4" }
-Focus = { bg = "bg4" }
-Text = { fg = "fg0" }
-Muted = { fg = "gray" }
-Faint = { fg = "fg4" }
-Keyword = { fg = "purple", italic = true }
-Function = { fg = "blue" }
-Type = { fg = "aqua" }
-String = { fg = "green" }
-Number = { fg = "purple_light" }
-Operator = { fg = "yellow_dark" }
-Symbol = { fg = "orange" }
-Parameter = { fg = "purple_light" }
-Property = { fg = "yellow" }
-EnumVariant = { fg = "aqua_light" }
-Macro = { fg = "purple" }
-Attribute = { fg = "yellow_light" }
-Builtin = { fg = "red", italic = true }
-Regex = { fg = "aqua", sp = "aqua", underline = true }
-Accent = { fg = "yellow" }
-Error = { fg = "red_dark" }
-Warning = { fg = "orange" }
-Info = { fg = "aqua" }
-Hint = { fg = "yellow" }
+[palette."lotusGreen3"]
+dark = "#b7d0ae"
+light = "#b7d0ae"
 
-[overrides]
-Constant = { fg = "orange" }
-Boolean = { fg = "orange", bold = true }
-Delimiter = { fg = "yellow_dark" }
-Punctuation = { fg = "blue_light" }
-Installation = { fg = "purple", bold = true }
-CompiledFunction = { fg = "blue", bold = true }
-Quote = { fg = "green" }
+[palette."lotusInk1"]
+dark = "#545464"
+light = "#545464"
+
+[palette."lotusInk2"]
+dark = "#43436c"
+light = "#43436c"
+
+[palette."lotusOrange"]
+dark = "#cc6d00"
+light = "#cc6d00"
+
+[palette."lotusOrange2"]
+dark = "#e98a00"
+light = "#e98a00"
+
+[palette."lotusPink"]
+dark = "#b35b79"
+light = "#b35b79"
+
+[palette."lotusRed"]
+dark = "#c84053"
+light = "#c84053"
+
+[palette."lotusRed2"]
+dark = "#d7474b"
+light = "#d7474b"
+
+[palette."lotusRed3"]
+dark = "#e82424"
+light = "#e82424"
+
+[palette."lotusRed4"]
+dark = "#d9a594"
+light = "#d9a594"
+
+[palette."lotusTeal1"]
+dark = "#4e8ca2"
+light = "#4e8ca2"
+
+[palette."lotusTeal2"]
+dark = "#6693bf"
+light = "#6693bf"
+
+[palette."lotusTeal3"]
+dark = "#5a7785"
+light = "#5a7785"
+
+[palette."lotusViolet1"]
+dark = "#a09cac"
+light = "#a09cac"
+
+[palette."lotusViolet2"]
+dark = "#766b90"
+light = "#766b90"
+
+[palette."lotusViolet3"]
+dark = "#c9cbd1"
+light = "#c9cbd1"
+
+[palette."lotusViolet4"]
+dark = "#624c83"
+light = "#624c83"
+
+[palette."lotusWhite0"]
+dark = "#d5cea3"
+light = "#d5cea3"
+
+[palette."lotusWhite1"]
+dark = "#dcd5ac"
+light = "#dcd5ac"
+
+[palette."lotusWhite2"]
+dark = "#e5ddb0"
+light = "#e5ddb0"
+
+[palette."lotusWhite3"]
+dark = "#f2ecbc"
+light = "#f2ecbc"
+
+[palette."lotusWhite4"]
+dark = "#e7dba0"
+light = "#e7dba0"
+
+[palette."lotusWhite5"]
+dark = "#e4d794"
+light = "#e4d794"
+
+[palette."lotusYellow"]
+dark = "#77713f"
+light = "#77713f"
+
+[palette."lotusYellow2"]
+dark = "#836f4a"
+light = "#836f4a"
+
+[palette."lotusYellow3"]
+dark = "#de9800"
+light = "#de9800"
+
+[palette."lotusYellow4"]
+dark = "#f9d791"
+light = "#f9d791"
+
+[palette."oldWhite"]
+dark = "#c8c093"
+light = "#c8c093"
+
+[palette."oniViolet"]
+dark = "#957fb8"
+light = "#957fb8"
+
+[palette."oniViolet2"]
+dark = "#b8b4d0"
+light = "#b8b4d0"
+
+[palette."peachRed"]
+dark = "#ff5d62"
+light = "#ff5d62"
+
+[palette."roninYellow"]
+dark = "#ff9e3b"
+light = "#ff9e3b"
+
+[palette."sakuraPink"]
+dark = "#d27e99"
+light = "#d27e99"
+
+[palette."samuraiRed"]
+dark = "#e82424"
+light = "#e82424"
+
+[palette."springBlue"]
+dark = "#7fb4ca"
+light = "#7fb4ca"
+
+[palette."springGreen"]
+dark = "#98bb6c"
+light = "#98bb6c"
+
+[palette."springViolet1"]
+dark = "#938aa9"
+light = "#938aa9"
+
+[palette."springViolet2"]
+dark = "#9cabca"
+light = "#9cabca"
+
+[palette."sumiInk0"]
+dark = "#16161d"
+light = "#16161d"
+
+[palette."sumiInk1"]
+dark = "#181820"
+light = "#181820"
+
+[palette."sumiInk2"]
+dark = "#1a1a22"
+light = "#1a1a22"
+
+[palette."sumiInk3"]
+dark = "#1f1f28"
+light = "#1f1f28"
+
+[palette."sumiInk4"]
+dark = "#2a2a37"
+light = "#2a2a37"
+
+[palette."sumiInk5"]
+dark = "#363646"
+light = "#363646"
+
+[palette."sumiInk6"]
+dark = "#54546d"
+light = "#54546d"
+
+[palette."surimiOrange"]
+dark = "#ffa066"
+light = "#ffa066"
+
+[palette."waveAqua1"]
+dark = "#6a9589"
+light = "#6a9589"
+
+[palette."waveAqua2"]
+dark = "#7aa89f"
+light = "#7aa89f"
+
+[palette."waveBlue1"]
+dark = "#223249"
+light = "#223249"
+
+[palette."waveBlue2"]
+dark = "#2d4f67"
+light = "#2d4f67"
+
+[palette."waveRed"]
+dark = "#e46876"
+light = "#e46876"
+
+[palette."winterBlue"]
+dark = "#252535"
+light = "#252535"
+
+[palette."winterGreen"]
+dark = "#2b3328"
+light = "#2b3328"
+
+[palette."winterRed"]
+dark = "#43242b"
+light = "#43242b"
+
+[palette."winterYellow"]
+dark = "#49443c"
+light = "#49443c"
+
+[groups]
+Accent = { fg = "carpYellow" }
+Attribute = { fg = "surimiOrange" }
+Bg0 = { bg = "sumiInk3" }
+Bg1 = { bg = "sumiInk0" }
+Bg2 = { bg = "sumiInk4" }
+Bg3 = { bg = "waveBlue2" }
+Bg4 = { bg = "sumiInk5" }
+Boolean = { bold = true, fg = "surimiOrange" }
+Builtin = { fg = "waveRed", italic = true }
+Comment = { fg = "fujiGray", italic = true }
+CompiledFunction = { fg = "springBlue" }
+Conditional = { fg = "oniViolet", italic = true }
+Constant = { fg = "surimiOrange" }
+Debug = { fg = "oniViolet", italic = true }
+Delimiter = { fg = "springViolet2" }
+Documentation = { fg = "springBlue" }
+EnumVariant = { fg = "surimiOrange" }
+Error = { fg = "lotusRed3" }
+ErrorMessage = { fg = "lotusRed3" }
+Exception = { bold = true, fg = "peachRed" }
+Faint = { fg = "sumiInk6" }
+Float = { fg = "sakuraPink" }
+Function = { fg = "crystalBlue" }
+Hint = { fg = "waveAqua1" }
+Info = { fg = "dragonBlue" }
+Installation = { bold = true, fg = "oniViolet" }
+Keyword = { fg = "oniViolet", italic = true }
+Macro = { fg = "waveRed" }
+MarkupBrief = { fg = "crystalBlue", italic = true }
+MarkupHeading1 = { fg = "crystalBlue" }
+MarkupHeading2 = { fg = "crystalBlue" }
+MarkupHeading3 = { fg = "crystalBlue" }
+Muted = { fg = "fujiGray" }
+Namespace = { fg = "waveAqua2" }
+Number = { fg = "sakuraPink" }
+Operator = { fg = "boatYellow2" }
+Package = { fg = "waveAqua2" }
+Parameter = { fg = "oniViolet2" }
+Picker = { bg = "waveBlue1", fg = "fujiWhite" }
+PickerBorder = { fg = "sumiInk6" }
+PickerSelected = { bg = "waveBlue2" }
+Property = { fg = "carpYellow" }
+Punctuation = { fg = "springViolet2" }
+Quote = { fg = "springBlue" }
+Regex = { fg = "boatYellow2" }
+Repeat = { fg = "oniViolet", italic = true }
+Statement = { fg = "peachRed", italic = true }
+StorageClass = { fg = "oniViolet", italic = true }
+String = { fg = "springGreen" }
+Symbol = { fg = "carpYellow" }
+Text = { fg = "fujiWhite" }
+Type = { fg = "waveAqua2" }
+Variable = { fg = "fujiWhite" }
+ViewLabelActive = { fg = "springBlue" }
+Warning = { fg = "roninYellow" }
+
+[variant_overrides.dark.dragon]
+Accent = { fg = "dragonYellow" }
+Attribute = { fg = "dragonOrange" }
+Bg0 = { bg = "dragonBlack3" }
+Bg1 = { bg = "dragonBlack0" }
+Bg2 = { bg = "dragonBlack4" }
+Bg4 = { bg = "dragonBlack5" }
+Boolean = { fg = "dragonOrange", bold = true }
+Builtin = { fg = "dragonRed", italic = true }
+Comment = { fg = "dragonAsh", italic = true }
+CompiledFunction = { fg = "dragonTeal" }
+Conditional = { fg = "dragonViolet", italic = true }
+Constant = { fg = "dragonOrange" }
+Debug = { fg = "dragonViolet", italic = true }
+Delimiter = { fg = "dragonGray2" }
+Documentation = { fg = "dragonTeal" }
+EnumVariant = { fg = "dragonOrange" }
+Exception = { fg = "dragonRed", bold = true }
+Faint = { fg = "dragonBlack6" }
+Float = { fg = "dragonPink" }
+Function = { fg = "dragonBlue2" }
+Installation = { fg = "dragonViolet", bold = true }
+Keyword = { fg = "dragonViolet", italic = true }
+Macro = { fg = "dragonRed" }
+MarkupBrief = { fg = "dragonBlue2", italic = true }
+MarkupHeading1 = { fg = "dragonBlue2" }
+MarkupHeading2 = { fg = "dragonBlue2" }
+MarkupHeading3 = { fg = "dragonBlue2" }
+Muted = { fg = "dragonAsh" }
+Namespace = { fg = "dragonAqua" }
+Number = { fg = "dragonPink" }
+Operator = { fg = "dragonRed" }
+Package = { fg = "dragonAqua" }
+Parameter = { fg = "dragonGray" }
+Property = { fg = "dragonYellow" }
+Punctuation = { fg = "dragonGray2" }
+Quote = { fg = "dragonTeal" }
+Regex = { fg = "dragonRed" }
+Repeat = { fg = "dragonViolet", italic = true }
+Statement = { fg = "dragonRed", italic = true }
+StorageClass = { fg = "dragonViolet", italic = true }
+String = { fg = "dragonGreen2" }
+Symbol = { fg = "dragonYellow" }
+Text = { fg = "dragonWhite" }
+Type = { fg = "dragonAqua" }
+Variable = { fg = "dragonWhite" }
+ViewLabelActive = { fg = "dragonTeal" }
+
+[variant_overrides.light.lotus]
+Accent = { fg = "lotusYellow" }
+Attribute = { fg = "lotusOrange" }
+Bg0 = { bg = "lotusWhite3" }
+Bg1 = { bg = "lotusWhite0" }
+Bg2 = { bg = "lotusWhite4" }
+Bg3 = { bg = "lotusBlue2" }
+Bg4 = { bg = "lotusWhite5" }
+Boolean = { fg = "lotusOrange", bold = true }
+Builtin = { fg = "lotusRed", italic = true }
+Comment = { fg = "lotusGray3", italic = true }
+CompiledFunction = { fg = "lotusTeal2" }
+Conditional = { fg = "lotusViolet4", italic = true }
+Constant = { fg = "lotusOrange" }
+Debug = { fg = "lotusViolet4", italic = true }
+Delimiter = { fg = "lotusTeal1" }
+Documentation = { fg = "lotusTeal2" }
+EnumVariant = { fg = "lotusOrange" }
+Exception = { fg = "lotusRed", bold = true }
+Faint = { fg = "lotusGray2" }
+Float = { fg = "lotusPink" }
+Function = { fg = "lotusBlue4" }
+Hint = { fg = "lotusAqua2" }
+Info = { fg = "lotusTeal3" }
+Installation = { fg = "lotusViolet4", bold = true }
+Keyword = { fg = "lotusViolet4", italic = true }
+Macro = { fg = "lotusRed" }
+MarkupBrief = { fg = "lotusBlue4", italic = true }
+MarkupHeading1 = { fg = "lotusBlue4" }
+MarkupHeading2 = { fg = "lotusBlue4" }
+MarkupHeading3 = { fg = "lotusBlue4" }
+Muted = { fg = "lotusGray3" }
+Namespace = { fg = "lotusAqua" }
+Number = { fg = "lotusPink" }
+Operator = { fg = "lotusYellow2" }
+Package = { fg = "lotusAqua" }
+Parameter = { fg = "lotusBlue5" }
+Picker = { fg = "lotusInk2", bg = "lotusBlue1" }
+PickerBorder = { fg = "lotusGray2" }
+PickerSelected = { bg = "lotusBlue3" }
+Property = { fg = "lotusYellow" }
+Punctuation = { fg = "lotusTeal1" }
+Quote = { fg = "lotusTeal2" }
+Regex = { fg = "lotusYellow2" }
+Repeat = { fg = "lotusViolet4", italic = true }
+Statement = { fg = "lotusRed", italic = true }
+StorageClass = { fg = "lotusViolet4", italic = true }
+String = { fg = "lotusGreen" }
+Symbol = { fg = "lotusYellow" }
+Text = { fg = "lotusInk1" }
+Type = { fg = "lotusAqua" }
+Variable = { fg = "lotusInk1" }
+ViewLabelActive = { fg = "lotusTeal2" }
+Warning = { fg = "lotusOrange2" }

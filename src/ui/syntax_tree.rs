@@ -142,7 +142,10 @@ impl SyntaxTreeBlock {
         ) -> Row {
             let groups = context.groups();
             let name = groups.style(HLGroup::Type);
-            let mut spans = vec![Span::styled(format!("{prefix}{branch}"), groups.muted())];
+            let mut spans = vec![Span::styled(
+                format!("{prefix}{branch}"),
+                groups.syntax_tree_branch(),
+            )];
             let token = (node.role() == PrettyNodeRole::Token)
                 .then(|| {
                     node.name()
@@ -157,9 +160,9 @@ impl SyntaxTreeBlock {
                 ));
             } else if let Some(token) = token {
                 spans.extend([
-                    Span::styled("Token![", groups.info()),
+                    Span::styled("Token![", groups.syntax_tree_token_marker()),
                     Span::styled(token.to_string(), groups.tree_code()),
-                    Span::styled("]", groups.info()),
+                    Span::styled("]", groups.syntax_tree_token_marker()),
                 ]);
             } else {
                 spans.push(Span::styled(node.name().to_string(), name));
@@ -172,7 +175,7 @@ impl SyntaxTreeBlock {
                 spans.extend([
                     Span::styled("  ", groups.muted()),
                     Span::styled(label.to_string(), groups.style(HLGroup::Property)),
-                    Span::styled(":", groups.muted()),
+                    Span::styled(":", groups.syntax_tree_label_separator()),
                 ]);
             }
             if !delimiter && token.is_none() {
@@ -348,7 +351,7 @@ impl Block for SyntaxTreeBlock {
         let mut rule = |row: u16| {
             Paragraph::new(Line::from(Span::styled(
                 "─".repeat(area.width.into()),
-                groups.border(),
+                groups.syntax_tree_border(),
             )))
             .style(groups.code())
             .render(

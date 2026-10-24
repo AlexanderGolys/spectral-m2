@@ -2,6 +2,25 @@
 
 All notable changes to Spectral M2 are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Added a *maths* setting: `unicode`, as before; `typeset`, which draws returned values as pictures typeset by the built-in RaTeX, through the kitty graphics protocol, on terminals that support it, tmux included; and `ascii`, Macaulay2's own plain-text spelling. A type holding maths, such as a matrix's rings, is typeset too, in the type colour. Where the terminal cannot show pictures, `typeset` is still offered, struck through and marked unavailable in that terminal.
+- Selecting a typeset picture copies the TeX it was set from, once however many rows it covers.
+
+### Changed
+
+- Settings are grouped into *appearance*, *layout* and *rendering* tabs, switched with `Tab`. Each row shows only its name and value, aligned in one column at any pane width: each shows its current value between arrows. The *restore defaults* button, no longer a row of its own, and the selected row's description sit beneath the rows, and the status line names the keys the open picker answers.
+- The mouse wheel over the input moves through its lines instead of changing *input max height*, which it used to lower without showing it.
+
+### Fixed
+
+- Pasting control characters or picture placeholders copied from a terminal no longer breaks the input: they are dropped and the text around them kept.
+- Inside tmux the first key pressed after starting is no longer lost: pictures are detected from what tmux reports instead of a terminal query that tmux leaves unanswered.
+- A typeset type sits beside its value with its last row on the value's last, rather than one row lower.
+- A cell sharing a line with the one before it, as in `a = 1; b = 2`, is no longer drawn indented by the space between them.
+
 ## [1.0.0] - 2026-10-19
 
 ### Added

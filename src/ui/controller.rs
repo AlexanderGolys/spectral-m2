@@ -4,10 +4,12 @@
 pub mod commands;
 mod completion;
 mod picker;
+mod preferences;
 mod screen;
 pub mod settings;
 mod view;
 
+use std::env;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -15,16 +17,15 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, Clear, Paragraph, Widget};
 use ratatui::Frame;
-use these_macros_should_be_illegal::discriminated_str;
 
 use self::commands::Command;
 use self::completion::{Names, Request};
-use self::picker::{Picker, PickerController, PickerInput, PickerItem, PickerMode, Row};
+use self::picker::{Picker, PickerController, PickerItem, PickerMode};
 use self::screen::{ScreenCapture, ScreenSelection};
-use self::settings::keymap::Keymaps;
+use self::settings::keymap::{KeymapRow, Keymaps};
 use self::settings::theme::groups::{publish, scheme, HLGroup};
 use self::settings::theme::Appearance;
-use self::settings::{Persisted, SavedSettings, Settings, StatusLinePosition};
+use self::settings::{Persisted, Preferences, SavedSettings, Settings, StatusLinePosition};
 pub use self::view::{CommittedCells, ViewKind, Viewport};
 use super::action::Action;
 use super::block::{Block, Element, HLSpan, Reformatted, Rethemed, TextSpan, Ticked};
@@ -36,9 +37,10 @@ use super::feed::Feed;
 use super::key::{KeyEvent, KeyMod};
 use super::render::selection::Exclusions;
 use super::render::RenderContext;
-use super::statusline::{StatusLine, StatusLineContext, StatusLineEvent};
+use super::statusline::{StatusLine, StatusLineContext, StatusLineEvent, StatusLocation};
+use crate::code::file::abbreviate_home;
 use crate::code::highlight::Highlighter;
-use crate::input::{InputCode, InputContext, InputSetting, InputSettings};
+use crate::input::{InputCode, InputContext};
 
 /// An outward effect produced while handling input or an [`Action`].
 pub enum Reaction {
@@ -60,15 +62,6 @@ pub enum Reaction {
     Load(String),
     /// Run the code the previous session left.
     Resume,
-}
-
-/// The choice `delta` steps after `current`, wrapping around `choices`.
-pub fn cycled<T: Copy + PartialEq>(choices: &[T], current: T, delta: i8) -> T {
-    let position = choices
-        .iter()
-        .position(|choice| *choice == current)
-        .expect("the current choice is among the choices");
-    choices[(position as isize + isize::from(delta)).rem_euclid(choices.len() as isize) as usize]
 }
 
 /// A session result to apply to the editor model.
@@ -135,110 +128,8 @@ pub enum EditorEvent {
     RunCommand(Command),
     ClosePicker,
     RestoreDefaults,
-    SetSettings(Settings),
-    SetInput(InputSettings),
-    SetAppearance(Appearance),
+    SetPreferences(Preferences),
     Rebind(Action, KeyEvent),
-}
-
-/// One independently cyclic axis of a colour appearance.
-#[discriminated_str(label)]
-#[derive(Clone, Copy)]
-enum AppearanceField {
-    Theme = "theme",
-    Contrast = "contrast",
-    Mode = "mode",
-    Background = "background",
-}
-
-impl AppearanceField {
-    fn value(self, appearance: Appearance) -> String {
-        match self {
-            Self::Theme => appearance.scheme().label().to_string(),
-            Self::Contrast => appearance.variant().label().to_string(),
-            Self::Mode => appearance.mode().to_string(),
-            Self::Background => appearance.background_label().to_string(),
-        }
-    }
-
-    fn adjust(self, appearance: Appearance, delta: i8) -> Appearance {
-        match self {
-            Self::Theme => appearance.cycle_theme(delta),
-            Self::Contrast => appearance.cycle_contrast(delta),
-            Self::Mode => appearance.cycle_mode(delta),
-            Self::Background => appearance.cycle_background(),
-        }
-    }
-
-    const fn description(self) -> &'static str {
-        match self {
-            Self::Theme => "colour scheme family",
-            Self::Contrast => "the theme's variants for the current mode",
-            Self::Mode => "dark or light palette",
-            Self::Background => "paint empty canvas or let the terminal show through",
-        }
-    }
-}
-
-const SHELL_ITEMS: &[ShellItem] = &[
-    ShellItem::Appearance(AppearanceField::Theme),
-    ShellItem::Appearance(AppearanceField::Contrast),
-    ShellItem::Appearance(AppearanceField::Mode),
-    ShellItem::Appearance(AppearanceField::Background),
-    ShellItem::Input(InputSetting::MaxHeight),
-    ShellItem::Input(InputSetting::Scrolloff),
-    ShellItem::Input(InputSetting::CompleteAfter),
-    ShellItem::Statusline,
-    ShellItem::Fractions,
-    ShellItem::MathFonts,
-    ShellItem::OutputRows,
-    ShellItem::ExampleTimeout,
-    ShellItem::RestoreDefault,
-];
-
-/// One item listed in the settings picker.
-#[derive(Clone, Copy)]
-enum ShellItem {
-    Appearance(AppearanceField),
-    Input(InputSetting),
-    Statusline,
-    Fractions,
-    MathFonts,
-    OutputRows,
-    ExampleTimeout,
-    RestoreDefault,
-}
-
-impl ShellItem {
-    /// The setting's name, leading its row.
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Appearance(field) => field.label(),
-            Self::Input(field) => field.label(),
-            Self::Statusline => "statusline",
-            Self::Fractions => "fractions",
-            Self::MathFonts => "math fonts",
-            Self::OutputRows => "max output height",
-            Self::ExampleTimeout => "compute examples",
-            Self::RestoreDefault => "restore default",
-        }
-    }
-
-    /// What the setting controls, shown after its value.
-    const fn description(self) -> &'static str {
-        match self {
-            Self::Appearance(field) => field.description(),
-            Self::Input(field) => field.description(),
-            Self::Statusline => "where the status line sits",
-            Self::Fractions => "how rational values are drawn",
-            Self::MathFonts => "use TeX math fonts like mathbb, mathcal",
-            Self::OutputRows => "rows a value shows before its middle folds away",
-            Self::ExampleTimeout => {
-                "run documentation examples again, each for at most this long, to draw their values"
-            }
-            Self::RestoreDefault => "reset settings, keymaps and appearance",
-        }
-    }
 }
 
 /// The editor child that receives an otherwise unclaimed input event.
@@ -280,6 +171,8 @@ pub struct Editor {
     last_click: Option<(Instant, Position)>,
     /// Where the mouse last was, so the link under it is underlined.
     pointer: Option<Position>,
+    /// Whether Ctrl is held, so the link under the pointer shows it would open.
+    control_held: bool,
 }
 
 impl Editor {
@@ -314,6 +207,7 @@ impl Editor {
             frame_stats: FrameStats::default(),
             last_click: None,
             pointer: None,
+            control_held: false,
         };
         editor.refresh_status_line();
         editor
@@ -517,15 +411,14 @@ impl Editor {
     /// Longest pause between two clicks on one cell that still reads as a double click.
     const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
-    /// Route the wheel by what it is pointing at: over the input pane it resizes
-    /// the pane, everywhere else it scrolls the feed. A double click on a folded
+    /// Route the wheel by what it is pointing at: over the input pane it moves
+    /// through the input's lines, everywhere else it scrolls the feed. A double click on a folded
     /// value expands it, and on an expanded one folds it back.
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Reaction {
         let pointer = Position::new(event.column, event.row);
         self.pointer = Some(pointer);
-        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
-            && event.modifiers.contains(KeyModifiers::CONTROL)
-        {
+        self.control_held = event.modifiers.contains(KeyModifiers::CONTROL);
+        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) && self.control_held {
             if let Some(link) = self.feed.link_at(pointer) {
                 self.screen_selection = None;
                 return Reaction::Post(format!("help {}", link.target));
@@ -551,7 +444,11 @@ impl Editor {
                     -1
                 };
                 if self.input.contains(event) {
-                    self.input.adjust(InputSetting::MaxHeight, delta);
+                    let field = self.input.field_mut();
+                    match delta > 0 {
+                        true => field.move_up(),
+                        false => field.move_down(),
+                    }
                 } else {
                     self.feed.scroll(delta);
                 }
@@ -564,6 +461,11 @@ impl Editor {
             return copy.map_or(Reaction::Continue, Reaction::Copy);
         }
         Reaction::Continue
+    }
+
+    /// Track Ctrl pressed or released on its own, which no mouse event reports.
+    pub fn hold_control(&mut self, held: bool) {
+        self.control_held = held;
     }
 
     /// Record a left press, reporting whether it repeats the previous one in time and place.
@@ -878,113 +780,36 @@ impl Editor {
     }
 
     fn settings_picker(&self) -> Picker {
-        Picker::new("settings", self.shell_items())
+        Picker::tabbed(
+            preferences::tabs(self.preferences()),
+            Some(preferences::restore_defaults()),
+        )
+    }
+
+    /// Everything the settings picker adjusts, as it stands.
+    fn preferences(&self) -> Preferences {
+        Preferences {
+            appearance: self.appearance,
+            input: self.input.settings(),
+            editor: self.settings,
+        }
+    }
+
+    /// Show the current preferences in the settings picker on top.
+    fn refresh_settings_picker(&mut self) {
+        let tabs = preferences::tabs(self.preferences());
+        self.pickers.last_mut().unwrap().picker.set_tabs(tabs);
     }
 
     fn keymaps_picker(&self) -> Picker {
         Picker::new("keymaps", self.keymap_items())
     }
 
-    fn shell_items(&self) -> Vec<Box<dyn PickerItem>> {
-        let groups = scheme();
-        SHELL_ITEMS
-            .iter()
-            .copied()
-            .map(|item| {
-                let cells = |value: &str| {
-                    vec![
-                        Span::styled(item.label(), groups.muted()).into(),
-                        Span::styled(value.to_string(), groups.value()).into(),
-                        Span::styled(item.description(), groups.muted()).into(),
-                    ]
-                };
-                match item {
-                    ShellItem::Appearance(field) => {
-                        let appearance = self.appearance;
-                        Row::adjust(cells(&field.value(appearance)), move |delta| {
-                            EditorEvent::SetAppearance(field.adjust(appearance, delta))
-                        })
-                    }
-                    ShellItem::Input(field) => {
-                        let mut settings = self.input.settings();
-                        Row::adjust(cells(&field.value(settings)), move |delta| {
-                            field.adjust(&mut settings, delta);
-                            EditorEvent::SetInput(settings)
-                        })
-                    }
-                    ShellItem::Statusline => {
-                        let mut settings = self.settings;
-                        let value = match settings.statusline {
-                            StatusLinePosition::BelowInput => "below input",
-                            StatusLinePosition::AboveInput => "above input",
-                            StatusLinePosition::Off => "off",
-                        };
-                        Row::adjust(cells(value), move |delta| {
-                            settings.statusline = settings.statusline.cycle(delta);
-                            EditorEvent::SetSettings(settings)
-                        })
-                    }
-                    ShellItem::Fractions => {
-                        let mut settings = self.settings;
-                        Row::adjust(cells(settings.fractions.label()), move |delta| {
-                            settings.fractions = settings.fractions.cycle(delta);
-                            EditorEvent::SetSettings(settings)
-                        })
-                    }
-                    ShellItem::MathFonts => {
-                        let mut settings = self.settings;
-                        let value = if settings.math_fonts { "on" } else { "off" };
-                        Row::adjust(cells(value), move |_| {
-                            settings.math_fonts = !settings.math_fonts;
-                            EditorEvent::SetSettings(settings)
-                        })
-                    }
-                    ShellItem::OutputRows => {
-                        let mut settings = self.settings;
-                        let value = format!("{} rows", settings.output_rows);
-                        Row::adjust(cells(&value), move |delta| {
-                            settings.adjust_output_rows(delta);
-                            EditorEvent::SetSettings(settings)
-                        })
-                    }
-                    ShellItem::ExampleTimeout => {
-                        let mut settings = self.settings;
-                        let value = match settings.example_seconds {
-                            0 => "off".to_string(),
-                            seconds => format!("{seconds}s"),
-                        };
-                        Row::adjust(cells(&value), move |delta| {
-                            settings.adjust_example_seconds(delta);
-                            EditorEvent::SetSettings(settings)
-                        })
-                    }
-                    ShellItem::RestoreDefault => {
-                        Row::enter(cells(""), || EditorEvent::RestoreDefaults)
-                    }
-                }
-                .into()
-            })
-            .collect()
-    }
-
     fn keymap_items(&self) -> Vec<Box<dyn PickerItem>> {
-        let groups = scheme();
         self.keymaps
             .remappable()
             .into_iter()
-            .map(|(action, key)| {
-                Row::new(
-                    vec![
-                        Span::styled(action.description(), groups.muted()).into(),
-                        Span::styled(key.to_string(), groups.style(HLGroup::KeymapHint)).into(),
-                    ],
-                    move |input| match input {
-                        PickerInput::Key(key) => Some(EditorEvent::Rebind(action, key)),
-                        _ => None,
-                    },
-                )
-                .into()
-            })
+            .map(|(action, key)| Box::new(KeymapRow::new(action, key)) as Box<dyn PickerItem>)
             .collect()
     }
 
@@ -1012,6 +837,9 @@ impl Editor {
         if mode == PickerMode::Keymaps && action == Action::OpenKeymaps {
             self.close_if_open(PickerMode::Keymaps);
             return Reaction::Continue;
+        }
+        if action == Action::Quit {
+            return self.leave_pickers(Reaction::Quit);
         }
         if mode != PickerMode::Keymaps {
             if let Some(result) = self.handle_debug_action(action) {
@@ -1103,8 +931,7 @@ impl Editor {
                     self.pickers.last().map(|controller| controller.mode),
                     Some(PickerMode::Settings)
                 ) {
-                    let items = self.shell_items();
-                    self.pickers.last_mut().unwrap().picker.set_items(items);
+                    self.refresh_settings_picker();
                 }
                 if matches!(
                     self.pickers.last().map(|controller| controller.mode),
@@ -1115,37 +942,10 @@ impl Editor {
                 }
             }
             EditorEvent::RestoreDefaults => {
-                if self.settings.reformats(&Settings::default()) {
-                    self.feed.on_event(&Reformatted);
-                }
-                self.settings = Settings::default();
-                self.input.set_settings(InputSettings::default());
                 self.keymaps = Keymaps::default();
-                self.save_settings();
-                self.apply_appearance(Appearance::default());
-                let items = self.shell_items();
-                self.pickers.last_mut().unwrap().picker.set_items(items);
+                self.set_preferences(Preferences::default());
             }
-            EditorEvent::SetSettings(settings) => {
-                if settings.reformats(&self.settings) {
-                    self.feed.on_event(&Reformatted);
-                }
-                self.settings = settings;
-                self.save_settings();
-                let items = self.shell_items();
-                self.pickers.last_mut().unwrap().picker.set_items(items);
-            }
-            EditorEvent::SetInput(settings) => {
-                self.input.set_settings(settings);
-                self.save_settings();
-                let items = self.shell_items();
-                self.pickers.last_mut().unwrap().picker.set_items(items);
-            }
-            EditorEvent::SetAppearance(appearance) => {
-                self.apply_appearance(appearance);
-                let items = self.shell_items();
-                self.pickers.last_mut().unwrap().picker.set_items(items);
-            }
+            EditorEvent::SetPreferences(preferences) => self.set_preferences(preferences),
             EditorEvent::Rebind(action, key) => {
                 if self.keymaps.rebind(action, key) {
                     self.save_settings();
@@ -1155,6 +955,17 @@ impl Editor {
             }
         }
         Reaction::Continue
+    }
+
+    fn set_preferences(&mut self, preferences: Preferences) {
+        if preferences.editor.reformats(&self.settings) {
+            self.feed.on_event(&Reformatted);
+        }
+        self.settings = preferences.editor;
+        self.input.set_settings(preferences.input);
+        self.save_settings();
+        self.apply_appearance(preferences.appearance);
+        self.refresh_settings_picker();
     }
 
     /// Keep what the settings and keymap pickers changed for the next session.
@@ -1232,7 +1043,7 @@ impl Editor {
             .prompt()
             .add_modifier(ratatui::style::Modifier::BOLD);
         let mut entries = vec![
-            (self.frame_stats.label(), scheme().muted()),
+            (self.frame_stats.label(), scheme().frame_stats()),
             ("highlight groups".into(), heading),
         ];
         entries.extend(
@@ -1308,8 +1119,8 @@ impl Editor {
         let base = scheme().transcript().patch(scheme().value());
         let block = TuiBlock::bordered()
             .style(base)
-            .border_style(scheme().border())
-            .title(Span::styled(title, scheme().prompt()));
+            .border_style(scheme().highlight_inspector_border())
+            .title(Span::styled(title, scheme().highlight_inspector_title()));
         frame.render_widget(Clear, area);
         frame.render_widget(Paragraph::new(lines).style(base).block(block), area);
         self.selection_exclusions.push(area);
@@ -1324,20 +1135,25 @@ impl Editor {
             .keymaps
             .key_for(Action::OpenSettings)
             .unwrap_or_default();
-        let event = if self.input.text().is_empty() {
+        let event = if let Some(controller) = self.pickers.last() {
+            StatusLineEvent::Show {
+                alignment: Alignment::Right,
+                spans: controller.hints(),
+            }
+        } else if self.input.text().is_empty() {
             let spans = match &self.continuation {
                 Some(_) => vec![
                     TextSpan::new(
                         format!("{} ", KeyCode::Up + KeyMod::Ctrl),
                         HLGroup::KeymapHint,
                     ),
-                    TextSpan::new("continue", HLGroup::Muted),
+                    TextSpan::new("continue", HLGroup::StatuslineHintLabel),
                 ],
                 None => vec![
                     TextSpan::new(format!("{commands_key} "), HLGroup::KeymapHint),
-                    TextSpan::new("commands · ", HLGroup::Muted),
+                    TextSpan::new("commands · ", HLGroup::StatuslineHintLabel),
                     TextSpan::new(format!("{settings_key} "), HLGroup::KeymapHint),
-                    TextSpan::new("settings", HLGroup::Muted),
+                    TextSpan::new("settings", HLGroup::StatuslineHintLabel),
                 ],
             };
             StatusLineEvent::Show {
@@ -1349,7 +1165,7 @@ impl Editor {
                 alignment: Alignment::Right,
                 spans: vec![
                     TextSpan::new(format!("{settings_key} "), HLGroup::KeymapHint),
-                    TextSpan::new("settings", HLGroup::Muted),
+                    TextSpan::new("settings", HLGroup::StatuslineHintLabel),
                 ],
             }
         };
@@ -1381,7 +1197,7 @@ impl Editor {
         let picker_height = self
             .pickers
             .last()
-            .map_or(0, |controller| controller.picker.height());
+            .map_or(0, |controller| controller.picker.height(editor_area.width));
         // A long list must never squeeze the input out of the frame: the cursor
         // would then be placed outside it.
         let picker_height = picker_height.min(
@@ -1420,6 +1236,7 @@ impl Editor {
         let context = RenderContext::new(editor_area.width, 0)
             .with_fractions(self.settings.fractions)
             .with_blackboard(self.settings.math_fonts)
+            .with_display(self.settings.maths)
             .with_recent_outputs(self.feed.recent_outputs())
             .with_output_limit(self.settings.output_rows);
         let input_context = RenderContext::new(editor_area.width, input_prefix);
@@ -1459,6 +1276,7 @@ impl Editor {
             .render(status_area, frame.buffer_mut());
         self.status_line.render(
             &StatusLineContext {
+                location: Some(self.location()),
                 idle_left: self.shell_state(),
                 ..StatusLineContext::default()
             },
@@ -1478,15 +1296,25 @@ impl Editor {
         self.settings.statusline != StatusLinePosition::Off
     }
 
+    /// The colour scheme in use and the directory the session runs in.
+    fn location(&self) -> StatusLocation {
+        StatusLocation {
+            scheme: self.appearance.scheme().label().to_string(),
+            directory: env::current_dir()
+                .map(|directory| abbreviate_home(&directory))
+                .unwrap_or_default(),
+        }
+    }
+
     /// What the session is doing, as the status line's left side says it, when
     /// it is doing anything.
     fn shell_state(&self) -> Option<TextSpan> {
         if self.processing {
             Some(TextSpan::new("Processing", HLGroup::StatuslineWarning))
         } else {
-            self.continuation
-                .as_ref()
-                .map(|reason| TextSpan::new(format!("Waiting for {reason}"), HLGroup::Muted))
+            self.continuation.as_ref().map(|reason| {
+                TextSpan::new(format!("Waiting for {reason}"), HLGroup::StatuslineState)
+            })
         }
     }
 
@@ -1504,7 +1332,10 @@ impl Editor {
         self.feed_top = -(self.feed.offset() as i64);
         self.selection_exclusions.extend(exclusions);
         if let Some(link) = self.pointer.and_then(|pointer| self.feed.link_at(pointer)) {
-            let hovered = context.groups().style(HLGroup::MarkupLinkHover);
+            let hovered = context.groups().style(match self.control_held {
+                true => HLGroup::MarkupLinkOpen,
+                false => HLGroup::MarkupLinkHover,
+            });
             for cells in link.cells {
                 frame.buffer_mut().set_style(cells, hovered);
             }
@@ -1516,9 +1347,11 @@ impl Editor {
 #[cfg(test)]
 mod mouse_tests {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::layout::{Position, Rect};
-    use ratatui::style::Style;
+    use ratatui::style::{Modifier, Style};
+    use ratatui::Terminal;
 
     use super::{Editor, Reaction};
     use crate::backend::M2Value;
@@ -1526,8 +1359,10 @@ mod mouse_tests {
     use crate::ui::feed::Feed;
     use crate::ui::render::RenderContext;
 
-    #[test]
-    fn only_control_click_opens_a_documentation_link() {
+    const AREA: Rect = Rect::new(0, 0, 60, 10);
+
+    /// An editor showing one documentation link, and a position on it.
+    fn editor_with_link() -> (Editor, Position) {
         let mut editor = Editor::new(String::new());
         editor.feed = Feed::new(Box::new(OutputBlock::rendered(
             M2Value::Markup {
@@ -1537,17 +1372,56 @@ mod mouse_tests {
             },
             None,
         )));
-        let area = Rect::new(0, 0, 60, 10);
         editor.feed.render(
-            &RenderContext::new(area.width, 0),
-            area,
-            &mut Buffer::empty(area),
+            &RenderContext::new(AREA.width, 0),
+            AREA,
+            &mut Buffer::empty(AREA),
             Style::default(),
         );
-        let pointer = (0..area.height)
-            .flat_map(|row| (0..area.width).map(move |column| Position::new(column, row)))
+        let pointer = (0..AREA.height)
+            .flat_map(|row| (0..AREA.width).map(move |column| Position::new(column, row)))
             .find(|&position| editor.feed.link_at(position).is_some())
             .expect("the documentation link is visible");
+        (editor, pointer)
+    }
+
+    #[test]
+    fn holding_control_over_a_link_bolds_it() {
+        let (mut editor, pointer) = editor_with_link();
+        let mut terminal = Terminal::new(TestBackend::new(AREA.width, AREA.height)).unwrap();
+        let mut hover = |editor: &mut Editor, modifiers| {
+            editor.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: pointer.x,
+                row: pointer.y,
+                modifiers,
+            });
+            terminal
+                .draw(|frame| {
+                    editor.draw_feed(frame, AREA, &RenderContext::new(AREA.width, 0));
+                })
+                .unwrap();
+            terminal.backend().buffer()[(pointer.x, pointer.y)].modifier
+        };
+
+        let hovered = hover(&mut editor, KeyModifiers::NONE);
+        assert!(hovered.contains(Modifier::UNDERLINED));
+        assert!(!hovered.contains(Modifier::BOLD));
+        assert!(hover(&mut editor, KeyModifiers::CONTROL).contains(Modifier::BOLD));
+        editor.hold_control(false);
+        terminal
+            .draw(|frame| {
+                editor.draw_feed(frame, AREA, &RenderContext::new(AREA.width, 0));
+            })
+            .unwrap();
+        assert!(!terminal.backend().buffer()[(pointer.x, pointer.y)]
+            .modifier
+            .contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn only_control_click_opens_a_documentation_link() {
+        let (mut editor, pointer) = editor_with_link();
         let click = |modifiers| MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: pointer.x,

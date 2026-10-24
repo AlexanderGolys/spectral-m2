@@ -234,6 +234,11 @@ mod tests {
     }
 
     #[test]
+    fn cells_on_one_line_start_at_their_code() {
+        assert_eq!(cells_of("a = 1; b = 2"), vec!["a = 1; ", "b = 2"]);
+    }
+
+    #[test]
     fn a_semicolon_travels_with_its_cell() {
         let source = "z = 7;\n1 + 1";
         let cells = cells_of(source);

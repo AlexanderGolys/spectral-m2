@@ -7,16 +7,16 @@ Commands are handled by Spectral rather than sent to Macaulay2.
 | Command | Key | Effect |
 | --- | --- | --- |
 | `/settings` | `Ctrl+O` | Open settings, appearance included. |
-| `/keymaps` | `Alt+K` | Show and edit the remappable bindings. |
+| `/keymaps` | `Ctrl+K` | Show and edit the remappable bindings. |
 | `/clear` | `Alt+L` | Clear the focused workspace's feed. |
-| `/code` | `Alt+C` | Show all committed input cells beside the session. |
-| `/values` | `Alt+V` | Show the returned values beside the session. |
-| `/stdout` | `Alt+P` | Show the text cells printed beside the session. |
-| `/output` | `Alt+O` | Show printed text and returned values, without input cells, beside the session. |
-| `/ast` | `Alt+T` | Show the `m2-syn` tree of committed cells beside the session. |
+| `/code` | `F2` | Show all committed input cells beside the session. |
+| `/values` | `F3` | Show the returned values beside the session. |
+| `/stdout` | `F4` | Show the text cells printed beside the session. |
+| `/output` | `F5` | Show printed text and returned values, without input cells, beside the session. |
+| `/ast` | `F6` | Show the `m2-syn` tree of committed cells beside the session. |
 | `/save [file]` | | Write the code of every committed cell to `file`, or, without one, keep it where exit does. |
 | `/load <file>` | | Restart Macaulay2, then run the code in `file` as if it had been typed. |
-| `/resume` | | Run the code the previous session left, one submission at a time, so the feed reads as it did. |
+| `/resume` | `Ctrl+R` | Run the code the previous session left, one submission at a time, so the feed reads as it did. |
 
 Views open beside the session.
 

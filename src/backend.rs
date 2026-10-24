@@ -123,6 +123,37 @@ pub enum Role {
     Command,
 }
 
+/// The characters a value's text layout may draw with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Spelling {
+    /// Two-dimensional maths and tall brackets.
+    Unicode,
+    /// Macaulay2's own plain-text spelling, between plain delimiters.
+    Ascii,
+}
+
+impl Spelling {
+    const fn arrow(self) -> &'static str {
+        match self {
+            Self::Unicode => " ⇒ ",
+            Self::Ascii => " => ",
+        }
+    }
+}
+
+/// `text` with the characters TeX reserves escaped, to be set as written.
+fn escape_tex(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '\\' => r"\textbackslash{}".to_string(),
+            '~' => r"\textasciitilde{}".to_string(),
+            '^' => r"\textasciicircum{}".to_string(),
+            '#' | '$' | '%' | '&' | '_' | '{' | '}' => format!("\\{c}"),
+            c => c.to_string(),
+        })
+        .collect()
+}
+
 /// The M2 list class a collection was drawn as, named exactly as M2 names it.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 pub enum CollectionKind {
@@ -199,10 +230,13 @@ impl M2Value {
         RenderedBlock::new(cells, baseline)
     }
 
-    fn brace(block: RenderedBlock) -> RenderedBlock {
-        match block.is_empty() {
-            true => RenderedBlock::from_text("{}"),
-            false => {
+    fn brace(block: RenderedBlock, spelling: Spelling) -> RenderedBlock {
+        match (block.is_empty(), spelling) {
+            (true, _) => RenderedBlock::from_text("{}"),
+            (false, Spelling::Ascii) => RenderedBlock::from_text("{")
+                .beside(&block)
+                .beside(&RenderedBlock::from_text("}")),
+            (false, Spelling::Unicode) => {
                 let space = RenderedBlock::from_text(" ");
                 let body = space.beside(&block).beside(&space);
                 let left = Self::curly(body.height(), true, body.baseline());
@@ -212,8 +246,9 @@ impl M2Value {
         }
     }
 
-    fn block(&self) -> RenderedBlock {
+    fn block(&self, spelling: Spelling) -> RenderedBlock {
         match self {
+            Self::Tex { fallback, .. } if spelling == Spelling::Ascii => Self::text_block(fallback),
             Self::Tex { source, fallback } => {
                 let source = match source
                     .strip_prefix('$')
@@ -231,22 +266,28 @@ impl M2Value {
             Self::Net(text) | Self::Markup { fallback: text, .. } | Self::Token { text, .. } => {
                 Self::text_block(text)
             }
-            Self::HashTable(rows) => Self::brace(Self::stack(rows.iter().map(|row| {
-                row[0]
-                    .block()
-                    .beside(&RenderedBlock::from_text(" ⇒ "))
-                    .beside(&row[1].block())
-            }))),
+            Self::HashTable(rows) => Self::brace(
+                Self::stack(rows.iter().map(|row| {
+                    row[0]
+                        .block(spelling)
+                        .beside(&RenderedBlock::from_text(spelling.arrow()))
+                        .beside(&row[1].block(spelling))
+                })),
+                spelling,
+            ),
             Self::Collection {
                 kind: CollectionKind::VerticalList,
                 items,
-            } => Self::brace(Self::stack(items.iter().map(Self::block))),
+            } => Self::brace(
+                Self::stack(items.iter().map(|item| item.block(spelling))),
+                spelling,
+            ),
             Self::Collection { kind, items } => {
                 let (open, close) = kind.delimiters();
                 let separator = RenderedBlock::from_text(", ");
                 items
                     .iter()
-                    .map(Self::block)
+                    .map(|item| item.block(spelling))
                     .reduce(|entries, item| entries.beside(&separator).beside(&item))
                     .map_or_else(
                         || RenderedBlock::from_text(&format!("{open}{close}")),
@@ -284,7 +325,7 @@ impl M2Value {
                 .collect::<Vec<_>>()
                 .join("\n");
         }
-        self.block()
+        self.block(Spelling::Unicode)
             .to_string()
             .lines()
             .map(str::trim_end)
@@ -292,6 +333,65 @@ impl M2Value {
             .join("\n")
     }
     /// Borrow flat output without parsing TeX or allocating a character grid.
+    /// The value in plain ASCII: Macaulay2's own spelling of every piece, set
+    /// between plain delimiters.
+    pub fn ascii(&self) -> String {
+        self.block(Spelling::Ascii)
+            .to_string()
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The whole value as one TeX formula, its entries set between the delimiters
+    /// of their kind; none when some part of it has no TeX or plain one-line text.
+    pub fn tex(&self) -> Option<String> {
+        let delimited = |open: &str, entries: Vec<String>, close: &str| {
+            format!(r"\left{open}{}\right{close}", entries.join(r",\:"))
+        };
+        Some(match self {
+            Self::Tex { source, .. } => source.strip_prefix('$')?.strip_suffix('$')?.to_string(),
+            Self::Token { text, .. } | Self::Net(text) if !text.contains('\n') => {
+                format!(r"\texttt{{{}}}", escape_tex(text))
+            }
+            Self::Token { .. } | Self::Net(_) | Self::Markup { .. } => return None,
+            Self::HashTable(rows) => delimited(
+                r"\{",
+                rows.iter()
+                    .map(|[key, value]| {
+                        Some(format!(r"{}\Rightarrow {}", key.tex()?, value.tex()?))
+                    })
+                    .collect::<Option<_>>()?,
+                r"\}",
+            ),
+            Self::Collection {
+                kind: CollectionKind::VerticalList,
+                items,
+            } => format!(
+                r"\left\{{\begin{{matrix}}{}\end{{matrix}}\right\}}",
+                items
+                    .iter()
+                    .map(Self::tex)
+                    .collect::<Option<Vec<_>>>()?
+                    .join(r"\\")
+            ),
+            Self::Collection { kind, items } => {
+                let (open, close) = match kind {
+                    CollectionKind::List | CollectionKind::VerticalList => (r"\{", r"\}"),
+                    CollectionKind::Array => ("[", "]"),
+                    CollectionKind::Sequence => ("(", ")"),
+                    CollectionKind::AngleBarList => (r"\langle", r"\rangle"),
+                };
+                delimited(
+                    open,
+                    items.iter().map(Self::tex).collect::<Option<_>>()?,
+                    close,
+                )
+            }
+        })
+    }
+
     pub fn plain_text(&self) -> Option<&str> {
         match self {
             Self::Net(text) | Self::Markup { fallback: text, .. } | Self::Token { text, .. } => {
@@ -824,6 +924,51 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             rendered.contains("x² + 1") && rendered.contains("x2"),
             "the exponent and the variable must stay distinguishable: {rendered}"
         );
+    }
+
+    fn tex(source: &str, fallback: &str) -> M2Value {
+        M2Value::Tex {
+            source: format!("${source}$"),
+            fallback: fallback.into(),
+        }
+    }
+
+    #[test]
+    fn a_collection_is_one_formula_between_its_own_delimiters() {
+        let list = M2Value::Collection {
+            kind: CollectionKind::List,
+            items: vec![tex("x", "x"), tex(r"\frac{1}{2}", "1/2")],
+        };
+
+        let formula = list.tex().unwrap();
+
+        assert!(formula.starts_with(r"\left\{") && formula.ends_with(r"\right\}"));
+        assert!(formula.contains(r"\frac{1}{2}"));
+    }
+
+    #[test]
+    fn plain_words_are_set_as_written_and_unset_pieces_spoil_the_whole() {
+        let word = M2Value::Token {
+            text: "a_b#c".into(),
+            role: Role::String,
+        };
+        let pair = M2Value::Collection {
+            kind: CollectionKind::Sequence,
+            items: vec![word.clone(), M2Value::Net("two\nrows".into())],
+        };
+
+        assert_eq!(word.tex().unwrap(), r"\texttt{a\_b\#c}");
+        assert_eq!(pair.tex(), None);
+    }
+
+    #[test]
+    fn ascii_spells_every_piece_as_macaulay2_does() {
+        let table = M2Value::HashTable(vec![[tex("1", "1"), tex(r"\frac{1}{2}", "1/2")]]);
+
+        let ascii = table.ascii();
+
+        assert!(ascii.is_ascii(), "{ascii}");
+        assert!(ascii.contains("1 => 1/2"), "{ascii}");
     }
 
     #[test]

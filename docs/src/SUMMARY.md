@@ -8,3 +8,7 @@
 - [Preview modes](previews.md)
 - [Settings](settings.md)
 - [Key reference](keys.md)
+
+---
+
+[Troubleshooting](troubleshooting.md)

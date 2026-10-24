@@ -1,81 +1,198 @@
+# Native palette source: https://github.com/sainnhe/gruvbox-material
+# Palette names are shared by every variant; values retain their upstream RGB identity.
 name = "gruvbox material"
 
 [variants]
 dark = ["material", "mix", "original"]
 light = ["material", "mix", "original"]
 
-[colors.red]
-dark = { material = "#ea6962", mix = "#f2594b", original = "#fb4934" }
-light = { material = "#c14a4a", mix = "#af2528", original = "#9d0006" }
-
-[colors.green]
-dark = { material = "#a9b665", mix = "#b0b846", original = "#b8bb26" }
-light = { material = "#6c782e", mix = "#72761e", original = "#79740e" }
-
-[colors.yellow]
-dark = { material = "#d8a657", mix = "#e9b143", original = "#fabd2f" }
-light = { material = "#b47109", mix = "#b4730e", original = "#b57614" }
-
-[colors.blue]
-dark = { material = "#7daea3", mix = "#80aa9e", original = "#83a598" }
-light = { material = "#45707a", mix = "#266b79", original = "#076678" }
-
-[colors.purple]
-dark = "#d3869b"
-light = { material = "#945e80", mix = "#924f79", original = "#8f3f71" }
-
-[colors.aqua]
+[palette."aqua"]
 dark = { material = "#89b482", mix = "#8bba7f", original = "#8ec07c" }
 light = { material = "#4c7a5d", mix = "#477a5b", original = "#427b58" }
 
-[colors.orange]
-dark = { material = "#e78a4e", mix = "#f28534", original = "#fe8019" }
-light = { material = "#c35e0a", mix = "#b94c07", original = "#af3a03" }
+[palette."bg0"]
+dark = "#282828"
+light = "#fbf1c7"
 
-[colors.gray]
+[palette."bg1"]
+dark = "#32302f"
+light = "#f4e8be"
+
+[palette."bg2"]
+dark = "#32302f"
+light = "#f2e5bc"
+
+[palette."bg3"]
+dark = "#45403d"
+light = "#eee0b7"
+
+[palette."bg4"]
+dark = "#45403d"
+light = "#e5d5ad"
+
+[palette."bg5"]
+dark = "#5a524c"
+light = "#ddccab"
+
+[palette."bg_current_word"]
+dark = "#3c3836"
+light = "#f2e5bc"
+
+[palette."bg_diff_blue"]
+dark = "#0e363e"
+light = "#e2e6c7"
+
+[palette."bg_diff_green"]
+dark = "#34381b"
+light = "#e6eabc"
+
+[palette."bg_diff_red"]
+dark = "#402120"
+light = "#f9e0bb"
+
+[palette."bg_dim"]
+dark = "#1b1b1b"
+light = "#f2e5bc"
+
+[palette."bg_green"]
+dark = { material = "#a9b665", mix = "#b0b846", original = "#b8bb26" }
+light = "#6f8352"
+
+[palette."bg_red"]
+dark = { material = "#ea6962", mix = "#db4740", original = "#cc241d" }
+light = "#ae5858"
+
+[palette."bg_statusline1"]
+dark = "#32302f"
+light = "#f2e5bc"
+
+[palette."bg_statusline2"]
+dark = "#3a3735"
+light = "#f2e5bc"
+
+[palette."bg_statusline3"]
+dark = "#504945"
+light = "#e5d5ad"
+
+[palette."bg_visual_blue"]
+dark = "#374141"
+light = "#dadec0"
+
+[palette."bg_visual_green"]
+dark = "#3b4439"
+light = "#dee2b6"
+
+[palette."bg_visual_purple"]
+dark = "#443840"
+light = "#efdec3"
+
+[palette."bg_visual_red"]
+dark = "#4c3432"
+light = "#f1d9b5"
+
+[palette."bg_visual_yellow"]
+dark = "#4f422e"
+light = "#fae7b3"
+
+[palette."bg_yellow"]
+dark = { material = "#d8a657", mix = "#e9b143", original = "#fabd2f" }
+light = "#a96b2c"
+
+[palette."blue"]
+dark = { material = "#7daea3", mix = "#80aa9e", original = "#83a598" }
+light = { material = "#45707a", mix = "#266b79", original = "#076678" }
+
+[palette."fg0"]
+dark = { material = "#d4be98", mix = "#e2cca9", original = "#ebdbb2" }
+light = { material = "#654735", mix = "#514036", original = "#3c3836" }
+
+[palette."fg1"]
+dark = { material = "#ddc7a1", mix = "#e2cca9", original = "#ebdbb2" }
+light = { material = "#4f3829", mix = "#514036", original = "#3c3836" }
+
+[palette."green"]
+dark = { material = "#a9b665", mix = "#b0b846", original = "#b8bb26" }
+light = { material = "#6c782e", mix = "#72761e", original = "#79740e" }
+
+[palette."grey0"]
+dark = "#7c6f64"
+light = "#a89984"
+
+[palette."grey1"]
 dark = "#928374"
 light = "#928374"
 
-[colors.fg]
-dark = { material = ["#d4be98", "#ddc7a1", "#a89984", "#928374", "#7c6f64"], mix = ["#e2cca9", "#e2cca9", "#a89984", "#928374", "#7c6f64"], original = ["#ebdbb2", "#ebdbb2", "#a89984", "#928374", "#7c6f64"] }
-light = { material = ["#654735", "#4f3829", "#7c6f64", "#928374", "#a89984"], mix = ["#514036", "#514036", "#7c6f64", "#928374", "#a89984"], original = ["#3c3836", "#3c3836", "#7c6f64", "#928374", "#a89984"] }
+[palette."grey2"]
+dark = "#a89984"
+light = "#7c6f64"
 
-[colors.bg]
-dark = ["#282828", "#1b1b1b", "#32302f", "#32302f", "#45403d"]
-light = ["#fbf1c7", "#f2e5bc", "#f4e8be", "#f2e5bc", "#eee0b7"]
+[palette."orange"]
+dark = { material = "#e78a4e", mix = "#f28534", original = "#fe8019" }
+light = { material = "#c35e0a", mix = "#b94c07", original = "#af3a03" }
 
-[base]
-Canvas = { bg = "bg0" }
-Code = { bg = "bg1" }
-Raised = { bg = "bg2" }
-Pending = { bg = "bg2" }
-Selection = { bg = "bg4" }
-Focus = { bg = "bg_green" }
-Text = { fg = "fg0" }
-Muted = { fg = "gray" }
-Faint = { fg = "fg4" }
-Keyword = { fg = "red" }
+[palette."purple"]
+dark = "#d3869b"
+light = { material = "#945e80", mix = "#924f79", original = "#8f3f71" }
+
+[palette."red"]
+dark = { material = "#ea6962", mix = "#f2594b", original = "#fb4934" }
+light = { material = "#c14a4a", mix = "#af2528", original = "#9d0006" }
+
+[palette."yellow"]
+dark = { material = "#d8a657", mix = "#e9b143", original = "#fabd2f" }
+light = { material = "#b47109", mix = "#b4730e", original = "#b57614" }
+
+[groups]
+Accent = { fg = "aqua" }
+Attribute = { fg = "purple" }
+Bg0 = { bg = "bg0" }
+Bg1 = { bg = "bg_dim" }
+Bg2 = { bg = "bg1" }
+Bg3 = { bg = "bg_visual_red" }
+Bg4 = { bg = "bg3" }
+Boolean = { fg = "purple" }
+Builtin = { fg = "purple" }
+Comment = { fg = "grey1", italic = true }
+CompiledFunction = { fg = "green" }
+Conditional = { fg = "red" }
+Constant = { fg = "fg0" }
+Debug = { fg = "orange" }
+Delimiter = { fg = "grey1" }
+Documentation = { fg = "fg0" }
+EnumVariant = { fg = "blue" }
+Error = {bold = true,  fg = "red" }
+ErrorMessage = { fg = "red"}
+Exception = { fg = "red" }
+Faint = { fg = "grey0" }
+Float = { fg = "purple" }
 Function = { fg = "green" }
-Type = { fg = "yellow" }
-String = { fg = "aqua" }
+Hint = { fg = "purple" }
+Info = { fg = "blue" }
+Installation = { fg = "orange" }
+Keyword = { fg = "red" }
+Macro = { fg = "purple" }
+MarkupBrief = { fg = "yellow", italic = true }
+MarkupHeading1 = { bold = true, fg = "orange" }
+MarkupHeading2 = { bold = true, fg = "yellow" }
+MarkupHeading3 = { bold = true, fg = "blue" }
+Muted = { fg = "grey1" }
+Namespace = { fg = "yellow" }
 Number = { fg = "purple" }
 Operator = { fg = "orange" }
-Symbol = { fg = "blue" }
+Package = { fg = "yellow" }
 Parameter = { fg = "fg0" }
+Picker = { bg = "bg2", fg = "fg0" }
 Property = { fg = "blue" }
-EnumVariant = { fg = "aqua" }
-Macro = { fg = "green", italic = true }
-Attribute = { fg = "orange" }
-Builtin = { fg = "purple", italic = true }
-Regex = { fg = "blue", sp = "blue", underline = true }
-Accent = { fg = "aqua" }
-Error = { fg = "red" }
-Warning = { fg = "yellow" }
-Info = { fg = "blue" }
-Hint = { fg = "aqua" }
-
-[overrides]
-Constant = { fg = "purple", italic = true }
-Punctuation = { fg = "fg2" }
-Installation = { fg = "orange" }
+Punctuation = { fg = "fg0" }
 Quote = { fg = "yellow" }
+Regex = { fg = "green" }
+Repeat = { fg = "red" }
+Statement = { fg = "red" }
+StorageClass = { fg = "red" }
+String = { fg = "aqua" }
+Symbol = { fg = "fg0" }
+Text = { fg = "fg0" }
+Type = { fg = "yellow" }
+Variable = { fg = "fg0" }
+ViewLabelActive = { fg = "fg0" }
+Warning = { fg = "yellow" }

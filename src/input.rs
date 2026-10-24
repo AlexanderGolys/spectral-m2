@@ -22,6 +22,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use serde::{Deserialize, Serialize};
 use these_macros_should_be_illegal::discriminated_str;
+use unicode_width::UnicodeWidthChar;
 
 pub use self::completion::Completion;
 use self::hints::Hint;
@@ -30,6 +31,7 @@ use self::undo::{EditKind, Snapshot, Undo};
 use crate::code::highlight::Highlighter;
 use crate::ui::block::{HLSpan, Text};
 use crate::ui::config::UI;
+use crate::ui::graphics::kitty::PLACEHOLDER;
 use crate::ui::key::KeyEvent;
 use crate::ui::render::{Highlights, Prompt, RenderContext};
 use crate::ui::wrap::{HardWrap, TextLayout, WrapPolicy};
@@ -74,7 +76,7 @@ pub enum InputAction {
 }
 
 /// User-adjustable layout policy owned by the input component.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InputSettings {
     /// Maximum editor-height percentage occupied by the input.
@@ -761,11 +763,6 @@ impl InputCode {
         self.settings = settings;
     }
 
-    /// Adjust one component-owned setting.
-    pub fn adjust(&mut self, setting: InputSetting, delta: i8) {
-        setting.adjust(&mut self.settings, delta);
-    }
-
     pub fn accept_submission(&mut self) {
         self.field.accept_submission();
         self.hint = Hint::default();
@@ -961,10 +958,11 @@ impl InputCode {
         None
     }
 
-    /// Insert pasted source as one input-owned edit.
+    /// Insert pasted source as one input-owned edit. Terminals send a pasted line
+    /// break as `\r` or `\r\n`; the input breaks lines only at `\n`.
     pub fn insert(&mut self, text: &str) {
         self.clear_diagnostic();
-        self.field.insert_str(text);
+        self.field.insert_str(&typeable(text));
     }
 
     /// Return whether a pointer event lies over the last rendered input pane.
@@ -1102,12 +1100,15 @@ impl InputCode {
                 line = insert_span(
                     line,
                     *offset,
-                    Span::styled(ghost.clone(), theme.hint_text()),
+                    Span::styled(ghost.clone(), theme.completion_hint()),
                 );
             }
             spans.extend(line);
             if index == 0 && text.is_empty() {
-                spans.push(Span::styled(self.hint.to_string(), theme.hint_text()));
+                spans.push(Span::styled(
+                    self.hint.to_string(),
+                    theme.placeholder_hint(),
+                ));
             }
             lines.push(Line::from(spans));
         }
@@ -1218,6 +1219,25 @@ impl InputCode {
             )
             .min(last)
     }
+}
+
+/// `text` as the input keeps it: line breaks as `\n`, without the control
+/// characters that would reach the terminal as commands, or picture placeholders
+/// copied from a terminal, which draw pictures in place of text.
+fn typeable(text: &str) -> String {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut kept = String::with_capacity(text.len());
+    let mut in_placeholder = false;
+    for character in text.chars() {
+        // The marks after a placeholder number the piece of picture it shows.
+        in_placeholder = character == PLACEHOLDER
+            || in_placeholder && character.width() == Some(0) && !character.is_control();
+        let control = character.is_control() && !matches!(character, '\n' | '\t');
+        if !in_placeholder && !control {
+            kept.push(character);
+        }
+    }
+    kept
 }
 
 /// `inserted` placed `offset` bytes into a row, splitting the span it falls in.
@@ -1354,6 +1374,39 @@ mod tests {
         }
 
         assert_eq!(input.text(), "\n\n\n\t");
+    }
+
+    #[test]
+    fn pasted_lines_grow_the_input_whatever_line_endings_the_terminal_sends() {
+        let rows = |input: &InputCode| input.height(80, UI.prompt_width(), 100);
+        let single = rows(&InputCode::new_in_memory());
+        for pasted in ["a\nb\nc", "a\rb\rc", "a\r\nb\r\nc"] {
+            let mut input = InputCode::new_in_memory();
+            input.insert(pasted);
+
+            assert_eq!(input.text(), "a\nb\nc", "{pasted:?}");
+            assert!(rows(&input) > single, "{pasted:?}");
+        }
+    }
+
+    #[test]
+    fn a_paste_keeps_text_but_not_terminal_commands_or_picture_placeholders() {
+        let placeholder = format!("{PLACEHOLDER}\u{305}\u{30D}");
+        let pasted = format!("a\tb{placeholder}{placeholder}\x1b[2Jc\u{301}\r\nd");
+        let mut input = InputCode::new_in_memory();
+        input.insert(&pasted);
+
+        assert_eq!(input.text(), "a\tb[2Jc\u{301}\nd");
+    }
+
+    #[test]
+    fn a_long_paste_grows_the_input_to_its_max_height() {
+        let mut input = InputCode::new_in_memory();
+        let editor_height = 100;
+        let cap = editor_height * u16::from(input.settings().max_height_percent) / 100;
+        input.insert(&vec!["f(x)"; usize::from(editor_height)].join("\n"));
+
+        assert_eq!(input.height(80, UI.prompt_width(), editor_height), cap);
     }
 
     #[test]
@@ -1740,7 +1793,7 @@ mod tests {
             .iter()
             .find(|span| span.content == "al")
             .unwrap();
-        assert_eq!(ghost.style, Groups::default().hint_text());
+        assert_eq!(ghost.style, Groups::default().completion_hint());
 
         input.handle_key(KeyCode::Tab.into());
         assert_eq!(input.text(), "f(ideal)");
@@ -1770,7 +1823,7 @@ mod tests {
                 .style
         };
         assert_eq!(style_of("$se").fg, groups.command().fg);
-        assert_eq!(style_of("ttings"), groups.hint_text());
+        assert_eq!(style_of("ttings"), groups.completion_hint());
     }
 
     #[test]

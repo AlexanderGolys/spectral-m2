@@ -10,13 +10,16 @@ use std::rc::Rc;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Offset, Position, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use super::block::{Block, Element, HLSpan, Link, Text};
+use super::controller::settings::theme::groups::HLGroup;
 use super::element::paste;
+use super::graphics::{self, typeset::Rgb};
+use super::render::maths::MathDisplay;
 use super::render::selection::Exclusions;
 use super::render::spin::{busy_frame, Tick};
 use super::render::{markup, maths};
@@ -25,6 +28,12 @@ use super::wrap::WrappedText;
 use crate::backend::transcript::{captured_output, strip_m2_location};
 use crate::backend::{M2Response, M2Value};
 use crate::ui::config::UI;
+
+/// The typewriter face Macaulay2 sets words in, as a class name is in a type.
+const TYPEWRITER_TEXT: &str = r"\texttt{";
+/// The upright face words in a typeset type are set in instead: typewriter reads
+/// as bold at the size a type is drawn.
+const UPRIGHT_TEXT: &str = r"\textrm{";
 
 macro_rules! row_count {
     ($rows:expr) => {
@@ -176,13 +185,22 @@ impl CellMarker {
                     {
                         groups.recent_cell_number()
                     }
-                    CellState::Value | CellState::Muted | CellState::Null => groups.muted(),
+                    CellState::Value | CellState::Muted | CellState::Null => groups.cell_number(),
                 },
             ),
-            Self::Pending => (busy_frame(&Tick::new(0)).into(), groups.muted()),
-            Self::Queued => (UI.glyphs.unevaluated_cell.current().into(), groups.muted()),
-            Self::Failed(number) => (number.to_string(), groups.error()),
-            Self::Invalid => (UI.glyphs.rejected_cell.current().into(), groups.error()),
+            Self::Pending => (
+                busy_frame(&Tick::new(0)).into(),
+                groups.pending_cell_marker(),
+            ),
+            Self::Queued => (
+                UI.glyphs.unevaluated_cell.current().into(),
+                groups.queued_cell_marker(),
+            ),
+            Self::Failed(number) => (number.to_string(), groups.failed_cell_marker()),
+            Self::Invalid => (
+                UI.glyphs.rejected_cell.current().into(),
+                groups.rejected_cell_marker(),
+            ),
             Self::Bare | Self::Empty => return None,
         })
     }
@@ -369,7 +387,7 @@ impl Block for IncompleteBlock {
         for x in 0..area.width {
             buf[(x, 0)]
                 .set_symbol(UI.glyphs.pending_separator.current())
-                .set_style(context.groups().muted().patch(style));
+                .set_style(context.groups().pending_separator().patch(style));
         }
     }
 
@@ -502,7 +520,7 @@ impl EvaluationBlock {
         if matches!(state, EvaluationState::Failed(_) | EvaluationState::Invalid) {
             groups.error_code().patch(groups.error())
         } else if after_error {
-            groups.error_code().patch(groups.muted())
+            groups.error_code().patch(groups.muted_code_text())
         } else {
             groups.code()
         }
@@ -716,14 +734,17 @@ impl EvaluationBlock {
         Self::OUTPUT_MARGIN
     }
 
-    /// Expand or fold the returned value covering local `row`; false when none folds there.
-    pub fn toggle_fold(&mut self, row: u16, context: &RenderContext) -> bool {
+    /// Expand or fold the returned value covering local `position`; false when none
+    /// folds there.
+    pub fn toggle_fold(&mut self, position: Position, context: &RenderContext) -> bool {
         let mut top = self.code_height(context) + self.output_margin();
         for output in &mut self.outputs {
             let bottom = top.saturating_add(output.block().height(context));
-            if (top..bottom).contains(&row) {
+            if (top..bottom).contains(&position.y) {
                 return match output {
-                    EvaluationOutput::Value(block) => block.toggle_fold(context),
+                    EvaluationOutput::Value(block) => {
+                        block.toggle_fold(Position::new(position.x, position.y - top), context)
+                    }
                     EvaluationOutput::Evaluation(_) | EvaluationOutput::Printed(_) => false,
                 };
             }
@@ -759,7 +780,7 @@ impl Block for EvaluationBlock {
         layout.render_separator(code_area_height, context.groups().separator(), buf);
         let mut row = area.y.saturating_add(1);
         let mut after_error = false;
-        for (cell, state) in &self.cells {
+        for (index, (cell, state)) in self.cells.iter().enumerate() {
             let marker = state.marker();
             let failed = matches!(state, EvaluationState::Failed(_) | EvaluationState::Invalid);
             let style = Self::code_style(state, after_error, context);
@@ -769,8 +790,11 @@ impl Block for EvaluationBlock {
                     .height(),
             );
             if after_error {
+                // Without any code run cleanly before it, the error claims the top
+                // margin too, so the whole block reads as failed.
+                let top = if index == 0 { area.y } else { row };
                 if let Some(bg) = context.groups().error_code().bg {
-                    for y in row..next {
+                    for y in top..next {
                         for x in area.x..area.right() {
                             buf[(x, y)].set_bg(bg);
                         }
@@ -953,7 +977,7 @@ impl Block for TextBlock {
                             margin = usize::from(UI.cell_margin),
                             width = prefix - usize::from(UI.cell_margin),
                         ),
-                        theme.muted(),
+                        theme.printed_cell_number(),
                     ),
                     None => Span::raw(" ".repeat(prefix)),
                 };
@@ -1131,21 +1155,43 @@ impl OutputBlock {
             }),
             _ => None,
         };
-        let mut lines: Vec<Line<'static>> = match token
-            .as_ref()
-            .or(cell.value.as_ref())
-            .map(|value| maths::spans(value, width, style))
-        {
-            Some(Ok(rows)) => rows
-                .into_iter()
-                .map(|row| Line::from(row.spans(theme)))
-                .collect(),
-            _ => self
-                .layout(cell, context)
-                .into_iter()
-                .map(|line| Line::from(Span::styled(line, theme.value())))
-                .collect(),
-        };
+        let mut lines: Vec<Line<'static>> = match (style.display, cell.value.as_ref()) {
+            (MathDisplay::Typeset, Some(value)) => value
+                .tex()
+                .and_then(|tex| Self::typeset(&tex, theme.value(), width)),
+            (
+                MathDisplay::Ascii,
+                Some(
+                    value @ (M2Value::Tex { .. }
+                    | M2Value::Collection { .. }
+                    | M2Value::HashTable(_)),
+                ),
+            ) => Some(
+                value
+                    .ascii()
+                    .lines()
+                    .map(|line| Line::from(Span::styled(line.to_string(), theme.value())))
+                    .collect(),
+            ),
+            _ => None,
+        }
+        .unwrap_or_else(|| {
+            match token
+                .as_ref()
+                .or(cell.value.as_ref())
+                .map(|value| maths::spans(value, width, style))
+            {
+                Some(Ok(rows)) => rows
+                    .into_iter()
+                    .map(|row| Line::from(row.spans(theme)))
+                    .collect(),
+                _ => self
+                    .layout(cell, context)
+                    .into_iter()
+                    .map(|line| Line::from(Span::styled(line, theme.value())))
+                    .collect(),
+            }
+        });
         let limit = (UI.max_output_preview_cells / usize::from(context.width().max(1))).max(1);
         if lines.len() > limit {
             let head = limit.saturating_sub(1) / 2;
@@ -1164,6 +1210,35 @@ impl OutputBlock {
             lines: lines.clone(),
         }));
         lines
+    }
+
+    /// `value` as a typeset picture painted in `ink`'s colour, when the terminal
+    /// shows pictures and the whole value has TeX that sets legibly in `width` columns.
+    fn typeset(tex: &str, ink: Style, width: usize) -> Option<Vec<Line<'static>>> {
+        let Some(Color::Rgb(r, g, b)) = ink.fg else {
+            return None;
+        };
+        let width = u16::try_from(width).unwrap_or(u16::MAX);
+        graphics::typeset(tex, Rgb([r, g, b]), width)
+    }
+
+    /// The type annotation as one picture in the type colour, when some part of
+    /// it is maths, such as a ring; one of words alone, such as `String`, stays text.
+    fn typeset_annotation(
+        parts: &[M2Value],
+        ink: Style,
+        width: usize,
+    ) -> Option<Vec<Line<'static>>> {
+        if !parts.iter().any(|part| matches!(part, M2Value::Tex { .. })) {
+            return None;
+        }
+        let tex = parts
+            .iter()
+            .map(M2Value::tex)
+            .collect::<Option<Vec<_>>>()?
+            .join(r"\ ")
+            .replace(TYPEWRITER_TEXT, UPRIGHT_TEXT);
+        Self::typeset(&tex, ink, width)
     }
 
     /// Value rows kept above the fold and rows hidden by it, when `rows` exceed
@@ -1213,21 +1288,34 @@ impl OutputBlock {
         ]
     }
 
-    /// Expand every folded value, or fold them back; false when none is tall enough.
-    pub fn toggle_fold(&mut self, context: &RenderContext) -> bool {
+    /// Expand every folded value from anywhere on the block, or fold them back from
+    /// its border at local `position`; false when nothing toggled.
+    pub fn toggle_fold(&mut self, position: Position, context: &RenderContext) -> bool {
         let foldable = context.output_limit().is_some_and(|limit| {
             self.cells
                 .iter()
                 .any(|cell| self.unfolded_lines(cell, context).len() > limit)
         });
-        self.expanded ^= foldable;
-        foldable
+        let area = Rect::new(0, 0, context.width(), self.height(context));
+        let toggled = foldable
+            && (!self.expanded || Bordered::on_border(area, self.border_layout(), position));
+        self.expanded ^= toggled;
+        toggled
     }
 
     fn type_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
         let theme = context.groups();
-        if !cell.type_parts.is_empty() {
-            let width = usize::from(self.text_width(context));
+        let width = usize::from(self.text_width(context));
+        let typeset = match context.math().display {
+            MathDisplay::Typeset => {
+                Self::typeset_annotation(&cell.type_parts, theme.style(HLGroup::Type), width)
+            }
+            _ => None,
+        };
+        if let Some(lines) = typeset {
+            return lines;
+        }
+        if !cell.type_parts.is_empty() && context.math().display != MathDisplay::Ascii {
             return maths::annotation(&cell.type_parts, width, context.math())
                 .into_iter()
                 .map(|row| Line::from(row.spans(theme)))
@@ -1241,10 +1329,14 @@ impl OutputBlock {
         })
     }
 
-    fn type_start(values: &[Line<'_>], type_width: usize, width: usize) -> usize {
-        match values.last() {
-            Some(value) if value.width() + type_width < width => values.len() - 1,
-            _ => values.len(),
+    /// The row the type's first row goes on: beside the value, its last row on the
+    /// value's last, when every value row it shares leaves it room; else below.
+    fn type_start(values: &[Line<'_>], types: usize, type_width: usize, width: usize) -> usize {
+        let fits = |value: &Line<'_>| value.width() + type_width < width;
+        let start = values.len().saturating_sub(types.max(1));
+        match !values.is_empty() && values[start..].iter().all(fits) {
+            true => start,
+            false => values.len(),
         }
     }
 
@@ -1259,7 +1351,7 @@ impl OutputBlock {
             lines.push(Line::default());
         }
         let width = usize::from(self.text_width(context));
-        let start = Self::type_start(&lines, type_width, width);
+        let start = Self::type_start(&lines, types.len(), type_width, width);
         lines.resize(start + types.len(), Line::default());
         for (line, ty) in lines[start..].iter_mut().zip(types) {
             line.spans.push(Span::raw(
@@ -1413,7 +1505,8 @@ impl Block for OutputBlock {
             let values = self.value_lines(cell, context);
             let types = self.type_lines(cell, context);
             let width = types.iter().map(Line::width).max().unwrap_or_default() as u16;
-            let start = Self::type_start(&values, width.into(), inner.width.into()) as u16;
+            let start =
+                Self::type_start(&values, types.len(), width.into(), inner.width.into()) as u16;
             for offset in 0..row_count!(types.len()) {
                 exclusions.push(Rect::new(
                     right.saturating_sub(width),
@@ -1565,6 +1658,7 @@ mod tests {
     use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
     use crate::ui::syntax_tree::SyntaxTreeBlock;
     use m2_syn::{DelimiterKind, DoubleSpan, PrettyNode, Span as M2Span};
+    use ratatui::style::Color;
 
     #[test]
     fn oversized_plain_output_has_a_bounded_preview_even_when_expanded() {
@@ -1647,7 +1741,7 @@ mod tests {
             &first,
             &block.unfolded_lines(&block.cells[0], &context)
         ));
-        assert!(block.toggle_fold(&context));
+        assert!(block.toggle_fold(Position::new(10, 2), &context));
         assert!(usize::from(block.height(&context)) > 12);
         assert!(Rc::ptr_eq(
             &first,
@@ -2478,7 +2572,9 @@ mod tests {
         let code_x = prefix() as u16;
 
         assert_eq!(buffer[(code_x, 1)].fg, theme.Function.fg.unwrap());
-        assert_eq!(buffer[(code_x, 1)].bg, theme.code().bg.unwrap());
+        for y in [0, 1] {
+            assert_eq!(buffer[(code_x, y)].bg, theme.code().bg.unwrap());
+        }
         for y in [2, 3, 4] {
             assert_eq!(buffer[(code_x, y)].bg, theme.error_code().bg.unwrap());
             assert_eq!(buffer[(35, y)].bg, theme.error_code().bg.unwrap());
@@ -2503,6 +2599,39 @@ mod tests {
             theme.error_code().bg.unwrap()
         );
         assert_eq!(buffer[(23, 1)].bg, theme.error_code().bg.unwrap());
+    }
+
+    #[test]
+    fn a_failed_first_cell_paints_the_whole_block_in_the_error_background() {
+        let mut block = EvaluationBlock::new(1, [("1/0".to_string(), Vec::new())]);
+        block.fail(0, 1, None, "error: division by zero".into());
+        let buffer = rendered_buffer(&block, 24);
+        let error = Groups::default().error_code().bg.unwrap();
+
+        for y in 0..=2 {
+            for x in [0, prefix() as u16, 23] {
+                assert_eq!(buffer[(x, y)].bg, error, "({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn error_background_tints_the_code_surface_toward_the_error_colour() {
+        let theme = Groups::default();
+        let (code, error) = (theme.code().bg.unwrap(), theme.Error.fg.unwrap());
+        let tinted = theme.error_code().bg.unwrap();
+        let channels = |color| match color {
+            Color::Rgb(r, g, b) => [r, g, b].map(i32::from),
+            _ => panic!("schemes are RGB"),
+        };
+        let distance = |from, to| {
+            let (from, to) = (channels(from), channels(to));
+            (0..3).map(|i| (from[i] - to[i]).abs()).sum::<i32>()
+        };
+
+        assert_ne!(tinted, code);
+        assert!(distance(tinted, code) < distance(tinted, error));
+        assert!(distance(tinted, error) < distance(code, error));
     }
 
     #[test]
@@ -2565,11 +2694,17 @@ mod tests {
         assert_eq!(block.cell_fold(&block.cells[0], &context), Some((11, 19)));
         assert_eq!(text(&block, &context.full_output()).len(), 40);
 
-        assert!(block.toggle_fold(&context));
+        let inside = Position::new(20, 5);
+        let border = Position::new(block.border_layout().inset(), 5);
+        assert!(block.toggle_fold(inside, &context));
         assert_eq!(text(&block, &context).len(), 40);
-        assert!(block.toggle_fold(&context));
+        assert!(
+            !block.toggle_fold(inside, &context),
+            "an expanded value folds back only from its border"
+        );
+        assert!(block.toggle_fold(border, &context));
         assert_eq!(text(&block, &context).len(), 24);
-        assert!(!OutputBlock::value("x".into(), None).toggle_fold(&context));
+        assert!(!OutputBlock::value("x".into(), None).toggle_fold(inside, &context));
     }
 
     #[test]

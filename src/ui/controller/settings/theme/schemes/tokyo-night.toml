@@ -1,82 +1,196 @@
+# Native palette source: https://github.com/folke/tokyonight.nvim
+# Palette names are shared by every variant; values retain their upstream RGB identity.
 name = "tokyo night"
 
 [variants]
 dark = ["night", "storm", "moon"]
 light = ["day"]
 
-[colors.red]
-dark = { night = { base = "#f7768e", dark = "#db4b4b" }, storm = { base = "#f7768e", dark = "#db4b4b" }, moon = { base = "#ff757f", dark = "#c53b53" } }
-light = { base = "#f52a65", dark = "#c64343" }
+[palette."bg"]
+dark = { night = "#1a1b26", storm = "#24283b", moon = "#222436" }
+light = "#e1e2e7"
 
-[colors.green]
-dark = { night = { base = "#9ece6a", light = "#73daca", dark = "#41a6b5" }, storm = { base = "#9ece6a", light = "#73daca", dark = "#41a6b5" }, moon = { base = "#c3e88d", dark = "#41a6b5" } }
-light = { base = "#587539", light = "#38919f", dark = "#387068" }
+[palette."bg_dark"]
+dark = { night = "#16161e", storm = "#1f2335", moon = "#1e2030" }
+light = "#d0d5e3"
 
-[colors.yellow]
-dark = { night = "#e0af68", storm = "#e0af68", moon = "#ffc777" }
-light = "#8c6c3e"
+[palette."bg_dark1"]
+dark = { night = "#0c0e14", storm = "#1b1e2d", moon = "#191b29" }
+light = "#c1c9df"
 
-[colors.blue]
-dark = { night = { base = "#7aa2f7", light = "#b4f9f8", dark = "#394b70" }, storm = { base = "#7aa2f7", light = "#b4f9f8", dark = "#394b70" }, moon = { base = "#82aaff", light = "#b4f9f8", dark = "#394b70" } }
-light = { base = "#2e7de9", light = "#92a6d5", dark = "#2e5857" }
+[palette."bg_highlight"]
+dark = { night = "#292e42", storm = "#292e42", moon = "#2f334d" }
+light = "#c4c8da"
 
-[colors.purple]
-dark = { night = "#9d7cd8", storm = "#9d7cd8", moon = "#fca7ea" }
-light = "#7847bd"
+[palette."blue"]
+dark = { night = "#7aa2f7", storm = "#7aa2f7", moon = "#82aaff" }
+light = "#2e7de9"
 
-[colors.aqua]
-dark = { night = "#7dcfff", storm = "#7dcfff", moon = "#86e1fc" }
-light = "#007197"
+[palette."blue0"]
+dark = { night = "#3d59a1", storm = "#3d59a1", moon = "#3e68d7" }
+light = "#7890dd"
 
-[colors.orange]
-dark = { night = "#ff9e64", storm = "#ff9e64", moon = "#ff966c" }
-light = "#b15c00"
+[palette."blue1"]
+dark = { night = "#2ac3de", storm = "#2ac3de", moon = "#65bcff" }
+light = "#188092"
 
-[colors.gray]
+[palette."blue2"]
+dark = "#0db9d7"
+light = "#07879d"
+
+[palette."blue5"]
+dark = "#89ddff"
+light = "#006a83"
+
+[palette."blue6"]
+dark = "#b4f9f8"
+light = "#2e5857"
+
+[palette."blue7"]
+dark = "#394b70"
+light = "#92a6d5"
+
+[palette."comment"]
 dark = { night = "#565f89", storm = "#565f89", moon = "#636da6" }
 light = "#848cb5"
 
-[colors.fg]
-dark = { night = ["#c0caf5", "#a9b1d6", "#565f89"], storm = ["#c0caf5", "#a9b1d6", "#565f89"], moon = ["#c8d3f5", "#828bb8", "#636da6"] }
-light = ["#3760bf", "#6172b0", "#848cb5"]
+[palette."cyan"]
+dark = { night = "#7dcfff", storm = "#7dcfff", moon = "#86e1fc" }
+light = "#007197"
 
-[colors.bg]
-dark = { night = ["#1a1b26", "#0c0e14", "#16161e", "#292e42", "#283457"], storm = ["#24283b", "#1b1e2d", "#1f2335", "#292e42", "#2e3c64"], moon = ["#222436", "#191b29", "#1e2030", "#2f334d", "#2d3f76"] }
-light = ["#e1e2e7", "#c1c9df", "#d0d5e3", "#c4c8da", "#b7c1e3"]
+[palette."dark3"]
+dark = "#545c7e"
+light = "#8990b3"
 
-[base]
-Canvas = { bg = "bg0" }
-Code = { bg = "bg1" }
-Raised = { bg = "bg2" }
-Pending = { bg = "bg2" }
-Selection = { bg = "bg4" }
-Focus = { bg = "bg4" }
-Text = { fg = "fg0" }
-Muted = { fg = "gray" }
-Faint = { fg = "fg4" }
-Keyword = { fg = "purple", italic = true }
-Function = { fg = "blue" }
-Type = { fg = "aqua_dark" }
-String = { fg = "green" }
-Number = { fg = "orange" }
-Operator = { fg = "aqua" }
-Symbol = { fg = "aqua_dark" }
-Parameter = { fg = "yellow" }
-Property = { fg = "aqua_dark" }
-EnumVariant = { fg = "green_dark" }
-Macro = { fg = "green_dark" }
-Attribute = { fg = "purple_light" }
+[palette."dark5"]
+dark = "#737aa2"
+light = "#68709a"
+
+[palette."fg"]
+dark = { night = "#c0caf5", storm = "#c0caf5", moon = "#c8d3f5" }
+light = "#3760bf"
+
+[palette."fg_dark"]
+dark = { night = "#a9b1d6", storm = "#a9b1d6", moon = "#828bb8" }
+light = "#6172b0"
+
+[palette."fg_gutter"]
+dark = "#3b4261"
+light = "#a8aecb"
+
+[palette."git.add"]
+dark = { night = "#449dab", storm = "#449dab", moon = "#b8db87" }
+light = "#4197a4"
+
+[palette."git.change"]
+dark = { night = "#6183bb", storm = "#6183bb", moon = "#7ca1f2" }
+light = "#506d9c"
+
+[palette."git.delete"]
+dark = { night = "#914c54", storm = "#914c54", moon = "#e26a75" }
+light = "#c47981"
+
+[palette."green"]
+dark = { night = "#9ece6a", storm = "#9ece6a", moon = "#c3e88d" }
+light = "#587539"
+
+[palette."green1"]
+dark = { night = "#73daca", storm = "#73daca", moon = "#4fd6be" }
+light = "#387068"
+
+[palette."green2"]
+dark = "#41a6b5"
+light = "#38919f"
+
+[palette."magenta"]
+dark = { night = "#bb9af7", storm = "#bb9af7", moon = "#c099ff" }
+light = "#9854f1"
+
+[palette."magenta2"]
+dark = "#ff007c"
+light = "#d20065"
+
+[palette."orange"]
+dark = { night = "#ff9e64", storm = "#ff9e64", moon = "#ff966c" }
+light = "#b15c00"
+
+[palette."purple"]
+dark = { night = "#9d7cd8", storm = "#9d7cd8", moon = "#fca7ea" }
+light = "#7847bd"
+
+[palette."red"]
+dark = { night = "#f7768e", storm = "#f7768e", moon = "#ff757f" }
+light = "#f52a65"
+
+[palette."red1"]
+dark = { night = "#db4b4b", storm = "#db4b4b", moon = "#c53b53" }
+light = "#c64343"
+
+[palette."teal"]
+dark = { night = "#1abc9c", storm = "#1abc9c", moon = "#4fd6be" }
+light = "#118c74"
+
+[palette."terminal_black"]
+dark = { night = "#414868", storm = "#414868", moon = "#444a73" }
+light = "#a1a6c5"
+
+[palette."yellow"]
+dark = { night = "#e0af68", storm = "#e0af68", moon = "#ffc777" }
+light = "#8c6c3e"
+
+[groups]
+Accent = { fg = "cyan" }
+Attribute = { fg = "cyan" }
+Bg0 = { bg = "bg" }
+Bg1 = { bg = "bg_dark" }
+Bg2 = { bg = "bg_highlight" }
+Bg3 = { bg = "bg_highlight" }
+Bg4 = { bg = "bg_highlight" }
+Boolean = { fg = "orange" }
 Builtin = { fg = "red" }
-Regex = { fg = "fg0", sp = "fg0", underline = true }
-Accent = { fg = "aqua" }
-Error = { fg = "red_dark" }
+Comment = { fg = "comment", italic = true }
+CompiledFunction = { fg = "blue1" }
+Conditional = { fg = "magenta" }
+Constant = { fg = "orange" }
+Debug = { fg = "orange" }
+Delimiter = { fg = "blue5" }
+Documentation = { fg = "fg" }
+EnumVariant = { fg = "orange" }
+Error = { fg = "red1" }
+ErrorMessage = { fg = "red1" }
+Exception = { fg = "magenta" }
+Faint = { fg = "fg_gutter" }
+Float = { fg = "orange" }
+Function = { fg = "blue" }
+Hint = { fg = "teal" }
+Info = { fg = "blue2" }
+Installation = { fg = "blue" }
+Keyword = { fg = "purple", italic = true }
+Macro = { fg = "cyan" }
+MarkupBrief = { fg = "blue", italic = true }
+MarkupHeading1 = { bold = true, fg = "blue" }
+MarkupHeading2 = { bold = true, fg = "blue" }
+MarkupHeading3 = { bold = true, fg = "blue" }
+Muted = { fg = "comment" }
+Namespace = { fg = "cyan" }
+Number = { fg = "orange" }
+Operator = { fg = "blue5" }
+Package = { fg = "cyan" }
+Parameter = { fg = "yellow" }
+Property = { fg = "green1" }
+Punctuation = { fg = "fg_dark" }
+Quote = { fg = "blue1" }
+Regex = { fg = "blue6" }
+Repeat = { fg = "magenta" }
+Statement = { fg = "purple", italic = true }
+StorageClass = { fg = "purple", italic = true }
+String = { fg = "green" }
+Symbol = { fg = "blue1" }
+Text = { fg = "fg" }
+Type = { fg = "blue1" }
+Variable = { fg = "fg" }
+ViewLabelActive = { fg = "fg" }
 Warning = { fg = "yellow" }
-Info = { fg = "blue" }
-Hint = { fg = "aqua" }
 
-[overrides]
-Comment = { fg = "fg4", italic = true }
-Constant = { fg = "aqua_dark" }
-Delimiter = { fg = "aqua" }
-CompiledFunction = { fg = "aqua_dark" }
-Documentation = { fg = "blue_light" }
+[variant_overrides.dark.moon]
+Property = { fg = "teal" }

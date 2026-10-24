@@ -53,9 +53,18 @@ impl FeedContent {
 /// style a highlight group resolves to, leaving the geometry exactly where it was.
 struct RetainedBlock {
     content: FeedContent,
-    layout: Option<(u16, u16)>,
+    layout: Option<Layout>,
     cells: Option<Buffer>,
     exclusions: Option<Exclusions>,
+}
+
+/// A block's measured height, kept as an estimate once it goes stale so a block off
+/// screen is never laid out again just to be scrolled past.
+#[derive(Clone, Copy)]
+struct Layout {
+    width: u16,
+    height: u16,
+    settled: bool,
 }
 
 impl RetainedBlock {
@@ -68,14 +77,34 @@ impl RetainedBlock {
         }
     }
 
+    /// The height at the context width, laid out again if it went stale.
     fn height(&mut self, context: &RenderContext) -> u16 {
         self.on_event(&Resized {
             width: context.width(),
         });
-        if self.layout.is_none() {
-            self.layout = Some((context.width(), self.content.block().height(context).max(1)));
+        match self.layout {
+            Some(layout) if layout.settled => layout.height,
+            _ => {
+                let height = self.content.block().height(context).max(1);
+                self.layout = Some(Layout {
+                    width: context.width(),
+                    height,
+                    settled: true,
+                });
+                height
+            }
         }
-        self.layout.unwrap().1
+    }
+
+    /// The last height measured, stale or not; only a block never measured is laid out.
+    fn estimated_height(&mut self, context: &RenderContext) -> u16 {
+        self.on_event(&Resized {
+            width: context.width(),
+        });
+        match self.layout {
+            Some(layout) => layout.height,
+            None => self.height(context),
+        }
     }
 
     fn render(&mut self, context: &RenderContext, canvas: Style) -> (&Buffer, &Exclusions) {
@@ -106,6 +135,14 @@ impl RetainedBlock {
     }
 
     fn invalidate_layout(&mut self) {
+        if let Some(layout) = &mut self.layout {
+            layout.settled = false;
+        }
+        self.invalidate();
+    }
+
+    /// The block's own content changed, so even its old height says nothing.
+    fn forget_layout(&mut self) {
         self.layout = None;
         self.invalidate();
     }
@@ -114,11 +151,11 @@ impl RetainedBlock {
 /// A width moves every wrap boundary, so both the geometry and the cells go with it.
 impl EventListener<Resized> for RetainedBlock {
     fn on_event(&mut self, event: &Resized) {
-        if self
-            .layout
-            .is_none_or(|(settled, _)| settled != event.width)
-        {
-            self.invalidate_layout();
+        if let Some(layout) = &mut self.layout {
+            if layout.width != event.width {
+                layout.width = event.width;
+                self.invalidate_layout();
+            }
         }
     }
 }
@@ -379,7 +416,7 @@ impl Feed {
             };
             if evaluation.id() == id {
                 update(evaluation);
-                block.invalidate_layout();
+                block.forget_layout();
                 self.anchor = anchor;
                 self.surface = None;
                 return;
@@ -402,13 +439,14 @@ impl Feed {
         let (context, anchor) = (surface.context, surface.anchor);
         let block = &mut self.blocks[index];
         let toggled = match &mut block.content {
-            FeedContent::Evaluation(evaluation) => {
-                evaluation.toggle_fold(start + position.y - area.y, &context)
-            }
+            FeedContent::Evaluation(evaluation) => evaluation.toggle_fold(
+                Position::new(position.x - area.x, start + position.y - area.y),
+                &context,
+            ),
             FeedContent::Block(_) | FeedContent::Incomplete(_) => false,
         };
         if toggled {
-            block.invalidate_layout();
+            block.forget_layout();
             self.anchor = anchor;
             self.surface = None;
         }
@@ -607,11 +645,24 @@ impl Feed {
         let Some(block) = blocks.get_mut(index) else {
             return 0;
         };
-        let row = row.min(block.height(context).saturating_sub(1));
-        blocks[index..]
+        let anchored = block.height(context);
+        let row = row.min(anchored.saturating_sub(1));
+        // The blocks the viewport reaches are laid out, as the walk that draws them
+        // will lay them out; those past its bottom count by their estimates on both
+        // sides, so the anchor lands where it was.
+        let mut shown = anchored - row;
+        let below = blocks[index + 1..]
             .iter_mut()
-            .map(|block| usize::from(block.height(context)))
-            .sum::<usize>()
+            .map(|block| {
+                let block_height = match shown < height {
+                    true => block.height(context),
+                    false => block.estimated_height(context),
+                };
+                shown = shown.saturating_add(block_height);
+                usize::from(block_height)
+            })
+            .sum::<usize>();
+        (below + usize::from(anchored))
             .saturating_sub(row.into())
             .saturating_sub(height.into())
     }
@@ -627,7 +678,12 @@ impl Feed {
         let mut total = 0;
         let mut visible = Vec::new();
         for (index, block) in blocks.iter_mut().enumerate().rev() {
-            let block_height = block.height(context);
+            // Blocks scrolled past keep their estimates; only one reaching the
+            // viewport is laid out, and its settled height decides the rest.
+            let mut block_height = block.estimated_height(context);
+            if below < usize::from(block_height) {
+                block_height = block.height(context);
+            }
             total += usize::from(block_height);
             if below >= usize::from(block_height) {
                 below -= usize::from(block_height);
@@ -825,7 +881,12 @@ mod tests {
         assert!(!expanded.iter().any(|row| row.contains("rows hidden")));
         assert!(expanded[8].contains("row 07"), "{expanded:#?}");
 
-        assert!(feed.toggle_fold(Position::new(10, 5)));
+        assert!(!feed.toggle_fold(Position::new(10, 5)), "inside the value");
+        let border = expanded[5]
+            .chars()
+            .position(|symbol| symbol == '│')
+            .expect("the value's border crosses its rows");
+        assert!(feed.toggle_fold(Position::new(border as u16, 5)));
         assert!(screen(&mut feed)
             .iter()
             .any(|row| row.contains("rows hidden")));
@@ -863,6 +924,47 @@ mod tests {
                 .map(|count| count.load(Ordering::Relaxed))
                 .collect::<Vec<_>>(),
             vec![0, 1, 1]
+        );
+    }
+
+    /// A one-row block counting how often it is laid out.
+    struct Measured(Arc<AtomicUsize>);
+
+    impl Block for Measured {
+        fn height(&self, _: &RenderContext) -> u16 {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            1
+        }
+
+        fn render_local(&self, _: &RenderContext, _: &mut Buffer) {}
+    }
+
+    #[test]
+    fn a_change_lays_out_again_only_the_blocks_on_screen() {
+        let counts = (0..3)
+            .map(|_| Arc::new(AtomicUsize::new(0)))
+            .collect::<Vec<_>>();
+        let mut feed = Feed::new(Box::new(Measured(counts[0].clone())));
+        feed.push(Box::new(Measured(counts[1].clone())));
+        feed.push(Box::new(Measured(counts[2].clone())));
+        let context = RenderContext::new(10, 0);
+        let area = Rect::new(0, 0, 10, 1);
+        let mut target = Buffer::empty(area);
+        feed.scroll(1);
+        feed.render(&context, area, &mut target, Style::default());
+        counts
+            .iter()
+            .for_each(|count| count.store(0, Ordering::Relaxed));
+
+        feed.on_event(&Reformatted);
+        feed.render(&context, area, &mut target, Style::default());
+
+        assert_eq!(
+            counts
+                .iter()
+                .map(|count| count.load(Ordering::Relaxed))
+                .collect::<Vec<_>>(),
+            vec![0, 1, 0]
         );
     }
 
@@ -1050,7 +1152,11 @@ mod tests {
         feed.render(&context, narrow, &mut target, Style::default());
 
         assert_eq!(target[(UI.feed_margin, 0)].symbol(), "B");
-        assert_eq!(feed.offset(), 7);
+
+        feed.scroll(-i8::MAX);
+        feed.render(&context, narrow, &mut target, Style::default());
+        assert_eq!(target[(UI.feed_margin, 1)].symbol(), "F");
+        assert_eq!(target[(UI.feed_margin, 2)].symbol(), "f");
     }
 
     #[test]

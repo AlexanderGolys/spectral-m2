@@ -197,9 +197,10 @@ announceReady := (() -> (
     render MutableHashTable := HashTable => renderMutableHashTable;
     -- A type is a name in code, whatever kind of type it is -- Type,
     -- WrapperType, a class made by `new Type of` -- and so is a package. A ring,
-    -- which is also a Type, draws itself.
+    -- which is also a Type, draws itself, and so does a family of rings such as
+    -- RR and CC, which stands for the ring at default precision.
     render Type := HashTable => value -> (
-        if instance(value, Ring) then renderMutableHashTable value
+        if instance(value, Ring) or instance(value, RingFamily) then renderMutableHashTable value
         else asToken(toString value, "type")
     );
     render Package := HashTable => value -> asToken(toString value, "package");

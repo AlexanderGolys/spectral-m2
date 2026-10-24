@@ -25,6 +25,7 @@ use crate::ui::action::Action;
 use crate::ui::cell::TextBlock;
 use crate::ui::config::UI;
 use crate::ui::controller::{CommittedCells, Editor, EditorUpdate, Reaction, ViewKind};
+use crate::ui::graphics;
 use crate::ui::key::{KeyEvent, Keyboard};
 use crate::ui::terminal::ReplTerminal;
 
@@ -78,7 +79,9 @@ impl App {
     fn handle_event(&mut self, event: Event) -> bool {
         match event {
             Event::Key(key) => {
-                let Some(key) = self.keyboard.event(key) else {
+                let key = self.keyboard.event(key);
+                self.workspace.editor.hold_control(self.keyboard.ctrl());
+                let Some(key) = key else {
                     return true;
                 };
                 self.handle_key(key)
@@ -132,10 +135,6 @@ impl App {
                 return true;
             }
             Action::ClosePane => {
-                self.panes.close_view();
-                return true;
-            }
-            Action::Quit if self.panes.focused().view != ViewKind::Shell => {
                 self.panes.close_view();
                 return true;
             }
@@ -496,6 +495,9 @@ pub fn run(backend: M2Backend) -> Result<()> {
         }
         let mut running = true;
         for event in events {
+            if matches!(event, Event::FocusGained) {
+                graphics::resend_all();
+            }
             running &= app.handle_event(event);
         }
         if !running {

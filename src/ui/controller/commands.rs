@@ -144,10 +144,14 @@ impl PickerItem for CommandItem {
         ]);
         let mut cells = vec![
             usage,
-            Span::styled(self.command.action.description(), groups.value()).into(),
+            Span::styled(
+                self.command.action.description(),
+                groups.command_action_description(),
+            )
+            .into(),
         ];
         if let Some(shortcut) = self.shortcut {
-            cells.push(Span::styled(shortcut.to_string(), groups.prompt()).into());
+            cells.push(Span::styled(shortcut.to_string(), groups.command_shortcut()).into());
         }
         cells
     }
