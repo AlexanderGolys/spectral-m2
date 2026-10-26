@@ -522,6 +522,7 @@ accessors! {
     settings_item_label: SettingsItemLabel,
     settings_item_value: SettingsItemValue,
     settings_item_unavailable: SettingsItemUnavailable,
+    settings_item_disabled: SettingsItemDisabled,
     settings_unavailable_note: SettingsUnavailableNote,
     settings_item_description: SettingsItemDescription,
     settings_step_arrow: SettingsStepArrow,

@@ -692,8 +692,6 @@ pub struct InputContext<'a> {
     pub debugging: bool,
     /// Whether this input is the focused UI element.
     pub focused: bool,
-    /// Whether submitted source directly touches the input's upper edge.
-    pub code_above: bool,
     /// Incomplete source whose following line is the live input.
     pub pending: Option<&'a str>,
 }
@@ -953,8 +951,8 @@ impl InputCode {
             KeyCode::End if key.shift() => Some(SelectLineEnd),
             KeyCode::Left => Some(MoveLeft),
             KeyCode::Right => Some(MoveRight),
-            KeyCode::Up if key.alt() => Some(HistoryPrevious),
-            KeyCode::Down if key.alt() => Some(HistoryNext),
+            KeyCode::Up if key.ctrl() => Some(HistoryPrevious),
+            KeyCode::Down if key.ctrl() => Some(HistoryNext),
             KeyCode::Up => Some(MoveUp),
             KeyCode::Down => Some(MoveDown),
             KeyCode::Home => Some(MoveLineStart),
@@ -1234,13 +1232,6 @@ impl InputCode {
                 buffer[(x, area.bottom() - 1)]
                     .set_symbol(UI.glyphs.pending_separator.current())
                     .set_style(groups.pending_separator().patch(code));
-            }
-        }
-        if context.code_above {
-            for x in area.x..area.right() {
-                buffer[(x, area.y)]
-                    .set_symbol(" ")
-                    .set_style(groups.transcript());
             }
         }
         context.focused.then(|| {
@@ -1678,7 +1669,6 @@ mod tests {
                     command: false,
                     debugging: false,
                     focused: true,
-                    code_above: false,
                     pending: None,
                 },
                 area,

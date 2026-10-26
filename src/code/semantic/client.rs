@@ -18,12 +18,14 @@ use lsp_types::request::{
 };
 use lsp_types::{
     InitializeResult, SemanticTokens, SemanticTokensLegend, SemanticTokensServerCapabilities,
+    ServerInfo,
 };
 use serde_json::{json, Value};
 
 use super::{Document, TOKEN_MODIFIERS, TOKEN_TYPES};
 
-const SERVER_EXECUTABLE: &str = "m2-ls";
+/// The language server Spectral runs, looked up on `PATH`.
+pub const SERVER_EXECUTABLE: &str = "m2-ls";
 const DEBOUNCE: Duration = Duration::from_millis(100);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -31,6 +33,8 @@ const WORKER_INTERVAL: Duration = Duration::from_millis(10);
 
 /// A completed computation or a terminal client failure.
 pub(super) enum Event {
+    /// The server finished initializing, named as it names itself or else by its executable.
+    Started(ServerInfo),
     Tokens {
         document: Arc<Document>,
         legend: SemanticTokensLegend,
@@ -300,6 +304,9 @@ fn serve(
         {
             return Err("semantic-token request timed out".to_string());
         }
+        if initialized && legend.is_none() && pending.is_some() {
+            return Err("language server does not support full semantic tokens".to_string());
+        }
         if initialized
             && in_flight.is_none()
             && pending
@@ -384,14 +391,16 @@ fn serve(
                     )) if supports_full(&options.semantic_tokens_options.full) => {
                         Some(options.semantic_tokens_options.legend)
                     }
-                    _ => {
-                        return Err(
-                            "language server does not support full semantic tokens".to_string()
-                        )
-                    }
+                    _ => None,
                 };
                 process.notify(Initialized::METHOD, json!({}))?;
                 initialized = true;
+                let _ = events.send(Event::Started(result.server_info.unwrap_or_else(|| {
+                    ServerInfo {
+                        name: SERVER_EXECUTABLE.to_string(),
+                        version: None,
+                    }
+                })));
             }
             Ok(WireEvent::Message(Message::Response(response))) => {
                 if in_flight
@@ -482,7 +491,7 @@ assert request['params']['capabilities']['textDocument']['semanticTokens']['augm
 if mode == 'initialize-timeout':
     time.sleep(5)
     sys.exit(0)
-reply(request, {'capabilities':{'semanticTokensProvider': {'full':True, 'legend': {'tokenTypes':['function'], 'tokenModifiers':[]}}}})
+reply(request, {'serverInfo':{'name':'fixture-ls','version':'0.1'}, 'capabilities':{'semanticTokensProvider': {'full':True, 'legend': {'tokenTypes':['function'], 'tokenModifiers':[]}}}})
 assert read()['method'] == 'initialized'
 opened = None
 refreshed = False
@@ -534,11 +543,31 @@ while True:
         Arc::new(document)
     }
 
-    fn event(client: &Client) -> Event {
+    fn next(client: &Client) -> Event {
         client
             .events
             .recv_timeout(Duration::from_secs(5))
             .expect("server fixture response")
+    }
+
+    /// The next event after the server's startup announcement.
+    fn event(client: &Client) -> Event {
+        match next(client) {
+            Event::Started(_) => next(client),
+            event => event,
+        }
+    }
+
+    #[test]
+    fn initialization_announces_the_server_by_name_and_version() {
+        let client = fixture("normal", REQUEST_TIMEOUT);
+        match next(&client) {
+            Event::Started(info) => {
+                assert_eq!(info.name, "fixture-ls");
+                assert_eq!(info.version.as_deref(), Some("0.1"));
+            }
+            _ => panic!("the server announces itself first"),
+        }
     }
 
     #[test]
@@ -560,6 +589,7 @@ while True:
                     assert_eq!(tokens.len(), 1);
                 }
                 Event::Failed(error) => panic!("{error}"),
+                Event::Started(_) => panic!("the server starts once"),
             }
         }
         let before = Instant::now();
@@ -584,6 +614,7 @@ while True:
         match event(&client) {
             Event::Tokens { document, .. } => assert_eq!(document.version, 19),
             Event::Failed(error) => panic!("{error}"),
+            Event::Started(_) => panic!("the server starts once"),
         }
         assert!(client.events.recv_timeout(DEBOUNCE).is_err());
     }
@@ -595,7 +626,7 @@ while True:
             client.update(document(0, 1, "f"));
             match event(&client) {
                 Event::Failed(error) => assert!(error.contains("timed out"), "{error}"),
-                Event::Tokens { .. } => panic!("fixture must time out"),
+                Event::Tokens { .. } | Event::Started(_) => panic!("fixture must time out"),
             }
         }
     }
@@ -623,7 +654,7 @@ while True:
     #[ignore = "requires an installed m2-ls executable"]
     fn installed_server_classifies_session_definitions_and_ring_generators() {
         let mut highlighter = SemanticHighlighter::new();
-        highlighter.set_enabled(true);
+        highlighter.configure(true, true);
         let mut source = Document::new(0);
         let cell = SourceId::Cell {
             generation: 0,
@@ -635,9 +666,9 @@ while True:
         highlighter.update(source);
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         loop {
-            let (changed, error) = highlighter.poll();
-            assert!(error.is_none(), "{error:?}");
-            if changed {
+            let polled = highlighter.poll();
+            assert!(polled.failure.is_none(), "{:?}", polled.failure);
+            if polled.recolored {
                 break;
             }
             assert!(Instant::now() < deadline, "no real-server tokens");

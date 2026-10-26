@@ -1,6 +1,6 @@
 # Settings
 
-Open settings with `Ctrl+O` or `/settings`. They are grouped into three tabs, named along the top of the picker: `Tab` and `Shift+Tab` switch between them. `Up` and `Down` choose a row and `Left` or `Right` adjust it. Each row shows its current value between arrows. Beneath the rows, the *restore defaults* button resets settings, keymaps, and appearance, and under it the selected row describes itself. While the picker is open, the status line names the keys it answers.
+Open settings with `Ctrl+O` or `/settings`. They are grouped into three tabs, named along the top of the picker: `Tab` and `Shift+Tab`, or `Ctrl+Right` and `Ctrl+Left`, switch between them. `Up` and `Down` choose a row and `Left` or `Right` adjust it. Each row shows its current value between arrows. Beneath the rows, the *restore defaults* button resets settings, keymaps, and appearance, and under it the selected row describes itself. While the picker is open, the status line names the keys it answers.
 
 Changes are kept between sessions. The appearance is saved to `appearance.json` and the other settings, along with keymap changes, to `settings.json`, both in `$XDG_CONFIG_HOME/spectral-m2`, falling back to `~/.config/spectral-m2`.
 
@@ -27,17 +27,18 @@ Changes are kept between sessions. The appearance is saved to `appearance.json` 
 
 | Setting | Choices |
 | --- | --- |
-| Semantic highlighting | On by default: use an installed `m2-ls` for semantic source colors, with immediate syntax colors while results arrive. |
+| Language server | `m2-ls` by default: run an installed `m2-ls` alongside the session. The welcome message names its version once it has started. |
+| Semantic highlighting | On by default: color source by what the language server knows about it, with immediate syntax colors while results arrive. Off and greyed out while the language server is off; switching the server back on restores it. |
 | Maths | `unicode` by default: values laid out in characters, with stacked fractions and tall brackets. `typeset` draws them as [typeset pictures](#typeset-maths), marked unavailable where the terminal cannot show them; `ascii` uses Macaulay2's own plain-text spelling. |
-| Fractions | Stacked, underlined, or inline. |
-| Math fonts | Off by default, which draws a ring by the name it has in code, `ZZ`; on draws its blackboard glyph, `ℤ`, and sets `\mathcal` and `\mathfrak` capitals as script and fraktur glyphs. How they look is up to the terminal's fonts; see [Troubleshooting](troubleshooting.md#blackboard). |
+| Fractions | Stacked, underlined, or inline. Greyed out while maths is typeset, since pictures set fractions themselves. |
+| Math fonts | Off by default, which draws a ring by the name it has in code, `ZZ`; on draws its blackboard glyph, `ℤ`, and sets `\mathcal` and `\mathfrak` capitals as script and fraktur glyphs. How they look is up to the terminal's fonts; see [Troubleshooting](troubleshooting.md#blackboard). Greyed out while maths is typeset, since pictures draw their own glyphs. |
 | Compute examples | How long each documentation example may run when it is computed again, so its value is drawn from its structure as a live value is; `off` keeps the output the documentation recorded. Each page runs in a fresh Macaulay2 with its package loaded, and stops at the first example that runs out of time or answers differently from the record. |
 
 ## Semantic highlighting
 
 Install the optional language server with `cargo install m2-ls --locked` and restart Spectral. Semantic colors apply to live input, submitted cells, code previews, and the source shown with syntax trees. Analysis includes earlier session source, queued cells, and the current continuation; it does not evaluate code or inspect runtime values. Dynamically created bindings and side effects may remain unknown.
 
-Without the server, or if it stops responding, source keeps its syntax colors. Switch *semantic highlighting* off and on to retry. Completion and syntax diagnostics continue to use the shell's existing providers.
+Without the server, or if it stops responding, source keeps its syntax colors. Switch *language server* off and on to retry. Completion and syntax diagnostics continue to use the shell's existing providers.
 
 The theme groups `Method`, `TypeParameter`, `SemanticCommand`, `RingGenerator`, `Option`, `File`, and `Unresolved` expose semantic roles. They inherit existing theme colors by default and can be customized in `themes/groups.toml` like other linked groups.
 

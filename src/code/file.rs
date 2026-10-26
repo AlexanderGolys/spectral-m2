@@ -7,8 +7,39 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use m2_syn::{lex_str_recovering, CommentTrivia, LexErrorKind, Spanned};
+
 /// The extension a file of Macaulay2 code carries.
 const EXTENSION: &str = "m2";
+
+/// Source replayed from a file without comments, preserving literal contents
+/// and whitespace separating executable tokens. Unclosed comments remain so
+/// the parser can still request their continuation.
+pub fn without_comments(source: &str) -> String {
+    let Ok(tokens) = lex_str_recovering(source) else {
+        return source.to_string();
+    };
+    if tokens
+        .diagnostics
+        .iter()
+        .any(|error| error.kind() == LexErrorKind::UnterminatedBlockComment)
+    {
+        return source.to_string();
+    }
+    let comments = CommentTrivia::of(&tokens.value);
+    let mut ranges = comments
+        .outer()
+        .iter()
+        .chain(comments.inner())
+        .filter_map(|comment| comment.span().range())
+        .collect::<Vec<_>>();
+    ranges.sort_by_key(|range| range.start);
+    let mut code = source.to_string();
+    for range in ranges.into_iter().rev() {
+        code.replace_range(range, " ");
+    }
+    code
+}
 
 /// The file a typed name refers to: a leading `~` is the home directory, and a
 /// name without an extension gets `.m2`.
@@ -116,6 +147,38 @@ pub fn previous_session() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn loaded_comments_are_removed_without_joining_tokens() {
+        let source = "-- heading\nx-* block\ncomment *-y -- trailing\n";
+        let code = super::without_comments(source);
+        assert_eq!(code.trim(), "x y");
+        assert!(super::without_comments("-- note\n-* σημείωση *-\n")
+            .trim()
+            .is_empty());
+    }
+
+    #[test]
+    fn comment_markers_inside_literals_are_preserved() {
+        for source in [
+            "\"-- literal -* also literal *-\"",
+            "///-- literal\n\n-* also literal *-///",
+            "f(\"escaped \\\" -- still literal\", -* hidden *- x)",
+        ] {
+            let code = super::without_comments(source);
+            assert!(code.contains("--"));
+            assert!(!code.contains("hidden"));
+            if !source.contains("hidden") {
+                assert_eq!(code, source);
+            }
+        }
+    }
+
+    #[test]
+    fn unclosed_file_comments_keep_their_parse_state() {
+        let source = "x = 1\n-* unfinished";
+        assert_eq!(super::without_comments(source), source);
+    }
+
     use super::*;
 
     #[test]

@@ -12,6 +12,7 @@ use std::time::Duration;
 use crossterm::clipboard::CopyToClipboard;
 use crossterm::event::{Event, MouseButton, MouseEvent, MouseEventKind};
 use crossterm::execute;
+use lsp_types::ServerInfo;
 use ratatui::layout::{Position, Rect};
 use ratatui::Frame;
 
@@ -36,6 +37,8 @@ struct Workspace {
     editor: Editor,
     highlighter: SemanticHighlighter,
     analysis_state: Option<(u64, u64, Option<String>)>,
+    /// The Macaulay2 version the welcome message names.
+    m2_version: String,
 }
 
 impl Workspace {
@@ -44,7 +47,7 @@ impl Workspace {
         let startup_output = backend.take_startup_output();
         let session = Session::new(backend);
         let version = session.version().unwrap_or_else(|_| "unknown".to_string());
-        let mut editor = Editor::new(welcome_message(&version));
+        let mut editor = Editor::new(welcome_message(&version, None));
         editor.apply(EditorUpdate::KnownNames(names));
         if !startup_output.is_empty() {
             editor.apply(EditorUpdate::Message(Box::new(TextBlock::printed(
@@ -56,6 +59,7 @@ impl Workspace {
             editor,
             highlighter: SemanticHighlighter::new(),
             analysis_state: None,
+            m2_version: version,
         }
     }
 }
@@ -113,7 +117,9 @@ impl App {
         if let Some(action) = editor.resolve_action(key) {
             return self.handle_action(action);
         }
-        if !editor.picker_open() && self.panes.focused_mut().handle_key(key) {
+        if !editor.picker_open()
+            && (self.panes.step_split_view(key) || self.panes.focused_mut().handle_key(key))
+        {
             return true;
         }
         let reaction = if previewing {
@@ -132,22 +138,6 @@ impl App {
                 }
                 let update = self.workspace.session.interrupt();
                 self.workspace.editor.apply(update);
-                return true;
-            }
-            Action::FocusPaneLeft => {
-                self.panes.focus(0);
-                return true;
-            }
-            Action::FocusPaneRight => {
-                self.panes.focus(Panes::SPLIT);
-                return true;
-            }
-            Action::ResizePaneLeft => {
-                self.resize_split(-1);
-                return true;
-            }
-            Action::ResizePaneRight => {
-                self.resize_split(1);
                 return true;
             }
             Action::ClosePane => {
@@ -290,7 +280,13 @@ impl App {
         let workspace = &mut self.workspace;
         let mut running = true;
         for block in Session::blocks(code) {
-            let update = workspace.session.submit(&block, &mut workspace.highlighter);
+            let block = code_file::without_comments(&block);
+            if block.trim().is_empty() {
+                continue;
+            }
+            let update = workspace
+                .session
+                .submit(block.trim(), &mut workspace.highlighter);
             running &= workspace.editor.post(update);
         }
         self.follow_new_input();
@@ -319,24 +315,6 @@ impl App {
         if let Some(path) = code_file::previous_session().filter(|_| !code.is_empty()) {
             let _ = code_file::write(&path, &code);
         }
-    }
-
-    fn resize_split(&mut self, delta: i8) {
-        let Some(divider) = self.divider else {
-            return;
-        };
-        let total = self.pane_areas.iter().map(|area| area.width).sum::<u16>();
-        if total < MIN_PANE_WIDTH * 2 {
-            return;
-        }
-        let width = divider.x.saturating_sub(self.pane_areas[0].x);
-        let width = if delta > 0 {
-            width.saturating_add(1)
-        } else {
-            width.saturating_sub(1)
-        }
-        .clamp(MIN_PANE_WIDTH, total - MIN_PANE_WIDTH);
-        self.split_ratio = ratio_for_width(width, total);
     }
 
     fn drag_split(&mut self, column: u16) {
@@ -470,8 +448,10 @@ impl App {
             self.follow_new_input();
         }
         let workspace = &mut self.workspace;
-        let enabled = workspace.editor.semantic_highlighting();
-        let mut recolored = workspace.highlighter.set_enabled(enabled);
+        let mut recolored = workspace.highlighter.configure(
+            workspace.editor.language_server(),
+            workspace.editor.semantic_highlighting(),
+        );
         let (draft, pending, revision) = workspace.editor.analysis_input();
         let state = (
             workspace.session.source_revision(),
@@ -484,17 +464,24 @@ impl App {
                 .update(workspace.session.semantic_document(pending, draft));
             workspace.analysis_state = Some(state);
         }
-        let (updated, failure) = workspace.highlighter.poll();
-        recolored |= updated;
+        let polled = workspace.highlighter.poll();
+        recolored |= polled.recolored;
         if recolored {
             workspace.editor.rehighlight(&mut workspace.highlighter);
             dirty = true;
         }
-        if let Some(message) = failure {
+        if let Some(server) = polled.started {
+            running &= workspace.editor.apply(EditorUpdate::Welcome(welcome_message(
+                &workspace.m2_version,
+                Some(&server),
+            )));
+            dirty = true;
+        }
+        if let Some(message) = polled.failure {
             running &= workspace
                 .editor
                 .apply(EditorUpdate::Message(Box::new(TextBlock::system(format!(
-                    "Semantic highlighting unavailable: {message}"
+                    "Language server unavailable: {message}"
                 )))));
             dirty = true;
         }
@@ -509,11 +496,20 @@ fn read_code(path: &Path) -> std::result::Result<String, EditorUpdate> {
     })
 }
 
-fn welcome_message(m2_version: &str) -> String {
-    format!(
+/// The versions of the shell, its Macaulay2, and the language server once it runs.
+fn welcome_message(m2_version: &str, server: Option<&ServerInfo>) -> String {
+    let mut message = format!(
         "spectral-m2 v{}\nMacaulay2 v{m2_version}",
         env!("CARGO_PKG_VERSION")
-    )
+    );
+    if let Some(server) = server {
+        message.push('\n');
+        message.push_str(&server.name);
+        if let Some(version) = &server.version {
+            message.push_str(&format!(" v{version}"));
+        }
+    }
+    message
 }
 
 /// Run the terminal event loop until any workspace requests exit, first running
@@ -560,6 +556,64 @@ pub fn run(backend: M2Backend, startup: Option<String>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn loading_comments_does_not_display_them_or_leave_a_continuation() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut app = super::App::new(crate::backend::M2Backend::spawn().unwrap());
+        app.run_code("-- hidden heading\n-* hidden block *-");
+        assert!(app.workspace.editor.analysis_input().1.is_none());
+        assert!(!app.workspace.session.busy());
+        app.run_code("-- hidden heading\nloadedCommentProbe = \"-- literal\" -- hidden tail\n\u{c}\n-- hidden saved block\n1 + 1;");
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(screen.contains("loadedCommentProbe"), "{screen}");
+        assert!(screen.contains("-- literal"), "{screen}");
+        assert!(!screen.contains("hidden"), "{screen}");
+        assert!(app.workspace.editor.analysis_input().1.is_none());
+    }
+
+    #[test]
+    fn incomplete_file_and_live_input_keep_uniform_padding() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut app = super::App::new(crate::backend::M2Backend::spawn().unwrap());
+        app.run_code("f(\n    x");
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let input_row = terminal.get_cursor_position().unwrap().y;
+        let buffer = terminal.backend().buffer();
+        let source_row = (0..24)
+            .find(|&y| {
+                (0..80)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains("f(")
+            })
+            .expect("incomplete source is visible");
+        let code_bg = crate::ui::render::RenderContext::new(80, 0)
+            .groups()
+            .code()
+            .bg
+            .unwrap();
+        for y in [
+            source_row - 1,
+            source_row,
+            input_row - 1,
+            input_row,
+            input_row + 1,
+        ] {
+            for x in 0..80 {
+                assert_eq!(buffer[(x, y)].bg, code_bg, "background at ({x}, {y})");
+            }
+        }
+    }
+
     #[test]
     fn first_session_displays_initialization_output() {
         use ratatui::{backend::TestBackend, Terminal};

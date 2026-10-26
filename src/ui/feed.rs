@@ -271,6 +271,8 @@ pub struct Feed {
     surface: Option<ViewportState>,
     /// The latest outputs the retained cells were labelled for.
     labelled: [Option<u32>; RECENT_OUTPUTS],
+    /// Whether the block the feed was created with still leads it.
+    opened: bool,
 }
 
 impl Feed {
@@ -282,6 +284,15 @@ impl Feed {
             anchor: None,
             surface: None,
             labelled: [None; RECENT_OUTPUTS],
+            opened: true,
+        }
+    }
+
+    /// Replace the block the feed was created with, unless it was cleared away.
+    pub fn replace_opening(&mut self, block: Box<dyn Block>) {
+        if self.opened {
+            self.blocks[0] = RetainedBlock::new(FeedContent::Block(block));
+            self.surface = None;
         }
     }
 
@@ -346,6 +357,7 @@ impl Feed {
     /// Remove every block and reset scrolling.
     pub fn clear(&mut self) {
         self.blocks.clear();
+        self.opened = false;
         self.scroll = 0;
         self.anchor = None;
         self.surface = None;
@@ -532,19 +544,6 @@ impl Feed {
     /// Return the current distance from the bottom.
     pub fn offset(&self) -> usize {
         self.scroll
-    }
-
-    /// Return whether unscrolled content ends in submitted source.
-    pub fn ends_in_code(&self) -> bool {
-        self.scroll == 0
-            && self
-                .blocks
-                .last()
-                .is_some_and(|block| match &block.content {
-                    FeedContent::Evaluation(evaluation) => evaluation.outputs().next().is_none(),
-                    FeedContent::Incomplete(_) => true,
-                    FeedContent::Block(_) => false,
-                })
     }
 
     /// Render the current viewport and return whether it is underfilled.
@@ -1198,6 +1197,27 @@ mod tests {
         feed.render(&context, narrow, &mut target, Style::default());
         assert_eq!(target[(UI.feed_margin, 1)].symbol(), "F");
         assert_eq!(target[(UI.feed_margin, 2)].symbol(), "f");
+    }
+
+    #[test]
+    fn only_the_opening_block_is_replaced_and_never_after_clearing() {
+        let mut feed = Feed::new(Box::new(Responsive('A')));
+        feed.push(Box::new(Responsive('B')));
+        feed.replace_opening(Box::new(Responsive('C')));
+        let context = RenderContext::new(12, 0);
+        let area = Rect::new(0, 0, 12, 2);
+        let mut target = Buffer::empty(area);
+        feed.render(&context, area, &mut target, Style::default());
+        assert_eq!(target[(UI.feed_margin, 0)].symbol(), "C");
+        assert_eq!(target[(UI.feed_margin, 1)].symbol(), "B");
+
+        feed.clear();
+        feed.push(Box::new(Responsive('D')));
+        feed.replace_opening(Box::new(Responsive('E')));
+        let mut target = Buffer::empty(area);
+        feed.render(&context, area, &mut target, Style::default());
+        assert_eq!(feed.len(), 1);
+        assert_eq!(target[(UI.feed_margin, 1)].symbol(), "D");
     }
 
     #[test]

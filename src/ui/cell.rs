@@ -323,7 +323,7 @@ impl CodeBlock {
 
     fn lines(&self, context: &RenderContext, style: Style) -> Vec<Line<'static>> {
         let layout = self.layout();
-        let mut rendered = Vec::new();
+        let mut rendered = vec![Line::default()];
         for cell in &self.cells {
             rendered.extend(cell_lines(
                 cell,
@@ -406,7 +406,7 @@ impl Block for IncompleteBlock {
 
 impl Block for CodeBlock {
     fn height(&self, context: &RenderContext) -> u16 {
-        self.body_height(context).saturating_add(1)
+        self.body_height(context).saturating_add(2)
     }
 
     fn render_local(&self, context: &RenderContext, buf: &mut Buffer) {
@@ -417,7 +417,7 @@ impl Block for CodeBlock {
             .render(area, buf);
         let layout = self.layout();
         layout.render_separator(area.height, context.groups().separator(), buf);
-        let mut row = area.y;
+        let mut row = area.y.saturating_add(1);
         for cell in &self.cells {
             let marker = cell.marker();
             marker.render(context, style, area, row, buf);
@@ -1845,11 +1845,11 @@ mod tests {
         let rows = rendered_rows(&block, 50);
 
         assert_eq!(
-            rows[0].chars().position(|character| character == 'f'),
+            rows[1].chars().position(|character| character == 'f'),
             Some(prefix())
         );
         assert_eq!(
-            rows[1].chars().position(|character| character == 'x'),
+            rows[2].chars().position(|character| character == 'x'),
             Some(prefix())
         );
         for row in &rows[..rows.len() - 1] {
@@ -2093,7 +2093,7 @@ mod tests {
         let input = rendered_rows(&input, width);
         let output = rendered_rows(&output, width);
         assert_eq!(
-            input[0].chars().position(|character| character == 'x'),
+            input[1].chars().position(|character| character == 'x'),
             Some(prefix())
         );
         assert_eq!(output[0].chars().nth(usize::from(inset())), Some('╭'));
@@ -2111,15 +2111,15 @@ mod tests {
 
         let border = inset();
         let margin = UI.cell_margin;
-        assert_eq!(input[(margin, 0)].symbol(), "7");
+        assert_eq!(input[(margin, 1)].symbol(), "7");
         assert_eq!(output[(border - 1, 1)].symbol(), "o");
         assert_eq!(output[(border, 1)].symbol(), "7");
         assert_eq!(output[(border, 0)].symbol(), "╭");
         assert_eq!(output[(border, 2)].symbol(), "╰");
-        assert_eq!(input[(margin, 0)].fg, groups.muted().fg.unwrap());
+        assert_eq!(input[(margin, 1)].fg, groups.muted().fg.unwrap());
         assert_eq!(output[(border, 1)].fg, groups.output_number().fg.unwrap());
         assert_eq!(output[(border, 1)].fg, groups.prompt().fg.unwrap());
-        assert!(!input[(margin, 0)].modifier.contains(Modifier::BOLD));
+        assert!(!input[(margin, 1)].modifier.contains(Modifier::BOLD));
         assert!(!output[(border, 1)].modifier.contains(Modifier::BOLD));
         assert_eq!(input[(border, 0)].symbol(), "│");
         assert_eq!(input[(border, 0)].fg, groups.separator().fg.unwrap());
@@ -2128,7 +2128,7 @@ mod tests {
             &CodeBlock::new([Cell::resolved("x".into(), 7, CellState::Null, Vec::new())]),
             20,
         );
-        assert_eq!(null[(margin, 0)].fg, groups.muted().fg.unwrap());
+        assert_eq!(null[(margin, 1)].fg, groups.muted().fg.unwrap());
     }
 
     #[test]
@@ -2145,7 +2145,7 @@ mod tests {
         code.render_local(&context, &mut cells);
         let margin = UI.cell_margin;
 
-        let (recent, old) = (&cells[(margin, 0)], &cells[(margin, 1)]);
+        let (recent, old) = (&cells[(margin, 1)], &cells[(margin, 2)]);
         assert_eq!(recent.fg, groups.recent_cell_number().fg.unwrap());
         assert_eq!(old.fg, groups.muted().fg.unwrap());
         assert!(!recent.modifier.contains(Modifier::BOLD));
@@ -2201,11 +2201,11 @@ mod tests {
 
         let rows = rendered_rows(&input, (prefix() + 4) as u16);
         assert_eq!(
-            rows[0].chars().position(|character| character == 'a'),
+            rows[1].chars().position(|character| character == 'a'),
             Some(prefix())
         );
         assert_eq!(
-            rows[1].chars().position(|character| character == 'e'),
+            rows[2].chars().position(|character| character == 'e'),
             Some(prefix())
         );
     }
@@ -2366,11 +2366,11 @@ mod tests {
         assert_eq!(code.cells[1].spans[0].content, 0..1);
         let rows = rendered_rows(&code, 20);
         assert_eq!(
-            rows[0].chars().position(|character| character == 'x'),
+            rows[1].chars().position(|character| character == 'x'),
             Some(prefix())
         );
         assert_eq!(
-            rows[1].chars().position(|character| character == 'y'),
+            rows[2].chars().position(|character| character == 'y'),
             Some(prefix())
         );
     }
@@ -2514,7 +2514,7 @@ mod tests {
         assert!(rows[0].contains('╭') && rows[0].contains('╮'));
         assert_eq!(rows[0].chars().nth(usize::from(inset())), Some('╭'));
         assert_eq!(
-            input[0].chars().position(|character| character == 'x'),
+            input[1].chars().position(|character| character == 'x'),
             Some(prefix())
         );
         assert!(rows[2].contains('╰') && rows[2].contains('╯'));

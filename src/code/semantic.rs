@@ -6,9 +6,12 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
-use lsp_types::{SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokensLegend};
+use lsp_types::{
+    SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokensLegend, ServerInfo,
+};
 
 use self::client::{Client, Event};
+pub use self::client::SERVER_EXECUTABLE;
 use super::highlight::{Highlighter, SyntaxHighlighter};
 use crate::ui::block::HLSpan;
 use crate::ui::controller::settings::theme::groups::HLGroup;
@@ -117,8 +120,22 @@ pub struct SemanticHighlighter {
     spans: HashMap<SourceId, (String, Vec<HLSpan>)>,
     revision: u64,
     client: Option<Client>,
-    enabled: bool,
+    /// Whether the language server should be running.
+    server: bool,
+    /// Whether its semantic tokens color source.
+    semantic: bool,
     version: i32,
+}
+
+/// What changed since the highlighter was last polled.
+#[derive(Debug, Default, PartialEq)]
+pub struct Polled {
+    /// Cached colors changed, so source must be highlighted again.
+    pub recolored: bool,
+    /// The language server that finished starting.
+    pub started: Option<ServerInfo>,
+    /// Why the language server stopped.
+    pub failure: Option<String>,
 }
 
 impl SemanticHighlighter {
@@ -130,27 +147,33 @@ impl SemanticHighlighter {
             spans: HashMap::new(),
             revision: 0,
             client: None,
-            enabled: false,
+            server: false,
+            semantic: false,
             version: 0,
         }
     }
 
-    /// Start or stop the optional server; whether cached colors changed.
-    pub fn set_enabled(&mut self, enabled: bool) -> bool {
-        if self.enabled == enabled {
+    /// Start or stop the optional server and whether its tokens color source,
+    /// which they never do without it; whether cached colors changed.
+    pub fn configure(&mut self, server: bool, semantic: bool) -> bool {
+        let semantic = server && semantic;
+        let restarted = self.server != server;
+        if restarted {
+            self.server = server;
+            self.client = server.then(Client::start);
+        }
+        if !restarted && self.semantic == semantic {
             return false;
         }
-        self.enabled = enabled;
-        if enabled {
-            self.client = Some(Client::start());
-            if let Some(document) = &self.document {
-                self.client.as_ref().unwrap().update(document.clone());
-            }
-        } else {
-            self.client = None;
+        self.semantic = semantic;
+        match (&self.client, &self.document) {
+            (Some(client), Some(document)) if semantic => client.update(document.clone()),
+            _ => {}
+        }
+        if !semantic {
             self.clear_current();
         }
-        true
+        restarted || !semantic
     }
 
     /// Replace the analysis source only when its text or source identities changed.
@@ -173,7 +196,7 @@ impl SemanticHighlighter {
             .retain(|id, _| matches!(id, SourceId::Cell { .. }));
         self.document = Some(document.clone());
         self.revision = self.revision.wrapping_add(1);
-        if let Some(client) = &self.client {
+        if let Some(client) = self.client.as_ref().filter(|_| self.semantic) {
             client.update(document);
         }
     }
@@ -187,35 +210,38 @@ impl SemanticHighlighter {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// Apply current responses; report a repaint and at most one server failure.
-    pub fn poll(&mut self) -> (bool, Option<String>) {
+    /// Apply current responses; report a repaint, the server's startup, and at
+    /// most one server failure.
+    pub fn poll(&mut self) -> Polled {
         let events = self.client.as_ref().map_or_else(Vec::new, Client::poll);
-        let mut changed = false;
-        let mut failure = None;
+        let mut polled = Polled::default();
         for event in events {
             match event {
+                Event::Started(info) => polled.started = Some(info),
                 Event::Tokens {
                     document,
                     legend,
                     tokens,
                 } => {
-                    if self.document.as_ref().is_some_and(|current| {
-                        current.version == document.version
-                            && current.generation == document.generation
-                    }) {
+                    if self.semantic
+                        && self.document.as_ref().is_some_and(|current| {
+                            current.version == document.version
+                                && current.generation == document.generation
+                        })
+                    {
                         self.apply(&document, &legend, &tokens);
-                        changed = true;
+                        polled.recolored = true;
                     }
                 }
                 Event::Failed(message) => {
                     self.client = None;
                     self.clear_current();
-                    changed = true;
-                    failure = Some(message);
+                    polled.recolored = true;
+                    polled.failure = Some(message);
                 }
             }
         }
-        (changed, failure)
+        polled
     }
 
     fn apply(
@@ -587,6 +613,7 @@ mod tests {
         highlighter.update(document);
         let (client, sender) = Client::test_channel();
         highlighter.client = Some(client);
+        highlighter.semantic = true;
         sender
             .send(Event::Tokens {
                 document: obsolete,
@@ -594,7 +621,7 @@ mod tests {
                 tokens: vec![token(0, 0, 1, 0, 0)],
             })
             .unwrap();
-        assert_eq!(highlighter.poll(), (false, None));
+        assert_eq!(highlighter.poll(), Polled::default());
         assert!(highlighter.spans.is_empty());
     }
 }

@@ -20,9 +20,9 @@ use ratatui::Frame;
 
 use self::commands::Command;
 use self::completion::{Names, Request};
-use self::picker::{Picker, PickerController, PickerItem, PickerMode};
+use self::picker::{Picker, PickerController, PickerItem, PickerMode, PickerTab};
 use self::screen::{ScreenCapture, ScreenSelection};
-use self::settings::keymap::{KeymapRow, Keymaps};
+use self::settings::keymap::{self, KeymapRow, Keymaps};
 use self::settings::theme::groups::{publish, scheme, HLGroup};
 use self::settings::theme::Appearance;
 use self::settings::{Persisted, Preferences, SavedSettings, Settings, StatusLinePosition};
@@ -84,6 +84,8 @@ pub enum EditorUpdate {
     WhitespaceAccepted,
     Diagnostic(String),
     Message(Box<dyn Block>),
+    /// The opening message, written again once more is known about the session.
+    Welcome(String),
     /// Every name a freshly started M2 knows, replacing those of any before it.
     KnownNames(Vec<String>),
     /// Names the session bound since M2 last reported.
@@ -129,6 +131,8 @@ pub enum EditorEvent {
     RunCommand(Command),
     ClosePicker,
     RestoreDefaults,
+    /// Put every shortcut back on its default key, leaving other settings be.
+    RestoreKeymaps,
     SetPreferences(Preferences),
     Rebind(Action, KeyEvent),
 }
@@ -259,9 +263,14 @@ impl Editor {
         self.settings.example_timeout()
     }
 
-    /// Whether semantic source colors are enabled in the persisted settings.
+    /// Whether the persisted settings run the language server.
+    pub fn language_server(&self) -> bool {
+        self.settings.language_server
+    }
+
+    /// Whether source takes semantic colors from the language server.
     pub fn semantic_highlighting(&self) -> bool {
-        self.settings.semantic_highlighting
+        self.settings.semantic_colors()
     }
 
     /// Source and revision for the current draft, excluding shell commands.
@@ -356,6 +365,9 @@ impl Editor {
             EditorUpdate::Diagnostic(diagnostic) => self.input.set_diagnostic(diagnostic, None),
             EditorUpdate::Message(block) => {
                 self.push_block(block);
+            }
+            EditorUpdate::Welcome(text) => {
+                self.feed.replace_opening(Box::new(TextBlock::system(text)));
             }
             EditorUpdate::KnownNames(names) => {
                 self.names.reset(names);
@@ -609,11 +621,7 @@ impl Editor {
             Action::ScrollFeedDown => self.feed.scroll(-1),
             Action::OpenCommands => self.toggle_picker(PickerMode::Commands, Self::open_commands),
             Action::ToggleHighlightDebug => unreachable!("debug toggles before input handling"),
-            Action::FocusPaneLeft
-            | Action::FocusPaneRight
-            | Action::ResizePaneLeft
-            | Action::ResizePaneRight
-            | Action::CancelExecution => unreachable!("panes are handled by the app"),
+            Action::CancelExecution => unreachable!("cancelling is handled by the app"),
             Action::OpenSettings
             | Action::OpenKeymaps
             | Action::ClearFeed
@@ -670,11 +678,7 @@ impl Editor {
             }
             Action::LoadCode => self.leave_pickers(Reaction::Load(argument.to_string())),
             Action::ResumeSession => self.leave_pickers(Reaction::Resume),
-            Action::FocusPaneLeft
-            | Action::FocusPaneRight
-            | Action::ResizePaneLeft
-            | Action::ResizePaneRight
-            | Action::CancelExecution
+            Action::CancelExecution
             | Action::Submit
             | Action::ScrollFeedUp
             | Action::ScrollFeedDown
@@ -845,7 +849,13 @@ impl Editor {
     }
 
     fn keymaps_picker(&self) -> Picker {
-        Picker::new("keymaps", self.keymap_items())
+        Picker::tabbed(
+            vec![PickerTab {
+                label: "keymaps",
+                items: self.keymap_items(),
+            }],
+            Some(keymap::restore_defaults()),
+        )
     }
 
     fn keymap_items(&self) -> Vec<Box<dyn PickerItem>> {
@@ -987,6 +997,12 @@ impl Editor {
             EditorEvent::RestoreDefaults => {
                 self.keymaps = Keymaps::default();
                 self.set_preferences(Preferences::default());
+            }
+            EditorEvent::RestoreKeymaps => {
+                self.keymaps = Keymaps::default();
+                self.save_settings();
+                let items = self.keymap_items();
+                self.pickers.last_mut().unwrap().picker.set_items(items);
             }
             EditorEvent::SetPreferences(preferences) => self.set_preferences(preferences),
             EditorEvent::Rebind(action, key) => {
@@ -1302,9 +1318,6 @@ impl Editor {
 
         self.feed_area = sections[0];
         self.draw_feed(frame, sections[0], &context);
-        let code_above = picker_height == 0
-            && self.settings.statusline != StatusLinePosition::AboveInput
-            && self.feed.ends_in_code();
         if let Some(controller) = self.pickers.last() {
             controller
                 .picker
@@ -1322,7 +1335,6 @@ impl Editor {
                 command,
                 debugging: in_debugger,
                 focused: self.pane_focused,
-                code_above,
                 pending,
             },
             input_area,
@@ -1532,5 +1544,32 @@ mod processing_tests {
         editor.set_processing(true);
         editor.animate();
         assert!(!text(&editor).contains("to cancel"));
+    }
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use crossterm::event::KeyCode;
+
+    use super::{Editor, PickerMode};
+    use crate::ui::action::Action;
+
+    #[test]
+    fn a_setting_closes_every_picker_once_chosen_after_its_typed_command_ran() {
+        let mut editor = Editor::new(String::new());
+        for character in "/setting".chars() {
+            editor.handle_input(KeyCode::Char(character).into());
+        }
+        assert_eq!(
+            editor.pickers.last().map(|controller| controller.mode),
+            Some(PickerMode::FilteredCommands)
+        );
+        editor.handle_action(Action::Submit);
+        assert_eq!(
+            editor.pickers.last().map(|controller| controller.mode),
+            Some(PickerMode::Settings)
+        );
+        editor.handle_action(Action::Submit);
+        assert!(editor.pickers.is_empty());
     }
 }

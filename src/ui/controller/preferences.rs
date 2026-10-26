@@ -9,6 +9,7 @@ use super::settings::theme::groups::scheme;
 use super::settings::theme::Appearance;
 use super::settings::{Preferences, StatusLinePosition};
 use super::EditorEvent;
+use crate::code::semantic::SERVER_EXECUTABLE;
 use crate::input::InputSetting;
 use crate::ui::cycle::cycled;
 use crate::ui::graphics;
@@ -44,6 +45,7 @@ const TABS: &[SettingsTab] = &[
     SettingsTab {
         label: "rendering",
         settings: &[
+            Setting::LanguageServer,
             Setting::SemanticHighlighting,
             Setting::Maths,
             Setting::Fractions,
@@ -73,6 +75,14 @@ pub fn restore_defaults() -> Box<dyn PickerItem> {
     Row::enter(vec![label.into()], || EditorEvent::RestoreDefaults)
         .described("reset settings, keymaps and appearance")
         .into()
+}
+
+/// An off/on value at `chosen`, its on option named `on`.
+fn switch(chosen: &bool, on: &str) -> PickerValue {
+    PickerValue::among(&[false, true], chosen, |&chosen| match chosen {
+        true => on.into(),
+        false => "off".into(),
+    })
 }
 
 /// One independently cyclic axis of a colour appearance.
@@ -122,6 +132,7 @@ enum Setting {
     Appearance(AppearanceField),
     Input(InputSetting),
     Statusline,
+    LanguageServer,
     SemanticHighlighting,
     Maths,
     Fractions,
@@ -137,6 +148,7 @@ impl Setting {
             Self::Appearance(field) => field.label(),
             Self::Input(field) => field.label(),
             Self::Statusline => "statusline",
+            Self::LanguageServer => "language server",
             Self::SemanticHighlighting => "semantic highlighting",
             Self::Maths => "maths",
             Self::Fractions => "fractions",
@@ -155,7 +167,8 @@ impl Setting {
             }
             Self::Appearance(field) => field.description(),
             Self::Input(field) => field.description(),
-            Self::SemanticHighlighting => "enrich source colors using m2-ls when it is installed",
+            Self::LanguageServer => "analyse the session's source with m2-ls when it is installed",
+            Self::SemanticHighlighting => "enrich source colors using the language server",
             Self::Statusline => "where the status line sits",
             Self::Maths => "draw returned maths as Unicode text, plain ASCII, or typeset pictures",
             Self::Fractions => "how rational values are drawn",
@@ -195,18 +208,9 @@ impl Setting {
                     style.label().into()
                 })
             }
-            Self::MathFonts => PickerValue::among(&[false, true], &editor.math_fonts, |&on| {
-                match on {
-                    true => "on",
-                    false => "off",
-                }
-                .into()
-            }),
-            Self::SemanticHighlighting => {
-                PickerValue::among(&[false, true], &editor.semantic_highlighting, |&on| {
-                    if on { "on" } else { "off" }.into()
-                })
-            }
+            Self::MathFonts => switch(&editor.math_fonts, "on"),
+            Self::LanguageServer => switch(&editor.language_server, SERVER_EXECUTABLE),
+            Self::SemanticHighlighting => switch(&editor.semantic_colors(), "on"),
             Self::OutputRows => PickerValue::Stepped(format!("{} rows", editor.output_rows)),
             Self::ExampleTimeout => PickerValue::Stepped(match editor.example_seconds {
                 0 => "off".to_string(),
@@ -228,6 +232,7 @@ impl Setting {
             Self::Maths => editor.maths = editor.maths.cycle(delta),
             Self::Fractions => editor.fractions = editor.fractions.cycle(delta),
             Self::MathFonts => editor.math_fonts = !editor.math_fonts,
+            Self::LanguageServer => editor.language_server = !editor.language_server,
             Self::SemanticHighlighting => {
                 editor.semantic_highlighting = !editor.semantic_highlighting
             }
@@ -244,13 +249,56 @@ impl Setting {
         })
         .with_value(self.value(preferences))
         .described(self.description(preferences))
+        .selectable_if(self.applies(preferences))
         .into()
+    }
+
+    /// Whether the setting takes effect: semantic colors need the language
+    /// server, and typeset pictures set fractions and fonts themselves.
+    fn applies(self, preferences: Preferences) -> bool {
+        let editor = preferences.editor;
+        match self {
+            Self::SemanticHighlighting => editor.language_server,
+            Self::Fractions | Self::MathFonts => {
+                editor.maths != MathDisplay::Typeset || !editor.maths.available()
+            }
+            _ => true,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn semantic_highlighting_reads_off_and_locks_without_the_language_server() {
+        let mut preferences = Preferences::default();
+        preferences.editor.semantic_highlighting = true;
+        preferences.editor.language_server = false;
+        let row = Setting::SemanticHighlighting.row(preferences);
+        assert!(!row.selectable());
+        assert!(matches!(
+            row.value(),
+            Some(PickerValue::Choice { options, chosen }) if options[*chosen].label == "off"
+        ));
+        preferences.editor.language_server = true;
+        assert!(Setting::SemanticHighlighting.row(preferences).selectable());
+    }
+
+    #[test]
+    fn typeset_maths_locks_fractions_and_math_fonts_where_it_is_drawn() {
+        let mut preferences = Preferences::default();
+        preferences.editor.maths = MathDisplay::Typeset;
+        let typeset = MathDisplay::Typeset.available();
+        for setting in [Setting::Fractions, Setting::MathFonts] {
+            assert_eq!(setting.row(preferences).selectable(), !typeset);
+        }
+        preferences.editor.maths = MathDisplay::Unicode;
+        for setting in [Setting::Fractions, Setting::MathFonts] {
+            assert!(setting.row(preferences).selectable());
+        }
+    }
 
     #[test]
     fn stepping_any_setting_forward_then_back_restores_it() {

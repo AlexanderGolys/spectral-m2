@@ -111,7 +111,7 @@ impl Panes {
 
     /// Fit the panes to `width` columns. A split too narrow to show side by side
     /// shows the view full width instead, from the moment it opens or the window
-    /// narrows; `Alt+Left` still brings the shell back.
+    /// narrows; closing the view brings the shell back.
     pub fn fit(&mut self, width: u16) {
         let collapsed = self.split() && width < MIN_SPLIT_WIDTH;
         if collapsed && !self.collapsed {
@@ -124,6 +124,19 @@ impl Panes {
         if pane < self.list.len() {
             self.active = pane;
         }
+    }
+
+    /// Step the view beside the session with `Ctrl+Left` or `Ctrl+Right` while the
+    /// shell has focus, its plain arrows moving through the input; whether it did.
+    pub fn step_split_view(&mut self, key: KeyEvent) -> bool {
+        let stepping = matches!(key.code, KeyCode::Left | KeyCode::Right)
+            && key.ctrl()
+            && !key.shift()
+            && !key.alt();
+        stepping
+            && self.split()
+            && self.active != Self::SPLIT
+            && self.list[Self::SPLIT].handle_key(key.code.into())
     }
 }
 
@@ -160,6 +173,7 @@ pub fn pane_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::key::KeyMod;
 
     #[test]
     fn previews_consume_scroll_actions_and_forward_quit() {
@@ -175,6 +189,23 @@ mod tests {
 
     fn views(panes: &Panes) -> Vec<ViewKind> {
         panes.list.iter().map(|pane| pane.view).collect()
+    }
+
+    #[test]
+    fn control_arrows_step_the_view_beside_a_focused_shell() {
+        let mut panes = Panes::new();
+        assert!(!panes.step_split_view(KeyCode::Right + KeyMod::Ctrl));
+        panes.open_view(ViewKind::Code);
+        assert!(panes.step_split_view(KeyCode::Right + KeyMod::Ctrl));
+        assert_eq!(panes.list[Panes::SPLIT].view, ViewKind::Code.cycle(1));
+        assert!(panes.step_split_view(KeyCode::Left + KeyMod::Ctrl));
+        assert_eq!(panes.list[Panes::SPLIT].view, ViewKind::Code);
+        assert!(!panes.step_split_view(KeyCode::Right.into()), "plain arrows edit");
+        assert!(
+            !panes.step_split_view(KeyCode::Right + KeyMod::Ctrl + KeyMod::Shift),
+            "word selection stays the input's"
+        );
+        assert_eq!(panes.active, 0);
     }
 
     #[test]

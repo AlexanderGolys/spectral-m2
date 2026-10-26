@@ -8,10 +8,6 @@ use these_macros_should_be_illegal::discriminated_str;
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Action {
-    FocusPaneLeft = "focus the left pane",
-    FocusPaneRight = "focus the right pane",
-    ResizePaneLeft = "move the pane divider left",
-    ResizePaneRight = "move the pane divider right",
     Quit = "quit spectral-m2",
     CancelExecution = "cancel execution",
     Submit = "evaluate the input",

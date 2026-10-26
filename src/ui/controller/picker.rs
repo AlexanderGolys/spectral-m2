@@ -166,6 +166,12 @@ pub trait PickerItem: Send {
         false
     }
 
+    /// Whether the row can be selected; one that cannot is drawn faint and
+    /// skipped over.
+    fn selectable(&self) -> bool {
+        true
+    }
+
     fn handle(&mut self, input: PickerInput) -> Option<EditorEvent>;
 }
 
@@ -174,6 +180,7 @@ pub struct Row {
     cells: Vec<Line<'static>>,
     value: Option<PickerValue>,
     description: Option<&'static str>,
+    selectable: bool,
     handle: Box<dyn FnMut(PickerInput) -> Option<EditorEvent> + Send>,
 }
 
@@ -187,11 +194,12 @@ impl Row {
             cells,
             value: None,
             description: None,
+            selectable: true,
             handle: Box::new(handle),
         }
     }
 
-    /// Create a row adjusted by horizontal arrow keys and closed by Enter.
+    /// Create a row adjusted by horizontal arrow keys; Enter closes every picker.
     pub fn adjust(
         cells: Vec<Line<'static>>,
         mut adjust: impl FnMut(i8) -> EditorEvent + Send + 'static,
@@ -205,7 +213,7 @@ impl Row {
                 code: KeyCode::Right,
                 ..
             }) => Some(adjust(1)),
-            PickerInput::Action(Action::Submit) => Some(EditorEvent::ClosePicker),
+            PickerInput::Action(Action::Submit) => Some(EditorEvent::ClosePickers),
             _ => None,
         })
     }
@@ -233,6 +241,11 @@ impl Row {
             ..self
         }
     }
+
+    /// The row, drawn faint and skipped over unless `selectable`.
+    pub fn selectable_if(self, selectable: bool) -> Self {
+        Self { selectable, ..self }
+    }
 }
 
 impl PickerItem for Row {
@@ -248,6 +261,10 @@ impl PickerItem for Row {
         self.description
     }
 
+    fn selectable(&self) -> bool {
+        self.selectable
+    }
+
     fn handle(&mut self, input: PickerInput) -> Option<EditorEvent> {
         (self.handle)(input)
     }
@@ -260,7 +277,7 @@ impl From<Row> for Box<dyn PickerItem> {
 }
 
 /// Keyboard behavior attached to a picker presentation.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PickerMode {
     FilteredCommands,
     Commands,
@@ -365,16 +382,36 @@ impl Picker {
             .collect()
     }
 
-    /// Select an item, or zero when the picker has no items.
+    /// Select an item, or the next selectable one after it; zero when the picker
+    /// has no items.
     pub fn select(&mut self, index: usize) {
         self.selected = index.min(self.positions().saturating_sub(1));
+        if !self.selectable_at(self.selected) {
+            self.move_selection(1);
+        }
     }
 
+    /// Move `delta` positions, then on past rows that cannot be selected.
     pub fn move_selection(&mut self, delta: isize) {
         let positions = self.positions() as isize;
-        if positions > 0 {
-            self.select((self.selected as isize + delta).rem_euclid(positions) as usize);
+        let mut selected = self.selected as isize + delta;
+        for _ in 0..positions {
+            selected = selected.rem_euclid(positions);
+            if self.selectable_at(selected as usize) {
+                break;
+            }
+            selected += delta.signum();
         }
+        if positions > 0 {
+            self.selected = selected as usize;
+        }
+    }
+
+    /// Whether the row, or the button past them, at `position` can be selected.
+    fn selectable_at(&self, position: usize) -> bool {
+        self.items()
+            .get(position)
+            .is_none_or(|item| item.selectable())
     }
 
     /// Show a neighbouring tab, keeping the selected row, or the button, where possible.
@@ -382,10 +419,10 @@ impl Picker {
         let on_button = self.selected >= self.items().len();
         self.tab = (self.tab as isize + delta).rem_euclid(self.tabs.len() as isize) as usize;
         let rows = self.items().len();
-        self.selected = match on_button {
+        self.select(match on_button {
             true => rows,
             false => self.selected.min(rows.saturating_sub(1)),
-        };
+        });
     }
 
     /// Replace the current tab's items while retaining the selection where possible.
@@ -470,10 +507,24 @@ impl Picker {
                 self.switch_tab(1);
                 (true, None)
             }
+            PickerInput::Key(key @ KeyEvent {
+                code: KeyCode::Right,
+                ..
+            }) if tabbed && key.ctrl() => {
+                self.switch_tab(1);
+                (true, None)
+            }
             PickerInput::Key(KeyEvent {
                 code: KeyCode::BackTab,
                 ..
             }) if tabbed => {
+                self.switch_tab(-1);
+                (true, None)
+            }
+            PickerInput::Key(key @ KeyEvent {
+                code: KeyCode::Left,
+                ..
+            }) if tabbed && key.ctrl() => {
                 self.switch_tab(-1);
                 (true, None)
             }
@@ -556,6 +607,9 @@ impl Picker {
             span.style = groups.picker().patch(span.style);
             if selected {
                 span.style = span.style.patch(groups.picker_selected());
+            }
+            if !item.selectable() {
+                span.style = span.style.patch(groups.settings_item_disabled());
             }
         }
         Line::from(spans)
@@ -762,6 +816,7 @@ impl PickerController {
 mod tests {
     use super::*;
     use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
+    use crate::ui::key::KeyMod;
     use crossterm::event::KeyCode;
 
     #[test]
@@ -999,6 +1054,37 @@ mod tests {
         assert!(row(&rendered(&picker, 60), 1).contains("> a much longer label"));
         picker.handle(key(KeyCode::BackTab));
         assert!(row(&rendered(&picker, 60), 1).contains("> mode"));
+    }
+
+    #[test]
+    fn control_arrows_switch_tabs_rather_than_change_the_row() {
+        let mut picker = tabbed(false);
+        let before = row(&rendered(&picker, 60), 1);
+        assert!(picker.handle(PickerInput::Key(KeyCode::Right + KeyMod::Ctrl)).0);
+        assert!(row(&rendered(&picker, 60), 1).contains("> a much longer label"));
+        picker.handle(PickerInput::Key(KeyCode::Left + KeyMod::Ctrl));
+        assert_eq!(row(&rendered(&picker, 60), 1), before);
+    }
+
+    #[test]
+    fn unselectable_rows_are_skipped_in_both_directions() {
+        let rows = |labels: &[&'static str]| {
+            labels
+                .iter()
+                .map(|&label| {
+                    Row::new(vec![Span::raw(label).into()], |_| None)
+                        .selectable_if(label != "locked")
+                        .into()
+                })
+                .collect::<Vec<Box<dyn PickerItem>>>()
+        };
+        let mut picker = picker(rows(&["first", "locked", "last"]));
+        picker.move_selection(1);
+        assert_eq!(picker.selected(), 2);
+        picker.move_selection(-1);
+        assert_eq!(picker.selected(), 0);
+        picker.select(1);
+        assert_eq!(picker.selected(), 2, "selecting a locked row moves past it");
     }
 
     #[test]

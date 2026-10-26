@@ -119,6 +119,7 @@ PickerTabSelected = { link = "Accent", reverse = true }
 SettingsItemLabel = { link = "Text" }
 SettingsItemValue = { link = "Accent" }
 SettingsItemUnavailable = { link = "Faint", dim = true, crossed_out = true }
+SettingsItemDisabled = { link = "Faint", dim = true }
 SettingsUnavailableNote = { link = "Faint", italic = true }
 SettingsItemDescription = { link = "Muted" }
 SettingsStepArrow = { link = "Faint" }

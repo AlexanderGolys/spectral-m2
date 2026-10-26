@@ -11,7 +11,7 @@ use KeyCode::*;
 use ratatui::text::{Line, Span};
 
 use crate::ui::action::Action;
-use crate::ui::controller::picker::{PickerInput, PickerItem};
+use crate::ui::controller::picker::{PickerInput, PickerItem, Row};
 use crate::ui::controller::settings::theme::groups::{scheme, HLGroup};
 use crate::ui::controller::EditorEvent;
 use crate::ui::key::{KeyEvent, KeyMod};
@@ -93,11 +93,8 @@ impl Keymaps {
             if character.is_control() || key.is_text() {
                 return false;
             }
-            if key.ctrl()
-                && !key.alt()
-                && !key.shift()
-                && matches!(character, 'i' | 'm' | '[' | 's' | 'q')
-            {
+            // The terminal sends these as Tab, Enter and Esc.
+            if key.ctrl() && !key.alt() && !key.shift() && matches!(character, 'i' | 'm' | '[') {
                 return false;
             }
         }
@@ -133,6 +130,14 @@ impl Keymaps {
         self.rebinds.push((action, key));
         true
     }
+}
+
+/// The button putting every shortcut back on its default key.
+pub fn restore_defaults() -> Box<dyn PickerItem> {
+    let label = Span::styled("restore defaults", scheme().settings_button());
+    Row::enter(vec![label.into()], || EditorEvent::RestoreKeymaps)
+        .described("put every shortcut back on its default key")
+        .into()
 }
 
 /// A shortcut row that captures a replacement only after Enter.
@@ -219,10 +224,6 @@ impl Default for Keymaps {
     fn default() -> Self {
         Self {
             bindings: HashMap::from([
-                keymap!(fixed FocusPaneLeft <- Left + Alt),
-                keymap!(fixed FocusPaneRight <- Right + Alt),
-                keymap!(fixed ResizePaneLeft <- Left + Alt + Shift),
-                keymap!(fixed ResizePaneRight <- Right + Alt + Shift),
                 keymap!(CancelExecution <- Char('c') + Ctrl),
                 keymap!(OpenCommands <- Char('/') + Ctrl),
                 keymap!(OpenSettings <- Char('o') + Ctrl),
@@ -271,8 +272,8 @@ impl Default for Keymaps {
                 key!(Right),
                 key!(Up),
                 key!(Down),
-                key!(Up + Alt),
-                key!(Down + Alt),
+                key!(Up + Ctrl),
+                key!(Down + Ctrl),
                 key!(Home),
                 key!(End),
                 key!(Backspace),
@@ -424,8 +425,6 @@ mod tests {
             key!(Char('i') + Ctrl),
             key!(Char('m') + Ctrl),
             key!(Char('[') + Ctrl),
-            key!(Char('s') + Ctrl),
-            key!(Char('q') + Ctrl),
             key!(Tab + Alt),
             key!(Esc + Ctrl),
             key!(Char('\t') + Alt),
@@ -444,6 +443,8 @@ mod tests {
         for key in (2..=24).map(|number| key!(F(number))).chain([
             key!(Char('a') + Ctrl),
             key!(Char('c') + Ctrl),
+            key!(Char('s') + Ctrl),
+            key!(Char('q') + Ctrl),
             key!(Char('a') + Alt),
             key!(Up + Shift),
         ]) {
@@ -451,6 +452,15 @@ mod tests {
             assert!(keymaps.rebind(Action::ClearFeed, key), "rejected {key}");
             assert!(action(&keymaps, key) == Some(Action::ClearFeed));
         }
+    }
+
+    #[test]
+    fn a_moved_binding_can_return_to_its_default_key() {
+        let mut keymaps = Keymaps::default();
+        let default = keymaps.key(Action::ClosePane).expect("closing is bound");
+        assert!(keymaps.rebind(Action::ClosePane, key!(Char('e') + Ctrl)));
+        assert!(keymaps.rebind(Action::ClosePane, default));
+        assert_eq!(keymaps.key(Action::ClosePane), Some(default));
     }
 
     #[test]

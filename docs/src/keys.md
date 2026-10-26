@@ -7,9 +7,9 @@
 | `Enter` | Submit complete input, or continue an incomplete construct. |
 | `Shift+Space`, `Shift+Enter`, `Alt+Enter`, `Ctrl+J` | Insert a newline. `Ctrl+J` is the newline character itself, which some terminals send for `Shift+Enter`. |
 | `Up`, `Down` | Move vertically within multiline input. At its boundaries, browse history only while recalling untouched entries; editing stops boundary history navigation. Single-line input searches history by prefix. |
-| `Alt+Up`, `Alt+Down` | Browse matching history from anywhere in the input. Editing or moving the cursor ends the previous search. |
+| `Ctrl+Up`, `Ctrl+Down` | Browse matching history from anywhere in the input. Editing or moving the cursor ends the previous search. |
 | `PageUp`, `PageDown` | Scroll the feed. |
-| `Ctrl+Left`, `Ctrl+Right` | Move the cursor by a word. |
+| `Ctrl+Left`, `Ctrl+Right` | Move the cursor by a word; with a view open beside the session, step that view instead. |
 | `Ctrl+Backspace`, `Ctrl+Delete` | Delete what `Ctrl+Left` or `Ctrl+Right` would move over. `Alt` works the same, and so does `Ctrl+H`, which some terminals send for `Ctrl+Backspace`. |
 | `Ctrl+Z`, `Ctrl+Shift+Z` | Undo or redo an edit to the input. |
 | `Home`, `End` | Move to the start or end of the line. |
@@ -36,10 +36,10 @@
 
 | Key | Action |
 | --- | --- |
-| `Alt+Left`, `Alt+Right` | Focus a pane, including in a collapsed narrow split. |
-| `Alt+Shift+Left`, `Alt+Shift+Right` | Resize a visible split. |
+| Click | Focus a pane; drag the divider to resize the split. |
 | `Up`, `Down`, `PageUp`, `PageDown` | Scroll a preview. |
 | `Left`, `Right` | Step to the previous or next view: code, values, stdout, output, syntax tree. |
+| `Ctrl+Left`, `Ctrl+Right` | Step the view from either pane, while the shell's plain arrows move through its input. |
 
 ## Pickers
 
@@ -47,6 +47,6 @@
 | --- | --- |
 | `Up`, `Down` | Change the selected row. |
 | `Left`, `Right` | Adjust a settings row. |
-| `Tab`, `Shift+Tab` | Switch settings tabs. |
-| `Enter` | Open or run the selected row; a view opens beside the session. |
+| `Tab`, `Shift+Tab`, `Ctrl+Left`, `Ctrl+Right` | Switch settings tabs. |
+| `Enter` | Open or run the selected row; a view opens beside the session. On a settings row, close every picker. |
 | `Esc` | Close the current picker or debug overlay. |

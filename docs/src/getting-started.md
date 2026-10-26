@@ -20,6 +20,8 @@ Spectral starts a Macaulay2 process immediately. If `M2` cannot be found or star
 
 Start from code you already have: a file runs cell by cell before you type anything, as `/load` would run it, and `--resume` brings back the code of the session you last closed.
 
+File loads and resumed code omit comments from the replayed source. Comment-only files leave the session empty. Comment markers inside string literals remain unchanged; comments entered interactively stay visible as pending input.
+
 ```sh
 sp2 ring.m2
 sp2 --resume

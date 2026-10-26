@@ -101,7 +101,10 @@ pub struct Preferences {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Whether an installed language server enriches source colors.
+    /// Whether an installed language server analyses the session's source.
+    pub language_server: bool,
+    /// Whether the language server enriches source colors, which it can only do
+    /// while it runs.
     pub semantic_highlighting: bool,
     pub statusline: StatusLinePosition,
     pub maths: MathDisplay,
@@ -118,6 +121,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            language_server: true,
             semantic_highlighting: true,
             statusline: StatusLinePosition::default(),
             maths: MathDisplay::default(),
@@ -130,6 +134,11 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Whether source takes semantic colors: chosen, and the server providing them runs.
+    pub const fn semantic_colors(&self) -> bool {
+        self.language_server && self.semantic_highlighting
+    }
+
     /// Move the output fold threshold by picker steps, keeping room for a head, the
     /// three fold rows, and a tail.
     pub fn adjust_output_rows(&mut self, delta: i8) {
@@ -272,5 +281,17 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&disabled).unwrap()).unwrap();
         assert!(!roundtrip.editor.semantic_highlighting);
         assert!(roundtrip.editor.math_fonts);
+    }
+
+    #[test]
+    fn semantic_colors_need_the_language_server_but_keep_their_choice() {
+        let old: SavedSettings = serde_json::from_str(r#"{"editor":{}}"#).unwrap();
+        assert!(old.editor.language_server);
+        let mut settings = old.editor;
+        settings.semantic_highlighting = true;
+        settings.language_server = false;
+        assert!(!settings.semantic_colors());
+        settings.language_server = true;
+        assert!(settings.semantic_colors());
     }
 }
