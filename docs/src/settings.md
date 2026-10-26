@@ -27,14 +27,23 @@ Changes are kept between sessions. The appearance is saved to `appearance.json` 
 
 | Setting | Choices |
 | --- | --- |
+| Semantic highlighting | On by default: use an installed `m2-ls` for semantic source colors, with immediate syntax colors while results arrive. |
 | Maths | `unicode` by default: values laid out in characters, with stacked fractions and tall brackets. `typeset` draws them as [typeset pictures](#typeset-maths), marked unavailable where the terminal cannot show them; `ascii` uses Macaulay2's own plain-text spelling. |
 | Fractions | Stacked, underlined, or inline. |
 | Math fonts | Off by default, which draws a ring by the name it has in code, `ZZ`; on draws its blackboard glyph, `ℤ`, and sets `\mathcal` and `\mathfrak` capitals as script and fraktur glyphs. How they look is up to the terminal's fonts; see [Troubleshooting](troubleshooting.md#blackboard). |
 | Compute examples | How long each documentation example may run when it is computed again, so its value is drawn from its structure as a live value is; `off` keeps the output the documentation recorded. Each page runs in a fresh Macaulay2 with its package loaded, and stops at the first example that runs out of time or answers differently from the record. |
 
+## Semantic highlighting
+
+Install the optional language server with `cargo install m2-ls --locked` and restart Spectral. Semantic colors apply to live input, submitted cells, code previews, and the source shown with syntax trees. Analysis includes earlier session source, queued cells, and the current continuation; it does not evaluate code or inspect runtime values. Dynamically created bindings and side effects may remain unknown.
+
+Without the server, or if it stops responding, source keeps its syntax colors. Switch *semantic highlighting* off and on to retry. Completion and syntax diagnostics continue to use the shell's existing providers.
+
+The theme groups `Method`, `TypeParameter`, `SemanticCommand`, `RingGenerator`, `Option`, `File`, and `Unresolved` expose semantic roles. They inherit existing theme colors by default and can be customized in `themes/groups.toml` like other linked groups.
+
 ## Typeset maths { #typeset-maths }
 
-With *maths* set to `typeset`, a returned value is set as TeX would set it and drawn as a picture in the value colour, matrices and fractions at their full height. Its type is set the same way, in the type colour, when it holds maths such as a ring, as in `Matrix R^1 <-- R^2`; a type of words alone, such as `String`, stays text. The picture sits in the transcript like text: it scrolls, folds and splits with the panes, and a theme change repaints it.
+With *maths* set to `typeset`, mathematical values are drawn as TeX pictures using the theme's math colours, with matrices and fractions at their full height. Strings, `null`, names and Nets remain terminal text. Collections compose their entries individually, so a Net does not change how neighbouring mathematics is rendered. Type annotations also keep ordinary words in the terminal font and typeset their mathematical parts, in the type colour. Pictures scroll, fold and split with the panes, and a theme change repaints them.
 
 Formulas are set by the built-in [RaTeX](https://github.com/erweixin/RaTeX), with KaTeX's layout and Computer Modern fonts, so nothing else needs installing.
 
@@ -116,4 +125,4 @@ Press `Ctrl+Shift+D` to open the one-column inspector at the lower right. It lis
 
 ## Keymaps
 
-Run `/keymaps` to inspect and edit command shortcuts. Select a row and press `Enter`; its shortcut changes to “Type keybind…”. Press the replacement shortcut, or `Esc` to cancel. Shortcuts require Ctrl or Alt for characters, or Ctrl, Alt, or Shift for other keys; `F2` through `F24` also work without modifiers. Ordinary typing, `F1`, terminal control keys such as `Ctrl+I`, and existing editing keys cannot be assigned. Invalid keys leave capture active. `Ctrl+C` always quits and cannot be remapped. Movement, submission, and other form-editing keys remain fixed.
+Run `/keymaps` to inspect and edit command shortcuts. Select a row and press `Enter`; its shortcut changes to “Type keybind…”. Press the replacement shortcut, or `Esc` to cancel. Shortcuts require Ctrl or Alt for characters, or Ctrl, Alt, or Shift for other keys; `F2` through `F24` also work without modifiers. Ordinary typing, `F1`, terminal control keys such as `Ctrl+I`, and existing editing keys cannot be assigned. Invalid keys leave capture active. The *cancel execution* action defaults to `Ctrl+C` and can be remapped. It cancels running computations and queued work, or quits when idle. After three seconds of processing, the status line shows its current shortcut. Movement, submission, and other form-editing keys remain fixed.

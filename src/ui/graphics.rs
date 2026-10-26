@@ -22,7 +22,7 @@ use resvg::usvg::{Options, Tree};
 
 use crate::ui::config::UI;
 use kitty::{ImageId, KittyImage, Passthrough};
-use typeset::{Rgb, EM};
+use typeset::{Rgb, EM, PADDING};
 
 const TMUX: &str = "tmux";
 /// Set in every process tmux runs.
@@ -156,12 +156,13 @@ pub fn available() -> bool {
     CANVAS.get().is_some()
 }
 
-/// `tex` typeset in `colour`, as placeholder lines no wider than `width`; none when
-/// pictures are unavailable or the formula cannot be set legibly in that width.
-pub fn typeset(tex: &str, colour: Rgb, width: u16) -> Option<Vec<Line<'static>>> {
+/// Typeset `source` with the colour scopes from `tex`, retaining `source` for copying.
+/// Returns placeholder lines no wider than `width`, or none when pictures are
+/// unavailable or the formula cannot be set legibly in that width.
+pub fn typeset(source: &str, tex: &str, colour: Rgb, width: u16) -> Option<Vec<Line<'static>>> {
     let canvas = *CANVAS.get()?;
     gallery()
-        .formula(tex, colour, canvas, width)
+        .formula(source, tex, colour, canvas, width)
         .map(|image| image.lines())
 }
 
@@ -225,6 +226,7 @@ struct Gallery {
 impl Gallery {
     fn formula(
         &mut self,
+        source: &str,
         tex: &str,
         colour: Rgb,
         canvas: Canvas,
@@ -235,7 +237,7 @@ impl Gallery {
             .formulas
             .entry(key.clone())
             .or_insert_with(|| {
-                let svg = typeset::svg(tex, colour).ok()?;
+                let svg = typeset::svg_colored(source, tex, colour).ok()?;
                 Tree::from_str(&svg, &Options::default()).ok().map(Arc::new)
             })
             .clone()?;
@@ -250,7 +252,7 @@ impl Gallery {
             .map(Arc::new);
         self.unsent.extend(image.clone());
         if image.is_some() {
-            self.sources.insert(self.last_id, tex.to_string());
+            self.sources.insert(self.last_id, source.to_string());
         }
         self.images.insert((key, raster.cells.width), image.clone());
         image
@@ -260,6 +262,8 @@ impl Gallery {
 /// How a vector picture lands on the cell grid: its scale and the cells it covers.
 struct Raster {
     scale: f32,
+    top: f32,
+    height: f32,
     cells: Size,
     cell: Size,
 }
@@ -268,6 +272,11 @@ impl Raster {
     /// The picture at the terminal's text size, shrunk to `width` columns when it
     /// is wider; none when shrinking would make it too small to read.
     fn fitted(tree: &Tree, canvas: Canvas, width: u16) -> Option<Self> {
+        // Font ascender/descender metrics can reserve more space than the ink,
+        // particularly for delimiters. Only visible bounds determine occupied rows.
+        let bounds = tree.root().abs_stroke_bounding_box();
+        let top = bounds.top() - PADDING;
+        let height = bounds.height() + 2.0 * PADDING;
         let cell_width = f32::from(canvas.cell.width);
         let cell_height = f32::from(canvas.cell.height);
         let natural = cell_height * UI.typeset.em_per_cell_height / EM;
@@ -280,9 +289,11 @@ impl Raster {
         let cover = |extent: f32, cell: f32| ((extent * scale / cell).ceil() as u16).max(1);
         Some(Self {
             scale,
+            top,
+            height,
             cells: Size::new(
                 cover(tree.size().width(), cell_width).min(width),
-                cover(tree.size().height(), cell_height),
+                cover(height, cell_height),
             ),
             cell: canvas.cell,
         })
@@ -293,9 +304,9 @@ impl Raster {
         let width = u32::from(self.cells.width) * u32::from(self.cell.width);
         let height = u32::from(self.cells.height) * u32::from(self.cell.height);
         let mut pixmap = Pixmap::new(width, height)?;
-        let slack = height as f32 - tree.size().height() * self.scale;
-        let transform =
-            Transform::from_scale(self.scale, self.scale).post_translate(0.0, slack / 2.0);
+        let slack = height as f32 - self.height * self.scale;
+        let transform = Transform::from_scale(self.scale, self.scale)
+            .post_translate(0.0, slack / 2.0 - self.top * self.scale);
         resvg::render(tree, transform, &mut pixmap.as_mut());
         pixmap.encode_png().ok()
     }
@@ -332,6 +343,29 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_delimiters_do_not_add_a_terminal_row() {
+        for tex in [
+            "1",
+            "(1)",
+            "[1]",
+            r"\left(1\right)",
+            r"\left[1\right]",
+            r"\left\{1\right\}",
+        ] {
+            let tree = tree(tex);
+            let raster = Raster::fitted(&tree, CANVAS, 80).unwrap();
+            assert_eq!(
+                raster.cells.height,
+                1,
+                "{tex}: SVG height {}, ink height {}, scale {}",
+                tree.size().height(),
+                raster.height,
+                raster.scale
+            );
+        }
+    }
+
+    #[test]
     fn a_picture_covers_whole_cells_and_fills_them_exactly() {
         let tree = tree(r"\frac{x+y}{x-z}");
 
@@ -365,10 +399,14 @@ mod tests {
         gallery.unsent.clear();
         let ink = Rgb([1, 2, 3]);
 
-        let first = gallery.formula("x^2", ink, CANVAS, 80);
-        let again = gallery.formula("x^2", ink, CANVAS, 120);
+        let first = gallery.formula("x^2", r"\textcolor{red}{x^2}", ink, CANVAS, 80);
+        let again = gallery.formula("x^2", r"\textcolor{red}{x^2}", ink, CANVAS, 120);
 
         assert!(Arc::ptr_eq(&first.unwrap(), &again.unwrap()));
         assert_eq!(gallery.unsent.len(), 1);
+        assert_eq!(
+            gallery.sources.get(&gallery.last_id).map(String::as_str),
+            Some("x^2")
+        );
     }
 }

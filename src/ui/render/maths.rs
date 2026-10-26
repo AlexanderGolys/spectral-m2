@@ -13,6 +13,8 @@
 
 use std::ops::Range;
 
+use ratatui::style::Color;
+
 use serde::{Deserialize, Serialize};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -20,7 +22,7 @@ use these_macros_should_be_illegal::discriminated_str;
 
 use crate::backend::{CollectionKind, M2Value, Role};
 use crate::ui::block::TextSpan;
-use crate::ui::controller::settings::theme::groups::HLGroup;
+use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
 use crate::ui::cycle::cyclic;
 use crate::ui::graphics;
 use crate::ui::present::{wrap, SpanLine};
@@ -154,7 +156,7 @@ impl From<FractionStyle> for MathStyle {
 impl Role {
     /// The group code paints the same thing with, so a value reads as it would
     /// typed: `null` as a constant, `true` as a Boolean, a name as a function.
-    const fn group(self) -> HLGroup {
+    pub(super) const fn group(self) -> HLGroup {
         match self {
             Self::Null => HLGroup::Constant,
             Self::Boolean => HLGroup::Boolean,
@@ -224,11 +226,55 @@ pub fn annotation(parts: &[M2Value], width: usize, style: impl Into<MathStyle>) 
         .collect()
 }
 
-/// A cursor over TeX source.
+/// Add theme colours to complete TeX atoms, preserving the original typesetting commands.
+/// Unsupported input is left to the typesetter unchanged.
+pub fn colored_tex(source: &str, groups: &Groups) -> String {
+    let mut input = Input::new(source, true);
+    if input.expression(&[]).is_err() || !input.rest().is_empty() {
+        return source.to_string();
+    }
+    let source = input.source;
+    let mut ranges = input.highlights;
+    ranges.sort_by_key(|(range, _)| (range.start, std::cmp::Reverse(range.end)));
+    let mut result = String::new();
+    let mut ends = Vec::new();
+    let mut at = 0;
+    for (range, kind) in ranges {
+        while ends.last().is_some_and(|end| *end <= range.start) {
+            let end = ends.pop().expect("an end was checked");
+            result.push_str(&source[at..end]);
+            result.push('}');
+            at = end;
+        }
+        let ink = groups.style(kind);
+        let color = if kind == HLGroup::FractionRule {
+            ink.underline_color.or(ink.fg)
+        } else {
+            ink.fg
+        };
+        let Some(Color::Rgb(r, g, b)) = color else {
+            continue;
+        };
+        result.push_str(&source[at..range.start]);
+        result.push_str(&format!("{{\\color{{#{r:02x}{g:02x}{b:02x}}}"));
+        ends.push(range.end);
+        at = range.start;
+    }
+    while let Some(end) = ends.pop() {
+        result.push_str(&source[at..end]);
+        result.push('}');
+        at = end;
+    }
+    result.push_str(&source[at..]);
+    result
+}
+
+/// A cursor over TeX source, retaining the source ranges of semantic atoms.
 struct Input<'a> {
     source: &'a str,
     at: usize,
     blackboard: bool,
+    highlights: Vec<(Range<usize>, HLGroup)>,
 }
 
 impl<'a> Input<'a> {
@@ -237,6 +283,7 @@ impl<'a> Input<'a> {
             source: source.trim(),
             at: 0,
             blackboard,
+            highlights: Vec::new(),
         }
     }
 
@@ -338,6 +385,25 @@ impl<'a> Input<'a> {
 
     fn atom(&mut self) -> Result<Math, Unsupported> {
         self.skip_trivia();
+        let start = self.at;
+        let first_highlight = self.highlights.len();
+        let parsed = self.atom_inner()?;
+        let kind = match &parsed {
+            Math::Atom { kind, .. } => {
+                self.highlights.truncate(first_highlight);
+                Some(*kind)
+            }
+            Math::Fraction { .. } => Some(HLGroup::FractionRule),
+            Math::Delimited { .. } | Math::Grid { .. } => Some(HLGroup::Delimiter),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            self.highlights.push((start..self.at, kind));
+        }
+        Ok(parsed)
+    }
+
+    fn atom_inner(&mut self) -> Result<Math, Unsupported> {
         let rest = self.rest();
         let Some(next) = rest.chars().next() else {
             return Err(Unsupported("expected an atom, found nothing".into()));
@@ -1011,7 +1077,7 @@ impl MathBlock {
         &self.rows
     }
 
-    fn into_rows(self) -> Vec<SpanLine> {
+    pub(super) fn into_rows(self) -> Vec<SpanLine> {
         self.rows
     }
 
@@ -1330,7 +1396,7 @@ impl MathBlock {
     /// unlike the box-drawing set, so a grown matrix keeps its shape wherever it is
     /// read. Any other fence -- M2's `<|` -- stays one row high on the baseline, and
     /// TeX's `.` marks the absence of one.
-    fn fence(fence: &str, height: usize, baseline: usize) -> Self {
+    pub(super) fn fence(fence: &str, height: usize, baseline: usize) -> Self {
         let [top, extension, bottom, tip] = match (fence, height) {
             (".", _) => return Self::empty(),
             (_, 1) => return Self::atom(fence, HLGroup::Delimiter),

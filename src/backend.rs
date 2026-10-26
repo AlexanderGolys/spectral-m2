@@ -6,10 +6,10 @@ use std::fmt::Display;
 use std::io::{BufRead, BufReader, PipeReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::LazyLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{env, fs, mem, thread};
 
 use crate::errors::{Error, Result};
@@ -139,19 +139,6 @@ impl Spelling {
             Self::Ascii => " => ",
         }
     }
-}
-
-/// `text` with the characters TeX reserves escaped, to be set as written.
-fn escape_tex(text: &str) -> String {
-    text.chars()
-        .map(|c| match c {
-            '\\' => r"\textbackslash{}".to_string(),
-            '~' => r"\textasciitilde{}".to_string(),
-            '^' => r"\textasciicircum{}".to_string(),
-            '#' | '$' | '%' | '&' | '_' | '{' | '}' => format!("\\{c}"),
-            c => c.to_string(),
-        })
-        .collect()
 }
 
 /// The M2 list class a collection was drawn as, named exactly as M2 names it.
@@ -344,54 +331,6 @@ impl M2Value {
             .join("\n")
     }
 
-    /// The whole value as one TeX formula, its entries set between the delimiters
-    /// of their kind; none when some part of it has no TeX or plain one-line text.
-    pub fn tex(&self) -> Option<String> {
-        let delimited = |open: &str, entries: Vec<String>, close: &str| {
-            format!(r"\left{open}{}\right{close}", entries.join(r",\:"))
-        };
-        Some(match self {
-            Self::Tex { source, .. } => source.strip_prefix('$')?.strip_suffix('$')?.to_string(),
-            Self::Token { text, .. } | Self::Net(text) if !text.contains('\n') => {
-                format!(r"\texttt{{{}}}", escape_tex(text))
-            }
-            Self::Token { .. } | Self::Net(_) | Self::Markup { .. } => return None,
-            Self::HashTable(rows) => delimited(
-                r"\{",
-                rows.iter()
-                    .map(|[key, value]| {
-                        Some(format!(r"{}\Rightarrow {}", key.tex()?, value.tex()?))
-                    })
-                    .collect::<Option<_>>()?,
-                r"\}",
-            ),
-            Self::Collection {
-                kind: CollectionKind::VerticalList,
-                items,
-            } => format!(
-                r"\left\{{\begin{{matrix}}{}\end{{matrix}}\right\}}",
-                items
-                    .iter()
-                    .map(Self::tex)
-                    .collect::<Option<Vec<_>>>()?
-                    .join(r"\\")
-            ),
-            Self::Collection { kind, items } => {
-                let (open, close) = match kind {
-                    CollectionKind::List | CollectionKind::VerticalList => (r"\{", r"\}"),
-                    CollectionKind::Array => ("[", "]"),
-                    CollectionKind::Sequence => ("(", ")"),
-                    CollectionKind::AngleBarList => (r"\langle", r"\rangle"),
-                };
-                delimited(
-                    open,
-                    items.iter().map(Self::tex).collect::<Option<_>>()?,
-                    close,
-                )
-            }
-        })
-    }
-
     pub fn plain_text(&self) -> Option<&str> {
         match self {
             Self::Net(text) | Self::Markup { fallback: text, .. } | Self::Token { text, .. } => {
@@ -514,7 +453,10 @@ impl M2Backend {
         }
         let mut process = command
             .arg("-e")
-            .arg(format!("load {}", m2_string_literal(script_path.display())))
+            .arg(format!(
+                "load {}; interpreter(); exit 0",
+                m2_string_literal(script_path.display())
+            ))
             .stdin(Stdio::piped())
             .stdout(writer.try_clone()?)
             .stderr(writer)
@@ -631,6 +573,7 @@ impl M2Backend {
     /// Synchronous and blocking. The terminator statement is appended so that a
     /// statement which errors, and therefore runs none of the hooks, is still
     /// closed by a frame rather than leaving this loop waiting forever.
+    #[cfg(test)]
     pub fn evaluate(&mut self, code: &str, number: Option<u32>) -> Result<M2Response> {
         let _ = number;
         self.evaluate_within(code, EVALUATION_TIMEOUT)
@@ -640,13 +583,51 @@ impl M2Backend {
     /// then still busy with it, so the process can no longer be trusted with
     /// anything else.
     pub fn evaluate_within(&mut self, code: &str, timeout: Duration) -> Result<M2Response> {
+        self.evaluate_with_cancellation(code, timeout, &AtomicBool::new(false))
+    }
+
+    /// Evaluate a cell, interrupting M2 once cancellation is requested.
+    pub fn evaluate_cancellable(
+        &mut self,
+        code: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<M2Response> {
+        self.evaluate_with_cancellation(code, EVALUATION_TIMEOUT, cancelled)
+    }
+
+    fn evaluate_with_cancellation(
+        &mut self,
+        code: &str,
+        timeout: Duration,
+        cancelled: &AtomicBool,
+    ) -> Result<M2Response> {
+        if cancelled.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
         writeln!(self.input, "{}", code.trim_end())?;
         writeln!(self.input, "{CELL_TERMINATOR}")?;
         self.input.flush()?;
 
         let mut transcript = String::new();
+        let deadline = Instant::now() + timeout;
+        let mut interrupted = false;
         loop {
-            match self.chunks.recv_timeout(timeout) {
+            if !interrupted && cancelled.load(Ordering::Acquire) {
+                nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(self.process.id() as i32),
+                    nix::sys::signal::Signal::SIGINT,
+                )
+                .map_err(std::io::Error::from)?;
+                interrupted = true;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(Error::Timeout(timeout.as_secs()));
+            }
+            match self
+                .chunks
+                .recv_timeout(remaining.min(Duration::from_millis(20)))
+            {
                 Ok(Chunk::Text(text)) => transcript.push_str(&text),
                 Ok(Chunk::Frame(frame)) => {
                     let frame: Frame = serde_json::from_str(&frame)?;
@@ -662,9 +643,9 @@ impl M2Backend {
                         names: frame.names,
                     });
                 }
-                Err(RecvTimeoutError::Timeout) => return Err(Error::Timeout(timeout.as_secs())),
+                Err(RecvTimeoutError::Timeout) => continue,
                 Err(RecvTimeoutError::Disconnected) => {
-                    return Err(Error::Process(self.exit_details(transcript.trim())))
+                    return Err(Error::Exited(self.process.wait()?));
                 }
             }
         }
@@ -745,6 +726,31 @@ impl Drop for M2Backend {
 mod tests {
     use super::*;
     use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn cancellation_near_completion_keeps_response_frames_in_sync() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        for delay in [0, 1, 5, 20, 50] {
+            let cancelled = AtomicBool::new(false);
+            let response = thread::scope(|scope| {
+                scope.spawn(|| {
+                    thread::sleep(Duration::from_millis(delay));
+                    cancelled.store(true, Ordering::Release);
+                });
+                backend.evaluate_with_cancellation(
+                    "sum(1..1000, identity)",
+                    Duration::from_secs(2),
+                    &cancelled,
+                )
+            });
+            assert!(matches!(response, Ok(_) | Err(Error::Cancelled)));
+            let next = backend
+                .evaluate_within("1+1", Duration::from_secs(2))
+                .expect("evaluate after cancellation");
+            assert!(!next.is_error, "{}", next.transcript);
+            assert_eq!(next.rendered_value().as_deref(), Some("2"));
+        }
+    }
 
     #[test]
     fn an_even_brace_splits_its_cusp_over_the_two_middle_rows() {
@@ -931,34 +937,6 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             source: format!("${source}$"),
             fallback: fallback.into(),
         }
-    }
-
-    #[test]
-    fn a_collection_is_one_formula_between_its_own_delimiters() {
-        let list = M2Value::Collection {
-            kind: CollectionKind::List,
-            items: vec![tex("x", "x"), tex(r"\frac{1}{2}", "1/2")],
-        };
-
-        let formula = list.tex().unwrap();
-
-        assert!(formula.starts_with(r"\left\{") && formula.ends_with(r"\right\}"));
-        assert!(formula.contains(r"\frac{1}{2}"));
-    }
-
-    #[test]
-    fn plain_words_are_set_as_written_and_unset_pieces_spoil_the_whole() {
-        let word = M2Value::Token {
-            text: "a_b#c".into(),
-            role: Role::String,
-        };
-        let pair = M2Value::Collection {
-            kind: CollectionKind::Sequence,
-            items: vec![word.clone(), M2Value::Net("two\nrows".into())],
-        };
-
-        assert_eq!(word.tex().unwrap(), r"\texttt{a\_b\#c}");
-        assert_eq!(pair.tex(), None);
     }
 
     #[test]

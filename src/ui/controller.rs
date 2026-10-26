@@ -66,6 +66,7 @@ pub enum Reaction {
 
 /// A session result to apply to the editor model.
 pub enum EditorUpdate {
+    Exit,
     Ignore,
     Batch(Vec<Self>),
     Incomplete {
@@ -151,6 +152,8 @@ pub struct Editor {
     status_line: StatusLine,
     continuation: Option<String>,
     processing: bool,
+    processing_started: Option<Instant>,
+    cancel_hint_shown: bool,
     /// The names M2 knows, which the input completes.
     names: Names,
     pickers: Vec<PickerController>,
@@ -191,6 +194,8 @@ impl Editor {
             status_line: StatusLine::default(),
             continuation: None,
             processing: false,
+            processing_started: None,
+            cancel_hint_shown: false,
             names: Names::default(),
             pickers: Vec::new(),
             feed_area: Rect::ZERO,
@@ -217,6 +222,8 @@ impl Editor {
     pub fn set_processing(&mut self, processing: bool) {
         if self.processing != processing {
             self.processing = processing;
+            self.processing_started = processing.then(Instant::now);
+            self.cancel_hint_shown = false;
             self.refresh_status_line();
         }
     }
@@ -226,6 +233,13 @@ impl Editor {
     pub fn animate(&mut self) -> bool {
         if self.processing {
             self.feed.on_event(&Ticked);
+            let show_hint = self
+                .processing_started
+                .is_some_and(|started| started.elapsed() >= Duration::from_secs(3));
+            if self.cancel_hint_shown != show_hint {
+                self.cancel_hint_shown = show_hint;
+                self.refresh_status_line();
+            }
         }
         self.processing
     }
@@ -243,6 +257,32 @@ impl Editor {
     /// How long each documentation example may take to be computed again.
     pub fn example_timeout(&self) -> Duration {
         self.settings.example_timeout()
+    }
+
+    /// Whether semantic source colors are enabled in the persisted settings.
+    pub fn semantic_highlighting(&self) -> bool {
+        self.settings.semantic_highlighting
+    }
+
+    /// Source and revision for the current draft, excluding shell commands.
+    pub fn analysis_input(&self) -> (&str, Option<&str>, u64) {
+        let text = self.input.text();
+        let draft = if text.starts_with(commands::PREFIX) {
+            ""
+        } else {
+            text
+        };
+        (draft, self.feed.incomplete_source(), self.input.revision())
+    }
+
+    /// Refresh transcript source colors without changing editor interaction state.
+    pub fn rehighlight(&mut self, highlighter: &mut crate::code::semantic::SemanticHighlighter) {
+        let sources = highlighter
+            .segments()
+            .iter()
+            .map(|segment| segment.id)
+            .collect::<Vec<_>>();
+        self.feed.rehighlight(&sources, highlighter);
     }
 
     pub fn submission(&self) -> &str {
@@ -281,6 +321,7 @@ impl Editor {
     /// Apply a session result. Returns whether the shell should keep running.
     pub fn apply(&mut self, update: EditorUpdate) -> bool {
         match update {
+            EditorUpdate::Exit => return false,
             EditorUpdate::Ignore => {}
             EditorUpdate::Batch(updates) => {
                 return updates.into_iter().all(|update| self.apply(update));
@@ -571,7 +612,8 @@ impl Editor {
             Action::FocusPaneLeft
             | Action::FocusPaneRight
             | Action::ResizePaneLeft
-            | Action::ResizePaneRight => unreachable!("panes are handled by the app"),
+            | Action::ResizePaneRight
+            | Action::CancelExecution => unreachable!("panes are handled by the app"),
             Action::OpenSettings
             | Action::OpenKeymaps
             | Action::ClearFeed
@@ -632,6 +674,7 @@ impl Editor {
             | Action::FocusPaneRight
             | Action::ResizePaneLeft
             | Action::ResizePaneRight
+            | Action::CancelExecution
             | Action::Submit
             | Action::ScrollFeedUp
             | Action::ScrollFeedDown
@@ -1135,7 +1178,23 @@ impl Editor {
             .keymaps
             .key_for(Action::OpenSettings)
             .unwrap_or_default();
-        let event = if let Some(controller) = self.pickers.last() {
+        let event = if self.cancel_hint_shown {
+            StatusLineEvent::Show {
+                alignment: Alignment::Right,
+                spans: vec![
+                    TextSpan::new(
+                        format!(
+                            "{} ",
+                            self.keymaps
+                                .key_for(Action::CancelExecution)
+                                .unwrap_or_default()
+                        ),
+                        HLGroup::KeymapHint,
+                    ),
+                    TextSpan::new("to cancel", HLGroup::StatuslineHintLabel),
+                ],
+            }
+        } else if let Some(controller) = self.pickers.last() {
             StatusLineEvent::Show {
                 alignment: Alignment::Right,
                 spans: controller.hints(),
@@ -1437,5 +1496,41 @@ mod mouse_tests {
             editor.handle_mouse(click(KeyModifiers::CONTROL)),
             Reaction::Post(command) if command == "help \"isPrime\""
         ));
+    }
+}
+
+#[cfg(test)]
+mod processing_tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    #[test]
+    fn cancel_hint_is_delayed_uses_the_binding_and_clears_when_idle() {
+        let mut editor = Editor::new(String::new());
+        let text = |editor: &Editor| {
+            let area = Rect::new(0, 0, 80, 1);
+            let mut buffer = Buffer::empty(area);
+            editor
+                .status_line
+                .render(&StatusLineContext::default(), area, &mut buffer);
+            (0..80).map(|x| buffer[(x, 0)].symbol()).collect::<String>()
+        };
+        editor.set_processing(true);
+        editor.animate();
+        assert!(!text(&editor).contains("to cancel"));
+        editor.processing_started = Some(Instant::now() - Duration::from_secs(3));
+        editor.animate();
+        assert!(text(&editor).contains("to cancel"));
+        assert!(text(&editor).contains(&editor.keymaps.key_for(Action::CancelExecution).unwrap()));
+        assert!(editor
+            .keymaps
+            .rebind(Action::CancelExecution, KeyEvent::new(KeyCode::F(24))));
+        editor.refresh_status_line();
+        assert!(text(&editor).contains(&editor.keymaps.key_for(Action::CancelExecution).unwrap()));
+        editor.set_processing(false);
+        assert!(!text(&editor).contains("to cancel"));
+        editor.set_processing(true);
+        editor.animate();
+        assert!(!text(&editor).contains("to cancel"));
     }
 }

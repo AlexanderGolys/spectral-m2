@@ -3,7 +3,6 @@ target/
 AGENTS.md
 CLAUDE.md
 TODO.md
-install.sh
 
 nvim.log
 sketches.txt

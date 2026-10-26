@@ -2,5 +2,7 @@
 
 pub mod file;
 pub mod highlight;
+pub mod semantic;
+
 #[cfg(test)]
 pub mod parser;

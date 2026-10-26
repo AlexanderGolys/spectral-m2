@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-use m2_syn::{lex_str_recovering, LexErrorKind, Spanned, TokenTree, TriviaKind};
+use m2_syn::{lex_str_recovering, LexError, LexErrorKind, Spanned, TokenTree, TriviaKind};
 
 use super::commands::{self, Command, Operand};
 use crate::code::file::{self, Entries};
@@ -78,17 +78,16 @@ fn typing(source: &str) -> Typing {
     let end = source.len();
     let recovered = match lex_str_recovering(source) {
         Ok(recovered) => recovered,
-        Err(error) => {
-            let opener = match error.kind() {
-                LexErrorKind::UnterminatedString => "\"".len(),
-                LexErrorKind::UnterminatedRawString => RAW_STRING_OPENER.len(),
-                _ => return Typing::Other,
-            };
-            return error.span().range().map_or(Typing::Other, |range| {
-                Typing::Text(range.start + opener..end)
-            });
-        }
+        Err(error) => return unterminated_text(&error, end).unwrap_or(Typing::Other),
     };
+    // A string left open is recovered, and reported among the diagnostics.
+    if let Some(text) = recovered
+        .diagnostics
+        .iter()
+        .find_map(|error| unterminated_text(error, end))
+    {
+        return text;
+    }
     // The innermost last token: an unclosed group's last token is inside it.
     let mut chain: Vec<&TokenTree> = Vec::new();
     let mut stream = &recovered.value;
@@ -113,6 +112,17 @@ fn typing(source: &str) -> Typing {
             .map_or(Typing::Other, Typing::Name),
         _ => Typing::Other,
     }
+}
+
+/// The text typed into a string `error` reports left open, running to `end`.
+fn unterminated_text(error: &LexError, end: usize) -> Option<Typing> {
+    let opener = match error.kind() {
+        LexErrorKind::UnterminatedString => "\"".len(),
+        LexErrorKind::UnterminatedRawString => RAW_STRING_OPENER.len(),
+        _ => return None,
+    };
+    let range = error.span().range()?;
+    Some(Typing::Text(range.start + opener..end))
 }
 
 /// Whether `character` can continue an M2 identifier.

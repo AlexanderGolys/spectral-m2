@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
-use super::block::{Block, HLSpan};
+use super::block::Block;
 use super::cell::{Cell, CodeBlock};
 use super::config::UI;
 use super::render::RenderContext;
@@ -24,9 +24,42 @@ struct TreeEntry<'a> {
     node: &'a PrettyNode,
 }
 
+/// A row, or a bracket pair with the rows it encloses nested under its opening.
+enum TreeItem<'a> {
+    Row(TreeEntry<'a>),
+    Enclosed {
+        opening: TreeEntry<'a>,
+        contents: Vec<TreeItem<'a>>,
+        closing: Option<TreeEntry<'a>>,
+    },
+}
+
+/// Which side of a bracket pair a row is.
+enum Bracket {
+    Opening,
+    Closing,
+}
+
+impl TreeEntry<'_> {
+    fn bracket(&self) -> Option<Bracket> {
+        if self.node.role() != PrettyNodeRole::Delimiter {
+            return None;
+        }
+        match self.label.rsplit('.').next() {
+            Some(OPENING) => Some(Bracket::Opening),
+            Some(CLOSING) => Some(Bracket::Closing),
+            _ => None,
+        }
+    }
+}
+
+/// The edge labels m2-syn gives the two boundaries of a bracket pair.
+const OPENING: &str = "opening";
+const CLOSING: &str = "closing";
+
 fn tree_label(parent: &str, child: &str) -> String {
     match (parent, child) {
-        (_, "contents" | "delimiter") => parent.to_string(),
+        (_, "" | "contents" | "delimiter") => parent.to_string(),
         ("", child) => child.to_string(),
         (parent, child) if child.starts_with('[') => format!("{parent}{child}"),
         _ => format!("{parent}.{child}"),
@@ -36,10 +69,13 @@ fn tree_label(parent: &str, child: &str) -> String {
 fn push_tree_node<'a>(node: &'a PrettyNode, label: String, entries: &mut Vec<TreeEntry<'a>>) {
     match node.role() {
         PrettyNodeRole::Absent => {}
-        PrettyNodeRole::Collection if node.name() != "Delimited" => {
-            push_tree_children(node, label, entries);
-        }
-        PrettyNodeRole::Syntax | PrettyNodeRole::Token | PrettyNodeRole::Collection => {
+        PrettyNodeRole::Collection if node.children().is_empty() => {}
+        // A category only says how a visitor dispatches on the node it wraps.
+        PrettyNodeRole::Category => push_tree_children(node, label, entries),
+        PrettyNodeRole::Syntax
+        | PrettyNodeRole::Token
+        | PrettyNodeRole::Delimiter
+        | PrettyNodeRole::Collection => {
             entries.push(TreeEntry { label, node });
         }
     }
@@ -72,11 +108,11 @@ fn in_source_order(entries: &mut [TreeEntry<'_>]) {
     }
 }
 
-fn tree_children(node: &PrettyNode) -> Vec<TreeEntry<'_>> {
+fn tree_children(node: &PrettyNode) -> Vec<TreeItem<'_>> {
     let mut entries = Vec::new();
     push_tree_children(node, String::new(), &mut entries);
     in_source_order(&mut entries);
-    entries
+    enclosed(entries)
 }
 
 fn compact_source(text: &str, width: usize) -> String {
@@ -94,23 +130,43 @@ fn compact_source(text: &str, width: usize) -> String {
     }
 }
 
-fn delimiter_boundaries(node: &PrettyNode) -> Option<(&PrettyNode, Option<&PrettyNode>)> {
-    let boundaries = node
-        .children()
-        .iter()
-        .find(|edge| edge.label() == "delimiter")?
-        .node()
-        .children();
-    Some((
-        boundaries
-            .iter()
-            .find(|edge| edge.label() == "opening")?
-            .node(),
-        boundaries
-            .iter()
-            .find(|edge| edge.label() == "closing")
-            .map(m2_syn::PrettyEdge::node),
-    ))
+/// `entries`, in source order, with each run from an opening bracket to its closing
+/// one gathered under the opening; a bracket left open encloses the rest.
+fn enclosed(entries: Vec<TreeEntry<'_>>) -> Vec<TreeItem<'_>> {
+    let mut open: Vec<(TreeEntry<'_>, Vec<TreeItem<'_>>)> = Vec::new();
+    let mut items = Vec::new();
+    for entry in entries {
+        match entry.bracket() {
+            Some(Bracket::Opening) => open.push((entry, Vec::new())),
+            Some(Bracket::Closing) if !open.is_empty() => close(&mut open, &mut items, Some(entry)),
+            _ => match open.last_mut() {
+                Some((_, contents)) => contents.push(TreeItem::Row(entry)),
+                None => items.push(TreeItem::Row(entry)),
+            },
+        }
+    }
+    while !open.is_empty() {
+        close(&mut open, &mut items, None);
+    }
+    items
+}
+
+/// Close the innermost open bracket with `closing`, placing the pair where it opened.
+fn close<'a>(
+    open: &mut Vec<(TreeEntry<'a>, Vec<TreeItem<'a>>)>,
+    items: &mut Vec<TreeItem<'a>>,
+    closing: Option<TreeEntry<'a>>,
+) {
+    let (opening, contents) = open.pop().expect("a bracket is open");
+    let item = TreeItem::Enclosed {
+        opening,
+        contents,
+        closing,
+    };
+    match open.last_mut() {
+        Some((_, contents)) => contents.push(item),
+        None => items.push(item),
+    }
 }
 
 fn delimiter_text(node: &PrettyNode) -> &str {
@@ -119,9 +175,9 @@ fn delimiter_text(node: &PrettyNode) -> &str {
 
 impl SyntaxTreeBlock {
     /// Create a highlighted committed cell and its `m2-syn` pretty tree.
-    pub fn new(text: String, spans: Vec<HLSpan>, tree: PrettyNode) -> Self {
+    pub fn new(cell: Cell, tree: PrettyNode) -> Self {
         Self {
-            code: CodeBlock::new([Cell::new(text, None, spans)]),
+            code: CodeBlock::new([cell]),
             tree,
         }
     }
@@ -210,86 +266,61 @@ impl SyntaxTreeBlock {
             (Line::from(spans), location)
         }
 
-        fn walk_entry(
-            entry: &TreeEntry<'_>,
-            prefix: String,
-            last: bool,
+        fn walk_items(
+            items: &[TreeItem<'_>],
+            prefix: &str,
+            closed: bool,
             context: &RenderContext,
             lines: &mut Vec<Row>,
         ) {
-            let branch = if last { "╰─" } else { "├─" };
-            if let Some((opening, closing)) = (entry.node.name() == "Delimited")
-                .then(|| delimiter_boundaries(entry.node))
-                .flatten()
-            {
-                lines.push(line(
-                    opening,
-                    Some(&entry.label),
-                    &prefix,
-                    branch,
-                    true,
-                    context,
-                ));
-                let prefix = format!("{prefix}{}", if last { "  " } else { "│ " });
-                let mut children: Vec<_> = entry
-                    .node
-                    .children()
-                    .iter()
-                    .filter(|edge| edge.label() != "delimiter")
-                    .flat_map(|edge| {
-                        let mut entries = Vec::new();
-                        push_tree_edge(edge, "", &mut entries);
-                        entries
-                    })
-                    .collect();
-                in_source_order(&mut children);
-                let trailing = closing.is_some();
-                for (index, child) in children.iter().enumerate() {
-                    walk_entry(
-                        child,
-                        prefix.clone(),
-                        !trailing && index + 1 == children.len(),
-                        context,
-                        lines,
-                    );
-                }
-                if let Some(closing) = closing {
-                    lines.push(line(closing, None, &prefix, "╰─", true, context));
-                }
-                return;
-            }
-            lines.push(line(
-                entry.node,
-                Some(&entry.label),
-                &prefix,
-                branch,
-                false,
-                context,
-            ));
-            let children = tree_children(entry.node);
-            let prefix = format!("{prefix}{}", if last { "  " } else { "│ " });
-            for (index, entry) in children.iter().enumerate() {
-                walk_entry(
-                    entry,
-                    prefix.clone(),
-                    index + 1 == children.len(),
+            for (index, item) in items.iter().enumerate() {
+                walk_item(
+                    item,
+                    prefix,
+                    closed && index + 1 == items.len(),
                     context,
                     lines,
                 );
             }
         }
 
-        let mut lines = vec![line(&self.tree, None, "", "", false, context)];
-        let children = tree_children(&self.tree);
-        for (index, entry) in children.iter().enumerate() {
-            walk_entry(
-                entry,
-                String::new(),
-                index + 1 == children.len(),
-                context,
-                &mut lines,
-            );
+        fn walk_item(
+            item: &TreeItem<'_>,
+            prefix: &str,
+            last: bool,
+            context: &RenderContext,
+            lines: &mut Vec<Row>,
+        ) {
+            let branch = if last { "╰─" } else { "├─" };
+            let nested = format!("{prefix}{}", if last { "  " } else { "│ " });
+            match item {
+                TreeItem::Row(entry) => {
+                    lines.push(line(
+                        entry.node,
+                        Some(&entry.label),
+                        prefix,
+                        branch,
+                        false,
+                        context,
+                    ));
+                    walk_items(&tree_children(entry.node), &nested, true, context, lines);
+                }
+                TreeItem::Enclosed {
+                    opening,
+                    contents,
+                    closing,
+                } => {
+                    lines.push(line(opening.node, None, prefix, branch, true, context));
+                    walk_items(contents, &nested, closing.is_none(), context, lines);
+                    if let Some(closing) = closing {
+                        lines.push(line(closing.node, None, &nested, "╰─", true, context));
+                    }
+                }
+            }
         }
+
+        let mut lines = vec![line(&self.tree, None, "", "", false, context)];
+        walk_items(&tree_children(&self.tree), "", true, context, &mut lines);
         let column = lines
             .iter()
             .map(|(structure, _)| structure.width())

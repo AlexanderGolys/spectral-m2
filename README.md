@@ -1,7 +1,7 @@
 # Spectral M2
 
 [![crates.io](https://img.shields.io/crates/v/spectral-m2.svg)](https://crates.io/crates/spectral-m2)
-[![license](https://img.shields.io/crates/l/spectral-m2.svg)](LICENSE)
+[![license](https://img.shields.io/crates/l/spectral-m2.svg)](#license)
 
 Spectral M2 is a syntax-aware terminal shell for [Macaulay2](https://macaulay2.com/). It combines a real M2 session with local `m2-syn` parsing, structured output, multiline editing, selectable transcripts, preview modes, and two independent workspaces.
 
@@ -13,7 +13,8 @@ betti res I
 
 ## Features
 
-- syntax highlighting and source-ranged diagnostics driven by `m2-syn`;
+- immediate syntax highlighting and local source-ranged diagnostics;
+- optional semantic colors from `m2-ls` across live input, session code, and previews;
 - immediate pending cells with spinner and queued states during evaluation;
 - structured values, types, printed text, warnings, and errors;
 - persistent multiline history and keyboard or mouse selection;
@@ -27,13 +28,23 @@ betti res I
 - Macaulay2 available as `M2` on `PATH`;
 - a terminal with mouse events and OSC 52 clipboard support for the complete interface.
 
+Optional semantic highlighting uses `m2-ls` on `PATH`, installed with `cargo install m2-ls --locked`. The shell also works without it.
+
 ## Install
 
 Install the released package through Cargo:
 
 ```sh
 cargo install spectral-m2 --locked
-spectral-m2
+sp2
+```
+
+The package is named `spectral-m2`; its executable is `sp2`. Give it a file to run as the session starts, or pick up where the last session ended:
+
+```sh
+sp2 ring.m2      # run ring.m2 cell by cell, then keep going
+sp2 --resume     # run the previous session's code
+sp2 --help
 ```
 
 Run the current checkout without installing it:
@@ -41,6 +52,8 @@ Run the current checkout without installing it:
 ```sh
 cargo run --release
 ```
+
+Press `Ctrl+C` during a computation to cancel it and discard queued work while keeping the Macaulay2 session. When idle, `Ctrl+C` quits. The *cancel execution* binding can be changed in `/keymaps`; its hint appears in the status line after three seconds. Macaulay2 commands that exit the process also close the shell.
 
 Type `/` for the filtered command picker, `Ctrl+/` for all commands, or `Ctrl+O` for settings. Views open beside the session.
 
@@ -63,4 +76,9 @@ mdbook serve docs --hostname 127.0.0.1 --port 3000
 
 ## License
 
-Spectral M2 is licensed under [GPL-3.0-only](LICENSE).
+Spectral M2 is licensed under either of
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option.

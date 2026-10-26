@@ -6,19 +6,19 @@
 //! service rather than editor state.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::ops::Range;
 use std::rc::Rc;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Offset, Position, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use super::block::{Block, Element, HLSpan, Link, Text};
-use super::controller::settings::theme::groups::HLGroup;
 use super::element::paste;
-use super::graphics::{self, typeset::Rgb};
 use super::render::maths::MathDisplay;
 use super::render::selection::Exclusions;
 use super::render::spin::{busy_frame, Tick};
@@ -27,13 +27,9 @@ use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::wrap::WrappedText;
 use crate::backend::transcript::{captured_output, strip_m2_location};
 use crate::backend::{M2Response, M2Value};
+use crate::code::highlight::Highlighter;
+use crate::code::semantic::SourceId;
 use crate::ui::config::UI;
-
-/// The typewriter face Macaulay2 sets words in, as a class name is in a type.
-const TYPEWRITER_TEXT: &str = r"\texttt{";
-/// The upright face words in a typeset type are set in instead: typewriter reads
-/// as bold at the size a type is drawn.
-const UPRIGHT_TEXT: &str = r"\textrm{";
 
 macro_rules! row_count {
     ($rows:expr) => {
@@ -223,15 +219,31 @@ pub struct Cell {
     text: String,
     number: Option<(u32, CellState)>,
     spans: Vec<HLSpan>,
+    wrap_ranges: Vec<Range<usize>>,
 }
 
 impl Cell {
     pub(super) fn new(text: String, number: Option<(u32, CellState)>, spans: Vec<HLSpan>) -> Self {
+        let wrap_ranges = spans.iter().map(|span| span.content.clone()).collect();
         Self {
             text,
             number,
             spans,
+            wrap_ranges,
         }
+    }
+
+    /// Highlight identified source while keeping wrapping tied to lexical boundaries.
+    pub fn highlighted(
+        text: String,
+        number: Option<(u32, CellState)>,
+        id: SourceId,
+        highlighter: &mut dyn Highlighter,
+    ) -> Self {
+        let lexical = highlighter.highlight(&text);
+        let mut cell = Self::new(text, number, lexical);
+        cell.rehighlight(id, highlighter);
+        cell
     }
 
     /// Create a numbered input cell from source and spans produced for that source.
@@ -241,6 +253,7 @@ impl Cell {
     }
 
     /// Create a numbered input cell with its result state.
+    #[cfg(test)]
     pub fn resolved(text: String, number: u32, state: CellState, spans: Vec<HLSpan>) -> Self {
         Self::new(text, Some((number, state)), spans)
     }
@@ -256,13 +269,17 @@ impl Cell {
         CodeBlock::new([self, other])
     }
 
+    fn rehighlight(&mut self, id: SourceId, highlighter: &mut dyn Highlighter) -> bool {
+        let spans = highlighter.highlight_source(id, &self.text);
+        if self.spans == spans {
+            return false;
+        }
+        self.spans = spans;
+        true
+    }
+
     fn wrapped(&self, width: u16) -> WrappedText {
-        let spans = self
-            .spans
-            .iter()
-            .map(|span| span.content.clone())
-            .collect::<Vec<_>>();
-        WrappedText::code(&self.text, width, &spans)
+        WrappedText::code(&self.text, width, &self.wrap_ranges)
     }
 
     fn marker(&self) -> CellMarker {
@@ -341,58 +358,49 @@ impl CodeBlock {
 
 /// The single unfinished submission retained at the bottom of the feed.
 pub struct IncompleteBlock {
-    cell: Cell,
+    code: CodeBlock,
 }
 
 impl IncompleteBlock {
     /// Create an unfinished block from the parser's complete active source.
     pub fn new(source: String, spans: Vec<HLSpan>) -> Self {
         Self {
-            cell: Cell::rejected(source, spans),
+            code: CodeBlock::new([Cell::rejected(source, spans)]),
         }
+    }
+
+    /// Refresh this unfinished source without replacing the block.
+    pub fn rehighlight(&mut self, id: SourceId, highlighter: &mut dyn Highlighter) -> bool {
+        self.code.cells[0].rehighlight(id, highlighter)
     }
 
     /// Return the source when this block is moved back into the editor.
     pub fn into_source(self) -> String {
-        self.cell.text
+        self.code
+            .cells
+            .into_iter()
+            .next()
+            .expect("unfinished cell")
+            .text
     }
 
     /// Borrow the retained source as highlighting context for the live input.
     pub fn source(&self) -> &str {
-        &self.cell.text
+        &self.code.cells[0].text
     }
 }
 
 impl Block for IncompleteBlock {
     fn height(&self, context: &RenderContext) -> u16 {
-        self.cell
-            .wrapped(context.width().saturating_sub(CellLayout::plain().prefix()))
-            .height()
-            .saturating_add(1)
+        self.code.height(context)
     }
 
     fn render_local(&self, context: &RenderContext, buf: &mut Buffer) {
-        let area = *buf.area();
-        let style = context.groups().pending();
-        let mut lines = vec![Line::default()];
-        lines.extend(cell_lines(
-            &self.cell,
-            CellMarker::Empty,
-            CellLayout::plain(),
-            context,
-            style,
-            true,
-        ));
-        Paragraph::new(lines).style(style).render(area, buf);
-        for x in 0..area.width {
-            buf[(x, 0)]
-                .set_symbol(UI.glyphs.pending_separator.current())
-                .set_style(context.groups().pending_separator().patch(style));
-        }
+        self.code.render_local(context, buf);
     }
 
     fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
-        exclusions.push(Rect::new(0, 0, context.width(), 1));
+        self.code.local_selection_exclusions(context, exclusions);
     }
 }
 
@@ -595,6 +603,21 @@ impl EvaluationBlock {
         {
             *state = EvaluationState::Pending;
         }
+    }
+
+    /// Refresh mapped cells while retaining their evaluation state and outputs.
+    pub fn rehighlight(
+        &mut self,
+        sources: &HashMap<(u64, usize), SourceId>,
+        highlighter: &mut dyn Highlighter,
+    ) -> bool {
+        let mut changed = false;
+        for (index, (cell, _)) in self.cells.iter_mut().enumerate() {
+            if let Some(&source) = sources.get(&(self.id, index)) {
+                changed |= cell.rehighlight(source, highlighter);
+            }
+        }
+        changed
     }
 
     /// Return the session-local submission identifier.
@@ -1155,43 +1178,44 @@ impl OutputBlock {
             }),
             _ => None,
         };
-        let mut lines: Vec<Line<'static>> = match (style.display, cell.value.as_ref()) {
-            (MathDisplay::Typeset, Some(value)) => value
-                .tex()
-                .and_then(|tex| Self::typeset(&tex, theme.value(), width)),
-            (
-                MathDisplay::Ascii,
-                Some(
-                    value @ (M2Value::Tex { .. }
-                    | M2Value::Collection { .. }
-                    | M2Value::HashTable(_)),
+        let mut lines: Vec<Line<'static>> =
+            match (style.display, token.as_ref().or(cell.value.as_ref())) {
+                (MathDisplay::Typeset, Some(value)) => {
+                    Some(super::render::typeset::lines(value, width, theme, style))
+                }
+                (
+                    MathDisplay::Ascii,
+                    Some(
+                        value @ (M2Value::Tex { .. }
+                        | M2Value::Collection { .. }
+                        | M2Value::HashTable(_)),
+                    ),
+                ) => Some(
+                    value
+                        .ascii()
+                        .lines()
+                        .map(|line| Line::from(Span::styled(line.to_string(), theme.value())))
+                        .collect(),
                 ),
-            ) => Some(
-                value
-                    .ascii()
-                    .lines()
-                    .map(|line| Line::from(Span::styled(line.to_string(), theme.value())))
-                    .collect(),
-            ),
-            _ => None,
-        }
-        .unwrap_or_else(|| {
-            match token
-                .as_ref()
-                .or(cell.value.as_ref())
-                .map(|value| maths::spans(value, width, style))
-            {
-                Some(Ok(rows)) => rows
-                    .into_iter()
-                    .map(|row| Line::from(row.spans(theme)))
-                    .collect(),
-                _ => self
-                    .layout(cell, context)
-                    .into_iter()
-                    .map(|line| Line::from(Span::styled(line, theme.value())))
-                    .collect(),
+                _ => None,
             }
-        });
+            .unwrap_or_else(|| {
+                match token
+                    .as_ref()
+                    .or(cell.value.as_ref())
+                    .map(|value| maths::spans(value, width, style))
+                {
+                    Some(Ok(rows)) => rows
+                        .into_iter()
+                        .map(|row| Line::from(row.spans(theme)))
+                        .collect(),
+                    _ => self
+                        .layout(cell, context)
+                        .into_iter()
+                        .map(|line| Line::from(Span::styled(line, theme.value())))
+                        .collect(),
+                }
+            });
         let limit = (UI.max_output_preview_cells / usize::from(context.width().max(1))).max(1);
         if lines.len() > limit {
             let head = limit.saturating_sub(1) / 2;
@@ -1210,35 +1234,6 @@ impl OutputBlock {
             lines: lines.clone(),
         }));
         lines
-    }
-
-    /// `value` as a typeset picture painted in `ink`'s colour, when the terminal
-    /// shows pictures and the whole value has TeX that sets legibly in `width` columns.
-    fn typeset(tex: &str, ink: Style, width: usize) -> Option<Vec<Line<'static>>> {
-        let Some(Color::Rgb(r, g, b)) = ink.fg else {
-            return None;
-        };
-        let width = u16::try_from(width).unwrap_or(u16::MAX);
-        graphics::typeset(tex, Rgb([r, g, b]), width)
-    }
-
-    /// The type annotation as one picture in the type colour, when some part of
-    /// it is maths, such as a ring; one of words alone, such as `String`, stays text.
-    fn typeset_annotation(
-        parts: &[M2Value],
-        ink: Style,
-        width: usize,
-    ) -> Option<Vec<Line<'static>>> {
-        if !parts.iter().any(|part| matches!(part, M2Value::Tex { .. })) {
-            return None;
-        }
-        let tex = parts
-            .iter()
-            .map(M2Value::tex)
-            .collect::<Option<Vec<_>>>()?
-            .join(r"\ ")
-            .replace(TYPEWRITER_TEXT, UPRIGHT_TEXT);
-        Self::typeset(&tex, ink, width)
     }
 
     /// Value rows kept above the fold and rows hidden by it, when `rows` exceed
@@ -1306,14 +1301,13 @@ impl OutputBlock {
     fn type_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
         let theme = context.groups();
         let width = usize::from(self.text_width(context));
-        let typeset = match context.math().display {
-            MathDisplay::Typeset => {
-                Self::typeset_annotation(&cell.type_parts, theme.style(HLGroup::Type), width)
-            }
-            _ => None,
-        };
-        if let Some(lines) = typeset {
-            return lines;
+        if context.math().display == MathDisplay::Typeset && !cell.type_parts.is_empty() {
+            return super::render::typeset::annotation(
+                &cell.type_parts,
+                width,
+                theme,
+                context.math(),
+            );
         }
         if !cell.type_parts.is_empty() && context.math().display != MathDisplay::Ascii {
             return maths::annotation(&cell.type_parts, width, context.math())
@@ -1845,19 +1839,28 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_source_has_an_inset_on_a_lighter_surface() {
+    fn incomplete_source_renders_exactly_like_unnumbered_code() {
         let groups = Groups::default();
         let block = IncompleteBlock::new("f(\nx\n".into(), Vec::new());
         let rows = rendered_rows(&block, 50);
 
-        assert!(rows.iter().all(|row| !row.contains('│')));
-        assert_eq!(rows[1].find("f("), Some(prefix()));
-        assert_eq!(rows[2].find('x'), Some(prefix()));
-        assert!(rows[0].chars().all(|character| character == '┈'));
-        assert!(!rows[1..].iter().any(|row| row.contains('┈')));
+        assert_eq!(
+            rows[0].chars().position(|character| character == 'f'),
+            Some(prefix())
+        );
+        assert_eq!(
+            rows[1].chars().position(|character| character == 'x'),
+            Some(prefix())
+        );
+        for row in &rows[..rows.len() - 1] {
+            assert_eq!(row.chars().nth(usize::from(inset())), Some('│'));
+            assert!(row[..usize::from(inset())].trim().is_empty());
+            assert!(!row.contains('┈'));
+        }
+        let ordinary = CodeBlock::new([Cell::rejected("f(\nx\n".into(), Vec::new())]);
+        assert_eq!(rows, rendered_rows(&ordinary, 50));
         let buffer = rendered_buffer(&block, 50);
-        assert_eq!(Some(buffer[(0, 1)].bg), groups.pending().bg);
-        assert_eq!(Some(buffer[(0, 0)].fg), groups.muted().fg);
+        assert_eq!(Some(buffer[(0, 0)].bg), groups.code().bg);
     }
 
     fn syntax_tree_fixture() -> SyntaxTreeBlock {
@@ -1885,7 +1888,7 @@ mod tests {
             "comments",
             PrettyNode::collection("Comments · 0 items", None),
         );
-        SyntaxTreeBlock::new("(x,y)".to_string(), Vec::new(), root)
+        SyntaxTreeBlock::new(Cell::new("(x,y)".to_string(), None, Vec::new()), root)
     }
 
     #[test]
@@ -1904,11 +1907,12 @@ mod tests {
             .collect();
         let screen = rows.join("\n");
 
-        assert!(rows[1].contains("(  parameters:"), "{screen}");
+        assert!(rows[1].contains("╰─("), "{screen}");
         assert!(rows[2].contains("  ├─Symbol x"), "{screen}");
         assert!(rows[3].contains("  ├─Token![,]"), "{screen}");
         assert!(rows[4].contains("  ├─Symbol y"), "{screen}");
         assert!(rows[5].contains("  ╰─)"), "{screen}");
+        assert_eq!(rows.len(), 7, "the empty comments add no row: {screen}");
         assert_eq!(rows[3].matches(',').count(), 1, "{screen}");
         for hidden in [
             "Delimited",
@@ -1935,7 +1939,6 @@ mod tests {
                 .style
         };
         assert_eq!(style("Root"), groups.style(HLGroup::Type));
-        assert_eq!(style("parameters"), groups.style(HLGroup::Property));
         assert_eq!(style("Symbol"), groups.style(HLGroup::Type));
         assert_eq!(style("Token!["), groups.info());
         assert_eq!(style(","), groups.tree_code());
@@ -1954,7 +1957,7 @@ mod tests {
         };
         let tree = cells.remove(0).tree;
         let context = RenderContext::new(100, 0);
-        let block = SyntaxTreeBlock::new(source.to_string(), Vec::new(), tree);
+        let block = SyntaxTreeBlock::new(Cell::new(source.to_string(), None, Vec::new()), tree);
         let screen = block
             .tree_lines(&context)
             .iter()
@@ -1967,10 +1970,14 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(screen.contains("ExprPack  content:"), "{screen}");
-        assert!(screen.contains("FixedArity  parameters:"), "{screen}");
-        assert!(screen.contains("╰─("), "{screen}");
+        assert!(
+            screen.contains("ExprAssignInstallMethod  content:"),
+            "{screen}"
+        );
+        assert!(screen.contains("ExprLambdaList  function:"), "{screen}");
+        assert!(screen.contains("├─("), "{screen}");
         assert!(screen.contains("╰─)"), "{screen}");
+        assert!(!screen.contains(".:"), "{screen}");
         assert!(!screen.contains("Delimited"), "{screen}");
         assert!(!screen.contains("method:"), "{screen}");
         assert!(!screen.contains("0[1]"), "{screen}");
@@ -1998,7 +2005,7 @@ mod tests {
             "closing",
             PrettyNode::token("Token", "]", span.subspan(3, 4)),
         );
-        let block = SyntaxTreeBlock::new("[ab]".into(), Vec::new(), array);
+        let block = SyntaxTreeBlock::new(Cell::new("[ab]".into(), None, Vec::new()), array);
         let buffer = rendered_buffer(&block, 60);
         let rows: Vec<String> = (0..buffer.area().height)
             .map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect())
@@ -2052,7 +2059,7 @@ mod tests {
         let span = M2Span::for_text("xy");
         let mut tree = PrettyNode::syntax("Root", Some(span.clone()));
         tree.push_node("operator", PrettyNode::token("Adj", "Adj", span.at(1)));
-        let block = SyntaxTreeBlock::new("xy".to_string(), Vec::new(), tree);
+        let block = SyntaxTreeBlock::new(Cell::new("xy".to_string(), None, Vec::new()), tree);
         let screen: String = block
             .tree_lines(&context)
             .iter()
@@ -2070,7 +2077,7 @@ mod tests {
         let context = RenderContext::new(40, 0);
         let source = (0..20).map(|_| "long").collect::<Vec<_>>().join(" \n");
         let tree = PrettyNode::syntax("Root", Some(M2Span::for_text(source.clone())));
-        let block = SyntaxTreeBlock::new(source, Vec::new(), tree);
+        let block = SyntaxTreeBlock::new(Cell::new(source, None, Vec::new()), tree);
         let line = &block.tree_lines(&context)[0];
 
         assert!(line.width() <= usize::from(context.width()));
@@ -2808,5 +2815,27 @@ mod tests {
 
         assert_eq!(block.height(&RenderContext::new(30, 0)), 3, "{rows:#?}");
         assert!(rows[1].contains(message), "{rows:#?}");
+    }
+    #[test]
+    fn semantic_boundaries_cannot_rewrap_source() {
+        struct SemanticWords;
+        impl Highlighter for SemanticWords {
+            fn highlight(&mut self, source: &str) -> Vec<HLSpan> {
+                vec![
+                    HLSpan::new(0..1, HLGroup::String),
+                    HLSpan::new(1..7, HLGroup::Namespace),
+                    HLSpan::new(7..source.len(), HLGroup::String),
+                ]
+            }
+        }
+        let source = "\"abcdefghijklmn\"";
+        let mut cell = Cell::new(
+            source.to_string(),
+            None,
+            vec![HLSpan::new(0..source.len(), HLGroup::String)],
+        );
+        let before = cell.wrapped(8).text().to_string();
+        cell.rehighlight(SourceId::Draft(0), &mut SemanticWords);
+        assert_eq!(cell.wrapped(8).text(), before);
     }
 }

@@ -6,11 +6,18 @@ All notable changes to Spectral M2 are documented here.
 
 ### Added
 
+- `Ctrl+C` interrupts a running computation and discards queued work while preserving the Macaulay2 session; when idle it still quits.
+
+- `sp2 FILE` runs a file's code as the session starts, `sp2 --resume` the previous session's, and `sp2 --help` and `--version` describe the shell.
+- Optional semantic highlighting through an installed `m2-ls`, covering live input, session code, and code previews, with configurable semantic theme groups and a persisted rendering setting.
+
 - Added a *maths* setting: `unicode`, as before; `typeset`, which draws returned values as pictures typeset by the built-in RaTeX, through the kitty graphics protocol, on terminals that support it, tmux included; and `ascii`, Macaulay2's own plain-text spelling. A type holding maths, such as a matrix's rings, is typeset too, in the type colour. Where the terminal cannot show pictures, `typeset` is still offered, struck through and marked unavailable in that terminal.
 - Selecting a typeset picture copies the TeX it was set from, once however many rows it covers.
 
 ### Changed
 
+- Spectral M2 is now licensed under MIT or Apache-2.0, at your option, instead of GPL-3.0-only.
+- Built on `m2-syn` 0.7, now also MIT or Apache-2.0. The syntax tree view still nests what brackets hold under the opening bracket, and no longer lists empty groups.
 - Settings are grouped into *appearance*, *layout* and *rendering* tabs, switched with `Tab`. Each row shows only its name and value, aligned in one column at any pane width: each shows its current value between arrows. The *restore defaults* button, no longer a row of its own, and the selected row's description sit beneath the rows, and the status line names the keys the open picker answers.
 - The mouse wheel over the input moves through its lines instead of changing *input max height*, which it used to lower without showing it.
 

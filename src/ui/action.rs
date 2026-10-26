@@ -13,6 +13,7 @@ pub enum Action {
     ResizePaneLeft = "move the pane divider left",
     ResizePaneRight = "move the pane divider right",
     Quit = "quit spectral-m2",
+    CancelExecution = "cancel execution",
     Submit = "evaluate the input",
     ScrollFeedUp = "scroll the feed up",
     ScrollFeedDown = "scroll the feed down",

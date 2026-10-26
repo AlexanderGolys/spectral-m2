@@ -19,7 +19,7 @@ use self::panes::{pane_layout, ratio_for_width, Panes, MIN_PANE_WIDTH};
 use self::session::Session;
 use crate::backend::M2Backend;
 use crate::code::file as code_file;
-use crate::code::highlight::SyntaxHighlighter;
+use crate::code::semantic::SemanticHighlighter;
 use crate::errors::Result;
 use crate::ui::action::Action;
 use crate::ui::cell::TextBlock;
@@ -34,7 +34,8 @@ const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(80);
 struct Workspace {
     session: Session,
     editor: Editor,
-    highlighter: SyntaxHighlighter,
+    highlighter: SemanticHighlighter,
+    analysis_state: Option<(u64, u64, Option<String>)>,
 }
 
 impl Workspace {
@@ -47,7 +48,8 @@ impl Workspace {
         Self {
             session,
             editor,
-            highlighter: SyntaxHighlighter::new(),
+            highlighter: SemanticHighlighter::new(),
+            analysis_state: None,
         }
     }
 }
@@ -118,6 +120,14 @@ impl App {
 
     fn handle_action(&mut self, action: Action) -> bool {
         match action {
+            Action::CancelExecution => {
+                if !self.workspace.session.busy() {
+                    return self.handle_action(Action::Quit);
+                }
+                let update = self.workspace.session.interrupt();
+                self.workspace.editor.apply(update);
+                return true;
+            }
             Action::FocusPaneLeft => {
                 self.panes.focus(0);
                 return true;
@@ -453,6 +463,35 @@ impl App {
         if dirty {
             self.follow_new_input();
         }
+        let workspace = &mut self.workspace;
+        let enabled = workspace.editor.semantic_highlighting();
+        let mut recolored = workspace.highlighter.set_enabled(enabled);
+        let (draft, pending, revision) = workspace.editor.analysis_input();
+        let state = (
+            workspace.session.source_revision(),
+            revision,
+            pending.map(str::to_string),
+        );
+        if workspace.analysis_state.as_ref() != Some(&state) {
+            workspace
+                .highlighter
+                .update(workspace.session.semantic_document(pending, draft));
+            workspace.analysis_state = Some(state);
+        }
+        let (updated, failure) = workspace.highlighter.poll();
+        recolored |= updated;
+        if recolored {
+            workspace.editor.rehighlight(&mut workspace.highlighter);
+            dirty = true;
+        }
+        if let Some(message) = failure {
+            running &= workspace
+                .editor
+                .apply(EditorUpdate::Message(Box::new(TextBlock::system(format!(
+                    "Semantic highlighting unavailable: {message}"
+                )))));
+            dirty = true;
+        }
         (running, dirty)
     }
 }
@@ -471,10 +510,14 @@ fn welcome_message(m2_version: &str) -> String {
     )
 }
 
-/// Run the terminal event loop until any workspace requests exit.
-pub fn run(backend: M2Backend) -> Result<()> {
+/// Run the terminal event loop until any workspace requests exit, first running
+/// `startup` as if it had been typed.
+pub fn run(backend: M2Backend, startup: Option<String>) -> Result<()> {
     let mut terminal = ReplTerminal::enter()?;
     let mut app = App::new(backend);
+    if let Some(code) = startup {
+        app.run_code(&code);
+    }
     let mut dirty = true;
     loop {
         if dirty {
@@ -507,4 +550,54 @@ pub fn run(backend: M2Backend) -> Result<()> {
     }
     app.keep_session();
     terminal.leave()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_submitted_comment_is_visible_on_the_next_frame() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut app = super::App::new(crate::backend::M2Backend::spawn().expect("spawn M2"));
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        for character in "--a".chars() {
+            app.handle_key(crossterm::event::KeyCode::Char(character).into());
+        }
+        assert!(app.handle_key(crossterm::event::KeyCode::Enter.into()));
+        app.poll();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(screen.contains("--a"), "{screen}");
+    }
+
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn ctrl_c_interrupts_while_busy_and_quits_when_idle() {
+        let mut app = App::new(M2Backend::spawn().expect("spawn M2"));
+        let update = app
+            .workspace
+            .session
+            .submit("while true do null", &mut app.workspace.highlighter);
+        app.workspace.editor.apply(update);
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(app.handle_key(crate::key!(ctrl + c)));
+        assert!(app.handle_key(crate::key!(ctrl + c)));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.workspace.session.busy() && Instant::now() < deadline {
+            for update in app.workspace.session.poll() {
+                app.workspace.editor.apply(update);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!app.workspace.session.busy());
+        assert!(!app.handle_key(crate::key!(ctrl + c)));
+    }
 }

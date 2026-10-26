@@ -21,6 +21,7 @@ pub mod maths;
 pub mod selection;
 #[allow(dead_code)] // groundwork: not yet wired into the running UI
 pub mod spin;
+pub mod typeset;
 
 /// Horizontal placement of a bordered feed element.
 #[derive(Clone, Copy)]

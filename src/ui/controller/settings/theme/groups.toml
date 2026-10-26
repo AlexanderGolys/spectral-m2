@@ -50,6 +50,13 @@ Debug = { link = "Keyword", captures = ["keyword.debug"] }
 Delimiter = { link = "Muted", captures = ["punctuation.delimiter"] }
 Punctuation = { link = "Muted", captures = ["punctuation.bracket"] }
 Variable = { link = "Text", captures = ["variable"] }
+Method = { link = "Function" }
+TypeParameter = { link = "Type" }
+SemanticCommand = { link = "Function" }
+RingGenerator = { link = "Symbol" }
+Option = { link = "Property" }
+File = { link = "String" }
+Unresolved = { link = "Variable" }
 Installation = { link = "Function", captures = ["label"] }
 CompiledFunction = { link = "Function", captures = ["function.builtin"] }
 Quote = { link = "Symbol", captures = ["character.special"] }

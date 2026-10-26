@@ -1,5 +1,10 @@
 //! Retained transcript rendering and interaction limited to the viewport.
 
+use std::collections::HashMap;
+
+use crate::code::highlight::Highlighter;
+use crate::code::semantic::SourceId;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Offset, Position, Rect};
 use ratatui::style::Style;
@@ -421,6 +426,42 @@ impl Feed {
                 self.surface = None;
                 return;
             }
+        }
+    }
+
+    /// Repaint source colors without following the bottom or replacing output blocks.
+    pub fn rehighlight(&mut self, sources: &[SourceId], highlighter: &mut dyn Highlighter) {
+        let cells: HashMap<_, _> = sources
+            .iter()
+            .filter_map(|&source| match source {
+                SourceId::Cell {
+                    submission, index, ..
+                } => Some(((submission, index), source)),
+                _ => None,
+            })
+            .collect();
+        let pending = sources
+            .iter()
+            .find(|source| matches!(source, SourceId::Pending(_)))
+            .copied();
+        let anchor = self.anchor.or_else(|| self.scrolled_anchor());
+        let mut changed = false;
+        for block in &mut self.blocks {
+            let repainted = match &mut block.content {
+                FeedContent::Evaluation(evaluation) => evaluation.rehighlight(&cells, highlighter),
+                FeedContent::Incomplete(incomplete) => {
+                    pending.is_some_and(|id| incomplete.rehighlight(id, highlighter))
+                }
+                FeedContent::Block(_) => false,
+            };
+            if repainted {
+                block.cells = None;
+                changed = true;
+            }
+        }
+        if changed {
+            self.anchor = anchor;
+            self.surface = None;
         }
     }
 
@@ -1305,5 +1346,64 @@ mod tests {
         feed.push_evaluation(evaluation);
 
         assert_eq!(feed.recent_outputs(), [Some(241), Some(239), None]);
+    }
+    #[test]
+    fn semantic_repainting_keeps_text_outputs_and_a_scrolled_anchor() {
+        struct SourceColors;
+        impl Highlighter for SourceColors {
+            fn highlight(&mut self, source: &str) -> Vec<crate::ui::block::HLSpan> {
+                vec![crate::ui::block::HLSpan::new(
+                    0..source.len(),
+                    crate::ui::controller::settings::theme::groups::HLGroup::Type,
+                )]
+            }
+        }
+        let mut feed = Feed::new(Box::new(Responsive('A')));
+        let mut evaluation = EvaluationBlock::new(7, [("alpha".to_string(), Vec::new())]);
+        evaluation.succeed(
+            0,
+            1,
+            CellState::Value,
+            Vec::new(),
+            Some(TextBlock::printed("kept output")),
+            None,
+        );
+        feed.push_evaluation(evaluation);
+        for symbol in ['B', 'C', 'D'] {
+            feed.push(Box::new(Responsive(symbol)));
+        }
+        let context = RenderContext::new(40, 0);
+        let area = Rect::new(0, 0, 40, 10);
+        let render = |feed: &mut Feed| {
+            let mut buffer = Buffer::empty(area);
+            feed.render(&context, area, &mut buffer, Style::default());
+            buffer
+        };
+        feed.scroll(1);
+        let before = render(&mut feed);
+        let offset = feed.offset();
+        feed.rehighlight(
+            &[SourceId::Cell {
+                generation: 0,
+                submission: 7,
+                index: 0,
+            }],
+            &mut SourceColors,
+        );
+        let after = render(&mut feed);
+        assert_eq!(feed.offset(), offset);
+        let text = |buffer: &Buffer| {
+            buffer
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        assert_eq!(text(&before), text(&after));
+        assert!(text(&after).contains("kept output"));
+        assert_ne!(
+            before, after,
+            "colors refresh even though source and geometry do not change"
+        );
     }
 }

@@ -56,6 +56,8 @@ pub enum InputAction {
     MoveRight = "move right",
     MoveUp = "move up, or recall older input",
     MoveDown = "move down, or recall newer input",
+    HistoryPrevious = "recall older matching input",
+    HistoryNext = "recall newer matching input",
     MoveWordLeft = "move left by a word",
     MoveWordRight = "move right by a word",
     MoveLineStart = "move to line start",
@@ -205,6 +207,7 @@ impl InputTextField {
     }
 
     pub fn start_selection(&mut self, cursor: usize) {
+        self.history.stop_browsing();
         if self.text.is_char_boundary(cursor) {
             self.cursor = cursor;
             self.anchor = Some(cursor);
@@ -352,6 +355,9 @@ impl InputTextField {
     /// Apply one undoable edit. An edit that changes nothing leaves no step,
     /// and one that replaces a selection never joins the step before it.
     fn edit(&mut self, kind: EditKind, apply: impl FnOnce(&mut Self)) {
+        if kind != EditKind::Recalling {
+            self.history.stop_browsing();
+        }
         if self.selection().is_some() {
             self.edits.break_run();
         }
@@ -371,12 +377,14 @@ impl InputTextField {
     }
 
     pub fn undo(&mut self) {
+        self.history.stop_browsing();
         if let Some(previous) = self.edits.undo(self.snapshot()) {
             self.load(previous.text, previous.cursor);
         }
     }
 
     pub fn redo(&mut self) {
+        self.history.stop_browsing();
         if let Some(next) = self.edits.redo(self.snapshot()) {
             self.load(next.text, next.cursor);
         }
@@ -506,14 +514,6 @@ impl InputTextField {
         }
         let column = self.text[starts[current]..self.cursor].chars().count();
         self.cursor = self.cursor_at_column(&starts, current + 1, column);
-    }
-
-    pub fn cursor_on_first_line(&self) -> bool {
-        !self.text[..self.cursor].contains('\n')
-    }
-
-    pub fn cursor_on_last_line(&self) -> bool {
-        !self.text[self.cursor..].contains('\n')
     }
 
     #[cfg(test)]
@@ -669,11 +669,13 @@ pub struct InputCode {
     command_range: Option<Range<usize>>,
     selecting: bool,
     highlighted_revision: u64,
+    semantic_revision: u64,
     highlighted_pending: Option<String>,
     highlights: Vec<HLSpan>,
     area: Rect,
     text_area: Rect,
     scroll: usize,
+    pinned_first_row: bool,
     /// When a keystroke last changed the text, while the typing prompt shows.
     typed_at: Option<Instant>,
 }
@@ -709,11 +711,13 @@ impl InputCode {
             command_range: None,
             selecting: false,
             highlighted_revision: u64::MAX,
+            semantic_revision: u64::MAX,
             highlighted_pending: None,
             highlights: Vec::new(),
             area: Rect::ZERO,
             text_area: Rect::ZERO,
             scroll: 0,
+            pinned_first_row: false,
             typed_at: None,
         }
     }
@@ -820,6 +824,10 @@ impl InputCode {
             return self.complete(action);
         }
         let field = &mut self.field;
+        if !matches!(action, MoveUp | MoveDown | HistoryPrevious | HistoryNext) {
+            field.history.stop_browsing();
+        }
+        let browse = field.history.browsing(&field.text) || !field.text.contains('\n');
         match action {
             InsertNewline => field.insert_char('\n'),
             InsertTab => field.insert_char('\t'),
@@ -837,9 +845,13 @@ impl InputCode {
             MoveLineEnd => field.move_end(),
             MoveTextStart => field.move_text_start(),
             MoveTextEnd => field.move_text_end(),
-            MoveUp if field.cursor_on_first_line() => field.history_prev(),
+            HistoryPrevious => field.history_prev(),
+            HistoryNext => field.history_next(),
+            MoveUp if browse && !field.text[..field.cursor].contains('\n') => field.history_prev(),
             MoveUp => field.move_up(),
-            MoveDown if field.cursor_on_last_line() => field.history_next(),
+            MoveDown if browse && !field.text[field.cursor..].contains('\n') => {
+                field.history_next()
+            }
             MoveDown => field.move_down(),
             SelectLeft => field.select_left(),
             SelectRight => field.select_right(),
@@ -941,6 +953,8 @@ impl InputCode {
             KeyCode::End if key.shift() => Some(SelectLineEnd),
             KeyCode::Left => Some(MoveLeft),
             KeyCode::Right => Some(MoveRight),
+            KeyCode::Up if key.alt() => Some(HistoryPrevious),
+            KeyCode::Down if key.alt() => Some(HistoryNext),
             KeyCode::Up => Some(MoveUp),
             KeyCode::Down => Some(MoveDown),
             KeyCode::Home => Some(MoveLineStart),
@@ -1002,7 +1016,16 @@ impl InputCode {
     fn cursor_at_mouse(&self, event: MouseEvent, area: Rect, scroll: usize) -> usize {
         let row = event.row.saturating_sub(area.y).min(area.height - 1);
         let column = event.column.saturating_sub(area.x).min(area.width) as usize;
-        self.cursor_at_visual(area.width, scroll + row as usize, column)
+        let source_row = if self.pinned_first_row {
+            if row < 2 {
+                0
+            } else {
+                scroll + usize::from(row - 2)
+            }
+        } else {
+            scroll + usize::from(row)
+        };
+        self.cursor_at_visual(area.width, source_row, column)
     }
 
     #[cfg(test)]
@@ -1018,11 +1041,13 @@ impl InputCode {
             command_range: None,
             selecting: false,
             highlighted_revision: u64::MAX,
+            semantic_revision: u64::MAX,
             highlighted_pending: None,
             highlights: Vec::new(),
             area: Rect::ZERO,
             text_area: Rect::ZERO,
             scroll: 0,
+            pinned_first_row: false,
             typed_at: None,
         }
     }
@@ -1040,11 +1065,13 @@ impl InputCode {
         debugging: bool,
         pending: Option<&str>,
     ) -> Vec<Line<'static>> {
-        if self.highlighted_revision != self.field.revision
+        if self.semantic_revision != highlighter.revision()
+            || self.highlighted_revision != self.field.revision
             || self.highlighted_pending.as_deref() != pending
         {
             self.highlights = highlighter.highlight_continuation(pending, self.field.text());
             self.highlighted_revision = self.field.revision;
+            self.semantic_revision = highlighter.revision();
             self.highlighted_pending = pending.map(str::to_string);
         }
         let selection = self.field.selection();
@@ -1158,7 +1185,14 @@ impl InputCode {
             .saturating_sub(2 + u16::from(diagnostic.is_some()))
             .max(1) as usize;
         let (cursor_row, cursor_column) = self.visual_cursor(text_width);
-        self.scroll = self.scroll_start(cursor_row, rows.len(), viewport);
+        let clipped = rows.len() > viewport;
+        self.pinned_first_row = clipped && viewport >= 3;
+        let pinned_rows = if self.pinned_first_row { 2 } else { 0 };
+        let body_height = viewport - pinned_rows;
+        self.scroll = self.scroll_start(cursor_row, rows.len(), body_height);
+        if self.pinned_first_row {
+            self.scroll = self.scroll.max(1);
+        }
         self.text_area = Rect::new(
             area.x + context.render.prefix(),
             area.y + 1,
@@ -1175,7 +1209,17 @@ impl InputCode {
         } else {
             vec![Line::default()]
         };
-        lines.extend(rows.into_iter().skip(self.scroll).take(viewport));
+        if self.pinned_first_row {
+            lines.push(rows[0].clone());
+            lines.push(Line::from(Span::styled(
+                UI.glyphs
+                    .pending_separator
+                    .current()
+                    .repeat(usize::from(area.width)),
+                groups.pending_separator().patch(code),
+            )));
+        }
+        lines.extend(rows.into_iter().skip(self.scroll).take(body_height));
         if let Some(message) = diagnostic {
             let error = groups.error().patch(code);
             lines.push(Line::from(vec![
@@ -1185,17 +1229,30 @@ impl InputCode {
         }
         lines.push(Line::default());
         Paragraph::new(lines).style(code).render(area, buffer);
+        if clipped && !self.pinned_first_row && area.height > 1 {
+            for x in area.x..area.right() {
+                buffer[(x, area.bottom() - 1)]
+                    .set_symbol(UI.glyphs.pending_separator.current())
+                    .set_style(groups.pending_separator().patch(code));
+            }
+        }
         if context.code_above {
             for x in area.x..area.right() {
                 buffer[(x, area.y)]
-                    .set_symbol(UI.glyphs.input_edge.current())
-                    .set_style(groups.separator());
+                    .set_symbol(" ")
+                    .set_style(groups.transcript());
             }
         }
         context.focused.then(|| {
             Position::new(
                 area.x + context.render.prefix() + cursor_column as u16,
-                area.y + 1 + (cursor_row - self.scroll) as u16,
+                area.y
+                    + 1
+                    + if self.pinned_first_row && cursor_row == 0 {
+                        0
+                    } else {
+                        (pinned_rows + cursor_row.saturating_sub(self.scroll)) as u16
+                    },
             )
         })
     }
@@ -1567,14 +1624,103 @@ mod tests {
     }
 
     #[test]
+    fn history_browsing_crosses_multiline_entries_until_cursor_movement() {
+        let mut input = InputCode::new_in_memory();
+        input.field.history.record("older\nentry");
+        input.field.history.record("newer\nentry");
+        input.edit(InputAction::MoveUp);
+        assert_eq!(input.text(), "newer\nentry");
+        input.edit(InputAction::MoveUp);
+        assert_eq!(input.field.cursor_line_col().0, 0);
+        assert_eq!(input.text(), "newer\nentry");
+        input.edit(InputAction::MoveUp);
+        assert_eq!(input.text(), "older\nentry");
+        input.edit(InputAction::MoveDown);
+        assert_eq!(input.text(), "newer\nentry");
+
+        input.edit(InputAction::MoveTextStart);
+        input.edit(InputAction::MoveUp);
+        assert_eq!(input.text(), "newer\nentry");
+        assert_eq!(input.field.cursor, 0);
+        input.edit(InputAction::MoveDown);
+        assert_eq!(input.field.cursor_line_col(), (1, 0));
+    }
+
+    #[test]
+    fn editing_recalled_multiline_input_stops_browsing() {
+        let mut input = InputCode::new_in_memory();
+        input.field.history.record("older\nentry");
+        input.field.history.record("newer\nentry");
+        input.edit(InputAction::MoveUp);
+        input.field.insert_char('!');
+        input.edit(InputAction::MoveUp);
+        assert_eq!(input.text(), "newer\nentry!");
+        assert_eq!(input.field.cursor_line_col().0, 0);
+        input.edit(InputAction::MoveUp);
+        assert_eq!(input.text(), "newer\nentry!");
+    }
+
+    #[test]
+    fn clipped_input_pins_its_first_row_above_a_separator() {
+        let mut input = InputCode::new_in_memory();
+        input
+            .field
+            .insert_str("first\nsecond\nthird\nfourth\nfifth\nlast");
+        let context = RenderContext::new(40, UI.prompt_width());
+        let mut highlighter = SyntaxHighlighter::new();
+        let area = Rect::new(0, 0, 40, 7);
+        let mut buffer = Buffer::empty(area);
+        let cursor = input
+            .render(
+                InputContext {
+                    render: &context,
+                    highlighter: &mut highlighter,
+                    command: false,
+                    debugging: false,
+                    focused: true,
+                    code_above: false,
+                    pending: None,
+                },
+                area,
+                &mut buffer,
+            )
+            .unwrap();
+        let row = |y| (0..40).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+        assert!(row(1).contains("first"));
+        assert!(row(2)
+            .chars()
+            .all(|symbol| symbol.to_string() == UI.glyphs.pending_separator.current()));
+        assert!(row(cursor.y).contains("last"));
+        assert!(cursor.y < area.bottom() - 1);
+        assert!(input.pinned_first_row);
+        assert!(input.scroll > 1);
+    }
+
+    #[test]
     fn returning_from_history_restores_the_draft_cursor() {
         let mut field = InputTextField::new_in_memory();
-        field.history.record("old input");
+        field.history.record("top\nbottom + 1");
+        field.history.record("unrelated input");
         field.insert_str("top\nbottom");
         field.cursor = 0;
 
         field.history_prev();
+        assert_eq!(field.text(), "top\nbottom + 1");
         field.history_next();
+
+        assert_eq!(field.text(), "top\nbottom");
+        assert_eq!(field.cursor_line_col(), (0, 0));
+    }
+
+    #[test]
+    fn multiline_history_without_a_match_preserves_the_draft() {
+        let mut field = InputTextField::new_in_memory();
+        field.history.record("top\nother");
+        field.history.record("unrelated input");
+        field.insert_str("top\nbottom");
+        field.cursor = 0;
+
+        field.history_prev();
 
         assert_eq!(field.text(), "top\nbottom");
         assert_eq!(field.cursor_line_col(), (0, 0));
@@ -1853,5 +1999,59 @@ mod tests {
         input.field_mut().move_end();
 
         assert_eq!(input.visual_cursor(4), (0, 2));
+    }
+    #[test]
+    fn semantic_revision_recolors_unchanged_input_without_moving_selection() {
+        use crate::ui::controller::settings::theme::groups::HLGroup;
+        struct ChangingHighlighter {
+            revision: u64,
+            group: HLGroup,
+        }
+        impl Highlighter for ChangingHighlighter {
+            fn revision(&self) -> u64 {
+                self.revision
+            }
+            fn highlight(&mut self, source: &str) -> Vec<HLSpan> {
+                vec![HLSpan::new(0..source.len(), self.group)]
+            }
+        }
+        let mut input = InputCode::new_in_memory();
+        input.field_mut().insert_str("alpha");
+        let context = RenderContext::new(40, UI.prompt_width());
+        let mut highlighter = ChangingHighlighter {
+            revision: 0,
+            group: HLGroup::Function,
+        };
+        input.field_mut().start_selection(1);
+        input.field_mut().continue_selection(3);
+        input.set_diagnostic("example diagnostic".to_string(), Some(3..5));
+        let before = input.highlighted_lines(&context, &mut highlighter, false, None);
+        let state = (
+            input.revision(),
+            input.field().cursor(),
+            input.field().selection(),
+        );
+        highlighter.revision = 1;
+        highlighter.group = HLGroup::Type;
+        let after = input.highlighted_lines(&context, &mut highlighter, false, None);
+        let color = |lines: &[Line<'_>]| {
+            lines[0]
+                .spans
+                .iter()
+                .find(|span| span.content == "a")
+                .unwrap()
+                .style
+                .fg
+        };
+        assert_ne!(color(&before), color(&after));
+        assert_eq!(
+            state,
+            (
+                input.revision(),
+                input.field().cursor(),
+                input.field().selection()
+            )
+        );
+        assert_eq!(input.text(), "alpha");
     }
 }

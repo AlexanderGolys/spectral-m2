@@ -6,7 +6,8 @@
 | --- | --- |
 | `Enter` | Submit complete input, or continue an incomplete construct. |
 | `Shift+Space`, `Shift+Enter`, `Alt+Enter`, `Ctrl+J` | Insert a newline. `Ctrl+J` is the newline character itself, which some terminals send for `Shift+Enter`. |
-| `Up`, `Down` | Move vertically or recall history at the input boundary. |
+| `Up`, `Down` | Move vertically within multiline input. At its boundaries, browse history only while recalling untouched entries; editing stops boundary history navigation. Single-line input searches history by prefix. |
+| `Alt+Up`, `Alt+Down` | Browse matching history from anywhere in the input. Editing or moving the cursor ends the previous search. |
 | `PageUp`, `PageDown` | Scroll the feed. |
 | `Ctrl+Left`, `Ctrl+Right` | Move the cursor by a word. |
 | `Ctrl+Backspace`, `Ctrl+Delete` | Delete what `Ctrl+Left` or `Ctrl+Right` would move over. `Alt` works the same, and so does `Ctrl+H`, which some terminals send for `Ctrl+Backspace`. |
@@ -29,7 +30,7 @@
 | `Ctrl+R` | Run the previous session's code again. |
 | `Ctrl+Q` | Close the view, from whichever pane has focus. |
 | `Ctrl+Shift+D` | Toggle highlight debug. |
-| `Ctrl+C` | Quit, from whichever pane has focus. |
+| `Ctrl+C` | Cancel running computations and queued work; quit when idle, from whichever pane has focus. |
 
 ## Split view and previews
 

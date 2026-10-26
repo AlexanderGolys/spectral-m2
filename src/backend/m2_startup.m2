@@ -330,7 +330,8 @@ announceReady := (() -> (
     -- the shell's `iN` contiguous. A failed input is rewound past as well, so the
     -- next cell reuses its number: nothing can refer to it, a statement that
     -- throws having bound no `oN` and left `oo` where it was.
-    User#"spectral end of cell" = locals -> (
+    -- Keep interruption from leaving a partial frame or half-reset cell state.
+    User#"spectral end of cell" = locals -> shield (
         lineNumber = lineNumber - 1;
         sendResult locals;
         if not completed then

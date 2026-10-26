@@ -2,7 +2,9 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::mem;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -12,6 +14,7 @@ use super::examples::{ExamplePage, ExampleRunner};
 use crate::backend::transcript::captured_error;
 use crate::backend::{M2Backend, M2Response, M2Value};
 use crate::code::highlight::Highlighter;
+use crate::code::semantic::{Document, SourceId};
 use crate::errors::Result;
 use crate::ui::cell::{response_blocks, CellState, TextBlock};
 use crate::ui::controller::EditorUpdate;
@@ -21,6 +24,8 @@ use crate::ui::render::markup;
 #[derive(Clone)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub struct CommittedCell {
+    /// Stable source identity shared by previews and the transcript.
+    pub source_id: SourceId,
     pub number: u32,
     pub state: CellState,
     pub code: String,
@@ -43,6 +48,7 @@ const BLOCK_SEPARATOR: char = '\u{c}';
 struct Evaluation {
     id: u64,
     cells: Vec<SubmittedCell>,
+    cancelled: Arc<AtomicBool>,
 }
 
 /// Work sent to the thread that exclusively owns an M2 process.
@@ -52,6 +58,7 @@ enum WorkerRequest {
         first_index: usize,
         first_number: u32,
         cells: Vec<String>,
+        cancelled: Arc<AtomicBool>,
     },
     Restart,
     Stop,
@@ -59,6 +66,7 @@ enum WorkerRequest {
 
 /// Incremental results returned by one workspace worker.
 enum WorkerEvent {
+    Exited,
     Cell {
         id: u64,
         index: usize,
@@ -79,6 +87,8 @@ pub struct Session {
     next_submission_id: u64,
     committed: Vec<CommittedCell>,
     committed_revision: u64,
+    generation: u64,
+    source_revision: u64,
     leading_whitespace: String,
     parser: NativeCellParser,
     evaluations: VecDeque<Evaluation>,
@@ -108,6 +118,8 @@ impl Session {
             next_submission_id: 0,
             committed: Vec::new(),
             committed_revision: 0,
+            generation: 0,
+            source_revision: 0,
             leading_whitespace: String::new(),
             parser: NativeCellParser::new(),
             evaluations: VecDeque::new(),
@@ -168,6 +180,38 @@ impl Session {
         &self.committed
     }
 
+    /// Revision of the source assembled for static session analysis.
+    pub fn source_revision(&self) -> u64 {
+        self.source_revision
+    }
+
+    /// Successful cells, unresolved evaluations, and the current editable continuation.
+    pub fn semantic_document(&self, pending: Option<&str>, draft: &str) -> Document {
+        let mut document = Document::new(self.generation);
+        let mut included = HashSet::new();
+        for cell in &self.committed {
+            document.push(cell.source_id, &cell.code);
+            included.insert(cell.source_id);
+        }
+        for evaluation in &self.evaluations {
+            for (index, cell) in evaluation.cells.iter().enumerate() {
+                let id = SourceId::Cell {
+                    generation: self.generation,
+                    submission: evaluation.id,
+                    index,
+                };
+                if !included.contains(&id) {
+                    document.push(id, &cell.code);
+                }
+            }
+        }
+        if let Some(pending) = pending {
+            document.push(SourceId::Pending(self.generation), pending);
+        }
+        document.push(SourceId::Draft(self.generation), draft);
+        document
+    }
+
     /// The code of every committed cell in evaluation order, as a file of it
     /// reads: a form feed line, which is whitespace to Macaulay2, divides the
     /// cells entered together from those entered after them.
@@ -223,6 +267,26 @@ impl Session {
         !self.evaluations.is_empty() || self.restarting
     }
 
+    /// Interrupt the active submission and discard work queued behind it.
+    pub fn interrupt(&mut self) -> EditorUpdate {
+        let Some(active) = self.evaluations.front() else {
+            return EditorUpdate::Ignore;
+        };
+        active.cancelled.store(true, Ordering::Release);
+        let queued = self
+            .evaluations
+            .drain(1..)
+            .map(|evaluation| EditorUpdate::CellFailed {
+                id: evaluation.id,
+                index: 0,
+                number: self.next_input_number,
+                printed: None,
+                message: "Computation cancelled before execution".to_string(),
+            })
+            .collect();
+        Self::batch(queued)
+    }
+
     pub fn restart(&mut self) -> EditorUpdate {
         if self.busy() {
             return EditorUpdate::Diagnostic("workspace is still evaluating".to_string());
@@ -253,6 +317,7 @@ impl Session {
     }
 
     pub fn submit(&mut self, source: &str, highlighter: &mut dyn Highlighter) -> EditorUpdate {
+        self.source_revision = self.source_revision.wrapping_add(1);
         if source.is_empty() {
             return EditorUpdate::Ignore;
         }
@@ -287,7 +352,9 @@ impl Session {
             self.leading_whitespace.clear();
         }
         match state {
-            NativeCellState::Incomplete => {
+            NativeCellState::Incomplete | NativeCellState::Empty
+                if !self.parser.active_source().is_empty() =>
+            {
                 let mut source = self.leading_whitespace.clone();
                 source.push_str(self.parser.active_source().trim_end());
                 let reason = self.incomplete_reason();
@@ -313,18 +380,14 @@ impl Session {
                     message,
                 });
             }
-            NativeCellState::Empty if !self.parser.active_source().is_empty() => {
-                let source = self.parser.active_source().to_string();
-                self.parser.reset_active();
-                updates.push(self.append_whitespace(&source));
-            }
-            NativeCellState::Empty | NativeCellState::Complete => {}
+            NativeCellState::Empty | NativeCellState::Complete | NativeCellState::Incomplete => {}
         }
         Self::batch(updates)
     }
 
     /// Discard parser state after the feed transfers its unfinished block back.
     pub fn reset_incomplete(&mut self) {
+        self.source_revision = self.source_revision.wrapping_add(1);
         self.parser.reset_active();
         self.leading_whitespace.clear();
     }
@@ -343,7 +406,11 @@ impl Session {
             })
             .collect();
         let id = self.next_id();
-        let evaluation = Evaluation { id, cells };
+        let evaluation = Evaluation {
+            id,
+            cells,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        };
         let pending = self.evaluations.is_empty();
         if pending && !self.dispatch(&evaluation, 0) {
             return EditorUpdate::Diagnostic("Macaulay2 worker stopped".to_string());
@@ -420,6 +487,7 @@ impl Session {
                 id: evaluation.id,
                 first_index,
                 first_number: self.next_input_number,
+                cancelled: Arc::clone(&evaluation.cancelled),
                 cells: evaluation
                     .cells
                     .iter()
@@ -438,7 +506,13 @@ impl Session {
     pub fn poll(&mut self) -> Vec<EditorUpdate> {
         let mut updates = Vec::new();
         while let Ok(event) = self.events.try_recv() {
+            self.source_revision = self.source_revision.wrapping_add(1);
             match event {
+                WorkerEvent::Exited => {
+                    self.evaluations.clear();
+                    self.restarting = false;
+                    updates.push(EditorUpdate::Exit);
+                }
                 WorkerEvent::Cell {
                     id,
                     index,
@@ -503,6 +577,11 @@ impl Session {
                 let state = CellState::of(&response);
                 self.compute_examples(response.value.as_ref());
                 self.committed.push(CommittedCell {
+                    source_id: SourceId::Cell {
+                        generation: self.generation,
+                        submission: id,
+                        index,
+                    },
                     number,
                     state,
                     code: cell.code.clone(),
@@ -539,6 +618,7 @@ impl Session {
                 }
             }
             Ok(response) => {
+                self.next_input_number = number + u32::from(response.has_value);
                 self.in_debugger = response.depth > 1;
                 let error = captured_error(&response.transcript, &cell.code);
                 let printed =
@@ -563,7 +643,11 @@ impl Session {
                     index,
                     number,
                     printed: None,
-                    message: format!("Communication error: {message}"),
+                    message: if message == crate::errors::Error::Cancelled.to_string() {
+                        message
+                    } else {
+                        format!("Communication error: {message}")
+                    },
                 };
                 Self::batch(
                     [Some(failed), self.abandon(id)]
@@ -614,6 +698,7 @@ impl Session {
                 self.version = version;
                 self.in_debugger = false;
                 self.next_input_number = 1;
+                self.generation = self.generation.wrapping_add(1);
                 self.committed.clear();
                 self.committed_revision = self.committed_revision.wrapping_add(1);
                 self.leading_whitespace.clear();
@@ -647,13 +732,26 @@ fn worker(mut backend: M2Backend, requests: Receiver<WorkerRequest>, events: Sen
                 first_index,
                 first_number,
                 cells,
+                cancelled,
             } => {
                 for (offset, code) in cells.iter().enumerate() {
                     let index = first_index + offset;
                     let number = first_number + offset as u32;
-                    let result = backend
-                        .evaluate(code, Some(number))
-                        .map_err(|error| error.to_string());
+                    let result =
+                        backend
+                            .evaluate_cancellable(code, &cancelled)
+                            .map(|mut response| {
+                                if cancelled.load(Ordering::Acquire) {
+                                    response.is_error = true;
+                                    response.transcript.push_str("\nComputation cancelled\n");
+                                }
+                                response
+                            });
+                    if matches!(result, Err(crate::errors::Error::Exited(_))) {
+                        let _ = events.send(WorkerEvent::Exited);
+                        return;
+                    }
+                    let result = result.map_err(|error| error.to_string());
                     // M2 numbers its own inputs, so the number a cell is labelled
                     // and recalled by is the one it reports back, not the one the
                     // shell guessed before submitting.
@@ -720,6 +818,89 @@ mod tests {
         updates.extend(session.poll());
         assert!(!session.busy(), "evaluation timed out");
         updates
+    }
+
+    #[test]
+    fn process_exit_closes_the_shell_without_running_later_blocks() {
+        for code in [
+            "quit",
+            "exit 0",
+            "exit 7",
+            "end",
+            "(() -> quit)()",
+            "(() -> exit 3)()",
+            "(() -> end)()",
+        ] {
+            let mut session = Session::new(M2Backend::spawn().expect("spawn M2"));
+            let mut highlighter = SyntaxHighlighter::new();
+            session.submit(&format!("{code}\nerror \"must not run\""), &mut highlighter);
+            session.submit("error \"queued code must not run\"", &mut highlighter);
+            let updates = updates_until_idle(&mut session);
+            assert!(
+                updates
+                    .iter()
+                    .any(|update| matches!(update, EditorUpdate::Exit)),
+                "{code} did not close the shell"
+            );
+            assert!(session.committed().is_empty());
+        }
+    }
+
+    #[test]
+    fn returning_command_names_does_not_close_the_shell() {
+        let mut session = Session::new(M2Backend::spawn().expect("spawn M2"));
+        let mut highlighter = SyntaxHighlighter::new();
+        session.submit(
+            "(() -> {\"quit\", \"exit\", \"restart\", \"end\"})()",
+            &mut highlighter,
+        );
+        let updates = updates_until_idle(&mut session);
+        assert!(!updates
+            .iter()
+            .any(|update| matches!(update, EditorUpdate::Exit)));
+        assert_eq!(session.committed().len(), 1);
+    }
+
+    #[test]
+    fn interrupt_stops_active_and_queued_work_and_preserves_the_session() {
+        let mut session = Session::new(M2Backend::spawn().expect("spawn M2"));
+        let mut highlighter = SyntaxHighlighter::new();
+        session.submit("savedBeforeInterrupt = 41", &mut highlighter);
+        updates_until_idle(&mut session);
+        session.submit(
+            "while true do null\nsavedBeforeInterrupt = 0",
+            &mut highlighter,
+        );
+        let queued = session.submit("savedBeforeInterrupt = 99", &mut highlighter);
+        let EditorUpdate::Queued { id: queued_id, .. } = queued else {
+            panic!("expected queued submission");
+        };
+        thread::sleep(Duration::from_millis(100));
+        let cancelled = session.interrupt();
+        assert!(matches!(cancelled, EditorUpdate::CellFailed { id, .. } if id == queued_id));
+        // Repeated presses while the interruption is in flight remain harmless.
+        session.interrupt();
+        let updates = updates_until_idle(&mut session);
+        assert!(updates.iter().any(|update| matches!(update,
+            EditorUpdate::CellFailed { message, .. } if message.contains("cancelled"))));
+        assert_eq!(session.committed().len(), 1);
+        assert_eq!(session.next_input_number(), 2);
+        session.submit("assert(savedBeforeInterrupt == 41);", &mut highlighter);
+        updates_until_idle(&mut session);
+        assert_eq!(session.committed().len(), 2);
+        assert_eq!(session.next_input_number(), 3);
+    }
+
+    #[test]
+    fn immediate_interrupt_does_not_run_the_submission() {
+        let mut session = Session::new(M2Backend::spawn().expect("spawn M2"));
+        let mut highlighter = SyntaxHighlighter::new();
+        session.submit("while true do null", &mut highlighter);
+        session.interrupt();
+        updates_until_idle(&mut session);
+        session.submit("1+1", &mut highlighter);
+        updates_until_idle(&mut session);
+        assert_eq!(session.committed().len(), 1);
     }
 
     #[test]
@@ -838,6 +1019,9 @@ mod tests {
 
         assert_eq!(Session::blocks(&code), ["a = 1;\nb = 2;", "c = 3", "d"]);
         assert_eq!(Session::blocks("a = 1\nb = 2\n"), ["a = 1", "b = 2"]);
+        for comments in ["-- comment", "-* comment 2\n   comment 3\n*-"] {
+            assert_eq!(Session::blocks(comments), [comments]);
+        }
     }
 
     #[test]
@@ -870,6 +1054,40 @@ mod tests {
             Session::cells(code),
             ["R = QQ[x]", "f = n -> (\n    n + 1\n)", "-- a comment\nf 2"]
         );
+    }
+
+    #[test]
+    fn comment_only_submissions_wait_for_code() {
+        for comments in [
+            vec!["-- comment"],
+            vec!["-* comment 2\n   comment 3\n*-"],
+            vec!["-- comment", "-* comment 2", "   comment 3", "*-"],
+        ] {
+            let mut session = Session::new(M2Backend::spawn().expect("spawn M2"));
+            let mut highlighter = SyntaxHighlighter::new();
+            let mut source = String::new();
+            for comment in comments {
+                source.push_str(comment);
+                assert!(matches!(
+                    session.submit(comment, &mut highlighter),
+                    EditorUpdate::Incomplete { source: pending, .. }
+                        if pending == source.trim_end()
+                ));
+                source.push('\n');
+                assert!(!session.busy());
+                assert_eq!(session.next_input_number(), 1);
+            }
+
+            source.push_str("1 + 1");
+            assert!(matches!(
+                session.submit("1 + 1", &mut highlighter),
+                EditorUpdate::Pending { cells, .. } if cells[0].0 == source
+            ));
+            updates_until_idle(&mut session);
+            assert_eq!(session.committed().len(), 1);
+            assert_eq!(session.committed()[0].code, source);
+            assert_eq!(session.next_input_number(), 2);
+        }
     }
 
     #[test]
@@ -995,5 +1213,42 @@ mod tests {
         assert!(printed.is_some());
         assert!(!message.lines().any(|line| line == "1"));
         assert!(message.contains("division by zero"));
+    }
+    #[test]
+    fn analysis_source_tracks_queued_cells_without_duplicating_committed_cells() {
+        let mut session = Session::new(M2Backend::spawn().expect("M2 starts"));
+        let mut highlighter = SyntaxHighlighter::new();
+        session.submit(
+            "sleep 1;
+a = 1",
+            &mut highlighter,
+        );
+        session.submit("b = a + 1", &mut highlighter);
+        let queued = session.semantic_document(Some("f("), "b)");
+        assert_eq!(queued.segments.len(), 5);
+        assert_eq!(queued.text.matches("a = 1").count(), 1);
+        assert_eq!(queued.text.matches("b = a + 1").count(), 1);
+        updates_until_idle(&mut session);
+        let committed = session.semantic_document(Some("f("), "b)");
+        assert_eq!(committed.segments, queued.segments);
+        assert_eq!(committed.text, queued.text);
+        session.restart();
+        updates_until_idle(&mut session);
+        let restarted = session.semantic_document(None, "b");
+        assert_eq!(restarted.generation, queued.generation + 1);
+        assert_eq!(restarted.text, "b\n");
+    }
+
+    #[test]
+    fn failed_and_abandoned_source_is_removed_from_analysis() {
+        let mut session = Session::new(M2Backend::spawn().expect("M2 starts"));
+        let mut highlighter = SyntaxHighlighter::new();
+        session.submit("a = 1;\n1/0\nb = 2", &mut highlighter);
+        updates_until_idle(&mut session);
+        let document = session.semantic_document(None, "a");
+        assert_eq!(document.segments.len(), 2);
+        assert!(document.text.contains("a = 1"));
+        assert!(!document.text.contains("1/0"));
+        assert!(!document.text.contains("b = 2"));
     }
 }

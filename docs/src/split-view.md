@@ -1,6 +1,6 @@
 # Split view
 
-Spectral runs one Macaulay2 session. For a second, independent session, open another terminal pane — tmux, a terminal split, or a new window — and start `spectral-m2` there.
+Spectral runs one Macaulay2 session. For a second, independent session, open another terminal pane — tmux, a terminal split, or a new window — and start `sp2` there.
 
 Split view instead shows another view of the current session beside it.
 

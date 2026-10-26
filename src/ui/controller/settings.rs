@@ -101,6 +101,8 @@ pub struct Preferences {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Whether an installed language server enriches source colors.
+    pub semantic_highlighting: bool,
     pub statusline: StatusLinePosition,
     pub maths: MathDisplay,
     pub fractions: FractionStyle,
@@ -116,6 +118,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            semantic_highlighting: true,
             statusline: StatusLinePosition::default(),
             maths: MathDisplay::default(),
             fractions: FractionStyle::default(),
@@ -257,5 +260,17 @@ mod tests {
         assert_eq!(saved.editor.fractions, FractionStyle::Underlined);
         assert_eq!(saved.editor.output_rows, Settings::default().output_rows);
         assert!(saved.rebinds.is_empty());
+    }
+    #[test]
+    fn semantic_highlighting_defaults_on_for_old_settings_and_saves_explicit_off() {
+        let old: SavedSettings = serde_json::from_str(r#"{"editor":{"math_fonts":true}}"#).unwrap();
+        assert!(old.editor.semantic_highlighting);
+        assert!(old.editor.math_fonts);
+        let mut disabled = old;
+        disabled.editor.semantic_highlighting = false;
+        let roundtrip: SavedSettings =
+            serde_json::from_str(&serde_json::to_string(&disabled).unwrap()).unwrap();
+        assert!(!roundtrip.editor.semantic_highlighting);
+        assert!(roundtrip.editor.math_fonts);
     }
 }

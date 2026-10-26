@@ -28,6 +28,16 @@ impl Sub<usize> for HLSpan {
 
 /// A source-to-highlight projection consumed by the renderer.
 pub trait Highlighter {
+    /// Revision of cached semantic spans, independent of source edits.
+    fn revision(&self) -> u64 {
+        0
+    }
+
+    /// Highlight a source segment by its identity within the session.
+    fn highlight_source(&mut self, _: super::semantic::SourceId, source: &str) -> Vec<HLSpan> {
+        self.highlight(source)
+    }
+
     /// Return ordered byte ranges carrying semantic theme groups.
     fn highlight(&mut self, source: &str) -> Vec<HLSpan>;
 

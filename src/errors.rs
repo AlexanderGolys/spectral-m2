@@ -13,6 +13,10 @@ pub enum Error {
     Theme(#[from] toml::de::Error),
     #[error("M2 process exited: {0}")]
     Process(String),
+    #[error("Macaulay2 exited: {0}")]
+    Exited(std::process::ExitStatus),
+    #[error("Computation cancelled")]
+    Cancelled,
     #[error("timed out after {0} seconds")]
     Timeout(u64),
 }

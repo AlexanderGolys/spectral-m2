@@ -18,6 +18,15 @@ cargo run --release
 
 Spectral starts a Macaulay2 process immediately. If `M2` cannot be found or started, it exits with an explanation instead of opening an unusable interface.
 
+Start from code you already have: a file runs cell by cell before you type anything, as `/load` would run it, and `--resume` brings back the code of the session you last closed.
+
+```sh
+sp2 ring.m2
+sp2 --resume
+```
+
+A name without an extension gets `.m2`. Everything else, from themes to keys, is set inside the shell: `Ctrl+O` opens the settings and `Ctrl+/` lists every command.
+
 ## Serve this book locally
 
 Install the documentation tools through Cargo once:

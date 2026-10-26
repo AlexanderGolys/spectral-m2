@@ -44,6 +44,7 @@ const TABS: &[SettingsTab] = &[
     SettingsTab {
         label: "rendering",
         settings: &[
+            Setting::SemanticHighlighting,
             Setting::Maths,
             Setting::Fractions,
             Setting::MathFonts,
@@ -121,6 +122,7 @@ enum Setting {
     Appearance(AppearanceField),
     Input(InputSetting),
     Statusline,
+    SemanticHighlighting,
     Maths,
     Fractions,
     MathFonts,
@@ -135,6 +137,7 @@ impl Setting {
             Self::Appearance(field) => field.label(),
             Self::Input(field) => field.label(),
             Self::Statusline => "statusline",
+            Self::SemanticHighlighting => "semantic highlighting",
             Self::Maths => "maths",
             Self::Fractions => "fractions",
             Self::MathFonts => "math fonts",
@@ -152,6 +155,7 @@ impl Setting {
             }
             Self::Appearance(field) => field.description(),
             Self::Input(field) => field.description(),
+            Self::SemanticHighlighting => "enrich source colors using m2-ls when it is installed",
             Self::Statusline => "where the status line sits",
             Self::Maths => "draw returned maths as Unicode text, plain ASCII, or typeset pictures",
             Self::Fractions => "how rational values are drawn",
@@ -198,6 +202,11 @@ impl Setting {
                 }
                 .into()
             }),
+            Self::SemanticHighlighting => {
+                PickerValue::among(&[false, true], &editor.semantic_highlighting, |&on| {
+                    if on { "on" } else { "off" }.into()
+                })
+            }
             Self::OutputRows => PickerValue::Stepped(format!("{} rows", editor.output_rows)),
             Self::ExampleTimeout => PickerValue::Stepped(match editor.example_seconds {
                 0 => "off".to_string(),
@@ -219,6 +228,9 @@ impl Setting {
             Self::Maths => editor.maths = editor.maths.cycle(delta),
             Self::Fractions => editor.fractions = editor.fractions.cycle(delta),
             Self::MathFonts => editor.math_fonts = !editor.math_fonts,
+            Self::SemanticHighlighting => {
+                editor.semantic_highlighting = !editor.semantic_highlighting
+            }
             Self::OutputRows => editor.adjust_output_rows(delta),
             Self::ExampleTimeout => editor.adjust_example_seconds(delta),
         }

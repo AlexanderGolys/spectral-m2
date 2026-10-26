@@ -34,7 +34,6 @@ pub struct Glyphs {
     pub cell_separator: Glyph,
     pub pending_separator: Glyph,
     pub fold_rule: Glyph,
-    pub input_edge: Glyph,
     pub unevaluated_cell: Glyph,
     pub rejected_cell: Glyph,
     /// Stands in for the leading part of text trimmed to fit.
@@ -158,10 +157,6 @@ pub const UI: UiConfig = UiConfig {
             preferred: "─",
             basic: "-",
         },
-        input_edge: Glyph {
-            preferred: "▀",
-            basic: "-",
-        },
         unevaluated_cell: Glyph {
             preferred: " ",
             basic: ".",
@@ -213,7 +208,7 @@ pub const UI: UiConfig = UiConfig {
     tree_location_gap: 2,
     printed_margin: 1,
     typeset: TypesetConfig {
-        em_per_cell_height: 0.8,
+        em_per_cell_height: 0.65,
         min_scale: 0.6,
     },
 };
@@ -243,7 +238,6 @@ mod tests {
             glyphs.cell_separator,
             glyphs.pending_separator,
             glyphs.fold_rule,
-            glyphs.input_edge,
             glyphs.unevaluated_cell,
             glyphs.rejected_cell,
             glyphs.step_back,

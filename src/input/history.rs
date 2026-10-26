@@ -39,6 +39,15 @@ pub struct History {
 }
 
 impl History {
+    pub fn browsing(&self, current: &str) -> bool {
+        self.pos.is_some_and(|pos| self.entries[pos] == current)
+    }
+
+    pub fn stop_browsing(&mut self) {
+        self.pos = None;
+        self.draft = None;
+    }
+
     pub fn new() -> Self {
         Self::from_path(history_file_path())
     }
@@ -139,6 +148,8 @@ impl History {
     /// As a shell's history search does: the prefix is fixed when browsing begins,
     /// so typing `R =` and stepping back visits only the entries that begin with it.
     /// An empty prefix matches everything, which is plain browsing.
+    /// Multiline drafts use their whole text so moving to the first line does
+    /// not discard the rest of the draft from the search.
     pub fn prev(&mut self, current: &str, cursor: usize) -> Option<HistoryBuffer> {
         self.end_search_if_edited(current);
         if self.pos.is_none() {
@@ -191,9 +202,12 @@ impl History {
             return false;
         };
         let entry = &self.entries[index];
-        entry.starts_with(&draft.text[..draft.cursor])
-            && self.newest.get(entry) == Some(&index)
-            && *entry != draft.text
+        let prefix = if draft.text.contains('\n') {
+            draft.text.as_str()
+        } else {
+            &draft.text[..draft.cursor]
+        };
+        entry.starts_with(prefix) && self.newest.get(entry) == Some(&index) && *entry != draft.text
     }
 }
 

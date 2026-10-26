@@ -72,6 +72,7 @@ pub struct CommittedCells<'a> {
 /// Parsed block model retained by one code or syntax-tree preview pane.
 struct PreviewCache {
     revision: u64,
+    highlight_revision: u64,
     view: ViewKind,
     blocks: Vec<Box<dyn Block>>,
 }
@@ -97,20 +98,20 @@ impl Viewport {
         view: ViewKind,
         highlighter: &mut dyn Highlighter,
     ) {
-        if self
-            .preview
-            .as_ref()
-            .is_none_or(|cache| cache.revision != committed.revision || cache.view != view)
-        {
+        if self.preview.as_ref().is_none_or(|cache| {
+            cache.revision != committed.revision
+                || cache.view != view
+                || cache.highlight_revision != highlighter.revision()
+        }) {
             let blocks: Vec<Box<dyn Block>> = match view {
                 ViewKind::Code => (!committed.cells.is_empty())
                     .then(|| {
                         Box::new(CodeBlock::new(committed.cells.iter().map(|cell| {
-                            Cell::resolved(
+                            Cell::highlighted(
                                 cell.code.clone(),
-                                cell.number,
-                                cell.state,
-                                highlighter.highlight(&cell.code),
+                                Some((cell.number, cell.state)),
+                                cell.source_id,
+                                highlighter,
                             )
                         }))) as Box<dyn Block>
                     })
@@ -121,8 +122,7 @@ impl Viewport {
                     .iter()
                     .map(|cell| {
                         Box::new(SyntaxTreeBlock::new(
-                            cell.code.clone(),
-                            highlighter.highlight(&cell.code),
+                            Cell::highlighted(cell.code.clone(), None, cell.source_id, highlighter),
                             cell.tree.clone(),
                         )) as Box<dyn Block>
                     })
@@ -131,6 +131,7 @@ impl Viewport {
             };
             self.preview = Some(PreviewCache {
                 revision: committed.revision,
+                highlight_revision: highlighter.revision(),
                 view,
                 blocks,
             });
@@ -196,7 +197,7 @@ impl Editor {
             .style(scheme().statusline_bg())
             .render(area, buffer);
         let status = self.preview_status(view, view_focused);
-        match view_focused && self.pickers.is_empty() {
+        match view_focused && self.pickers.is_empty() && !self.cancel_hint_shown {
             true => StatusLine::default().render(&status, area, buffer),
             false => self.status_line.render(&status, area, buffer),
         }
@@ -514,5 +515,62 @@ mod tests {
             .all(|preview| visited.contains(preview)));
         assert!(!visited.contains(&ViewKind::Shell));
         assert_eq!(view.cycle(1).cycle(-1), view);
+    }
+    #[test]
+    fn semantic_revision_refreshes_a_preview_without_new_committed_source() {
+        use crate::code::semantic::SourceId;
+        use crate::ui::block::HLSpan;
+        use crate::ui::cell::CellState;
+        use m2_syn::{NativeCellParser, PrettyTree};
+        struct ChangingHighlighter {
+            revision: u64,
+            projections: usize,
+        }
+        impl Highlighter for ChangingHighlighter {
+            fn revision(&self) -> u64 {
+                self.revision
+            }
+            fn highlight(&mut self, _: &str) -> Vec<HLSpan> {
+                Vec::new()
+            }
+            fn highlight_source(&mut self, _: SourceId, _: &str) -> Vec<HLSpan> {
+                self.projections += 1;
+                Vec::new()
+            }
+        }
+        let mut parser = NativeCellParser::new();
+        parser.push_line("f = 1");
+        let tree = parser.take_completed()[0].syntax().pretty_tree();
+        let cells = [CommittedCell {
+            source_id: SourceId::Cell {
+                generation: 0,
+                submission: 1,
+                index: 0,
+            },
+            number: 1,
+            state: CellState::Value,
+            code: "f = 1".to_string(),
+            tree,
+            block: 1,
+        }];
+        let mut viewport = Viewport::default();
+        viewport.scroll = 3;
+        let mut highlighter = ChangingHighlighter {
+            revision: 0,
+            projections: 0,
+        };
+        for revision in [0, 0, 1] {
+            highlighter.revision = revision;
+            viewport.refresh_preview(
+                CommittedCells {
+                    cells: &cells,
+                    revision: 1,
+                },
+                ViewKind::Code,
+                &mut highlighter,
+            );
+        }
+        assert_eq!(highlighter.projections, 2);
+        assert_eq!(viewport.scroll, 3);
     }
 }

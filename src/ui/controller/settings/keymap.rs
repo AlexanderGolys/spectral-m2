@@ -223,7 +223,7 @@ impl Default for Keymaps {
                 keymap!(fixed FocusPaneRight <- Right + Alt),
                 keymap!(fixed ResizePaneLeft <- Left + Alt + Shift),
                 keymap!(fixed ResizePaneRight <- Right + Alt + Shift),
-                keymap!(fixed Quit <- Char('c') + Ctrl),
+                keymap!(CancelExecution <- Char('c') + Ctrl),
                 keymap!(OpenCommands <- Char('/') + Ctrl),
                 keymap!(OpenSettings <- Char('o') + Ctrl),
                 keymap!(OpenKeymaps <- Char('k') + Ctrl),
@@ -271,6 +271,8 @@ impl Default for Keymaps {
                 key!(Right),
                 key!(Up),
                 key!(Down),
+                key!(Up + Alt),
+                key!(Down + Alt),
                 key!(Home),
                 key!(End),
                 key!(Backspace),
@@ -452,14 +454,15 @@ mod tests {
     }
 
     #[test]
-    fn quit_is_fixed_even_while_remapping() {
+    fn cancel_execution_has_a_remappable_ctrl_c_binding() {
         let mut keymaps = Keymaps::default();
-        assert!(!keymaps.rebind(Action::Quit, key!(F(24))));
-        assert!(keymaps.action(key!(Char('c') + Ctrl), true) == Some(Action::Quit));
+        assert!(keymaps.action(key!(Char('c') + Ctrl), false) == Some(Action::CancelExecution));
         assert!(keymaps
             .remappable()
             .iter()
-            .all(|(action, _)| *action != Action::Quit));
+            .any(|(action, _)| *action == Action::CancelExecution));
+        assert!(keymaps.rebind(Action::CancelExecution, key!(F(24))));
+        assert!(keymaps.action(key!(F(24)), false) == Some(Action::CancelExecution));
     }
 
     #[test]
