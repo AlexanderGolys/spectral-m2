@@ -3,6 +3,8 @@
 use std::iter;
 use std::ops::Range;
 
+use unicode_width::UnicodeWidthChar;
+
 /// A visual row represented as a byte range into its source text.
 pub struct VisualLine {
     pub range: Range<usize>,
@@ -15,6 +17,20 @@ impl VisualLine {
         self
     }
 }
+/// The byte offset in `text` of the character drawn at terminal `column`, or the
+/// end of `text` when it is narrower; a wide character spans every column it
+/// covers.
+pub fn offset_at_column(text: &str, column: usize) -> usize {
+    let mut columns = 0;
+    for (offset, character) in text.char_indices() {
+        columns += character.width().unwrap_or(0);
+        if columns > column {
+            return offset;
+        }
+    }
+    text.len()
+}
+
 /// A strategy for projecting one logical line into byte ranges for visual rows.
 pub trait WrapPolicy {
     fn wrap_logical_line(&self, line: &str, width: u16, offset: usize) -> Vec<VisualLine>;
@@ -120,8 +136,9 @@ impl WrapPolicy for HardWrap {
         let mut start = 0;
         let mut columns = 0;
         let mut hard_continuation = false;
-        for (byte, _) in line.char_indices() {
-            if columns == width {
+        for (byte, character) in line.char_indices() {
+            let cells = character.width().unwrap_or(0);
+            if columns > 0 && columns + cells > width {
                 rows.push(VisualLine {
                     range: start..byte,
                     hard_continuation,
@@ -130,7 +147,7 @@ impl WrapPolicy for HardWrap {
                 columns = 0;
                 hard_continuation = true;
             }
-            columns += 1;
+            columns += cells;
         }
         rows.push(VisualLine {
             range: start..line.len(),

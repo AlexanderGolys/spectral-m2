@@ -131,7 +131,7 @@ Constant = { fg = "fg" }
 Debug = { fg = "orange" }
 Delimiter = { fg = "grey1" }
 Documentation = { fg = "fg" }
-EnumVariant = { fg = "orange" }
+EnumVariant = { fg = "blue" }
 Error = { fg = "red" }
 ErrorMessage = { bold = true, fg = "red", underline = true }
 Exception = { fg = "red" }
@@ -144,9 +144,9 @@ Installation = { fg = "orange" }
 Keyword = { fg = "red" }
 Macro = { fg = "green" }
 MarkupBrief = { fg = "orange", italic = true }
-MarkupHeading1 = { bold = true, fg = "orange" }
+MarkupHeading1 = { bold = true, fg = "red" }
 MarkupHeading2 = { bold = true, fg = "orange" }
-MarkupHeading3 = { bold = true, fg = "orange" }
+MarkupHeading3 = { bold = true, fg = "yellow" }
 Muted = { fg = "grey1" }
 Namespace = { fg = "yellow" }
 Number = { fg = "purple" }
@@ -156,8 +156,8 @@ Parameter = { fg = "fg" }
 Picker = { bg = "bg2", fg = "fg" }
 # Preserve the picker's independently styled text and key hints on selection.
 PickerSelected = { bg = "bg_visual" }
-Property = { fg = "fg" }
-Punctuation = { fg = "grey1" }
+Property = { fg = "blue" }
+Punctuation = { fg = "fg" }
 Quote = { fg = "yellow" }
 Regex = { fg = "green" }
 Repeat = { fg = "red" }

@@ -471,10 +471,12 @@ impl App {
             dirty = true;
         }
         if let Some(server) = polled.started {
-            running &= workspace.editor.apply(EditorUpdate::Welcome(welcome_message(
-                &workspace.m2_version,
-                Some(&server),
-            )));
+            running &= workspace
+                .editor
+                .apply(EditorUpdate::Welcome(welcome_message(
+                    &workspace.m2_version,
+                    Some(&server),
+                )));
             dirty = true;
         }
         if let Some(message) = polled.failure {

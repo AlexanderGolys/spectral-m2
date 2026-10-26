@@ -768,13 +768,17 @@ mod tests {
 
     #[test]
     fn every_scheme_fills_the_complete_group_space() {
+        // Groups declared without a style lay nothing over the text beneath them.
+        let transparent =
+            [HLGroup::LspVariable, HLGroup::Unresolved].map(|group| group.description());
         for groups in SCHEMES
             .iter()
             .flat_map(|scheme| scheme.variants())
             .map(|variant| variant.groups())
         {
-            assert!(groups.highlight_groups().iter().all(|&(_, style)| {
-                style.fg.is_some()
+            assert!(groups.highlight_groups().iter().all(|&(group, style)| {
+                transparent.contains(&group)
+                    || style.fg.is_some()
                     || style.bg.is_some()
                     || style.underline_color.is_some()
                     || !style.add_modifier.is_empty()
@@ -859,7 +863,7 @@ mod tests {
             .flat_map(|scheme| scheme.variants())
             .map(|variant| variant.groups())
         {
-            assert!(!groups[HLGroup::Documentation]
+            assert!(!groups[HLGroup::MarkupLink]
                 .add_modifier
                 .contains(Modifier::UNDERLINED));
             assert!(groups[HLGroup::MarkupLinkHover]

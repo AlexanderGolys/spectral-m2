@@ -817,9 +817,7 @@ fn row(line: &TaggedLine<Vec<RichAnnotation>>) -> SpanLine {
         let mut painted = if is_code {
             example(text, preformatted)
         } else {
-            let group = heading.unwrap_or(if linked {
-                HLGroup::Documentation
-            } else if described {
+            let group = heading.unwrap_or(if described {
                 HLGroup::Muted
             } else {
                 HLGroup::Value
@@ -851,12 +849,16 @@ fn row(line: &TaggedLine<Vec<RichAnnotation>>) -> SpanLine {
         // A definition term is always set in emphasis, which would set `Usage:`
         // apart from the other property labels.
         let emphasis = run.tag.contains(&RichAnnotation::Emphasis) && level != SYNOPSIS_LEVEL;
-        let mark = if run.tag.contains(&RichAnnotation::Strong) && emphasis {
+        // A link keeps the colour of the text it sits in, slanted like emphasis.
+        let strong = run.tag.contains(&RichAnnotation::Strong);
+        let mark = if strong && (emphasis || linked) {
             Some(HLGroup::MarkupStrongEmphasis)
-        } else if run.tag.contains(&RichAnnotation::Strong) {
+        } else if strong {
             Some(HLGroup::MarkupStrong)
         } else if emphasis {
             Some(HLGroup::MarkupEmphasis)
+        } else if linked {
+            Some(HLGroup::MarkupLink)
         } else if run.tag.contains(&RichAnnotation::Strikeout) {
             Some(HLGroup::MarkupStrike)
         } else {
@@ -1252,6 +1254,16 @@ mod tests {
         assert!(flat.contains("ZZ"), "{flat}");
     }
 
+    /// Each piece of text with the group laid over its colour, if any.
+    fn marks(html: &str) -> Vec<(String, Option<HLGroup>)> {
+        spans(html, 60)
+            .expect("reads")
+            .into_iter()
+            .flatten()
+            .map(|span| (span.content, span.mark))
+            .collect()
+    }
+
     fn kinds(html: &str) -> Vec<(String, HLGroup)> {
         spans(html, 60)
             .expect("reads")
@@ -1262,13 +1274,22 @@ mod tests {
     }
 
     #[test]
+    fn a_link_keeps_the_colour_of_its_text_and_is_slanted() {
+        let html = r#"<p>see <a href="x">matrix</a> or <b><a href="y">det</a></b></p>"#;
+        assert!(kinds(html).contains(&("matrix".to_string(), HLGroup::Value)));
+        let marked = marks(html);
+        assert!(marked.contains(&("matrix".to_string(), Some(HLGroup::MarkupLink))));
+        assert!(marked.contains(&("det".to_string(), Some(HLGroup::MarkupStrongEmphasis))));
+    }
+
+    #[test]
     fn headings_and_links_have_semantic_colours() {
         let painted = kinds(
             r#"<div><h1>det</h1><p>see <a href="x">matrix</a>, <b>bold</b> and <em>slanted</em></p></div>"#,
         );
         for (text, group) in [
             ("det", HLGroup::MarkupHeading1),
-            ("matrix", HLGroup::Documentation),
+            ("matrix", HLGroup::Value),
             ("bold", HLGroup::Value),
             ("slanted", HLGroup::Value),
         ] {
@@ -1293,7 +1314,10 @@ mod tests {
         );
         assert!(painted.contains(&("* ".to_string(), HLGroup::Punctuation)));
         assert!(painted.contains(&("isPrime".to_string(), HLGroup::Function)));
-        assert!(painted.contains(&("isPrime".to_string(), HLGroup::Documentation)));
+        assert!(marks(
+            r#"<ul><li><span><kbd>isPrime(ZZ)</kbd> -- see <span><a href="x">isPrime</a> -- whether prime</span></span></li></ul>"#,
+        )
+        .contains(&("isPrime".to_string(), Some(HLGroup::MarkupLink))));
         assert!(painted
             .iter()
             .any(|(text, group)| text.starts_with(" -- see") && *group == HLGroup::Muted));

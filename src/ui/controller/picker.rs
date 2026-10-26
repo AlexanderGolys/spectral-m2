@@ -507,10 +507,12 @@ impl Picker {
                 self.switch_tab(1);
                 (true, None)
             }
-            PickerInput::Key(key @ KeyEvent {
-                code: KeyCode::Right,
-                ..
-            }) if tabbed && key.ctrl() => {
+            PickerInput::Key(
+                key @ KeyEvent {
+                    code: KeyCode::Right,
+                    ..
+                },
+            ) if tabbed && key.ctrl() => {
                 self.switch_tab(1);
                 (true, None)
             }
@@ -521,10 +523,12 @@ impl Picker {
                 self.switch_tab(-1);
                 (true, None)
             }
-            PickerInput::Key(key @ KeyEvent {
-                code: KeyCode::Left,
-                ..
-            }) if tabbed && key.ctrl() => {
+            PickerInput::Key(
+                key @ KeyEvent {
+                    code: KeyCode::Left,
+                    ..
+                },
+            ) if tabbed && key.ctrl() => {
                 self.switch_tab(-1);
                 (true, None)
             }
@@ -1060,7 +1064,11 @@ mod tests {
     fn control_arrows_switch_tabs_rather_than_change_the_row() {
         let mut picker = tabbed(false);
         let before = row(&rendered(&picker, 60), 1);
-        assert!(picker.handle(PickerInput::Key(KeyCode::Right + KeyMod::Ctrl)).0);
+        assert!(
+            picker
+                .handle(PickerInput::Key(KeyCode::Right + KeyMod::Ctrl))
+                .0
+        );
         assert!(row(&rendered(&picker, 60), 1).contains("> a much longer label"));
         picker.handle(PickerInput::Key(KeyCode::Left + KeyMod::Ctrl));
         assert_eq!(row(&rendered(&picker, 60), 1), before);

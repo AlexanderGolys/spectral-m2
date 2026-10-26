@@ -200,7 +200,10 @@ mod tests {
         assert_eq!(panes.list[Panes::SPLIT].view, ViewKind::Code.cycle(1));
         assert!(panes.step_split_view(KeyCode::Left + KeyMod::Ctrl));
         assert_eq!(panes.list[Panes::SPLIT].view, ViewKind::Code);
-        assert!(!panes.step_split_view(KeyCode::Right.into()), "plain arrows edit");
+        assert!(
+            !panes.step_split_view(KeyCode::Right.into()),
+            "plain arrows edit"
+        );
         assert!(
             !panes.step_split_view(KeyCode::Right + KeyMod::Ctrl + KeyMod::Shift),
             "word selection stays the input's"

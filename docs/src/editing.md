@@ -37,7 +37,7 @@ degree I
 
 Plain-text results such as `net help "arithmetic with complex maps"` use a bounded preview: at most 256 KiB of source text and 262,144 display cells per value. Larger previews retain their beginning and end with a truncation notice. Expanding a result keeps these limits; the full value remains available in Macaulay2.
 
-`help` pages are drawn in the feed: the title over a rule, its name apart from its brief; the usage, inputs and outputs as headers over their entries; and each example as the session draws code and values, without its numbers. A link to another page is underlined while the pointer is over it, and Ctrl+click runs `help` for that page beside what you are typing.
+`help` pages are drawn in the feed: the title over a rule, its name apart from its brief; the usage, inputs and outputs as headers over their entries; and each example as the session draws code and values, without its numbers. A link to another page keeps the colour of the text around it, set in italics (the `MarkupLink` group), and is underlined while the pointer is over it, and Ctrl+click runs `help` for that page beside what you are typing.
 
 ## History and navigation
 

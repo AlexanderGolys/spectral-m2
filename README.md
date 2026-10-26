@@ -28,7 +28,7 @@ betti res I
 - Macaulay2 available as `M2` on `PATH`;
 - a terminal with mouse events and OSC 52 clipboard support for the complete interface.
 
-Optional semantic highlighting uses `m2-ls` on `PATH`, installed with `cargo install m2-ls --locked`. The shell also works without it.
+Optional semantic highlighting uses `m2-ls` 2.0 or later on `PATH`, installed with `cargo install m2-ls`. The shell also works without it.
 
 ## Install
 

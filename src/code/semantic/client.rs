@@ -675,24 +675,30 @@ while True:
             thread::sleep(WORKER_INTERVAL);
         }
         let spans = highlighter.highlight_source(cell, "R = QQ[x, y]\nf = a -> a + x");
-        assert!(spans.iter().any(|span| span.kind == HLGroup::Type));
-        assert!(spans.iter().any(|span| span.kind == HLGroup::RingGenerator));
-        assert!(spans.iter().any(|span| span.kind == HLGroup::Parameter));
+        assert!(spans
+            .iter()
+            .any(|span| span.mark.unwrap_or(span.kind) == HLGroup::Type));
+        assert!(spans
+            .iter()
+            .any(|span| span.mark.unwrap_or(span.kind) == HLGroup::RingGenerator));
+        assert!(spans
+            .iter()
+            .any(|span| span.mark.unwrap_or(span.kind) == HLGroup::Parameter));
         let spans = highlighter.highlight_continuation(None, "f(x)");
         assert_eq!(
             spans
                 .iter()
                 .find(|span| span.content.contains(&0))
-                .unwrap()
-                .kind,
+                .map(|span| span.mark.unwrap_or(span.kind))
+                .unwrap(),
             HLGroup::Function
         );
         assert_eq!(
             spans
                 .iter()
                 .find(|span| span.content.contains(&2))
-                .unwrap()
-                .kind,
+                .map(|span| span.mark.unwrap_or(span.kind))
+                .unwrap(),
             HLGroup::RingGenerator
         );
     }

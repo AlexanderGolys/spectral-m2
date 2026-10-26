@@ -56,7 +56,9 @@ SemanticCommand = { link = "Function" }
 RingGenerator = { link = "Symbol" }
 Option = { link = "Property" }
 File = { link = "String" }
-Unresolved = { link = "Variable" }
+# A plain value adds nothing to its syntax colour, as `@lsp.type.variable` in Neovim.
+LspVariable = {}
+Unresolved = { link = "LspVariable" }
 Installation = { link = "Function", captures = ["label"] }
 CompiledFunction = { link = "Function", captures = ["function.builtin"] }
 Quote = { link = "Symbol", captures = ["character.special"] }
@@ -71,6 +73,8 @@ MarkupStrong = { bold = true }
 MarkupEmphasis = { italic = true }
 MarkupStrongEmphasis = { bold = true, italic = true }
 MarkupStrike = { crossed_out = true }
+# A link keeps the colour of the text around it and is set apart by these.
+MarkupLink = { italic = true }
 MarkupLinkHover = { underline = true }
 MarkupLinkOpen = { underline = true, bold = true }
 DiagnosticError = { sp_from = "Error.fg", underline = true }

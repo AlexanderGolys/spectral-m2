@@ -10,14 +10,16 @@ use lsp_types::{
     SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokensLegend, ServerInfo,
 };
 
-use self::client::{Client, Event};
 pub use self::client::SERVER_EXECUTABLE;
+use self::client::{Client, Event};
 use super::highlight::{Highlighter, SyntaxHighlighter};
 use crate::ui::block::HLSpan;
 use crate::ui::controller::settings::theme::groups::HLGroup;
 
-const COMMAND: SemanticTokenType = SemanticTokenType::new("command");
-const RING_GENERATOR: SemanticTokenModifier = SemanticTokenModifier::new("ringGenerator");
+/// Characters other than letters and digits that continue a Macaulay2 name.
+const NAME_PUNCTUATION: &[char] = &['\'', '_', '$'];
+const COMMAND: SemanticTokenModifier = SemanticTokenModifier::new("command");
+const ALGEBRAIC: SemanticTokenModifier = SemanticTokenModifier::new("algebraic");
 const OPTION: SemanticTokenModifier = SemanticTokenModifier::new("option");
 const FILE: SemanticTokenModifier = SemanticTokenModifier::new("file");
 const UNRESOLVED: SemanticTokenModifier = SemanticTokenModifier::new("unresolved");
@@ -38,13 +40,15 @@ const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::METHOD,
     SemanticTokenType::MODIFIER,
     SemanticTokenType::TYPE_PARAMETER,
-    COMMAND,
+    SemanticTokenType::MACRO,
+    SemanticTokenType::DECORATOR,
 ];
 const TOKEN_MODIFIERS: &[SemanticTokenModifier] = &[
     SemanticTokenModifier::DECLARATION,
     SemanticTokenModifier::new("builtin"),
     SemanticTokenModifier::DEFAULT_LIBRARY,
-    RING_GENERATOR,
+    COMMAND,
+    ALGEBRAIC,
     OPTION,
     FILE,
     UNRESOLVED,
@@ -191,9 +195,12 @@ impl SemanticHighlighter {
             .expect("LSP document version exhausted");
         document.version = self.version;
         let document = Arc::new(document);
-        // Drafts and incomplete fragments are transient; historic cells retain their colors.
-        self.spans
-            .retain(|id, _| matches!(id, SourceId::Cell { .. }));
+        // Historic cells retain their colors; edited sources keep their previous
+        // ones, carried onto the edit, until their new tokens arrive.
+        self.spans.retain(|id, _| {
+            matches!(id, SourceId::Cell { .. })
+                || document.segments.iter().any(|segment| segment.id == *id)
+        });
         self.document = Some(document.clone());
         self.revision = self.revision.wrapping_add(1);
         if let Some(client) = self.client.as_ref().filter(|_| self.semantic) {
@@ -279,9 +286,12 @@ impl SemanticHighlighter {
             .map_or(&[], |document| &document.segments)
     }
 
+    /// Syntax colors under the semantic ones last computed for `id`, carried onto
+    /// `source` when it was edited since, so colors never fall back while typing.
     fn overlay(&self, id: SourceId, source: &str, lexical: Vec<HLSpan>) -> Vec<HLSpan> {
-        match self.spans.get(&id).filter(|(text, _)| text == source) {
-            Some((_, semantic)) => merge(lexical, semantic),
+        match self.spans.get(&id) {
+            Some((text, semantic)) if text == source => merge(lexical, semantic),
+            Some((text, semantic)) => merge(lexical, &carried(text, semantic, source)),
             None => lexical,
         }
     }
@@ -308,6 +318,52 @@ impl Highlighter for SemanticHighlighter {
             None => lexical,
         }
     }
+}
+
+/// `spans` of `old` carried onto `new`, read as one edit of the range between
+/// their common prefix and suffix. Spans clear of the edit move with their text;
+/// one around a name being typed into stretches over it; one cut by any other
+/// edit keeps what survives of it.
+fn carried(old: &str, spans: &[HLSpan], new: &str) -> Vec<HLSpan> {
+    let prefix = old
+        .char_indices()
+        .zip(new.chars())
+        .find(|((_, before), after)| before != after)
+        .map_or(old.len().min(new.len()), |((offset, _), _)| offset);
+    let suffix = old[prefix..]
+        .chars()
+        .rev()
+        .zip(new[prefix..].chars().rev())
+        .take_while(|(before, after)| before == after)
+        .map(|(character, _)| character.len_utf8())
+        .sum::<usize>();
+    let edited = prefix..old.len() - suffix;
+    let inserted = &new[prefix..new.len() - suffix];
+    let shift = |offset: usize| offset + new.len() - old.len();
+    let names = |text: &str| {
+        text.chars()
+            .all(|character| character.is_alphanumeric() || NAME_PUNCTUATION.contains(&character))
+    };
+    let renames = names(inserted) && names(&old[edited.clone()]);
+    spans
+        .iter()
+        .flat_map(|span| {
+            let range = span.content.clone();
+            let (before, after) =
+                if renames && range.start <= edited.start && edited.end <= range.end {
+                    (range.start..shift(range.end), None)
+                } else {
+                    let after = (range.end > edited.end)
+                        .then(|| shift(range.start.max(edited.end))..shift(range.end));
+                    (range.start..range.end.min(edited.start), after)
+                };
+            [before]
+                .into_iter()
+                .chain(after)
+                .filter(|range| range.start < range.end)
+                .map(|range| span.with_content(range))
+        })
+        .collect()
 }
 
 /// Decode relative UTF-16 positions without allowing malformed spans into rendering.
@@ -392,7 +448,7 @@ fn classify(legend: &SemanticTokensLegend, token: &SemanticToken) -> Option<HLGr
     let base = match token_type {
         value if value == Token::TYPE.as_str() => HLGroup::Type,
         value if value == Token::FUNCTION.as_str() => HLGroup::Function,
-        value if value == Token::VARIABLE.as_str() => HLGroup::Variable,
+        value if value == Token::VARIABLE.as_str() => HLGroup::LspVariable,
         value if value == Token::PARAMETER.as_str() => HLGroup::Parameter,
         value if value == Token::PROPERTY.as_str() => HLGroup::Property,
         value if value == Token::NAMESPACE.as_str() => HLGroup::Namespace,
@@ -405,11 +461,13 @@ fn classify(legend: &SemanticTokensLegend, token: &SemanticToken) -> Option<HLGr
         value if value == Token::METHOD.as_str() => HLGroup::Method,
         value if value == Token::MODIFIER.as_str() => HLGroup::StorageClass,
         value if value == Token::TYPE_PARAMETER.as_str() => HLGroup::TypeParameter,
-        value if value == COMMAND.as_str() => HLGroup::SemanticCommand,
+        value if value == Token::MACRO.as_str() => HLGroup::Macro,
+        value if value == Token::DECORATOR.as_str() => HLGroup::Attribute,
         _ => return None,
     };
     for (modifier, group) in [
-        (RING_GENERATOR.as_str(), HLGroup::RingGenerator),
+        (ALGEBRAIC.as_str(), HLGroup::RingGenerator),
+        (COMMAND.as_str(), HLGroup::SemanticCommand),
         (OPTION.as_str(), HLGroup::Option),
         (FILE.as_str(), HLGroup::File),
         (UNRESOLVED.as_str(), HLGroup::Unresolved),
@@ -421,30 +479,50 @@ fn classify(legend: &SemanticTokensLegend, token: &SemanticToken) -> Option<HLGr
     Some(base)
 }
 
-/// Overlay semantic colors while retaining lexical spans outside their exact ranges.
+/// Lay the semantic groups over the syntax groups they cover, as Neovim lays
+/// language-server highlights over Tree-sitter ones: a semantic group overrides
+/// what it styles, and an empty one leaves the syntax colour. Semantic spans over
+/// text with no syntax group are drawn as they are.
 fn merge(lexical: Vec<HLSpan>, semantic: &[HLSpan]) -> Vec<HLSpan> {
+    let overlapping = |range: Range<usize>| {
+        let first = semantic.partition_point(|overlay| overlay.content.end <= range.start);
+        semantic[first..]
+            .iter()
+            .take_while(move |overlay| overlay.content.start < range.end)
+    };
     let mut result = Vec::new();
-    let mut semantic_index = 0;
-    for span in lexical {
+    for span in &lexical {
         let mut start = span.content.start;
-        while semantic_index < semantic.len() && semantic[semantic_index].content.end <= start {
-            result.push(semantic[semantic_index].clone());
-            semantic_index += 1;
-        }
-        for overlay in &semantic[semantic_index..] {
-            if overlay.content.start >= span.content.end {
-                break;
+        for overlay in overlapping(span.content.clone()) {
+            let covered =
+                overlay.content.start.max(start)..overlay.content.end.min(span.content.end);
+            if start < covered.start {
+                result.push(span.with_content(start..covered.start));
             }
-            if start < overlay.content.start {
-                result.push(span.with_content(start..overlay.content.start.min(span.content.end)));
-            }
-            start = start.max(overlay.content.end);
+            let piece: HLSpan = span.with_content(covered.clone());
+            result.push(piece.marked(overlay.kind));
+            start = covered.end;
         }
         if start < span.content.end {
             result.push(span.with_content(start..span.content.end));
         }
     }
-    result.extend(semantic[semantic_index..].iter().cloned());
+    for overlay in semantic {
+        let mut start = overlay.content.start;
+        let first = lexical.partition_point(|span| span.content.end <= start);
+        for span in lexical[first..]
+            .iter()
+            .take_while(|span| span.content.start < overlay.content.end)
+        {
+            if start < span.content.start {
+                result.push(overlay.with_content(start..span.content.start));
+            }
+            start = start.max(span.content.end);
+        }
+        if start < overlay.content.end {
+            result.push(overlay.with_content(start..overlay.content.end));
+        }
+    }
     result.sort_by_key(|span| span.content.start);
     result
 }
@@ -463,9 +541,14 @@ mod tests {
             ],
             token_modifiers: vec![
                 SemanticTokenModifier::new("unresolved"),
-                SemanticTokenModifier::new("ringGenerator"),
+                SemanticTokenModifier::new("algebraic"),
             ],
         }
+    }
+
+    /// The group a span is drawn in: its semantic layer, else its syntax group.
+    fn shown(span: &HLSpan) -> HLGroup {
+        span.mark.unwrap_or(span.kind)
     }
 
     fn token(line: u32, column: u32, length: u32, kind: u32, modifiers: u32) -> SemanticToken {
@@ -526,10 +609,10 @@ mod tests {
     }
 
     #[test]
-    fn overlay_splits_lexical_spans_and_also_colors_unclassified_text() {
+    fn semantic_groups_lie_over_syntax_ones_and_color_unclassified_text() {
         let lexical = vec![
-            HLSpan::new(0..5, HLGroup::String),
-            HLSpan::new(5..8, HLGroup::String),
+            HLSpan::new(0..5, HLGroup::Variable),
+            HLSpan::new(5..8, HLGroup::Variable),
         ];
         let semantic = vec![
             HLSpan::new(2..6, HLGroup::Namespace),
@@ -538,12 +621,26 @@ mod tests {
         assert_eq!(
             merge(lexical, &semantic),
             vec![
-                HLSpan::new(0..2, HLGroup::String),
-                HLSpan::new(2..6, HLGroup::Namespace),
-                HLSpan::new(6..8, HLGroup::String),
+                HLSpan::new(0..2, HLGroup::Variable),
+                HLSpan::new(2..5, HLGroup::Variable).marked(HLGroup::Namespace),
+                HLSpan::new(5..6, HLGroup::Variable).marked(HLGroup::Namespace),
+                HLSpan::new(6..8, HLGroup::Variable),
                 HLSpan::new(10..12, HLGroup::Function),
             ]
         );
+    }
+
+    #[test]
+    fn a_plain_value_leaves_its_syntax_color() {
+        let groups = crate::ui::controller::settings::theme::groups::scheme();
+        for (syntax, semantic) in [
+            (HLGroup::Boolean, HLGroup::LspVariable),
+            (HLGroup::Function, HLGroup::Unresolved),
+        ] {
+            let layered: HLSpan = HLSpan::new(0..4, syntax).marked(semantic);
+            let plain: HLSpan = HLSpan::new(0..4, syntax);
+            assert_eq!(layered.style(groups), plain.style(groups), "{semantic:?}");
+        }
     }
 
     #[test]
@@ -560,11 +657,11 @@ mod tests {
             &[token(0, 0, 1, 0, 0), token(1, 0, 1, 1, 0)],
         );
         assert_eq!(
-            highlighter.highlight_source(cell(0, 1, 0), "f")[0].kind,
+            shown(&highlighter.highlight_source(cell(0, 1, 0), "f")[0]),
             HLGroup::Function
         );
         assert_eq!(
-            highlighter.highlight_source(cell(0, 2, 0), "f")[0].kind,
+            shown(&highlighter.highlight_source(cell(0, 2, 0), "f")[0]),
             HLGroup::Type
         );
         highlighter.apply(&document, &legend(), &[]);
@@ -575,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_drafts_drop_colors_and_restart_preserves_historic_cells() {
+    fn restart_drops_old_drafts_and_preserves_historic_cells() {
         let mut highlighter = SemanticHighlighter::new();
         let mut document = Document::new(0);
         document.push(cell(0, 1, 0), "f");
@@ -588,7 +685,7 @@ mod tests {
             &[token(0, 0, 1, 0, 0), token(1, 0, 1, 0, 0)],
         );
         assert_eq!(
-            highlighter.highlight_continuation(None, "f")[0].kind,
+            shown(&highlighter.highlight_continuation(None, "f")[0]),
             HLGroup::Function
         );
         let mut restarted = Document::new(1);
@@ -597,7 +694,7 @@ mod tests {
         assert!(!highlighter.spans.contains_key(&SourceId::Draft(0)));
         highlighter.clear_current();
         assert_eq!(
-            highlighter.highlight_source(cell(0, 1, 0), "f")[0].kind,
+            shown(&highlighter.highlight_source(cell(0, 1, 0), "f")[0]),
             HLGroup::Function
         );
     }
@@ -623,5 +720,67 @@ mod tests {
             .unwrap();
         assert_eq!(highlighter.poll(), Polled::default());
         assert!(highlighter.spans.is_empty());
+    }
+
+    fn kinds(spans: &[HLSpan]) -> Vec<(Range<usize>, HLGroup)> {
+        spans
+            .iter()
+            .map(|span| (span.content.clone(), span.kind))
+            .collect()
+    }
+
+    #[test]
+    fn spans_clear_of_an_edit_move_with_their_text() {
+        let spans = [
+            HLSpan::new(0..1, HLGroup::Function),
+            HLSpan::new(6..7, HLGroup::Type),
+        ];
+        assert_eq!(
+            kinds(&carried("f(x); R", &spans, "f(x, y); R")),
+            [(0..1, HLGroup::Function), (9..10, HLGroup::Type)]
+        );
+        assert_eq!(
+            kinds(&carried(
+                "f(x, y); R",
+                &[HLSpan::new(9..10, HLGroup::Type)],
+                "f(x); R"
+            )),
+            [(6..7, HLGroup::Type)]
+        );
+    }
+
+    #[test]
+    fn a_name_typed_into_keeps_its_color() {
+        let spans = [HLSpan::new(0..2, HLGroup::Function)];
+        assert_eq!(
+            kinds(&carried("fo(x)", &spans, "foo(x)")),
+            [(0..3, HLGroup::Function)]
+        );
+        assert_eq!(
+            kinds(&carried("fo(x)", &spans, "f(x)")),
+            [(0..1, HLGroup::Function)]
+        );
+        assert_eq!(
+            kinds(&carried("fo", &spans, "fo + 1")),
+            [(0..2, HLGroup::Function)],
+            "an operator typed after a name takes its own color"
+        );
+        assert!(carried("fo", &spans, "").is_empty());
+    }
+
+    #[test]
+    fn an_edited_draft_keeps_its_semantic_colors_until_new_tokens_arrive() {
+        let mut highlighter = SemanticHighlighter::new();
+        let mut document = Document::new(0);
+        document.push(SourceId::Draft(0), "f x");
+        highlighter.update(document.clone());
+        let current = highlighter.document.clone().unwrap();
+        highlighter.apply(&current, &legend(), &[token(0, 0, 1, 0, 0)]);
+        let mut edited = Document::new(0);
+        edited.push(SourceId::Draft(0), "ff x");
+        highlighter.update(edited);
+        let spans = highlighter.highlight_continuation(None, "ff x");
+        assert_eq!(spans[0].content, 0..2);
+        assert_eq!(shown(&spans[0]), HLGroup::Function);
     }
 }

@@ -22,7 +22,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use serde::{Deserialize, Serialize};
 use these_macros_should_be_illegal::discriminated_str;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub use self::completion::Completion;
 use self::hints::Hint;
@@ -34,7 +34,7 @@ use crate::ui::config::UI;
 use crate::ui::graphics::kitty::PLACEHOLDER;
 use crate::ui::key::KeyEvent;
 use crate::ui::render::{Highlights, Prompt, RenderContext};
-use crate::ui::wrap::{HardWrap, TextLayout, WrapPolicy};
+use crate::ui::wrap::{offset_at_column, HardWrap, TextLayout, WrapPolicy};
 
 /// A text-editing operation owned and interpreted by the input field.
 #[discriminated_str(description)]
@@ -501,7 +501,7 @@ impl InputTextField {
         if current == 0 {
             return;
         }
-        let column = self.text[starts[current]..self.cursor].chars().count();
+        let column = self.text[starts[current]..self.cursor].width();
         self.cursor = self.cursor_at_column(&starts, current - 1, column);
     }
 
@@ -512,7 +512,7 @@ impl InputTextField {
         if current + 1 == starts.len() {
             return;
         }
-        let column = self.text[starts[current]..self.cursor].chars().count();
+        let column = self.text[starts[current]..self.cursor].width();
         self.cursor = self.cursor_at_column(&starts, current + 1, column);
     }
 
@@ -615,10 +615,7 @@ impl InputTextField {
         let end = starts
             .get(line + 1)
             .map_or(self.text.len(), |next| next - 1);
-        self.text[start..end]
-            .char_indices()
-            .nth(column)
-            .map_or(end, |(offset, _)| start + offset)
+        start + offset_at_column(&self.text[start..end], column)
     }
 
     #[cfg(test)]
@@ -1381,7 +1378,7 @@ impl InputCode {
             .iter()
             .rposition(|row| row.range.start <= cursor)
             .unwrap_or(0);
-        let column = text[rows[row].range.start..cursor].chars().count();
+        let column = text[rows[row].range.start..cursor].width();
         (row, column)
     }
 
@@ -1393,10 +1390,7 @@ impl InputCode {
     pub fn cursor_at_visual(&self, width: u16, row: usize, column: usize) -> usize {
         let rows = HardWrap.wrap(self.text(), width);
         let line = &rows[row.min(rows.len().saturating_sub(1))];
-        self.text()[line.range.clone()]
-            .char_indices()
-            .nth(column)
-            .map_or(line.range.end, |(offset, _)| line.range.start + offset)
+        line.range.start + offset_at_column(&self.text()[line.range.clone()], column)
     }
 }
 
@@ -1990,6 +1984,33 @@ mod tests {
 
         assert_eq!(input.visual_cursor(4), (0, 2));
     }
+
+    #[test]
+    fn wide_characters_take_the_columns_they_are_drawn_in() {
+        let mut input = InputCode::new_in_memory();
+        input.field_mut().insert_str("😀😀");
+        assert_eq!(input.visual_cursor(80), (0, 4));
+
+        // A wide character that would cross the edge starts the next row, and a
+        // row it fills exactly leaves the caret the row after.
+        input.field_mut().insert_str("a");
+        assert_eq!(input.visual_rows(3), 3);
+        assert_eq!(input.visual_cursor(3), (2, 0));
+    }
+
+    #[test]
+    fn vertical_moves_keep_the_drawn_column_across_wide_characters() {
+        let mut input = InputCode::new_in_memory();
+        input.field_mut().insert_str("abcd\n😀x");
+        input.field_mut().move_up();
+        input.field_mut().move_end();
+        input.field_mut().move_down();
+        assert_eq!(input.visual_cursor(80), (1, 3));
+        input.field_mut().move_left();
+        input.field_mut().move_up();
+        assert_eq!(input.visual_cursor(80), (0, 2));
+    }
+
     #[test]
     fn semantic_revision_recolors_unchanged_input_without_moving_selection() {
         use crate::ui::controller::settings::theme::groups::HLGroup;

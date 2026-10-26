@@ -28,7 +28,7 @@ Changes are kept between sessions. The appearance is saved to `appearance.json` 
 | Setting | Choices |
 | --- | --- |
 | Language server | `m2-ls` by default: run an installed `m2-ls` alongside the session. The welcome message names its version once it has started. |
-| Semantic highlighting | On by default: color source by what the language server knows about it, with immediate syntax colors while results arrive. Off and greyed out while the language server is off; switching the server back on restores it. |
+| Semantic highlighting | On by default: color source by what the language server knows about it, keeping the colors already shown while new ones arrive. Off and greyed out while the language server is off; switching the server back on restores it. |
 | Maths | `unicode` by default: values laid out in characters, with stacked fractions and tall brackets. `typeset` draws them as [typeset pictures](#typeset-maths), marked unavailable where the terminal cannot show them; `ascii` uses Macaulay2's own plain-text spelling. |
 | Fractions | Stacked, underlined, or inline. Greyed out while maths is typeset, since pictures set fractions themselves. |
 | Math fonts | Off by default, which draws a ring by the name it has in code, `ZZ`; on draws its blackboard glyph, `ℤ`, and sets `\mathcal` and `\mathfrak` capitals as script and fraktur glyphs. How they look is up to the terminal's fonts; see [Troubleshooting](troubleshooting.md#blackboard). Greyed out while maths is typeset, since pictures draw their own glyphs. |
@@ -36,11 +36,11 @@ Changes are kept between sessions. The appearance is saved to `appearance.json` 
 
 ## Semantic highlighting
 
-Install the optional language server with `cargo install m2-ls --locked` and restart Spectral. Semantic colors apply to live input, submitted cells, code previews, and the source shown with syntax trees. Analysis includes earlier session source, queued cells, and the current continuation; it does not evaluate code or inspect runtime values. Dynamically created bindings and side effects may remain unknown.
+Install the optional language server, `m2-ls` 2.0 or later, with `cargo install m2-ls` and restart Spectral. Semantic colors apply to live input, submitted cells, code previews, and the source shown with syntax trees. Analysis includes earlier session source, queued cells, and the current continuation; it does not evaluate code or inspect runtime values. Dynamically created bindings and side effects may remain unknown.
 
 Without the server, or if it stops responding, source keeps its syntax colors. Switch *language server* off and on to retry. Completion and syntax diagnostics continue to use the shell's existing providers.
 
-The theme groups `Method`, `TypeParameter`, `SemanticCommand`, `RingGenerator`, `Option`, `File`, and `Unresolved` expose semantic roles. They inherit existing theme colors by default and can be customized in `themes/groups.toml` like other linked groups.
+Semantic colors are laid over the syntax colors, as Neovim lays `@lsp` highlights over Tree-sitter ones: wherever the language server knows a role it overrides the syntax color, and while typing the previous colors stay until new ones arrive. A plain value, `LspVariable`, has no color of its own, so it keeps whatever the syntax gave it, a boolean or a function call; `Unresolved` names follow it. The theme groups `Method`, `TypeParameter`, `SemanticCommand`, `RingGenerator`, `Option`, `File`, `LspVariable`, and `Unresolved` expose semantic roles. They inherit existing theme colors by default and can be customized in `themes/groups.toml` like other linked groups.
 
 ## Typeset maths { #typeset-maths }
 
