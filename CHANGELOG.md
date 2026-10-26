@@ -6,6 +6,9 @@ All notable changes to Spectral M2 are documented here.
 
 ### Added
 
+- M2 startup configuration through `-q`, `-E`, `-e`, `--no-preload`, `--prefix`, `--srcdir`, `--no-backtrace`, `--no-debug`, `--debug`, `--notify`, `--print-width`, `--no-randomize`, `--no-threads`, and `--no-time`, retained across session restarts.
+- Initialization output is shown on first startup and after restarting M2.
+
 - `Ctrl+C` interrupts a running computation and discards queued work while preserving the Macaulay2 session; when idle it still quits.
 
 - `sp2 FILE` runs a file's code as the session starts, `sp2 --resume` the previous session's, and `sp2 --help` and `--version` describe the shell.
@@ -16,6 +19,7 @@ All notable changes to Spectral M2 are documented here.
 
 ### Changed
 
+- M2 enters its normal top level after backend initialization, so `quit`, `exit`, and `end` close the shell cleanly; writes racing with process exit are handled as termination.
 - Spectral M2 is now licensed under MIT or Apache-2.0, at your option, instead of GPL-3.0-only.
 - Built on `m2-syn` 0.7, now also MIT or Apache-2.0. The syntax tree view still nests what brackets hold under the opening bracket, and no longer lists empty groups.
 - Settings are grouped into *appearance*, *layout* and *rendering* tabs, switched with `Tab`. Each row shows only its name and value, aligned in one column at any pane width: each shows its current value between arrows. The *restore defaults* button, no longer a row of its own, and the selected row's description sit beneath the rows, and the status line names the keys the open picker answers.

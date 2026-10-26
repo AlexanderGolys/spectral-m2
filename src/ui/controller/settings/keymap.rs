@@ -426,7 +426,6 @@ mod tests {
             key!(Char('[') + Ctrl),
             key!(Char('s') + Ctrl),
             key!(Char('q') + Ctrl),
-            key!(Char('c') + Ctrl),
             key!(Tab + Alt),
             key!(Esc + Ctrl),
             key!(Char('\t') + Alt),
@@ -444,6 +443,7 @@ mod tests {
     fn function_keys_and_modified_shortcuts_can_be_assigned() {
         for key in (2..=24).map(|number| key!(F(number))).chain([
             key!(Char('a') + Ctrl),
+            key!(Char('c') + Ctrl),
             key!(Char('a') + Alt),
             key!(Up + Shift),
         ]) {

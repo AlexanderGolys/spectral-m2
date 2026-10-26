@@ -25,7 +25,39 @@ sp2 ring.m2
 sp2 --resume
 ```
 
-A name without an extension gets `.m2`. Everything else, from themes to keys, is set inside the shell: `Ctrl+O` opens the settings and `Ctrl+/` lists every command.
+A name without an extension gets `.m2`. Themes, keys, and display settings are set inside the shell: `Ctrl+O` opens the settings and `Ctrl+/` lists every command.
+
+## M2 startup options
+
+Macaulay2 loads its normal user `init.m2` before the shell opens. Spectral then loads its own optional `init.m2` from `$XDG_CONFIG_HOME/spectral-m2`, falling back to `~/.config/spectral-m2`. Initialization output appears in the transcript. `-q` skips both user initialization files and disables M2's home-directory package paths.
+
+These options are passed to M2 and kept when the session restarts, including when `/load` starts a fresh session:
+
+| Option | Effect |
+| --- | --- |
+| `-q` | Skip user initialization and home-directory packages. |
+| `-E EXPR` | Evaluate before M2 initialization; repeatable. |
+| `-e EXPR` | Evaluate after M2 initialization, before Spectral's init file and backend hooks; repeatable. |
+| `--no-preload` | Skip preloaded packages. |
+| `--prefix DIR` | Set M2's prefix directory. |
+| `--srcdir DIR` | Add an M2 source or build tree to the initial path. |
+| `--no-backtrace` | Suppress error backtraces. |
+| `--no-debug` | Do not enter the debugger on error. |
+| `--debug N` | Turn warning N into an error. |
+| `--notify` | Report files loaded and command-line expressions evaluated. |
+| `--print-width N` | Set M2's output width. |
+| `--no-randomize` | Keep the fixed initial random seed. |
+| `--no-threads` | Disable additional M2 threads and tasks. |
+| `--no-time` | Make M2's current time always zero. |
+
+For example:
+
+```sh
+sp2 --no-debug --print-width 100 -e 'R = QQ[x]' ring.m2
+sp2 -q --no-randomize --resume
+```
+
+Expressions run inside M2 without creating transcript input cells. Files and resumed code run afterward, cell by cell. Documentation examples continue to use their separate default M2 configuration.
 
 ## Serve this book locally
 

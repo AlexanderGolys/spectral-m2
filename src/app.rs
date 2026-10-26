@@ -41,10 +41,16 @@ struct Workspace {
 impl Workspace {
     fn new(mut backend: M2Backend) -> Self {
         let names = backend.take_names();
+        let startup_output = backend.take_startup_output();
         let session = Session::new(backend);
         let version = session.version().unwrap_or_else(|_| "unknown".to_string());
         let mut editor = Editor::new(welcome_message(&version));
         editor.apply(EditorUpdate::KnownNames(names));
+        if !startup_output.is_empty() {
+            editor.apply(EditorUpdate::Message(Box::new(TextBlock::printed(
+                startup_output,
+            ))));
+        }
         Self {
             session,
             editor,
@@ -554,6 +560,29 @@ pub fn run(backend: M2Backend, startup: Option<String>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn first_session_displays_initialization_output() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let directory =
+            std::env::temp_dir().join(format!("spectral-startup-output-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let init = directory.join("init.m2");
+        std::fs::write(&init, "print \"startup output probe\"\n").unwrap();
+        let backend = crate::backend::M2Backend::spawn_with_init_file(Some(init)).unwrap();
+        let mut app = super::App::new(backend);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        std::fs::remove_dir_all(directory).unwrap();
+        assert!(screen.contains("startup output probe"), "{screen}");
+    }
+
     #[test]
     fn a_submitted_comment_is_visible_on_the_next_frame() {
         use ratatui::{backend::TestBackend, Terminal};

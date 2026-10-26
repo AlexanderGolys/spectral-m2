@@ -47,6 +47,8 @@ sp2 --resume     # run the previous session's code
 sp2 --help
 ```
 
+M2 startup options can be combined with a file or `--resume`, for example `sp2 --no-debug --print-width 100 -e 'R = QQ[x]' ring.m2`. Use `-E` for expressions before initialization and `-e` for expressions after it; both can be repeated. The same configuration is applied when the session restarts. `sp2 --help` lists all supported options.
+
 Run the current checkout without installing it:
 
 ```sh

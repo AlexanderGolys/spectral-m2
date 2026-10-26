@@ -12,6 +12,7 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use std::{env, fs, mem, thread};
 
+use crate::cli::M2Options;
 use crate::errors::{Error, Result};
 use regex::Regex;
 use serde::Deserialize;
@@ -393,12 +394,26 @@ pub struct M2Backend {
     version: String,
     /// Every name M2 started with, until it is taken.
     names: Vec<String>,
+    startup_output: String,
+    startup_options: M2Options,
 }
 
 impl M2Backend {
+    #[cfg(test)]
     pub fn spawn() -> Result<Self> {
+        Self::spawn_with_options(&M2Options::default())
+    }
+
+    /// Start an interactive session with the requested M2 configuration.
+    pub fn spawn_with_options(options: &M2Options) -> Result<Self> {
         let config = Self::config_dir()?;
-        Self::spawn_in(&config, Some(config.join("init.m2")), None)
+        let init = options.loads_init().then(|| config.join("init.m2"));
+        Self::spawn_in(&config, init, None, options)
+    }
+
+    /// Start a fresh process with this session's original M2 configuration.
+    pub fn restarted(&self) -> Result<Self> {
+        Self::spawn_with_options(&self.startup_options)
     }
 
     /// A Macaulay2 as documentation examples run in: without Spectral's init
@@ -406,16 +421,16 @@ impl M2Backend {
     /// before running them. Loading it on the command line costs no input
     /// number, so the examples keep the numbers they were recorded under.
     pub fn spawn_for_examples(package: Option<&str>) -> Result<Self> {
-        Self::spawn_in(&Self::config_dir()?, None, package)
+        Self::spawn_in(&Self::config_dir()?, None, package, &M2Options::default())
     }
 
     #[cfg(test)]
-    fn spawn_with_init_file(init_file: Option<PathBuf>) -> Result<Self> {
+    pub(crate) fn spawn_with_init_file(init_file: Option<PathBuf>) -> Result<Self> {
         let config = match init_file.as_deref().and_then(Path::parent) {
             Some(config) => config.to_path_buf(),
             None => Self::config_dir()?,
         };
-        Self::spawn_in(&config, init_file, None)
+        Self::spawn_in(&config, init_file, None, &M2Options::default())
     }
 
     /// Start M2 and let its own top level read the session from stdin.
@@ -423,20 +438,26 @@ impl M2Backend {
     /// The startup script is loaded with `-e` *before* the top level begins, so
     /// the hooks are installed by the time the first cell can arrive. Deliberately
     /// not `--script`, which would evaluate the file and exit rather than going on
-    /// to read stdin. Normal M2 initialization is preserved: `-q` would also
-    /// remove the user's installed packages from the search path. Spectral's
+    /// to read stdin. Normal M2 initialization is preserved unless `-q` is
+    /// requested, which also removes home-directory package paths. Spectral's
     /// own `init.m2` runs after M2's initialization and before the backend hooks.
     ///
     /// Both output streams are handed the same pipe. Printed text, diagnostics
     /// and result frames then share one ordering, which is what lets a cell's
     /// output be attributed by position rather than by guesswork.
-    fn spawn_in(config: &Path, init_file: Option<PathBuf>, package: Option<&str>) -> Result<Self> {
+    fn spawn_in(
+        config: &Path,
+        init_file: Option<PathBuf>,
+        package: Option<&str>,
+        options: &M2Options,
+    ) -> Result<Self> {
         let script_path = Self::sync_startup_script(config)?;
         let (reader, writer) = std::io::pipe()?;
 
         let mut command = Command::new("M2");
         command.arg("--silent").arg("--no-readline");
-        // Spectral's init file first, so that the startup frame really is the
+        command.args(options.arguments());
+        // Load Spectral's init file before the hooks, so the startup frame is the
         // last thing to arrive before the session opens. `load` rather than a
         // submitted cell: it gives the file its own dictionary, the way every
         // other loaded file gets one, and costs it no input number -- numbering
@@ -453,10 +474,7 @@ impl M2Backend {
         }
         let mut process = command
             .arg("-e")
-            .arg(format!(
-                "load {}; interpreter(); exit 0",
-                m2_string_literal(script_path.display())
-            ))
+            .arg(format!("load {}", m2_string_literal(script_path.display())))
             .stdin(Stdio::piped())
             .stdout(writer.try_clone()?)
             .stderr(writer)
@@ -471,6 +489,8 @@ impl M2Backend {
             chunks: split_stream(reader),
             version: String::new(),
             names: Vec::new(),
+            startup_output: String::new(),
+            startup_options: options.clone(),
         };
         let ready = backend.wait_for_ready()?;
         backend.version = ready.ready.unwrap_or_default();
@@ -534,6 +554,7 @@ impl M2Backend {
                 Ok(Chunk::Text(text)) => said.push_str(&text),
                 Ok(Chunk::Frame(frame)) => {
                     let frame: Frame = serde_json::from_str(&frame)?;
+                    self.startup_output = said.trim().to_string();
                     return match frame.ready {
                         Some(_) => Ok(frame),
                         None => Err(Error::Process(
@@ -604,9 +625,14 @@ impl M2Backend {
         if cancelled.load(Ordering::Acquire) {
             return Err(Error::Cancelled);
         }
-        writeln!(self.input, "{}", code.trim_end())?;
-        writeln!(self.input, "{CELL_TERMINATOR}")?;
-        self.input.flush()?;
+        let written = writeln!(self.input, "{}\n{CELL_TERMINATOR}", code.trim_end())
+            .and_then(|()| self.input.flush());
+        if let Err(error) = written {
+            return match error.kind() {
+                std::io::ErrorKind::BrokenPipe => Err(Error::Exited(self.process.wait()?)),
+                _ => Err(error.into()),
+            };
+        }
 
         let mut transcript = String::new();
         let deadline = Instant::now() + timeout;
@@ -659,6 +685,11 @@ impl M2Backend {
     /// Every name M2 started with; later names arrive with each response.
     pub fn take_names(&mut self) -> Vec<String> {
         mem::take(&mut self.names)
+    }
+
+    /// Text printed during initialization before the backend became ready.
+    pub fn take_startup_output(&mut self) -> String {
+        mem::take(&mut self.startup_output)
     }
 }
 
@@ -1559,14 +1590,74 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     }
 
     #[test]
+    fn configured_startup_expressions_and_runtime_flags_survive_restart() {
+        use clap::Parser;
+        let options = crate::cli::Options::try_parse_from([
+            "sp2",
+            "-q",
+            "--no-preload",
+            "--no-debug",
+            "--no-backtrace",
+            "--no-randomize",
+            "--no-threads",
+            "--no-time",
+            "--print-width",
+            "73",
+            "-E",
+            "print \"before initialization probe\"",
+            "-e",
+            "spectralStartupProbe = 41",
+            "-e",
+            "spectralStartupProbe = spectralStartupProbe + 1",
+        ])
+        .unwrap();
+        let mut backend = M2Backend::spawn_with_options(&options.m2).expect("configured M2");
+        for generation in 0..2 {
+            let output = backend.take_startup_output();
+            assert!(output.contains("before initialization probe"), "{output}");
+            assert!(!output.contains("error:"), "{output}");
+            let response = backend
+                .evaluate(
+                    "assert(spectralStartupProbe == 42); assert(printWidth == 73);",
+                    None,
+                )
+                .unwrap();
+            assert!(!response.is_error, "{}", response.transcript);
+            if generation == 0 {
+                backend.evaluate("spectralStartupProbe = 0;", None).unwrap();
+                backend = backend.restarted().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn writing_after_process_exit_reports_exit_instead_of_broken_pipe() {
+        let mut backend = M2Backend::spawn().unwrap();
+        backend.process.kill().unwrap();
+        backend.process.wait().unwrap();
+        assert!(matches!(
+            backend.evaluate("1 + 1", None),
+            Err(Error::Exited(_))
+        ));
+    }
+
+    #[test]
     fn init_file_is_loaded() {
         let base = env::temp_dir().join(format!("spectral-m2-init-test-{}", std::process::id()));
         let config = base.join("spectral-m2");
         fs::create_dir_all(&config).expect("create temp config dir");
         let init_file = config.join("init.m2");
-        fs::write(&init_file, "spectralInitProbe = 1729\n").expect("write init.m2");
+        fs::write(
+            &init_file,
+            "spectralInitProbe = 1729\nprint \"initialization probe loaded\"\n",
+        )
+        .expect("write init.m2");
 
         let mut be = M2Backend::spawn_with_init_file(Some(init_file)).expect("spawn M2");
+        assert!(be
+            .take_startup_output()
+            .contains("initialization probe loaded"));
+        assert!(be.take_startup_output().is_empty());
         let out = be
             .evaluate("spectralInitProbe", Some(1))
             .expect("evaluate probe");

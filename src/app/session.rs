@@ -74,7 +74,7 @@ enum WorkerEvent {
         result: std::result::Result<M2Response, String>,
     },
     /// The fresh process's version and every name it started with.
-    Restarted(std::result::Result<(String, Vec<String>), String>),
+    Restarted(std::result::Result<(String, Vec<String>, String), String>),
 }
 
 /// A live M2 worker and the source state committed through it.
@@ -690,11 +690,11 @@ impl Session {
 
     fn resolve_restart(
         &mut self,
-        result: std::result::Result<(String, Vec<String>), String>,
+        result: std::result::Result<(String, Vec<String>, String), String>,
     ) -> EditorUpdate {
         self.restarting = false;
         match result {
-            Ok((version, names)) => {
+            Ok((version, names, startup_output)) => {
                 self.version = version;
                 self.in_debugger = false;
                 self.next_input_number = 1;
@@ -703,12 +703,18 @@ impl Session {
                 self.committed_revision = self.committed_revision.wrapping_add(1);
                 self.leading_whitespace.clear();
                 self.parser.reset_active();
-                EditorUpdate::Batch(vec![
+                let mut updates = vec![
                     EditorUpdate::Message(Box::new(TextBlock::system(
                         "Macaulay2 restarted -- the session is empty and numbering begins again",
                     ))),
                     EditorUpdate::KnownNames(names),
-                ])
+                ];
+                if !startup_output.is_empty() {
+                    updates.push(EditorUpdate::Message(Box::new(TextBlock::printed(
+                        startup_output,
+                    ))));
+                }
+                EditorUpdate::Batch(updates)
             }
             Err(error) => {
                 self.after_restart = None;
@@ -774,8 +780,12 @@ fn worker(mut backend: M2Backend, requests: Receiver<WorkerRequest>, events: Sen
                 }
             }
             WorkerRequest::Restart => {
-                let result = M2Backend::spawn().and_then(|mut replacement| {
-                    let started = (replacement.version()?, replacement.take_names());
+                let result = backend.restarted().and_then(|mut replacement| {
+                    let started = (
+                        replacement.version()?,
+                        replacement.take_names(),
+                        replacement.take_startup_output(),
+                    );
                     backend = replacement;
                     Ok(started)
                 });

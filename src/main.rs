@@ -21,7 +21,7 @@ fn main() {
     let startup = options
         .startup_code()
         .unwrap_or_else(|message| Options::command().error(ErrorKind::Io, message).exit());
-    match M2Backend::spawn() {
+    match M2Backend::spawn_with_options(&options.m2) {
         Ok(backend) => {
             if let Err(e) = app::run(backend, startup) {
                 eprintln!("Error: {}", e);
