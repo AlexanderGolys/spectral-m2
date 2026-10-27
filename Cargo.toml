@@ -11,7 +11,7 @@ categories = ["command-line-utilities", "development-tools"]
 include = [
     "build.rs",
     "src/**/*.rs",
-    "src/**/*.m2",
+    "src/backend/m2_startup.m2",
     "src/**/*.toml",
     "Cargo.lock",
     "CHANGELOG.md",
