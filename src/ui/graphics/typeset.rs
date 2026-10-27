@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn theme_colors_preserve_every_glyph_and_its_geometry() {
         let groups = crate::ui::controller::settings::theme::groups::Groups::default();
-        let colors = regex::Regex::new(r"rgba\([^)]*\)").unwrap();
+        let colors = regex::Regex::new(r"rgba?\([^)]*\)").unwrap();
         for tex in [
             r"x+2=y",
             r"x^{2}+\frac{1}{3}",

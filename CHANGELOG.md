@@ -4,6 +4,8 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-27
+
 ### Added
 
 - M2 startup configuration through `-q`, `-E`, `-e`, `--no-preload`, `--prefix`, `--srcdir`, `--no-backtrace`, `--no-debug`, `--debug`, `--notify`, `--print-width`, `--no-randomize`, `--no-threads`, and `--no-time`, retained across session restarts.
@@ -15,7 +17,8 @@ All notable changes to Spectral M2 are documented here.
 - Optional semantic highlighting through an installed `m2-ls`, covering live input, session code, and code previews, with configurable semantic theme groups and a persisted rendering setting.
 
 - Added a *maths* setting: `unicode`, as before; `typeset`, which draws returned values as pictures typeset by the built-in RaTeX, through the kitty graphics protocol, on terminals that support it, tmux included; and `ascii`, Macaulay2's own plain-text spelling. A type holding maths, such as a matrix's rings, is typeset too, in the type colour. Where the terminal cannot show pictures, `typeset` is still offered, struck through and marked unavailable in that terminal.
-- Selecting a typeset picture copies the TeX it was set from, once however many rows it covers.
+- Selecting a typeset picture copies its Macaulay2 code, once however many rows it covers; repeated formulas each copy separately.
+- Double-click selects a word, a bracketed block, or a whole formula in the input, session, and previews. `Ctrl+A` selects the whole input, and dragging against a pane edge scrolls the selection.
 
 ### Changed
 
@@ -24,6 +27,12 @@ All notable changes to Spectral M2 are documented here.
 - Built on `m2-syn` 0.7, now also MIT or Apache-2.0. The syntax tree view still nests what brackets hold under the opening bracket, and no longer lists empty groups.
 - Settings are grouped into *appearance*, *layout* and *rendering* tabs, switched with `Tab`. Each row shows only its name and value, aligned in one column at any pane width: each shows its current value between arrows. The *restore defaults* button, no longer a row of its own, and the selected row's description sit beneath the rows, and the status line names the keys the open picker answers.
 - The mouse wheel over the input moves through its lines instead of changing *input max height*, which it used to lower without showing it.
+- Semantic colours from `m2-ls` 2.0 are layered over syntax colours and retained while typing until new tokens arrive.
+- Typeset type annotations use the terminal's font for typewriter words, and wide formulas wrap across rows.
+
+### Removed
+
+- Removed the `Alt+arrow` pane shortcuts; panes remain accessible by mouse and the view commands.
 
 ### Fixed
 
@@ -31,6 +40,8 @@ All notable changes to Spectral M2 are documented here.
 - Inside tmux the first key pressed after starting is no longer lost: pictures are detected from what tmux reports instead of a terminal query that tmux leaves unanswered.
 - A typeset type sits beside its value with its last row on the value's last, rather than one row lower.
 - A cell sharing a line with the one before it, as in `a = 1; b = 2`, is no longer drawn indented by the space between them.
+- Input wrapping, cursor placement, and vertical movement account for the display width of wide characters.
+- Dragging outside the input copies the selection on release, and rows joined by a tall picture copy as one line.
 
 ## [1.0.0] - 2026-10-19
 
@@ -138,6 +149,8 @@ First crates.io release.
 - Reorganized the shell around workspace sessions, typed feed blocks, responsive panes, and independently rendered previews.
 - Made installation Cargo-managed and removed manual binary copying and local-bin symlinks.
 
+[Unreleased]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v0.4.0...v1.0.0
 [0.4.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/AlexanderGolys/spectral-m2/releases/tag/v0.3.0
