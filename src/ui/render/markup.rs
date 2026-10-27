@@ -849,13 +849,14 @@ fn row(line: &TaggedLine<Vec<RichAnnotation>>) -> SpanLine {
         // A definition term is always set in emphasis, which would set `Usage:`
         // apart from the other property labels.
         let emphasis = run.tag.contains(&RichAnnotation::Emphasis) && level != SYNOPSIS_LEVEL;
-        // A link keeps the colour of the text it sits in, slanted like emphasis.
+        // A link in prose takes the link colour; one set as code keeps the
+        // syntax colours of its code. Both are slanted like emphasis.
         let strong = run.tag.contains(&RichAnnotation::Strong);
         let mark = if strong && (emphasis || linked) {
             Some(HLGroup::MarkupStrongEmphasis)
         } else if strong {
             Some(HLGroup::MarkupStrong)
-        } else if emphasis {
+        } else if emphasis || linked && is_code {
             Some(HLGroup::MarkupEmphasis)
         } else if linked {
             Some(HLGroup::MarkupLink)
@@ -1274,12 +1275,18 @@ mod tests {
     }
 
     #[test]
-    fn a_link_keeps_the_colour_of_its_text_and_is_slanted() {
+    fn a_prose_link_is_slanted_in_the_colour_of_printed_output() {
         let html = r#"<p>see <a href="x">matrix</a> or <b><a href="y">det</a></b></p>"#;
-        assert!(kinds(html).contains(&("matrix".to_string(), HLGroup::Value)));
-        let marked = marks(html);
-        assert!(marked.contains(&("matrix".to_string(), Some(HLGroup::MarkupLink))));
-        assert!(marked.contains(&("det".to_string(), Some(HLGroup::MarkupStrongEmphasis))));
+        let lines = spans(html, 60).expect("reads");
+        let link = lines
+            .iter()
+            .flatten()
+            .find(|span| span.content == "matrix")
+            .unwrap();
+        let groups = Groups::default();
+        assert_eq!(link.style(&groups).fg, groups[HLGroup::Printed].fg);
+        assert!(link.style(&groups).add_modifier.contains(Modifier::ITALIC));
+        assert!(marks(html).contains(&("det".to_string(), Some(HLGroup::MarkupStrongEmphasis))));
     }
 
     #[test]

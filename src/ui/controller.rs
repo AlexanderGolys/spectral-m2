@@ -53,6 +53,8 @@ pub enum Reaction {
     Quit,
     /// Put the current selection on the system clipboard.
     Copy(String),
+    /// Scroll the focused pane by rows, positive toward older content.
+    ScrollView(i8),
     Open(ViewKind),
     ClosePane,
     /// Write the session's code to the file typed, or where the session is kept
@@ -477,14 +479,21 @@ impl Editor {
                 return Reaction::Post(format!("help {}", link.target));
             }
         }
-        if self.double_clicked(event)
-            && self
-                .feed
-                .toggle_fold(Position::new(event.column, event.row))
-        {
+        let double = self.double_clicked(event);
+        if double && self.feed.toggle_fold(pointer) {
             self.last_click = None;
             self.screen_selection = None;
             return Reaction::Continue;
+        }
+        if double && self.input.contains(event) {
+            self.screen_selection = None;
+            return self
+                .input
+                .handle_double_click(event)
+                .map_or(Reaction::Continue, Reaction::Copy);
+        }
+        if let Some(copy) = double.then(|| self.pick_screen_text(event)).flatten() {
+            return copy;
         }
         if let Some(action) = self.handle_screen_mouse(event) {
             return action;
@@ -535,8 +544,17 @@ impl Editor {
     }
 
     pub fn handle_preview_mouse(&mut self, event: MouseEvent) -> Reaction {
-        self.handle_screen_mouse(event)
+        let double = self.double_clicked(event);
+        double
+            .then(|| self.pick_screen_text(event))
+            .flatten()
+            .or_else(|| self.handle_screen_mouse(event))
             .unwrap_or(Reaction::Continue)
+    }
+
+    /// Move the feed by signed rows, positive toward older content.
+    pub fn scroll_feed(&mut self, rows: i8) {
+        self.feed.scroll(rows);
     }
 
     /// Forward unbound shell input to its focused component.

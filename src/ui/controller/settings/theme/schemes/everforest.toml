@@ -120,8 +120,8 @@ Attribute = { fg = "purple" }
 Bg0 = { bg = "bg0" }
 Bg1 = { bg = "bg_dim" }
 Bg2 = { bg = "bg1" }
-Bg3 = { bg = "bg_visual" }
-Bg4 = { bg = "bg1" }
+Bg3 = { bg = "bg2" }
+Bg4 = { bg = "bg3" }
 Boolean = { fg = "purple" }
 Builtin = { fg = "purple" }
 Comment = { fg = "grey1", italic = true }
@@ -133,7 +133,7 @@ Delimiter = { fg = "grey1" }
 Documentation = { fg = "fg" }
 EnumVariant = { fg = "blue" }
 Error = { fg = "red" }
-ErrorMessage = { bold = true, fg = "red", underline = true }
+ErrorMessage = {fg = "red" }
 Exception = { fg = "red" }
 Faint = { fg = "grey0" }
 Float = { fg = "purple" }
@@ -159,7 +159,7 @@ PickerSelected = { bg = "bg_visual" }
 Property = { fg = "blue" }
 Punctuation = { fg = "fg" }
 Quote = { fg = "yellow" }
-Regex = { fg = "green" }
+Regex = { fg = "yellow" }
 Repeat = { fg = "red" }
 Statement = { fg = "red" }
 Statusline1 = { fg = "statusline1" }

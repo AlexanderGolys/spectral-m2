@@ -6,13 +6,13 @@ use ratatui::text::{Line, Span};
 use crate::backend::{CollectionKind, M2Value};
 use crate::ui::block::Text;
 use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
-use crate::ui::graphics::{self, typeset::Rgb};
+use crate::ui::graphics::{self, typeset::Rgb, Typesetting};
 use crate::ui::wrap::WrappedText;
 
 use super::maths::{self, MathBlock, MathStyle};
 
 /// The image backend, returning terminal-cell rows for one formula.
-type Picture = fn(&str, &str, Rgb, u16) -> Option<Vec<Line<'static>>>;
+type Picture = fn(Typesetting, Rgb, u16) -> Option<Vec<Line<'static>>>;
 
 /// Render each value in its own representation, without converting text into TeX.
 pub fn lines(
@@ -24,7 +24,9 @@ pub fn lines(
     Block::value(value, width.max(1), groups, style, None, graphics::typeset).lines
 }
 
-/// Type words remain terminal text while mathematical parts keep their typesetting.
+/// The pieces of a type annotation, which carry their own spacing, set together:
+/// as one formula with its words in a typewriter font when every piece has a TeX
+/// form, so cell boundaries never widen the gaps between them; else side by side.
 pub fn annotation(
     parts: &[M2Value],
     width: usize,
@@ -32,25 +34,54 @@ pub fn annotation(
     style: MathStyle,
 ) -> Vec<Line<'static>> {
     let ink = groups.style(HLGroup::Type);
-    let blocks = parts.iter().enumerate().map(|(index, part)| {
-        let block = Block::value(
+    let block = |part: &M2Value| {
+        Block::value(
             part,
             width.max(1),
             groups,
             style,
             Some(ink),
             graphics::typeset,
-        );
-        if index + 1 < parts.len() {
-            block.beside(Block::text(" ", ink))
-        } else {
-            block
-        }
-    });
+        )
+    };
+    let blocks = match formula(parts) {
+        Some(formula) => vec![block(&formula)],
+        None => parts.iter().map(block).collect(),
+    };
     Block::pack(blocks, width.max(1))
         .into_iter()
         .flat_map(|block| block.lines)
         .collect()
+}
+
+/// `parts` joined into one TeX value, words as typewriter text; none when a part
+/// has no TeX form.
+fn formula(parts: &[M2Value]) -> Option<M2Value> {
+    let (mut tex, mut fallback, mut code) = (String::new(), String::new(), String::new());
+    for part in parts {
+        match part {
+            M2Value::Tex {
+                source,
+                fallback: net,
+                code: spelling,
+            } => {
+                tex.push_str(source.strip_prefix('$')?.strip_suffix('$')?);
+                fallback.push_str(net);
+                code.push_str(spelling);
+            }
+            M2Value::Token { text, .. } => {
+                tex.push_str(&maths::typewriter(text));
+                fallback.push_str(text);
+                code.push_str(text);
+            }
+            _ => return None,
+        }
+    }
+    Some(M2Value::Tex {
+        source: format!("${tex}$"),
+        fallback,
+        code,
+    })
 }
 
 struct Block {
@@ -152,7 +183,11 @@ impl Block {
     ) -> Self {
         let text_ink = |kind| ink.unwrap_or_else(|| groups.style(kind));
         match value {
-            M2Value::Tex { source, fallback } => {
+            M2Value::Tex {
+                source,
+                fallback,
+                code,
+            } => {
                 if let Some(tex) = source
                     .strip_prefix('$')
                     .and_then(|tex| tex.strip_suffix('$'))
@@ -163,9 +198,13 @@ impl Block {
                             Some(_) => tex.to_string(),
                             None => maths::colored_tex(tex, groups),
                         };
-                        if let Some(lines) = picture(
+                        let formula = Typesetting {
                             tex,
-                            &painted,
+                            painted: &painted,
+                            code,
+                        };
+                        if let Some(lines) = picture(
+                            formula,
                             Rgb([r, g, b]),
                             u16::try_from(width).unwrap_or(u16::MAX),
                         ) {
@@ -303,8 +342,8 @@ mod tests {
     use super::*;
     use crate::backend::Role;
 
-    fn picture(source: &str, _: &str, _: Rgb, _: u16) -> Option<Vec<Line<'static>>> {
-        assert_eq!(source, r"\frac{2}{3}");
+    fn picture(formula: Typesetting, _: Rgb, _: u16) -> Option<Vec<Line<'static>>> {
+        assert_eq!(formula.tex, r"\frac{2}{3}");
         Some(vec![Line::raw("2"), Line::raw("─"), Line::raw("3")])
     }
 
@@ -326,6 +365,7 @@ mod tests {
         let fraction = M2Value::Tex {
             source: r"$\frac{2}{3}$".into(),
             fallback: "2/3".into(),
+            code: String::new(),
         };
         let string = M2Value::Token {
             text: "2/3".into(),
@@ -359,6 +399,40 @@ mod tests {
     }
 
     #[test]
+    fn annotation_pieces_keep_their_own_spacing() {
+        let parts = [
+            M2Value::Tex {
+                source: r"${\mathbb R}$".into(),
+                fallback: "RR".into(),
+                code: String::new(),
+            },
+            M2Value::Token {
+                text: " (of precision ".into(),
+                role: Role::String,
+            },
+            M2Value::Tex {
+                source: "$53$".into(),
+                fallback: "53".into(),
+                code: String::new(),
+            },
+            M2Value::Token {
+                text: ")".into(),
+                role: Role::String,
+            },
+        ];
+        let groups = Groups::default();
+        let drawn = text(&annotation(&parts, 80, &groups, MathStyle::default()));
+        assert_eq!(drawn.len(), 1);
+        assert!(drawn[0].ends_with(" (of precision 53)"), "{drawn:?}");
+        assert!(!drawn[0].contains("  "), "{drawn:?}");
+        let unicode: Vec<String> = maths::annotation(&parts, 80, MathStyle::default())
+            .iter()
+            .map(|row| row.iter().map(|span| span.content.as_str()).collect())
+            .collect();
+        assert_eq!(unicode, drawn);
+    }
+
+    #[test]
     fn ordinary_values_never_enter_the_picture_backend() {
         let groups = Groups::default();
         let value = M2Value::Collection {
@@ -381,7 +455,7 @@ mod tests {
             &groups,
             MathStyle::default(),
             None,
-            |_, _, _, _| panic!("ordinary text must not be typeset"),
+            |_, _, _| panic!("ordinary text must not be typeset"),
         );
         assert_eq!(text(&block.lines), [r"{\frac{2}{3}, null, literal}"]);
     }

@@ -69,7 +69,7 @@ announceReady := (() -> (
     -- shell's M2Value (src/backend.rs) in serde's spelling of an enum, a one-key
     -- table naming the variant:
     --
-    --     net => text                   tex => {source, fallback}
+    --     net => text                   tex => {source, fallback, code}
     --     markup => {html, fallback,    hashtable => {{key, value}, ...}
     --         exampleWidth}
     --     collection => {kind, items}
@@ -81,14 +81,25 @@ announceReady := (() -> (
     render := method(Dispatch => Thing);
     asNet := value -> hashTable {symbol net => toString net value};
     -- Every class answers `tex`, most of them with their Net in a typewriter
-    -- font; one with a `texMath` of its own has a real TeX form. A formatter
-    -- that throws costs the value its TeX, never the statement its result.
+    -- font, and containers by spelling out their structure, `MdList{...}`. Only
+    -- a `texMath` of a class's own is a real TeX form: one that draws itself by
+    -- a `net` installed at or below such a fallback reads as that net, as M2
+    -- prints it. A formatter that throws costs the value its TeX, never the
+    -- statement its result. Its `code` is the one-line spelling M2 reads back,
+    -- which is what copying its picture gives.
+    structuralTex := apply({Thing, BasicList, HashTable}, type -> lookup(texMath, type));
+    installedAt := (method, type) -> last select(ancestors type,
+        ancestor -> lookup(method, ancestor) === lookup(method, type));
+    lacksTex := type -> (
+        member(lookup(texMath, type), structuralTex)
+        and ancestor(installedAt(texMath, type), installedAt(net, type))
+    );
     drawnWhole := value -> (
-        if lookup(texMath, class value) === lookup(texMath, Thing) then
+        if lacksTex class value then
             asNet value
         else try hashTable {
             symbol tex => hashTable {symbol source => tex value, symbol fallback =>
-                    toString net value}
+                    toString net value, symbol code => toString value}
         } else asNet value
     );
     render Thing := HashTable => drawnWhole;

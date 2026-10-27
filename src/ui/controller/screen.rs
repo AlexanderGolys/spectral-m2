@@ -1,8 +1,11 @@
 //! Mouse selection over the drawn screen: what each pane drew, which of its
-//! cells may be copied, and the text a drag selects. A selection belongs to the
-//! pane it starts in and never leaves it.
+//! cells may be copied, and the text a drag or a double click selects. A
+//! selection belongs to the pane it starts in and never leaves it, but reaches
+//! past what the pane shows: dragging against its edge scrolls it, and every row
+//! drawn while the selection lasts stays captured.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::ops::RangeInclusive;
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
@@ -10,33 +13,116 @@ use ratatui::Frame;
 
 use super::settings::theme::groups::scheme;
 use super::{Editor, Reaction};
-use crate::ui::graphics::{self, kitty::ImageId};
+use crate::ui::graphics::{
+    self,
+    kitty::{ImageId, Piece},
+};
+use crate::ui::text_object::{Bracket, CharClass};
 
-/// A selectable cell position: a screen column and a content row, so a
-/// selection stays on its text while the pane scrolls.
-#[derive(Clone, Copy)]
+/// A selectable cell position: a content row and a screen column, so a
+/// selection stays on its text while the pane scrolls. Positions order as text
+/// reads.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct ScreenPosition {
-    column: u16,
     row: i64,
+    column: u16,
 }
 
-/// A mouse selection spanning captured cells of one pane.
+impl ScreenPosition {
+    fn new(column: u16, row: i64) -> Self {
+        Self { row, column }
+    }
+}
+
+/// A mouse selection spanning captured cells of one pane, alive while the button
+/// is held: releasing it copies what it covers and lets it go.
 pub struct ScreenSelection {
     /// The area of the pane the selection started in.
     area: Rect,
     anchor: ScreenPosition,
     focus: ScreenPosition,
     dragged: bool,
-    text: Option<String>,
+}
+
+/// The cells a selection covers, between two positions in reading order.
+#[derive(Clone, Copy, Debug)]
+enum Region {
+    /// Everything read from `start` through `end`, wrapping at the pane's edges.
+    Flow {
+        start: ScreenPosition,
+        end: ScreenPosition,
+    },
+    /// The rectangle with these corners: a picture, or a block between tall fences.
+    Block {
+        start: ScreenPosition,
+        end: ScreenPosition,
+    },
+}
+
+impl Region {
+    fn rows(self) -> RangeInclusive<i64> {
+        let (Self::Flow { start, end } | Self::Block { start, end }) = self;
+        start.row..=end.row
+    }
+
+    /// The columns of `area` the region covers on `row`.
+    fn columns(self, row: i64, area: Rect) -> RangeInclusive<u16> {
+        match self {
+            Self::Flow { start, end } => {
+                let from = match row == start.row {
+                    true => start.column,
+                    false => area.x,
+                };
+                let through = match row == end.row {
+                    true => end.column,
+                    false => area.right().saturating_sub(1),
+                };
+                from..=through
+            }
+            Self::Block { start, end } => start.column..=end.column,
+        }
+    }
+}
+
+/// Which captured cells a region reads.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Reach {
+    /// Only text outside every selection exclusion, as a drag reads it.
+    Copyable,
+    /// Every cell drawn, as a double click on an excluded type reads it.
+    Drawn,
+}
+
+impl Reach {
+    /// Whether a row holding `cell` takes part in the copy at all.
+    fn admits(self, cell: &ScreenCell) -> bool {
+        self == Self::Drawn || cell.copyable
+    }
+
+    /// Whether `cell` contributes its text.
+    fn reads(self, cell: &ScreenCell) -> bool {
+        self == Self::Drawn || cell.selectable
+    }
+}
+
+/// One place a picture is shown: the picture and the content cell holding its first
+/// piece, so the same formula shown twice copies twice while the pieces of one
+/// showing copy once.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+struct Showing {
+    image: ImageId,
+    column: i32,
+    row: i64,
 }
 
 /// Captured terminal content and whether it may be copied.
 pub struct ScreenCell {
     /// The text the cell copies as: what it shows, or for a piece of a picture
-    /// the TeX of the whole picture.
+    /// the M2 code of the whole picture.
     symbol: String,
-    /// The picture the cell shows a piece of, copied once however many it covers.
-    picture: Option<ImageId>,
+    /// The showing of a picture the cell is a piece of, copied once however many
+    /// cells it covers.
+    picture: Option<Showing>,
     /// Whether the cell holds text a selection copies.
     selectable: bool,
     /// Whether the cell lies outside every selection exclusion, such as a frame,
@@ -44,12 +130,27 @@ pub struct ScreenCell {
     copyable: bool,
 }
 
-/// What one pane drew in its last frame, kept to select and copy from.
+impl ScreenCell {
+    /// The one character the cell shows as text, if that is what it shows.
+    fn character(&self) -> Option<char> {
+        let mut characters = self.symbol.chars();
+        let character = characters.next()?;
+        (self.picture.is_none() && characters.next().is_none()).then_some(character)
+    }
+
+    /// Whether the cell shows a piece of a fence grown taller than a row.
+    fn is_fence_piece(&self) -> bool {
+        self.picture.is_none() && Bracket::is_fence_piece(&self.symbol)
+    }
+}
+
+/// What one pane drew, kept to select and copy from: its last frame, and while a
+/// selection lasts every row drawn since it began.
 pub struct ScreenCapture {
     area: Rect,
     /// The content row shown on the area's first line.
     top: i64,
-    rows: Vec<Vec<ScreenCell>>,
+    rows: BTreeMap<i64, Vec<ScreenCell>>,
 }
 
 impl ScreenCapture {
@@ -58,10 +159,7 @@ impl ScreenCapture {
         let area = self.area;
         let column = event.column.clamp(area.x, area.right().saturating_sub(1));
         let line = event.row.clamp(area.y, area.bottom().saturating_sub(1));
-        ScreenPosition {
-            column,
-            row: self.top + i64::from(line - area.y),
-        }
+        ScreenPosition::new(column, self.top + i64::from(line - area.y))
     }
 
     /// The screen line showing `content_row`, if it is on screen.
@@ -70,32 +168,240 @@ impl ScreenCapture {
         (offset < self.area.height).then(|| self.area.y + offset)
     }
 
-    fn cell(&self, x: u16, y: u16) -> Option<&ScreenCell> {
+    fn cell(&self, at: ScreenPosition) -> Option<&ScreenCell> {
         self.rows
-            .get(usize::from(y.checked_sub(self.area.y)?))?
-            .get(usize::from(x.checked_sub(self.area.x)?))
+            .get(&at.row)?
+            .get(usize::from(at.column.checked_sub(self.area.x)?))
     }
 
-    fn selectable(&self, x: u16, y: u16) -> Option<&ScreenCell> {
-        self.cell(x, y).filter(|cell| cell.selectable)
+    /// The rows the pane scrolls toward when a drag reaches `line`: older ones at
+    /// its first line, newer ones at its last.
+    fn edge_scroll(&self, line: u16) -> Option<i8> {
+        match line {
+            _ if line <= self.area.y => Some(1),
+            _ if line >= self.area.bottom().saturating_sub(1) => Some(-1),
+            _ => None,
+        }
     }
 
-    /// The columns a selection from `start` to `end` covers on `content_row`.
-    fn columns(
-        &self,
-        content_row: i64,
-        start: ScreenPosition,
-        end: ScreenPosition,
-    ) -> impl Iterator<Item = u16> {
-        let from = match content_row == start.row {
-            true => start.column,
-            false => self.area.x,
+    /// Whether a picture shown on `upper` carries on to the row below, so the two
+    /// read as one line.
+    fn joined_below(&self, upper: i64) -> bool {
+        let (Some(above), Some(below)) = (self.rows.get(&upper), self.rows.get(&(upper + 1)))
+        else {
+            return false;
         };
-        let through = match content_row == end.row {
-            true => end.column,
-            false => self.area.right().saturating_sub(1),
+        let shown: HashSet<Showing> = above.iter().filter_map(|cell| cell.picture).collect();
+        below
+            .iter()
+            .filter_map(|cell| cell.picture)
+            .any(|showing| shown.contains(&showing))
+    }
+
+    /// The text `region` covers. Rows a picture spans read as one line, column by
+    /// column, a tall fence as the bracket it draws; every picture copies once.
+    fn text(&self, region: Region, reach: Reach) -> Option<String> {
+        let mut copied = HashSet::new();
+        let mut lines = Vec::new();
+        let mut band: Vec<Vec<(u16, &ScreenCell)>> = Vec::new();
+        for row in region.rows() {
+            let Some(cells) = self.rows.get(&row) else {
+                continue;
+            };
+            let selected: Vec<(u16, &ScreenCell)> = region
+                .columns(row, self.area)
+                .filter_map(|x| Some((x, cells.get(usize::from(x.checked_sub(self.area.x)?))?)))
+                .filter(|(_, cell)| reach.admits(cell))
+                .collect();
+            if !selected.is_empty() {
+                band.push(selected);
+            }
+            if !band.is_empty() && (!self.joined_below(row) || row == *region.rows().end()) {
+                lines.extend(Self::band_line(&band, reach, &mut copied));
+                band.clear();
+            }
+        }
+        let text = lines.join("\n");
+        let text = text.trim_matches('\n');
+        (!text.is_empty()).then(|| text.to_string())
+    }
+
+    /// One line read from rows joined by the pictures they share; none when they
+    /// hold only pictures already copied.
+    fn band_line(
+        band: &[Vec<(u16, &ScreenCell)>],
+        reach: Reach,
+        copied: &mut HashSet<Showing>,
+    ) -> Option<String> {
+        let mut columns: BTreeMap<u16, Vec<&ScreenCell>> = BTreeMap::new();
+        for row in band {
+            for &(x, cell) in row.iter().filter(|(_, cell)| reach.reads(cell)) {
+                columns.entry(x).or_default().push(cell);
+            }
+        }
+        let tall = band.len() > 1;
+        let mut line = String::new();
+        let mut pictured = false;
+        for cells in columns.values() {
+            let mut read = String::new();
+            let mut covered = false;
+            let mut above_fence = false;
+            for cell in cells {
+                if let Some(showing) = cell.picture {
+                    pictured = true;
+                    covered = true;
+                    if copied.insert(showing) {
+                        read.push_str(&cell.symbol);
+                    }
+                } else if tall && cell.is_fence_piece() {
+                    covered = true;
+                    if !above_fence {
+                        read.extend(Bracket::of_fence_top(&cell.symbol).map(Bracket::character));
+                    }
+                } else if !tall || !cell.symbol.trim().is_empty() {
+                    read.push_str(&cell.symbol);
+                }
+                above_fence = cell.is_fence_piece();
+            }
+            if tall && read.is_empty() && !covered {
+                read.push(' ');
+            }
+            line.push_str(&read);
+        }
+        let line = line.trim_end();
+        (!(pictured && line.trim().is_empty())).then(|| line.to_string())
+    }
+
+    /// What a double click at `at` picks out, and how to read it: a whole picture,
+    /// the block from a bracket to its partner, or a word.
+    fn pick(&self, at: ScreenPosition) -> Option<(Region, Reach)> {
+        let cell = self.cell(at)?;
+        let reach = match cell.copyable {
+            true => Reach::Copyable,
+            false => Reach::Drawn,
         };
-        from..=through
+        if let Some(showing) = cell.picture {
+            return Some((self.showing_extent(showing), Reach::Drawn));
+        }
+        if cell.is_fence_piece() {
+            return self.fenced_block(at).map(|region| (region, reach));
+        }
+        let character = cell.character()?;
+        if let Some(bracket) = Bracket::of(character) {
+            return self
+                .bracketed_flow(at, bracket)
+                .map(|region| (region, reach));
+        }
+        (CharClass::of(character) == CharClass::Word).then(|| (self.word(at), reach))
+    }
+
+    /// The cells a picture's showing covers.
+    fn showing_extent(&self, showing: Showing) -> Region {
+        let covered = self.rows.iter().flat_map(|(&row, cells)| {
+            cells
+                .iter()
+                .zip(self.area.x..)
+                .filter(move |(cell, _)| cell.picture == Some(showing))
+                .map(move |(_, column)| ScreenPosition::new(column, row))
+        });
+        let (start, end) = covered.fold(
+            (
+                ScreenPosition::new(u16::MAX, i64::MAX),
+                ScreenPosition::new(0, i64::MIN),
+            ),
+            |(start, end), at| {
+                (
+                    ScreenPosition::new(start.column.min(at.column), start.row.min(at.row)),
+                    ScreenPosition::new(end.column.max(at.column), end.row.max(at.row)),
+                )
+            },
+        );
+        Region::Block { start, end }
+    }
+
+    /// The run of word characters on `at`'s row around it.
+    fn word(&self, at: ScreenPosition) -> Region {
+        let is_word = |column: u16| {
+            self.cell(ScreenPosition::new(column, at.row))
+                .and_then(ScreenCell::character)
+                .is_some_and(|character| CharClass::of(character) == CharClass::Word)
+        };
+        let first = (self.area.x..at.column)
+            .rev()
+            .take_while(|&column| is_word(column))
+            .last()
+            .unwrap_or(at.column);
+        let last = (at.column + 1..self.area.right())
+            .take_while(|&column| is_word(column))
+            .last()
+            .unwrap_or(at.column);
+        Region::Flow {
+            start: ScreenPosition::new(first, at.row),
+            end: ScreenPosition::new(last, at.row),
+        }
+    }
+
+    /// From a one-row bracket at `at` to its partner, in reading order.
+    fn bracketed_flow(&self, at: ScreenPosition, bracket: Bracket) -> Option<Region> {
+        let characters: Vec<(ScreenPosition, char)> = self
+            .rows
+            .iter()
+            .flat_map(|(&row, cells)| {
+                cells
+                    .iter()
+                    .zip(self.area.x..)
+                    .filter_map(move |(cell, column)| {
+                        Some((ScreenPosition::new(column, row), cell.character()?))
+                    })
+            })
+            .collect();
+        let index = characters
+            .iter()
+            .position(|&(position, _)| position == at)?;
+        let partner = match bracket.opening {
+            true => bracket.partner(characters[index + 1..].iter().copied()),
+            false => bracket.partner(characters[..index].iter().rev().copied()),
+        }?;
+        Some(Region::Flow {
+            start: at.min(partner),
+            end: at.max(partner),
+        })
+    }
+
+    /// From the tall fence a piece at `at` belongs to, to its partner of the same
+    /// height: the rows the fence spans, across the columns between them.
+    fn fenced_block(&self, at: ScreenPosition) -> Option<Region> {
+        let is_piece = |column: u16, row: i64| {
+            self.cell(ScreenPosition::new(column, row))
+                .is_some_and(ScreenCell::is_fence_piece)
+        };
+        let top = (i64::MIN..=at.row)
+            .rev()
+            .take_while(|&row| is_piece(at.column, row))
+            .last()?;
+        let bottom = (at.row..)
+            .take_while(|&row| is_piece(at.column, row))
+            .last()?;
+        let fence_top = |column: u16| {
+            (is_piece(column, top) && !is_piece(column, top - 1))
+                .then(|| self.cell(ScreenPosition::new(column, top)))
+                .flatten()
+                .and_then(|cell| Bracket::of_fence_top(&cell.symbol))
+        };
+        let bracket = fence_top(at.column)?;
+        let tops = |columns: Vec<u16>| {
+            columns
+                .into_iter()
+                .filter_map(move |column| Some((column, fence_top(column)?.character())))
+        };
+        let partner = match bracket.opening {
+            true => bracket.partner(tops((at.column + 1..self.area.right()).collect())),
+            false => bracket.partner(tops((self.area.x..at.column).rev().collect())),
+        }?;
+        Some(Region::Block {
+            start: ScreenPosition::new(at.column.min(partner), top),
+            end: ScreenPosition::new(at.column.max(partner), bottom),
+        })
     }
 }
 
@@ -115,13 +421,22 @@ impl Editor {
                     anchor: position,
                     focus: position,
                     dragged: false,
-                    text: None,
                 });
                 self.screen_selecting = true;
             }
-            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
-                if self.screen_selecting =>
-            {
+            MouseEventKind::Drag(MouseButton::Left) if self.screen_selecting => {
+                let selection = self.screen_selection.as_mut()?;
+                let capture = self
+                    .captures
+                    .iter()
+                    .find(|capture| capture.area == selection.area)?;
+                selection.focus = capture.position(event);
+                selection.dragged = true;
+                if let Some(rows) = capture.edge_scroll(event.row) {
+                    return Some(Reaction::ScrollView(rows));
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.screen_selecting => {
                 if let Some(selection) = self.screen_selection.as_mut() {
                     if let Some(capture) = self
                         .captures
@@ -129,21 +444,33 @@ impl Editor {
                         .find(|capture| capture.area == selection.area)
                     {
                         selection.focus = capture.position(event);
-                        selection.dragged |=
-                            matches!(event.kind, MouseEventKind::Drag(MouseButton::Left));
                     }
                 }
-                if matches!(event.kind, MouseEventKind::Up(MouseButton::Left)) {
-                    self.screen_selecting = false;
-                    if let Some(text) = self.selected_screen_text() {
-                        self.screen_selection.as_mut().unwrap().text = Some(text.clone());
-                        return Some(Reaction::Copy(text));
-                    }
+                let text = self.selected_screen_text();
+                self.screen_selecting = false;
+                self.screen_selection = None;
+                if let Some(text) = text {
+                    return Some(Reaction::Copy(text));
                 }
             }
             _ => return None,
         }
         Some(Reaction::Continue)
+    }
+
+    /// Copy what a double click picks out of the pane under it: a word, a
+    /// bracketed block or a picture, typed annotations included.
+    pub fn pick_screen_text(&mut self, event: MouseEvent) -> Option<Reaction> {
+        let pointer = Position::new(event.column, event.row);
+        let capture = self
+            .captures
+            .iter()
+            .find(|capture| capture.area.contains(pointer))?;
+        let (region, reach) = capture.pick(capture.position(event))?;
+        let text = capture.text(region, reach)?;
+        self.screen_selecting = false;
+        self.screen_selection = None;
+        Some(Reaction::Copy(text))
     }
 
     /// The capture of the pane `selection` belongs to.
@@ -155,66 +482,38 @@ impl Editor {
 
     pub fn selected_screen_text(&self) -> Option<String> {
         let selection = self.screen_selection.as_ref()?;
-        if let Some(text) = selection.text.as_ref() {
-            return Some(text.clone());
-        }
         if !selection.dragged {
             return None;
         }
         let capture = self.capture_of(selection)?;
-        let (start, end) = ordered_screen_positions(selection.anchor, selection.focus);
-        let mut copied_pictures = HashSet::new();
-        let mut lines = Vec::new();
-        for content_row in start.row..=end.row {
-            let Some(y) = capture.line(content_row) else {
-                continue;
-            };
-            let cells: Vec<&ScreenCell> = capture
-                .columns(content_row, start, end)
-                .filter_map(|x| capture.cell(x, y))
-                .filter(|cell| cell.copyable)
-                .collect();
-            if cells.is_empty() {
-                continue;
-            }
-            let mut line = String::new();
-            let mut pictured = false;
-            for cell in cells.iter().filter(|cell| cell.selectable) {
-                match cell.picture {
-                    Some(id) => {
-                        pictured = true;
-                        if copied_pictures.insert(id) {
-                            line.push_str(&cell.symbol);
-                        }
-                    }
-                    None => line.push_str(&cell.symbol),
-                }
-            }
-            // A row holding only pieces of pictures already copied adds nothing.
-            if !(pictured && line.trim().is_empty()) {
-                lines.push(line.trim_end().to_string());
-            }
-        }
-        let text = lines.join("\n");
-        let text = text.trim_matches('\n');
-        (!text.is_empty()).then(|| text.to_string())
+        capture.text(selection.region(), Reach::Copyable)
     }
 
     /// Keep what the pane just drawn into the feed area shows, replacing whatever
-    /// was captured where it now lies.
+    /// was captured where it now lies; a selection in that pane keeps the rows it
+    /// captured before as well.
     pub fn capture_screen(&mut self, frame: &mut Frame) {
         let area = self.feed_area;
+        let top = self.feed_top;
         let buffer = frame.buffer_mut();
         let rows = (area.y..area.bottom())
             .map(|y| {
-                let pictures: Vec<Option<ImageId>> = (area.x..area.right())
-                    .map(|x| ImageId::placed(buffer[(x, y)].symbol(), buffer[(x, y)].fg))
+                let row = top + i64::from(y - area.y);
+                let pictures: Vec<Option<Showing>> = (area.x..area.right())
+                    .map(|x| {
+                        let piece = Piece::placed(buffer[(x, y)].symbol(), buffer[(x, y)].fg)?;
+                        Some(Showing {
+                            image: piece.image,
+                            column: i32::from(x) - i32::from(piece.column),
+                            row: row - i64::from(piece.row),
+                        })
+                    })
                     .collect();
                 let symbols: Vec<String> = (area.x..area.right())
                     .zip(&pictures)
                     .map(|(x, picture)| {
                         picture
-                            .and_then(graphics::source)
+                            .and_then(|showing| graphics::source(showing.image))
                             .unwrap_or_else(|| buffer[(x, y)].symbol().to_string())
                     })
                     .collect();
@@ -225,7 +524,7 @@ impl Editor {
                     })
                     .collect();
                 let selectable = selectable_columns(&symbols, &allowed);
-                symbols
+                let cells = symbols
                     .into_iter()
                     .zip(pictures)
                     .zip(selectable)
@@ -236,16 +535,26 @@ impl Editor {
                         selectable,
                         copyable,
                     })
-                    .collect()
+                    .collect();
+                (row, cells)
             })
-            .collect();
+            .collect::<BTreeMap<_, _>>();
+        let selecting = self
+            .screen_selection
+            .as_ref()
+            .is_some_and(|selection| selection.area == area);
+        if let Some(kept) = self
+            .captures
+            .iter_mut()
+            .find(|capture| selecting && capture.area == area)
+        {
+            kept.top = top;
+            kept.rows.extend(rows);
+            return;
+        }
         self.captures
             .retain(|capture| !capture.area.intersects(area));
-        self.captures.push(ScreenCapture {
-            area,
-            top: self.feed_top,
-            rows,
-        });
+        self.captures.push(ScreenCapture { area, top, rows });
     }
 
     /// Paint the selection over the pane just drawn, if the selection is its own.
@@ -260,14 +569,15 @@ impl Editor {
         let Some(capture) = self.capture_of(selection) else {
             return;
         };
-        let (start, end) = ordered_screen_positions(selection.anchor, selection.focus);
+        let region = selection.region();
         let buffer = frame.buffer_mut();
-        for content_row in start.row..=end.row {
+        for content_row in region.rows() {
             let Some(y) = capture.line(content_row) else {
                 continue;
             };
-            for x in capture.columns(content_row, start, end) {
-                if capture.selectable(x, y).is_some() {
+            for x in region.columns(content_row, capture.area) {
+                let at = ScreenPosition::new(x, content_row);
+                if capture.cell(at).is_some_and(|cell| cell.selectable) {
                     buffer[(x, y)].set_style(scheme().selection());
                 }
             }
@@ -275,14 +585,12 @@ impl Editor {
     }
 }
 
-fn ordered_screen_positions(
-    left: ScreenPosition,
-    right: ScreenPosition,
-) -> (ScreenPosition, ScreenPosition) {
-    if (left.row, left.column) <= (right.row, right.column) {
-        (left, right)
-    } else {
-        (right, left)
+impl ScreenSelection {
+    fn region(&self) -> Region {
+        Region::Flow {
+            start: self.anchor.min(self.focus),
+            end: self.anchor.max(self.focus),
+        }
     }
 }
 
@@ -327,6 +635,7 @@ mod tests {
     use crossterm::event::KeyModifiers;
 
     use super::*;
+    use crate::ui::render::maths::SHORT_BRACES;
 
     /// A pane at `area` that drew `text` on every line, every cell selectable.
     fn pane(area: Rect, text: &str) -> ScreenCapture {
@@ -345,7 +654,9 @@ mod tests {
         ScreenCapture {
             area,
             top: 0,
-            rows: (0..area.height).map(|_| line()).collect(),
+            rows: (0..i64::from(area.height))
+                .map(|row| (row, line()))
+                .collect(),
         }
     }
 
@@ -379,7 +690,7 @@ mod tests {
         ScreenCapture {
             area,
             top: 0,
-            rows: lines.iter().map(|&line| row(line)).collect(),
+            rows: (0..).zip(lines.iter().map(|&line| row(line))).collect(),
         }
     }
 
@@ -402,42 +713,49 @@ mod tests {
     }
 
     #[test]
-    fn a_picture_copies_as_its_tex_once_whatever_it_covers() {
-        let area = Rect::new(0, 0, 3, 3);
-        let id = ImageId::from(7);
-        let cell = |picture: Option<ImageId>, symbol: &str| ScreenCell {
-            symbol: symbol.to_string(),
-            picture,
+    fn each_showing_of_a_picture_copies_its_code_once_whatever_it_covers() {
+        let area = Rect::new(0, 0, 5, 3);
+        let image = ImageId::from(7);
+        let piece = |column: i32| ScreenCell {
+            symbol: "A_1".to_string(),
+            picture: Some(Showing {
+                image,
+                column,
+                row: 0,
+            }),
             selectable: true,
             copyable: true,
         };
-        let pictured = || {
-            vec![
-                cell(Some(id), "x^2"),
-                cell(Some(id), "x^2"),
-                cell(None, " "),
-            ]
+        let text = |symbol: &str| ScreenCell {
+            symbol: symbol.to_string(),
+            picture: None,
+            selectable: true,
+            copyable: true,
         };
+        // The same two-by-two picture shown twice, at columns 0 and 3.
+        let pictured = |between: &str| vec![piece(0), piece(0), text(between), piece(3), piece(3)];
         let mut editor = Editor::new(String::new());
         editor.captures = vec![ScreenCapture {
             area,
             top: 0,
-            rows: vec![
-                pictured(),
-                pictured(),
-                (0..3).map(|_| cell(None, "o")).collect(),
-            ],
+            rows: (0..)
+                .zip([
+                    pictured(","),
+                    pictured(" "),
+                    (0..5).map(|_| text("o")).collect(),
+                ])
+                .collect(),
         }];
 
         let left = MouseButton::Left;
         editor.handle_screen_mouse(mouse(MouseEventKind::Down(left), 0, 0));
-        editor.handle_screen_mouse(mouse(MouseEventKind::Drag(left), 2, 2));
-        let copied = editor.handle_screen_mouse(mouse(MouseEventKind::Up(left), 2, 2));
+        editor.handle_screen_mouse(mouse(MouseEventKind::Drag(left), 4, 2));
+        let copied = editor.handle_screen_mouse(mouse(MouseEventKind::Up(left), 4, 2));
 
         let Some(Reaction::Copy(text)) = copied else {
             panic!("a drag copies its text");
         };
-        assert_eq!(text, "x^2\nooo");
+        assert_eq!(text, "A_1,A_1\nooooo");
     }
 
     #[test]
@@ -457,5 +775,143 @@ mod tests {
         };
         assert!(!text.contains('s'), "{text:?} reached into the shell");
         assert_eq!(text, "vvv\nv");
+    }
+
+    fn text_cell(symbol: &str) -> ScreenCell {
+        ScreenCell {
+            symbol: symbol.to_string(),
+            picture: None,
+            selectable: true,
+            copyable: true,
+        }
+    }
+
+    /// A pane drawing `lines` as plain text, every line copyable.
+    fn drawn(lines: &[&str]) -> ScreenCapture {
+        let width = lines
+            .iter()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or(0);
+        ScreenCapture {
+            area: Rect::new(0, 0, width as u16, lines.len() as u16),
+            top: 0,
+            rows: (0..)
+                .zip(lines.iter().map(|line| {
+                    let mut symbols: Vec<String> = line.chars().map(String::from).collect();
+                    symbols.resize(width, " ".to_string());
+                    let selectable = selectable_columns(&symbols, &vec![true; width]);
+                    symbols
+                        .iter()
+                        .zip(selectable)
+                        .map(|(symbol, selectable)| ScreenCell {
+                            selectable,
+                            ..text_cell(symbol)
+                        })
+                        .collect()
+                }))
+                .collect(),
+        }
+    }
+
+    /// The text a double click at `column`, `line` copies from `capture`.
+    fn double_click(capture: ScreenCapture, column: u16, line: u16) -> Option<String> {
+        let mut editor = Editor::new(String::new());
+        editor.captures = vec![capture];
+        match editor.pick_screen_text(mouse(MouseEventKind::Down(MouseButton::Left), column, line))
+        {
+            Some(Reaction::Copy(text)) => Some(text),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_double_click_copies_the_word_under_it() {
+        let capture = drawn(&["x = foo_bar2 + 1"]);
+        assert_eq!(double_click(capture, 7, 0).as_deref(), Some("foo_bar2"));
+    }
+
+    #[test]
+    fn a_double_click_on_a_bracket_copies_through_its_partner() {
+        let lines = ["{a, (b, [c],", " d), e}"];
+        assert_eq!(
+            double_click(drawn(&lines), 4, 0).as_deref(),
+            Some("(b, [c],\n d)")
+        );
+        assert_eq!(
+            double_click(drawn(&lines), 2, 1).as_deref(),
+            Some("(b, [c],\n d)")
+        );
+        assert_eq!(
+            double_click(drawn(&lines), 6, 1).as_deref(),
+            Some("{a, (b, [c],\n d), e}")
+        );
+    }
+
+    #[test]
+    fn a_double_click_on_a_tall_fence_copies_its_block_as_one_line() {
+        let piece = |image: u32, column: i32, code: &str| ScreenCell {
+            symbol: code.to_string(),
+            picture: Some(Showing {
+                image: ImageId::from(image),
+                column,
+                row: 0,
+            }),
+            selectable: true,
+            copyable: true,
+        };
+        // `{a/b, c/d}` with each fraction a picture two rows high, between braces
+        // drawn from their halves.
+        let row = |open: &str, between: &str, close: &str| {
+            vec![
+                text_cell(open),
+                piece(1, 1, "a/b"),
+                piece(1, 1, "a/b"),
+                text_cell(between),
+                text_cell(" "),
+                piece(2, 5, "c/d"),
+                piece(2, 5, "c/d"),
+                text_cell(close),
+            ]
+        };
+        let (short_open, short_close) = (SHORT_BRACES[0].1, SHORT_BRACES[1].1);
+        let capture = ScreenCapture {
+            area: Rect::new(0, 0, 8, 2),
+            top: 0,
+            rows: (0..)
+                .zip([
+                    row(short_open[0], ",", short_close[0]),
+                    row(short_open[2], " ", short_close[2]),
+                ])
+                .collect(),
+        };
+        assert_eq!(double_click(capture, 0, 1).as_deref(), Some("{a/b, c/d}"));
+    }
+
+    #[test]
+    fn a_selection_keeps_rows_scrolled_out_of_view() {
+        let mut editor = Editor::new(String::new());
+        let mut capture = drawn(&["one", "two", "six", "ten"]);
+        capture.area.height = 2;
+        capture.top = 2;
+        capture.rows = capture.rows.into_iter().collect();
+        editor.captures = vec![capture];
+        let left = MouseButton::Left;
+
+        editor.handle_screen_mouse(mouse(MouseEventKind::Down(left), 2, 1));
+        // The pane scrolled back to the top while the button was held.
+        editor.captures[0].top = 0;
+        let edge = editor.handle_screen_mouse(mouse(MouseEventKind::Drag(left), 0, 0));
+        let copied = editor.handle_screen_mouse(mouse(MouseEventKind::Up(left), 0, 0));
+
+        assert!(matches!(edge, Some(Reaction::ScrollView(rows)) if rows > 0));
+        let Some(Reaction::Copy(text)) = copied else {
+            panic!("a drag copies its text");
+        };
+        assert_eq!(text, "one\ntwo\nsix\nten");
+        assert!(
+            editor.screen_selection.is_none(),
+            "copying lets the selection go"
+        );
     }
 }

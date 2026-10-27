@@ -7,6 +7,7 @@
 
 pub mod kitty;
 pub mod typeset;
+mod typewriter;
 
 use std::collections::HashMap;
 use std::env;
@@ -17,12 +18,14 @@ use crossterm::terminal::window_size;
 use ratatui::layout::Size;
 use ratatui::text::Line;
 use ratatui_image::picker::{Picker, ProtocolType};
-use resvg::tiny_skia::{Pixmap, Transform};
+use std::ops::Range;
+
+use resvg::tiny_skia::{Pixmap, PixmapPaint, Transform};
 use resvg::usvg::{Options, Tree};
 
 use crate::ui::config::UI;
 use kitty::{ImageId, KittyImage, Passthrough};
-use typeset::{Rgb, EM, PADDING};
+use typeset::{Break, Rgb, EM, PADDING};
 
 const TMUX: &str = "tmux";
 /// Set in every process tmux runs.
@@ -156,17 +159,26 @@ pub fn available() -> bool {
     CANVAS.get().is_some()
 }
 
-/// Typeset `source` with the colour scopes from `tex`, retaining `source` for copying.
-/// Returns placeholder lines no wider than `width`, or none when pictures are
-/// unavailable or the formula cannot be set legibly in that width.
-pub fn typeset(source: &str, tex: &str, colour: Rgb, width: u16) -> Option<Vec<Line<'static>>> {
+/// A formula to draw: its TeX, that TeX with theme colour scopes, and the M2 code
+/// a copy of its picture gives.
+#[derive(Clone, Copy, Debug)]
+pub struct Typesetting<'a> {
+    pub tex: &'a str,
+    pub painted: &'a str,
+    pub code: &'a str,
+}
+
+/// Typeset `formula` in `colour`, retaining its code for copying. Returns
+/// placeholder lines no wider than `width`, or none when pictures are unavailable
+/// or the formula cannot be set legibly in that width.
+pub fn typeset(formula: Typesetting, colour: Rgb, width: u16) -> Option<Vec<Line<'static>>> {
     let canvas = *CANVAS.get()?;
     gallery()
-        .formula(source, tex, colour, canvas, width)
+        .formula(formula, colour, canvas, width)
         .map(|image| image.lines())
 }
 
-/// The TeX the picture `id` was set from.
+/// The M2 code the picture `id` shows.
 pub fn source(id: ImageId) -> Option<String> {
     gallery().sources.get(&id).cloned()
 }
@@ -210,68 +222,88 @@ fn gallery() -> MutexGuard<'static, Gallery> {
 
 /// A formula as set in one colour.
 type FormulaKey = (String, Rgb);
+/// A formula's picture at a number of columns, for the code it copies as: values
+/// sharing TeX but not code each get their own picture to copy from.
+type ImageKey = (FormulaKey, u16, String);
+
+/// A formula's vector picture and the places it may be cut into rows.
+struct Formula {
+    tree: Tree,
+    breaks: Vec<Break>,
+}
 
 /// Every picture made, kept so a layout at another width or a resend reuses it.
 struct Gallery {
     /// Each formula's vector picture, or none when RaTeX refused it.
-    formulas: HashMap<FormulaKey, Option<Arc<Tree>>>,
+    formulas: HashMap<FormulaKey, Option<Arc<Formula>>>,
     /// Each formula rasterised to a number of columns.
-    images: HashMap<(FormulaKey, u16), Option<Arc<KittyImage>>>,
+    images: HashMap<ImageKey, Option<Arc<KittyImage>>>,
     last_id: ImageId,
     unsent: Vec<Arc<KittyImage>>,
-    /// The TeX each picture was set from, so copying it gives back its source.
+    /// The M2 code each picture shows, so copying it gives back what M2 reads.
     sources: HashMap<ImageId, String>,
 }
 
 impl Gallery {
     fn formula(
         &mut self,
-        source: &str,
-        tex: &str,
+        Typesetting { tex, painted, code }: Typesetting,
         colour: Rgb,
         canvas: Canvas,
         width: u16,
     ) -> Option<Arc<KittyImage>> {
-        let key = (tex.to_string(), colour);
-        let tree = self
+        let key = (painted.to_string(), colour);
+        let formula = self
             .formulas
             .entry(key.clone())
             .or_insert_with(|| {
-                let svg = typeset::svg_colored(source, tex, colour).ok()?;
-                Tree::from_str(&svg, &Options::default()).ok().map(Arc::new)
+                let typeset = typeset::svg_colored(tex, painted, colour).ok()?;
+                let tree = Tree::from_str(&typeset.svg, &Options::default()).ok()?;
+                Some(Arc::new(Formula {
+                    tree,
+                    breaks: typeset.breaks,
+                }))
             })
             .clone()?;
-        let raster = Raster::fitted(&tree, canvas, width)?;
-        if let Some(image) = self.images.get(&(key.clone(), raster.cells.width)) {
+        let raster = Raster::fitted(&formula, canvas, width)?;
+        let image_key = (key, raster.cells.width, code.to_string());
+        if let Some(image) = self.images.get(&image_key) {
             return image.clone();
         }
         self.last_id = self.last_id.next();
         let image = raster
-            .png(&tree)
+            .png(&formula.tree)
             .and_then(|png| KittyImage::new(self.last_id, raster.cells, png).ok())
             .map(Arc::new);
         self.unsent.extend(image.clone());
         if image.is_some() {
-            self.sources.insert(self.last_id, source.to_string());
+            self.sources.insert(self.last_id, code.to_string());
         }
-        self.images.insert((key, raster.cells.width), image.clone());
+        self.images.insert(image_key, image.clone());
         image
     }
 }
 
-/// How a vector picture lands on the cell grid: its scale and the cells it covers.
+/// How a vector picture lands on the cell grid: its scale, the slices of it
+/// stacked as rows, and the cells it covers.
 struct Raster {
     scale: f32,
     top: f32,
     height: f32,
+    /// The picture's slices, left to right, each drawn below the one before.
+    rows: Vec<Range<f32>>,
+    /// Terminal rows each slice stands in.
+    row_cells: u16,
     cells: Size,
     cell: Size,
 }
 
 impl Raster {
-    /// The picture at the terminal's text size, shrunk to `width` columns when it
-    /// is wider; none when shrinking would make it too small to read.
-    fn fitted(tree: &Tree, canvas: Canvas, width: u16) -> Option<Self> {
+    /// The picture at the terminal's text size, broken into rows of at most
+    /// `width` columns where it may break, and shrunk to `width` when a row it
+    /// cannot break is wider; none when shrinking would make it too small to read.
+    fn fitted(formula: &Formula, canvas: Canvas, width: u16) -> Option<Self> {
+        let tree = &formula.tree;
         // Font ascender/descender metrics can reserve more space than the ink,
         // particularly for delimiters. Only visible bounds determine occupied rows.
         let bounds = tree.root().abs_stroke_bounding_box();
@@ -280,36 +312,86 @@ impl Raster {
         let cell_width = f32::from(canvas.cell.width);
         let cell_height = f32::from(canvas.cell.height);
         let natural = cell_height * UI.typeset.em_per_cell_height / EM;
-        let columns = tree.size().width() * natural / cell_width;
-        let shrink = (f32::from(width) / columns).min(1.0);
+        let room = f32::from(width) * cell_width / natural;
+        let across = tree.size().width();
+        let breaks = formula
+            .breaks
+            .iter()
+            .map(|cut| cut.across(across))
+            .collect::<Vec<_>>();
+        let rows = wrapped(across, &breaks, room);
+        let widest = rows
+            .iter()
+            .map(|row| row.end - row.start)
+            .fold(0.0, f32::max);
+        let shrink = (room / widest).min(1.0);
         if shrink < UI.typeset.min_scale {
             return None;
         }
         let scale = natural * shrink;
         let cover = |extent: f32, cell: f32| ((extent * scale / cell).ceil() as u16).max(1);
+        let row_cells = cover(height, cell_height);
         Some(Self {
             scale,
             top,
             height,
             cells: Size::new(
-                cover(tree.size().width(), cell_width).min(width),
-                cover(height, cell_height),
+                cover(widest, cell_width).min(width),
+                row_cells * rows.len() as u16,
             ),
+            rows,
+            row_cells,
             cell: canvas.cell,
         })
     }
 
-    /// The picture drawn across exactly its cells, centred down them, as PNG.
+    /// The picture's rows drawn across exactly its cells, each centred down its
+    /// own, as PNG.
     fn png(&self, tree: &Tree) -> Option<Vec<u8>> {
         let width = u32::from(self.cells.width) * u32::from(self.cell.width);
-        let height = u32::from(self.cells.height) * u32::from(self.cell.height);
-        let mut pixmap = Pixmap::new(width, height)?;
-        let slack = height as f32 - self.height * self.scale;
-        let transform = Transform::from_scale(self.scale, self.scale)
-            .post_translate(0.0, slack / 2.0 - self.top * self.scale);
-        resvg::render(tree, transform, &mut pixmap.as_mut());
+        let row_height = u32::from(self.row_cells) * u32::from(self.cell.height);
+        let mut pixmap = Pixmap::new(width, row_height * self.rows.len() as u32)?;
+        let slack = row_height as f32 - self.height * self.scale;
+        for (index, row) in self.rows.iter().enumerate() {
+            // A slice as wide as its row, so what follows its end is cut away.
+            let slice = (((row.end - row.start) * self.scale).ceil() as u32).clamp(1, width);
+            let mut strip = Pixmap::new(slice, row_height)?;
+            let transform = Transform::from_scale(self.scale, self.scale)
+                .post_translate(-row.start * self.scale, slack / 2.0 - self.top * self.scale);
+            resvg::render(tree, transform, &mut strip.as_mut());
+            pixmap.draw_pixmap(
+                0,
+                (row_height * index as u32) as i32,
+                strip.as_ref(),
+                &PixmapPaint::default(),
+                Transform::identity(),
+                None,
+            );
+        }
         pixmap.encode_png().ok()
     }
+}
+
+/// The slices of a picture `width` units wide, each at most `room` wide where
+/// `breaks` allow: every row takes the last break that still fits, and a row
+/// with none that fits runs on to the first it can.
+fn wrapped(width: f32, breaks: &[Break], room: f32) -> Vec<Range<f32>> {
+    let mut rows = Vec::new();
+    let mut start = 0.0;
+    while width - start > room {
+        let ahead = || breaks.iter().filter(|cut| cut.start > start);
+        let Some(cut) = ahead()
+            .take_while(|cut| cut.end - start <= room)
+            .last()
+            .or_else(|| ahead().next())
+        else {
+            break;
+        };
+        rows.push(start..cut.end);
+        start = cut.start;
+    }
+    rows.push(start..width);
+    rows
 }
 
 #[cfg(test)]
@@ -337,9 +419,12 @@ mod tests {
         assert!(typeset::svg(annotation, Rgb([255, 255, 255])).is_ok());
     }
 
-    fn tree(tex: &str) -> Tree {
-        let svg = typeset::svg(tex, Rgb([255, 255, 255])).unwrap();
-        Tree::from_str(&svg, &Options::default()).unwrap()
+    fn formula(tex: &str) -> Formula {
+        let typeset = typeset::svg_colored(tex, tex, Rgb([255, 255, 255])).unwrap();
+        Formula {
+            tree: Tree::from_str(&typeset.svg, &Options::default()).unwrap(),
+            breaks: typeset.breaks,
+        }
     }
 
     #[test]
@@ -352,13 +437,13 @@ mod tests {
             r"\left[1\right]",
             r"\left\{1\right\}",
         ] {
-            let tree = tree(tex);
-            let raster = Raster::fitted(&tree, CANVAS, 80).unwrap();
+            let formula = formula(tex);
+            let raster = Raster::fitted(&formula, CANVAS, 80).unwrap();
             assert_eq!(
                 raster.cells.height,
                 1,
                 "{tex}: SVG height {}, ink height {}, scale {}",
-                tree.size().height(),
+                formula.tree.size().height(),
                 raster.height,
                 raster.scale
             );
@@ -367,10 +452,10 @@ mod tests {
 
     #[test]
     fn a_picture_covers_whole_cells_and_fills_them_exactly() {
-        let tree = tree(r"\frac{x+y}{x-z}");
+        let formula = formula(r"\frac{x+y}{x-z}");
 
-        let raster = Raster::fitted(&tree, CANVAS, 80).unwrap();
-        let png = raster.png(&tree).unwrap();
+        let raster = Raster::fitted(&formula, CANVAS, 80).unwrap();
+        let png = raster.png(&formula.tree).unwrap();
 
         let pixmap = Pixmap::decode_png(&png).unwrap();
         assert_eq!(pixmap.width(), u32::from(raster.cells.width) * 10);
@@ -383,14 +468,42 @@ mod tests {
 
     #[test]
     fn a_wide_formula_shrinks_to_the_width_until_it_would_be_unreadable() {
-        let tree = tree(r"1\,267\,650\,600\,228\,229\,401\,496\,703\,205\,376");
-        let natural = Raster::fitted(&tree, CANVAS, u16::MAX).unwrap().cells.width;
+        let formula = formula(r"1\,267\,650\,600\,228\,229\,401\,496\,703\,205\,376");
+        let natural = Raster::fitted(&formula, CANVAS, u16::MAX)
+            .unwrap()
+            .cells
+            .width;
 
-        let shrunk = Raster::fitted(&tree, CANVAS, natural - 1).unwrap();
-        let refused = Raster::fitted(&tree, CANVAS, 1);
+        let shrunk = Raster::fitted(&formula, CANVAS, natural - 1).unwrap();
+        let refused = Raster::fitted(&formula, CANVAS, 1);
 
         assert!(shrunk.cells.width < natural);
         assert!(refused.is_none());
+    }
+
+    #[test]
+    fn a_long_list_wraps_after_its_commas_at_full_size() {
+        let entries = (1..=60).map(|n| n.to_string()).collect::<Vec<_>>();
+        let formula = formula(&format!(r"\left\{{{}\right\}}", entries.join(r",\,")));
+        let unbroken = Raster::fitted(&formula, CANVAS, u16::MAX).unwrap();
+        let width = unbroken.cells.width / 3;
+
+        let wrapped = Raster::fitted(&formula, CANVAS, width).unwrap();
+
+        assert_eq!(unbroken.rows.len(), 1);
+        assert!(wrapped.rows.len() >= 3, "{} rows", wrapped.rows.len());
+        assert_eq!(wrapped.scale, unbroken.scale, "wrapping never shrinks");
+        assert!(wrapped.cells.width <= width);
+        assert_eq!(
+            wrapped.cells.height,
+            unbroken.cells.height * wrapped.rows.len() as u16
+        );
+    }
+
+    #[test]
+    fn a_fraction_bar_is_never_cut() {
+        let formula = formula(r"\frac{1,\,2,\,3,\,4,\,5,\,6,\,7,\,8}{9}");
+        assert!(formula.breaks.is_empty());
     }
 
     #[test]
@@ -399,14 +512,20 @@ mod tests {
         gallery.unsent.clear();
         let ink = Rgb([1, 2, 3]);
 
-        let first = gallery.formula("x^2", r"\textcolor{red}{x^2}", ink, CANVAS, 80);
-        let again = gallery.formula("x^2", r"\textcolor{red}{x^2}", ink, CANVAS, 120);
+        let square = Typesetting {
+            tex: "x^2",
+            painted: r"\textcolor{red}{x^2}",
+            code: "x^2",
+        };
+
+        let first = gallery.formula(square, ink, CANVAS, 80);
+        let again = gallery.formula(square, ink, CANVAS, 120);
 
         assert!(Arc::ptr_eq(&first.unwrap(), &again.unwrap()));
         assert_eq!(gallery.unsent.len(), 1);
         assert_eq!(
             gallery.sources.get(&gallery.last_id).map(String::as_str),
-            Some("x^2")
+            Some(square.code)
         );
     }
 }

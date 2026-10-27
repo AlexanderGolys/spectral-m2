@@ -2555,6 +2555,7 @@ dependencies = [
  "base64",
  "clap",
  "crossterm 0.29.0",
+ "fontdb",
  "html2text",
  "lsp-server",
  "lsp-types",
@@ -2563,6 +2564,7 @@ dependencies = [
  "rand 0.8.6",
  "ratatui",
  "ratatui-image",
+ "ratex-font",
  "ratex-layout",
  "ratex-parser",
  "ratex-svg",
@@ -2577,6 +2579,7 @@ dependencies = [
  "toml",
  "tree-sitter-highlight",
  "tree-sitter-macaulay2",
+ "ttf-parser",
  "unicode-width",
  "url",
 ]

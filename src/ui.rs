@@ -19,4 +19,5 @@ pub mod render;
 mod statusline;
 mod syntax_tree;
 pub mod terminal;
+pub mod text_object;
 pub mod wrap;

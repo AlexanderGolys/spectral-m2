@@ -1125,8 +1125,25 @@ impl OutputBlock {
         Bordered::text_width(context, self.border_layout())
     }
 
-    fn layout(&self, cell: &OutputCell, context: &RenderContext) -> Vec<String> {
+    /// The columns `cell`'s value wraps to: short of its type and the gap before
+    /// it, when the type is narrow enough to stand beside the value; else all of
+    /// them, the type then going below wherever the value leaves it no room.
+    fn value_width(&self, cell: &OutputCell, context: &RenderContext) -> u16 {
         let width = self.text_width(context);
+        let column = self
+            .type_lines(cell, context)
+            .iter()
+            .map(Line::width)
+            .max()
+            .map_or(0, |type_width| type_width + UI.type_gap);
+        match column as f32 <= f32::from(width) * UI.max_type_share {
+            true => u16::try_from(usize::from(width) - column).unwrap_or(width),
+            false => width,
+        }
+    }
+
+    fn layout(&self, cell: &OutputCell, context: &RenderContext) -> Vec<String> {
+        let width = self.value_width(cell, context);
         let text = match &cell.value {
             Some(value @ M2Value::Markup { .. }) => value.render_at(width.into()),
             _ => cell.text.clone(),
@@ -1148,7 +1165,7 @@ impl OutputBlock {
         // A value whose TeX parses is drawn from its own structure, so a numeral, a
         // name and an operator each take their own colour. Anything else is flat text
         // and keeps the single value colour it always had.
-        let width = usize::from(self.text_width(context));
+        let width = usize::from(self.value_width(cell, context));
         let style = context.math();
         if let Some(M2Value::Markup {
             html,
@@ -1458,7 +1475,7 @@ impl Block for OutputBlock {
             let link = markup::link_at(
                 html,
                 *example_width,
-                &context.with_width(self.text_width(context)),
+                &context.with_width(self.value_width(cell, context)),
                 Position::new(
                     position.x.checked_sub(inner.x)?,
                     unfolded(usize::from(position.y - row))? as u16,
@@ -2753,13 +2770,27 @@ mod tests {
     }
 
     #[test]
-    fn overflowing_type_moves_below_a_full_value_row() {
-        let width = 20;
-        let context = RenderContext::new(width, 0);
+    fn a_long_value_wraps_short_of_its_type() {
+        let context = RenderContext::new(40, 0);
         let width = OutputBlock::value(String::new(), None).text_width(&context);
-        let block = OutputBlock::value("x".repeat(width.into()), Some("R".into()));
+        let block = OutputBlock::value("x".repeat(3 * usize::from(width)), Some("R".into()));
 
-        let rows = rendered_rows(&block, 20);
+        let rows = rendered_rows(&block, 40);
+        let ty = rows.iter().find_map(|row| row.find('R')).unwrap();
+        assert!(rows
+            .iter()
+            .filter_map(|row| row.rfind('x'))
+            .all(|value| value + UI.type_gap < ty));
+    }
+
+    #[test]
+    fn a_type_too_wide_for_its_column_moves_below_a_full_value_row() {
+        let context = RenderContext::new(40, 0);
+        let width = OutputBlock::value(String::new(), None).text_width(&context);
+        let wide = (f32::from(width) * UI.max_type_share) as usize;
+        let block = OutputBlock::value("x".repeat(width.into()), Some("R".repeat(wide)));
+
+        let rows = rendered_rows(&block, 40);
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[1].matches('x').count(), usize::from(width));
         assert!(!rows[1].contains('R'));

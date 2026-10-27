@@ -31,6 +31,8 @@ Error = { required = true, captures = ["error"] }
 Warning = { required = true }
 Info = { required = true }
 Hint = { required = true }
+
+Bg5 = { link="Bg4" }
 Canvas = { link = "Bg0" }
 Code = { link = "Bg1" }
 Raised = { link = "Bg2" }
@@ -73,8 +75,8 @@ MarkupStrong = { bold = true }
 MarkupEmphasis = { italic = true }
 MarkupStrongEmphasis = { bold = true, italic = true }
 MarkupStrike = { crossed_out = true }
-# A link keeps the colour of the text around it and is set apart by these.
-MarkupLink = { italic = true }
+# A link is drawn in the colour of printed output, set apart by its slant.
+MarkupLink = { fg_from = "Printed.fg", italic = true }
 MarkupLinkHover = { underline = true }
 MarkupLinkOpen = { underline = true, bold = true }
 DiagnosticError = { sp_from = "Error.fg", underline = true }

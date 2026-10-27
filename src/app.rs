@@ -232,6 +232,19 @@ impl App {
                 let _ = execute!(io::stdout(), CopyToClipboard::to_clipboard_from(text));
                 true
             }
+            Reaction::ScrollView(rows) => {
+                let pane = self.panes.focused_mut();
+                match pane.view {
+                    ViewKind::Shell => workspace.editor.scroll_feed(rows),
+                    _ => {
+                        pane.viewport.scroll = pane
+                            .viewport
+                            .scroll
+                            .saturating_add_signed(-isize::from(rows))
+                    }
+                }
+                true
+            }
             Reaction::Open(view) => {
                 self.panes.open_view(view);
                 true

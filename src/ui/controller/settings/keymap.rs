@@ -245,6 +245,7 @@ impl Default for Keymaps {
             ]),
             reserved: HashSet::from([
                 key!(Char('l') + Ctrl),
+                key!(Char('a') + Ctrl),
                 key!(Char(' ') + Shift),
                 key!(Enter + Shift),
                 key!(Enter + Alt),
@@ -441,7 +442,7 @@ mod tests {
     #[test]
     fn function_keys_and_modified_shortcuts_can_be_assigned() {
         for key in (2..=24).map(|number| key!(F(number))).chain([
-            key!(Char('a') + Ctrl),
+            key!(Char('g') + Ctrl),
             key!(Char('c') + Ctrl),
             key!(Char('s') + Ctrl),
             key!(Char('q') + Ctrl),

@@ -21,7 +21,7 @@ While you type, the prompt changes to its typing form, and it returns to the res
 
 ## Pending and completed cells
 
-Submitted code moves into the feed immediately. As Macaulay2 answers, Spectral appends printed text, values, types, warnings, or errors; consecutive values share one border. If a cell fails, its code and the unevaluated cells below it sit on a red background; the unevaluated code is muted without syntax highlighting. The error box puts “Error” in its title and shows the message in light red. Cell numbers remain session metadata but are not displayed until cells become focusable.
+Submitted code moves into the feed immediately. As Macaulay2 answers, Spectral appends printed text, values, types, warnings, or errors; consecutive values share one border. A value's type stands at the right edge, and a long value wraps short of it; a type wider than a third of the box goes below the value instead. If a cell fails, its code and the unevaluated cells below it sit on a red background; the unevaluated code is muted without syntax highlighting. The error box puts “Error” in its title and shows the message in light red. Cell numbers remain session metadata but are not displayed until cells become focusable.
 
 Only one submission can evaluate in a workspace at a time. Trying to submit another while it is busy produces an input diagnostic and does not disturb the running evaluation.
 
@@ -37,7 +37,7 @@ degree I
 
 Plain-text results such as `net help "arithmetic with complex maps"` use a bounded preview: at most 256 KiB of source text and 262,144 display cells per value. Larger previews retain their beginning and end with a truncation notice. Expanding a result keeps these limits; the full value remains available in Macaulay2.
 
-`help` pages are drawn in the feed: the title over a rule, its name apart from its brief; the usage, inputs and outputs as headers over their entries; and each example as the session draws code and values, without its numbers. A link to another page keeps the colour of the text around it, set in italics (the `MarkupLink` group), and is underlined while the pointer is over it, and Ctrl+click runs `help` for that page beside what you are typing.
+`help` pages are drawn in the feed: the title over a rule, its name apart from its brief; the usage, inputs and outputs as headers over their entries; and each example as the session draws code and values, without its numbers. A link to another page is set in italics in the colour of printed output (the `MarkupLink` group), while one written as code keeps the colours of its code, and is underlined while the pointer is over it, and Ctrl+click runs `help` for that page beside what you are typing.
 
 ## History and navigation
 
@@ -61,6 +61,14 @@ Commands and their files complete too; see [Commands and pickers](commands.md).
 
 ## Selection and clipboard
 
-Hold `Shift` with `Left`, `Right`, `Home`, or `End` to extend an input selection. `Ctrl+Y` copies it. Typing or deleting replaces the selected range.
+Hold `Shift` with `Left`, `Right`, `Home`, or `End` to extend an input selection, or press `Ctrl+A` to select all of it. `Ctrl+Y` copies it. Typing or deleting replaces the selected range.
 
-You can also drag over input, feed, code previews, or syntax trees with the mouse. Releasing a real drag copies the selectable text through OSC 52. UI markers, borders, type annotations, and picker rows are excluded where appropriate so copied text stays useful.
+Drag over the input, the feed, or a preview to select with the mouse. Releasing the button copies the text through OSC 52; outside the input the selection then lets go. Drag against the top or bottom edge to scroll on, so a selection can reach past what fits on screen. UI markers, borders, type annotations, and picker rows are left out, so copied text stays useful.
+
+Double-click to copy a piece at once:
+
+- a word, such as a variable name;
+- a bracket, to take everything up to its partner -- `(x_1, x_2)` or a whole `{...}` list, across lines too;
+- a typeset formula, which copies as the Macaulay2 code it shows.
+
+Typeset maths always copies as code you can paste back: a matrix shown as a picture copies as `matrix {{x_1, 1/2}}`, not as its TeX. Rows held together by a tall formula read back as one line, its tall brackets as single ones. Double-clicking works on type annotations too, though a drag leaves them out.

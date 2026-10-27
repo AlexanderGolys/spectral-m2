@@ -34,6 +34,7 @@ use crate::ui::config::UI;
 use crate::ui::graphics::kitty::PLACEHOLDER;
 use crate::ui::key::KeyEvent;
 use crate::ui::render::{Highlights, Prompt, RenderContext};
+use crate::ui::text_object::{Bracket, CharClass};
 use crate::ui::wrap::{offset_at_column, HardWrap, TextLayout, WrapPolicy};
 
 /// A text-editing operation owned and interpreted by the input field.
@@ -73,6 +74,7 @@ pub enum InputAction {
     SelectLineEnd = "extend selection to line end",
     SelectTextStart = "extend selection to the start of the input",
     SelectTextEnd = "extend selection to the end of the input",
+    SelectAll = "select the whole input",
 
     Clear = "clear input text",
 }
@@ -212,6 +214,56 @@ impl InputTextField {
             self.cursor = cursor;
             self.anchor = Some(cursor);
         }
+    }
+
+    pub fn select_all(&mut self) {
+        self.select(0..self.text.len());
+    }
+
+    /// Select what a double click at `cursor` picks out: the block from a bracket
+    /// there to its partner, brackets included, or the word there.
+    pub fn select_around(&mut self, cursor: usize) {
+        let Some(character) = self.text.get(cursor..).and_then(|rest| rest.chars().next()) else {
+            return;
+        };
+        let after = cursor + character.len_utf8();
+        let range = match Bracket::of(character) {
+            Some(bracket) if bracket.opening => bracket
+                .partner(
+                    self.text[after..]
+                        .char_indices()
+                        .map(|(index, character)| (after + index, character)),
+                )
+                .map(|close| cursor..close + 1),
+            Some(bracket) => bracket
+                .partner(self.text[..cursor].char_indices().rev())
+                .map(|open| open..after),
+            None if CharClass::of(character) == CharClass::Word => {
+                let is_word = |character: &char| CharClass::of(*character) == CharClass::Word;
+                let before: usize = self.text[..cursor]
+                    .chars()
+                    .rev()
+                    .take_while(is_word)
+                    .map(char::len_utf8)
+                    .sum();
+                let rest: usize = self.text[cursor..]
+                    .chars()
+                    .take_while(is_word)
+                    .map(char::len_utf8)
+                    .sum();
+                Some(cursor - before..cursor + rest)
+            }
+            None => None,
+        };
+        if let Some(range) = range {
+            self.select(range);
+        }
+    }
+
+    fn select(&mut self, range: Range<usize>) {
+        self.history.stop_browsing();
+        self.anchor = Some(range.start);
+        self.cursor = range.end;
     }
 
     pub fn continue_selection(&mut self, cursor: usize) {
@@ -631,26 +683,6 @@ impl InputTextField {
     }
 }
 
-/// What a word-wise cursor motion treats alike: it crosses a run of one class.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CharClass {
-    Word,
-    Punctuation,
-    Space,
-}
-
-impl CharClass {
-    fn of(character: char) -> Self {
-        if character.is_whitespace() {
-            Self::Space
-        } else if character.is_alphanumeric() || character == '_' || character == '\'' {
-            Self::Word
-        } else {
-            Self::Punctuation
-        }
-    }
-}
-
 /// The live source field and its transient presentation state.
 pub struct InputCode {
     field: InputTextField,
@@ -856,6 +888,7 @@ impl InputCode {
             SelectLineEnd => field.select_end(),
             SelectTextStart => field.select_text_start(),
             SelectTextEnd => field.select_text_end(),
+            SelectAll => field.select_all(),
             Clear | NextCompletion | PreviousCompletion => unreachable!(),
         }
     }
@@ -917,6 +950,7 @@ impl InputCode {
         use InputAction::*;
         let action = match key.code {
             KeyCode::Char('l') if key.ctrl() => Some(Clear),
+            KeyCode::Char('a') if key.ctrl() => Some(SelectAll),
             KeyCode::Char('z' | 'Z') if key.ctrl() && key.shift() => Some(Redo),
             KeyCode::Char('z') if key.ctrl() => Some(Undo),
             // The backspace control character, which is what a terminal sends
@@ -1006,6 +1040,19 @@ impl InputCode {
             _ => return (false, None),
         }
         (true, None)
+    }
+
+    /// Select the word or bracketed block under a double click, returning what
+    /// it selected; none when the click is outside the text.
+    pub fn handle_double_click(&mut self, event: MouseEvent) -> Option<String> {
+        let area = self.text_area;
+        if !area.contains(Position::new(event.column, event.row)) {
+            return None;
+        }
+        self.selecting = false;
+        let cursor = self.cursor_at_mouse(event, area, self.scroll);
+        self.field.select_around(cursor);
+        self.field.selected_text().map(str::to_string)
     }
 
     fn cursor_at_mouse(&self, event: MouseEvent, area: Rect, scroll: usize) -> usize {
@@ -1416,6 +1463,33 @@ mod tests {
         }
 
         assert_eq!(input.text(), "\n\n\n\t");
+    }
+
+    #[test]
+    fn a_double_click_selects_the_word_or_bracketed_block_around_it() {
+        let source = "f(x_1, {a, b}) + total";
+        let selected = |cursor: usize| {
+            let mut input = InputCode::new_in_memory();
+            input.insert(source);
+            input.field.select_around(cursor);
+            input.field.selected_text().map(str::to_string)
+        };
+
+        assert_eq!(selected(3).as_deref(), Some("x_1"));
+        assert_eq!(selected(source.len() - 2).as_deref(), Some("total"));
+        assert_eq!(selected(1).as_deref(), Some("(x_1, {a, b})"));
+        assert_eq!(selected(12).as_deref(), Some("{a, b}"));
+        assert_eq!(selected(5), None);
+    }
+
+    #[test]
+    fn ctrl_a_selects_the_whole_input() {
+        let mut input = InputCode::new_in_memory();
+        input.insert("R = QQ[x]\nI = ideal x");
+
+        input.handle_key(KeyCode::Char('a') + Ctrl);
+
+        assert_eq!(input.field.selected_text(), Some("R = QQ[x]\nI = ideal x"));
     }
 
     #[test]

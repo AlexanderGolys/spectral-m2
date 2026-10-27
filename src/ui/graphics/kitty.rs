@@ -355,15 +355,33 @@ impl ImageId {
         let [_, r, g, b] = self.0.to_be_bytes();
         Color::Rgb(r, g, b)
     }
+}
 
-    /// The picture a placeholder drawn as `symbol` in `colour` shows a piece of.
+/// What one placeholder cell shows: a picture, and the row and column of its piece.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Piece {
+    pub image: ImageId,
+    pub row: u16,
+    pub column: u16,
+}
+
+impl Piece {
+    /// The piece a placeholder drawn as `symbol` in `colour` shows.
     pub fn placed(symbol: &str, colour: Color) -> Option<Self> {
         let Color::Rgb(r, g, b) = colour else {
             return None;
         };
-        symbol
-            .starts_with(PLACEHOLDER)
-            .then(|| Self(u32::from_be_bytes([0, r, g, b])))
+        let mut marks = symbol.strip_prefix(PLACEHOLDER)?.chars().map(|mark| {
+            DIACRITICS
+                .iter()
+                .position(|&diacritic| diacritic == mark)
+                .and_then(|index| u16::try_from(index).ok())
+        });
+        Some(Self {
+            image: ImageId(u32::from_be_bytes([0, r, g, b])),
+            row: marks.next()??,
+            column: marks.next()??,
+        })
     }
 }
 
@@ -475,6 +493,34 @@ mod tests {
         );
         let colours = lines[1].spans.iter().map(|span| span.style.fg);
         assert!(colours.into_iter().all(|fg| fg == Some(image.id.colour())));
+    }
+
+    #[test]
+    fn a_placeholder_reads_back_as_the_piece_it_was_drawn_for() {
+        let image = image(Size::new(3, 2));
+        let lines = image.lines();
+        let row = lines[1].to_string();
+        let cells: Vec<String> = row
+            .split(PLACEHOLDER)
+            .skip(1)
+            .map(|marks| format!("{PLACEHOLDER}{marks}"))
+            .collect();
+
+        let pieces = cells
+            .iter()
+            .map(|cell| Piece::placed(cell, image.id.colour()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            pieces,
+            (0..3)
+                .map(|column| Some(Piece {
+                    image: image.id,
+                    row: 1,
+                    column
+                }))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

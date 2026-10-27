@@ -85,8 +85,13 @@ struct Frame {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum M2Value {
-    /// TeX source accompanied by the Net spelling used when it is unsupported.
-    Tex { source: String, fallback: String },
+    /// TeX source accompanied by the Net spelling used when it is unsupported,
+    /// and the one-line code M2 reads back, which copying its picture gives.
+    Tex {
+        source: String,
+        fallback: String,
+        code: String,
+    },
     /// A value for which M2 could not produce TeX.
     Net(String),
     /// Key/value parts composed into one brace-delimited row grid.
@@ -237,7 +242,9 @@ impl M2Value {
     fn block(&self, spelling: Spelling) -> RenderedBlock {
         match self {
             Self::Tex { fallback, .. } if spelling == Spelling::Ascii => Self::text_block(fallback),
-            Self::Tex { source, fallback } => {
+            Self::Tex {
+                source, fallback, ..
+            } => {
                 let source = match source
                     .strip_prefix('$')
                     .and_then(|tex| tex.strip_suffix('$'))
@@ -337,11 +344,9 @@ impl M2Value {
             Self::Net(text) | Self::Markup { fallback: text, .. } | Self::Token { text, .. } => {
                 Some(text.as_str())
             }
-            Self::Tex { source, fallback }
-                if !(source.starts_with('$') && source.ends_with('$')) =>
-            {
-                Some(fallback.as_str())
-            }
+            Self::Tex {
+                source, fallback, ..
+            } if !(source.starts_with('$') && source.ends_with('$')) => Some(fallback.as_str()),
             _ => None,
         }
     }
@@ -808,6 +813,7 @@ mod tests {
             M2Value::Tex {
                 source: "\\begin{tabular}...".into(),
                 fallback: text.into(),
+                code: String::new(),
             },
             M2Value::Markup {
                 html: String::new(),
@@ -828,6 +834,7 @@ mod tests {
         let fraction = M2Value::Tex {
             source: r"$\frac{1}{2}$".into(),
             fallback: "1\n-\n2".into(),
+            code: String::new(),
         };
         assert_eq!(fraction.render(), " 1\n───\n 2");
 
@@ -843,6 +850,7 @@ mod tests {
             )
             .into(),
             fallback: "matrix fallback".into(),
+            code: String::new(),
         };
         assert_eq!(matrix.render(), "⎛ x²    y   ⎞\n⎝ 1   x - y ⎠");
     }
@@ -852,12 +860,14 @@ mod tests {
         let value = M2Value::Tex {
             source: r"$\spectralUnsupported{true}$".into(),
             fallback: "true".into(),
+            code: String::new(),
         };
         assert_eq!(value.render(), "true");
 
         let document = M2Value::Tex {
             source: r"\par\textbf{Description}".into(),
             fallback: "Description".into(),
+            code: String::new(),
         };
         assert_eq!(document.render(), "Description");
     }
@@ -886,6 +896,7 @@ mod tests {
             let value = M2Value::Tex {
                 source: source.into(),
                 fallback: "NET FALLBACK".into(),
+                code: String::new(),
             };
             assert_eq!(value.render(), expected);
         }
@@ -904,6 +915,7 @@ mod tests {
             let value = M2Value::Tex {
                 source: source.into(),
                 fallback: "NET FALLBACK".into(),
+                code: String::new(),
             };
             assert_eq!(value.render(), expected);
         }
@@ -922,6 +934,7 @@ mod tests {
 \end{array}\!\right)$"
                 .into(),
             fallback: "| xxyy   xxyy   |\n| xxyy^2 xxyy^2 |".into(),
+            code: String::new(),
         };
         let rendered = value.render();
 
@@ -950,6 +963,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
 \end{array}\!\right)$"
                 .into(),
             fallback: "| 1    x     |\n| x2+1 1/3x2 |".into(),
+            code: String::new(),
         };
         let rendered = value.render();
 
@@ -967,6 +981,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         M2Value::Tex {
             source: format!("${source}$"),
             fallback: fallback.into(),
+            code: String::new(),
         }
     }
 
@@ -1371,6 +1386,33 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         };
         assert!(matches!(&entries[0][1], M2Value::Tex { fallback, .. }
             if fallback.starts_with("MutableHashTable{")));
+    }
+
+    // A container's inherited TeX only spells out its structure, `Shout{...}`,
+    // where M2 prints what its class's own net draws. A real TeX form, such as
+    // the one a ring family carries, is still preferred.
+    #[test]
+    fn a_class_drawing_itself_arrives_as_its_net_not_its_structure() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+
+        let drawn = backend
+            .evaluate(
+                r#"Shout = new Type of BasicList; net Shout := x -> net "LOUD"; new Shout from {1}"#,
+                Some(1),
+            )
+            .expect("evaluate a list drawing itself");
+        assert!(
+            matches!(&drawn.value, Some(M2Value::Net(text)) if text == "LOUD"),
+            "arrived as its structure: {:?}",
+            drawn.value
+        );
+
+        let field = backend.evaluate("RR", Some(2)).expect("evaluate RR");
+        assert!(
+            matches!(&field.value, Some(M2Value::Tex { source, .. }) if source.contains(r"\mathbb")),
+            "RR lost its TeX: {:?}",
+            field.value
+        );
     }
 
     // One reader holds one local dictionary for the whole session, exactly as an

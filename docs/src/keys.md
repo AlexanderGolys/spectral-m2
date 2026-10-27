@@ -16,7 +16,8 @@
 | `Ctrl+Home`, `Ctrl+End` | Move to the start or end of the whole input. |
 | `Shift+Left`, `Shift+Right` | Extend the input selection; with `Ctrl`, by a word. |
 | `Shift+Home`, `Shift+End` | Extend selection to a line boundary; with `Ctrl`, to the start or end of the input. |
-| `Ctrl+Y` | Copy selected input or screen text. |
+| `Ctrl+A` | Select the whole input. |
+| `Ctrl+Y` | Copy selected input text. |
 | `Tab` | Take the completion shown after the cursor; again, the next one. |
 | `Shift+Tab` | Take the previous completion. |
 | `Alt+Tab` | Insert a tab. |

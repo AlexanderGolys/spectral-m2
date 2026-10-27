@@ -125,6 +125,11 @@ pub struct UiConfig {
     pub tree_location_gap: usize,
     /// Blank rows inside the band of printed output, above and below its text.
     pub printed_margin: u16,
+    /// Columns kept between a value and the type set beside it.
+    pub type_gap: usize,
+    /// The largest share of an output's width its type may keep beside the value,
+    /// gap included; a wider type goes below the value instead.
+    pub max_type_share: f32,
     pub typeset: TypesetConfig,
 }
 
@@ -207,6 +212,8 @@ pub const UI: UiConfig = UiConfig {
     min_output_rows: 5,
     tree_location_gap: 2,
     printed_margin: 1,
+    type_gap: 2,
+    max_type_share: 0.3,
     typeset: TypesetConfig {
         em_per_cell_height: 0.65,
         min_scale: 0.6,

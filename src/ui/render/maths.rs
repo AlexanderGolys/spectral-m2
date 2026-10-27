@@ -226,6 +226,30 @@ pub fn annotation(parts: &[M2Value], width: usize, style: impl Into<MathStyle>) 
         .collect()
 }
 
+/// `text` as TeX set in a typewriter font, escaped so it reads back as written.
+pub fn typewriter(text: &str) -> String {
+    let mut tex = String::from(r"\texttt{");
+    for character in text.chars() {
+        match TEXT_SYMBOLS
+            .iter()
+            .find(|(_, symbol)| symbol.starts_with(character))
+        {
+            Some((command, _)) => {
+                tex.push('\\');
+                tex.push_str(command);
+                tex.push_str("{}");
+            }
+            None if TEXT_ESCAPED.contains(character) => {
+                tex.push('\\');
+                tex.push(character);
+            }
+            None => tex.push(character),
+        }
+    }
+    tex.push('}');
+    tex
+}
+
 /// Add theme colours to complete TeX atoms, preserving the original typesetting commands.
 /// Unsupported input is left to the typesetter unchanged.
 pub fn colored_tex(source: &str, groups: &Groups) -> String {
@@ -318,6 +342,42 @@ impl<'a> Input<'a> {
                 None => return,
             }
         }
+    }
+
+    /// The text of one braced group in text mode: its spaces kept, inner braces
+    /// dropped, and escaped characters and named symbols spelled out.
+    fn text_group(&mut self) -> Result<String, Unsupported> {
+        self.at += self.rest().len() - self.rest().trim_start().len();
+        if !self.eat("{") {
+            return Err(Unsupported("text without a braced argument".into()));
+        }
+        let mut text = String::new();
+        let mut depth = 0usize;
+        while let Some(next) = self.rest().chars().next() {
+            self.at += next.len_utf8();
+            match next {
+                '{' => depth += 1,
+                '}' if depth == 0 => return Ok(text),
+                '}' => depth -= 1,
+                '~' => text.push(' '),
+                '\\' => match self.rest().chars().next() {
+                    Some(escaped) if !escaped.is_ascii_alphabetic() => {
+                        self.at += escaped.len_utf8();
+                        text.push(escaped);
+                    }
+                    _ => {
+                        let name = self.name();
+                        let (_, symbol) = TEXT_SYMBOLS
+                            .iter()
+                            .find(|(command, _)| *command == name)
+                            .ok_or_else(|| Unsupported(format!("\\{name} in text")))?;
+                        text.push_str(symbol);
+                    }
+                },
+                character => text.push(character),
+            }
+        }
+        Err(Unsupported("unclosed text".into()))
     }
 
     /// Step over one braced group, nested braces included, and whatever whitespace
@@ -487,6 +547,8 @@ impl<'a> Input<'a> {
             }),
             "begin" => self.environment(),
             "cdot" => Ok(Math::atom(PRODUCT, HLGroup::Operator)),
+            // M2 prefixes interval fields with a square before their blackboard letter.
+            "square" => Ok(Math::atom("□", HLGroup::Type)),
             // Reached only between factors: a thin space inside a numeral is consumed
             // by the numeral itself.
             "," => Ok(Math::Space),
@@ -502,6 +564,13 @@ impl<'a> Input<'a> {
             "setminus" => Ok(Math::atom("\u{2216}", HLGroup::Operator)),
             brace @ ("{" | "}") => Ok(Math::atom(brace, HLGroup::Delimiter)),
             "left" => self.fences(),
+            text if TEXT_COMMANDS.contains(&text) => {
+                let words = Math::atom(self.text_group()?, HLGroup::Text);
+                Ok(match text {
+                    "texttt" => words.named_in_code(),
+                    _ => words,
+                })
+            }
             // A font wrapper renames the role of what it wraps but adds no shape.
             font if FONTS.contains(&font) => {
                 let body = self.atom()?;
@@ -680,6 +749,24 @@ const OPERATOR_COMMANDS: [(&str, &str); 17] = [
     ("geq", "\u{2265}"),
 ];
 const DELIMITERS: &str = "()[]{}|.";
+/// The pieces a fence grows from when taller than a row: top, extension, bottom,
+/// and the tip a brace points at its baseline with. These families measure one
+/// column under every terminal convention, unlike the box-drawing set.
+pub const TALL_FENCES: [(&str, [&str; 4]); 7] = [
+    ("(", ["\u{239B}", "\u{239C}", "\u{239D}", "\u{239C}"]),
+    (")", ["\u{239E}", "\u{239F}", "\u{23A0}", "\u{239F}"]),
+    ("[", ["\u{23A1}", "\u{23A2}", "\u{23A3}", "\u{23A2}"]),
+    ("]", ["\u{23A4}", "\u{23A5}", "\u{23A6}", "\u{23A5}"]),
+    ("{", ["\u{23A7}", "\u{23AA}", "\u{23A9}", "\u{23A8}"]),
+    ("}", ["\u{23AB}", "\u{23AA}", "\u{23AD}", "\u{23AC}"]),
+    ("|", ["\u{23AA}"; 4]),
+];
+/// Braces two rows high, which leave no room for a tip and so are drawn from
+/// their two halves; without either they would read as parentheses.
+pub const SHORT_BRACES: [(&str, [&str; 4]); 2] = [
+    ("{", ["\u{23B0}", "", "\u{23B1}", ""]),
+    ("}", ["\u{23B1}", "", "\u{23B0}", ""]),
+];
 /// A TeX math alphabet as Unicode sets it: capitals in a run of the Mathematical
 /// Alphanumeric Symbols block, bar the few Unicode had already placed among the
 /// letterlike symbols.
@@ -743,9 +830,19 @@ const SCRIPT: Alphabet = Alphabet {
 /// Font commands M2 wraps names in. All are transparent to layout: they change how a
 /// name is *set*, never what it is. `mathit` marks multi-character names, which is how
 /// M2 keeps `x2` from reading as a power; the parser gets that from structure instead.
-const FONTS: [&str; 9] = [
-    "mathbb", "mathbf", "mathcal", "mathrm", "mathfrak", "mathsf", "mathtt", "mathit", "texttt",
+const FONTS: [&str; 8] = [
+    "mathbb", "mathbf", "mathcal", "mathrm", "mathfrak", "mathsf", "mathtt", "mathit",
 ];
+/// Commands whose argument is text rather than maths, set as written, spaces and all.
+const TEXT_COMMANDS: [&str; 3] = ["texttt", "textrm", "text"];
+/// Named characters TeX text spells as commands, since they would otherwise be markup.
+const TEXT_SYMBOLS: [(&str, &str); 3] = [
+    ("textbackslash", "\\"),
+    ("textasciitilde", "~"),
+    ("textasciicircum", "^"),
+];
+/// Characters TeX text takes as markup unless a backslash escapes them.
+const TEXT_ESCAPED: &str = "#$%&_{}";
 
 impl Math {
     /// Parse one M2 TeX expression.
@@ -1180,11 +1277,12 @@ impl MathBlock {
     /// that text.
     fn value(value: &M2Value, style: MathStyle) -> Self {
         match value {
-            M2Value::Tex { source, fallback } => Math::from_tex(source, style.blackboard)
-                .map_or_else(
-                    |_| Self::text(fallback, HLGroup::Value),
-                    |math| math.layout(style.fractions),
-                ),
+            M2Value::Tex {
+                source, fallback, ..
+            } => Math::from_tex(source, style.blackboard).map_or_else(
+                |_| Self::text(fallback, HLGroup::Value),
+                |math| math.layout(style.fractions),
+            ),
             M2Value::Net(text) | M2Value::Markup { fallback: text, .. } => {
                 Self::text(text, HLGroup::Value)
             }
@@ -1389,27 +1487,25 @@ impl MathBlock {
 
     /// A fence drawn to `height` rows around `baseline`.
     ///
-    /// A bracket grows from its top, extension and bottom pieces, a brace adding the
-    /// tip that points at the baseline. Two rows leave no room for a tip, so a brace
-    /// that short is drawn from its two halves instead; without either it would be a
-    /// parenthesis. These families measure one column under every terminal convention,
-    /// unlike the box-drawing set, so a grown matrix keeps its shape wherever it is
-    /// read. Any other fence -- M2's `<|` -- stays one row high on the baseline, and
-    /// TeX's `.` marks the absence of one.
+    /// A bracket grows from its [`TALL_FENCES`] pieces, a brace two rows high from
+    /// its [`SHORT_BRACES`] halves, so a grown matrix keeps its shape wherever it
+    /// is read. Any other fence -- M2's `<|` -- stays one row high on the
+    /// baseline, and TeX's `.` marks the absence of one.
     pub(super) fn fence(fence: &str, height: usize, baseline: usize) -> Self {
-        let [top, extension, bottom, tip] = match (fence, height) {
-            (".", _) => return Self::empty(),
-            (_, 1) => return Self::atom(fence, HLGroup::Delimiter),
-            ("{", 2) => ["\u{23B0}", "", "\u{23B1}", ""],
-            ("}", 2) => ["\u{23B1}", "", "\u{23B0}", ""],
-            ("(", _) => ["\u{239B}", "\u{239C}", "\u{239D}", "\u{239C}"],
-            (")", _) => ["\u{239E}", "\u{239F}", "\u{23A0}", "\u{239F}"],
-            ("[", _) => ["\u{23A1}", "\u{23A2}", "\u{23A3}", "\u{23A2}"],
-            ("]", _) => ["\u{23A4}", "\u{23A5}", "\u{23A6}", "\u{23A5}"],
-            ("{", _) => ["\u{23A7}", "\u{23AA}", "\u{23A9}", "\u{23A8}"],
-            ("}", _) => ["\u{23AB}", "\u{23AA}", "\u{23AD}", "\u{23AC}"],
-            ("|", _) => ["\u{23AA}"; 4],
-            _ => return Self::atom(fence, HLGroup::Delimiter),
+        if fence == "." {
+            return Self::empty();
+        }
+        let short = match height {
+            2 => &SHORT_BRACES[..],
+            _ => &[],
+        };
+        let Some(&(_, [top, extension, bottom, tip])) = short
+            .iter()
+            .chain(&TALL_FENCES)
+            .find(|(family, _)| *family == fence)
+            .filter(|_| height > 1)
+        else {
+            return Self::atom(fence, HLGroup::Delimiter);
         };
         let pointed = baseline.clamp(1, height.saturating_sub(2).max(1));
         Self {
@@ -1625,6 +1721,25 @@ mod tests {
         assert_eq!(parsed, atom("ZZ", HLGroup::Type));
     }
 
+    #[test]
+    fn interval_fields_keep_their_type_highlights() {
+        let groups = crate::ui::controller::settings::theme::groups::scheme();
+        for (source, letter) in [(r"\square\mathbb R", "RR"), (r"\square\mathbb C", "CC")] {
+            assert_eq!(
+                Math::parse(source).expect("an interval field parses"),
+                Math::Row(vec![atom("□", HLGroup::Type), atom(letter, HLGroup::Type)])
+            );
+            let mut input = Input::new(source, true);
+            input.expression(&[]).expect("an interval field parses");
+            assert!(input.rest().is_empty());
+            assert_eq!(
+                input.highlights,
+                [(0..7, HLGroup::Type), (7..source.len(), HLGroup::Type)]
+            );
+            assert_ne!(colored_tex(source, groups), source);
+        }
+    }
+
     /// The three shapes `backend.rs` currently rewrites with regexes before rendering.
     #[test]
     fn the_forms_macaulay2_emits_need_no_rewriting_first() {
@@ -1782,6 +1897,7 @@ mod tests {
         M2Value::Tex {
             source: format!("${maths}$"),
             fallback: maths.into(),
+            code: String::new(),
         }
     }
 
@@ -1849,6 +1965,7 @@ mod tests {
         let string = M2Value::Tex {
             source: "hello world".into(),
             fallback: "hello world".into(),
+            code: String::new(),
         };
 
         assert!(
@@ -2291,6 +2408,24 @@ mod tests {
         assert_eq!(rendered("${\\mathfrak g}$", true), "g");
         assert_eq!(rendered("${\\mathfrak P}$", true), "𝔓");
         assert_eq!(rendered("${\\mathfrak R}$", true), "ℜ");
+    }
+
+    #[test]
+    fn text_keeps_its_spaces_and_spells_out_its_escapes() {
+        assert_eq!(rendered(r"$\texttt{ring R}$", false), "ring R");
+        assert_eq!(
+            rendered(r"$\texttt{ -- get the ring}$", false),
+            " -- get the ring"
+        );
+        assert_eq!(rendered(r"$\textrm{a\_b\{c\}}$", false), "a_b{c}");
+        assert_eq!(rendered(r"$\text{x \textbackslash{} y}$", false), "x \\ y");
+        assert_eq!(rendered(r"$\mathtt{ring R}$", false), "ringR");
+    }
+
+    #[test]
+    fn typewriter_text_reads_back_as_written() {
+        let text = r" a\b{c}_d^e~f#g$h%i&j  k";
+        assert_eq!(rendered(&format!("${}$", typewriter(text)), false), text);
     }
 
     #[test]
