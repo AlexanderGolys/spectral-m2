@@ -4,6 +4,12 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Added `hintCompletionBelow`, a 16-bit candidate threshold for inline completion hints, adjustable in settings; 0 disables hints.
+- Completion candidates open on the first `Tab`, which also inserts a visible hint; otherwise the second `Tab` inserts, subsequent presses cycle, and `Ctrl+Tab` cycles backwards.
+- Symbol completions are ranked by usage counts from successfully evaluated source. Library-symbol counts persist; counts for session-created names stay in memory and reset with the session. Scoped locals, comments, strings, and assignment targets are excluded.
+
 ## [1.1.0] - 2026-10-27
 
 ### Added

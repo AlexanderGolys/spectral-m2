@@ -1,8 +1,13 @@
-//! An inline completion: the candidates for the text just before the cursor,
-//! the rest of the chosen one drawn after the cursor, ready to be taken, and
-//! once taken cycled through in place.
+//! Completion candidates, their inline hint, and the list opened before insertion.
 
 use std::ops::Range;
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+
+use crate::ui::controller::settings::theme::groups::Groups;
 
 /// What the typed text in `range` may be completed to, in order of preference.
 pub struct Completion {
@@ -12,6 +17,8 @@ pub struct Completion {
     /// Whether the chosen candidate has replaced the typed text, so `range`
     /// spans it.
     taken: bool,
+    /// Whether Tab has opened the candidate list.
+    listed: bool,
 }
 
 impl Completion {
@@ -28,11 +35,73 @@ impl Completion {
             candidates,
             chosen: 0,
             taken: false,
+            listed: false,
         })
     }
 
     pub fn chosen(&self) -> &str {
         &self.candidates[self.chosen]
+    }
+
+    /// Whether the number of candidates permits an inline hint.
+    pub fn hinted(&self, below: u16) -> bool {
+        !self.taken && self.candidates.len() < usize::from(below)
+    }
+
+    /// Open the list before insertion when no inline hint was offered.
+    /// Returns whether this key only opened the list.
+    pub fn reveal(&mut self, below: u16) -> bool {
+        if self.listed {
+            return false;
+        }
+        let reveal_only = !self.taken && !self.hinted(below);
+        self.listed = true;
+        reveal_only
+    }
+
+    /// Rows needed by the open list, including its border.
+    pub fn list_height(&self) -> u16 {
+        if self.listed {
+            u16::try_from(self.candidates.len())
+                .unwrap_or(u16::MAX)
+                .saturating_add(2)
+        } else {
+            0
+        }
+    }
+
+    /// Draw the candidates with the chosen one visible even in a short pane.
+    pub fn render_list(&self, area: Rect, buffer: &mut Buffer, groups: &Groups) {
+        let height = usize::from(area.height.saturating_sub(2));
+        let first = (self.chosen + 1).saturating_sub(height);
+        let lines: Vec<_> = self
+            .candidates
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(height)
+            .map(|(index, name)| {
+                let selected = index == self.chosen;
+                let marker = if selected { "> " } else { "  " };
+                Line::from(vec![
+                    Span::styled(marker, groups.picker_selected_marker()),
+                    Span::raw(name.clone()),
+                ])
+                .style(if selected {
+                    groups.picker().patch(groups.picker_selected())
+                } else {
+                    groups.picker()
+                })
+            })
+            .collect();
+        Paragraph::new(lines)
+            .style(groups.picker())
+            .block(
+                Block::default()
+                    .borders(Borders::TOP | Borders::BOTTOM)
+                    .border_style(groups.picker_border()),
+            )
+            .render(area, buffer);
     }
 
     /// The part of the chosen candidate not yet typed.
@@ -62,6 +131,38 @@ impl Completion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hint_threshold_is_strict_and_a_hint_inserts_as_the_list_opens() {
+        let mut completion =
+            Completion::new("i", 0..1, vec!["ideal".into(), "image".into()]).unwrap();
+        assert!(!completion.hinted(0));
+        assert!(!completion.hinted(2));
+        assert!(completion.hinted(3));
+        assert!(!completion.reveal(3));
+        assert_eq!(completion.list_height(), 4);
+        assert_eq!(completion.take(true).1, "ideal");
+        assert!(!completion.hinted(3));
+        assert_eq!(completion.take(false).1, "image");
+    }
+
+    #[test]
+    fn a_short_candidate_list_keeps_the_cycled_candidate_visible() {
+        let mut completion = Completion::new(
+            "i",
+            0..1,
+            vec!["ideal".into(), "image".into(), "identity".into()],
+        )
+        .unwrap();
+        assert!(completion.reveal(0));
+        completion.take(true);
+        completion.take(false);
+        let area = Rect::new(0, 0, 20, 3);
+        let mut buffer = Buffer::empty(area);
+        completion.render_list(area, &mut buffer, &Groups::default());
+        let row: String = (0..area.width).map(|x| buffer[(x, 1)].symbol()).collect();
+        assert!(row.starts_with("> identity"), "{row}");
+    }
 
     #[test]
     fn only_candidates_extending_the_typed_text_are_offered() {

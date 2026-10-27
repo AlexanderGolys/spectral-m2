@@ -403,9 +403,14 @@ impl Editor {
                 value,
             } => {
                 self.input.clear_diagnostic();
+                let names = &mut self.names;
                 self.feed.update_evaluation(id, |evaluation| {
+                    if let Some(source) = evaluation.source(index) {
+                        names.record(source);
+                    }
                     evaluation.succeed(index, number, state, outputs, printed, value)
                 });
+                self.input.forget_completion();
             }
             EditorUpdate::CellFailed {
                 id,
@@ -962,6 +967,9 @@ impl Editor {
             EditorEvent::EditCommand(key) => {
                 let revision = self.input.revision();
                 match key.code {
+                    KeyCode::Tab if key.ctrl() => {
+                        self.pickers.last_mut().unwrap().picker.move_selection(-1)
+                    }
                     KeyCode::Tab => {
                         if let Some(command) = self.picked_command() {
                             self.input.restore(commands::completed(command));
@@ -1281,16 +1289,21 @@ impl Editor {
         frame.render_widget(Clear, area);
 
         let editor_area = area;
+        self.refresh_completion();
 
         let input_height = self
             .input
             .height(editor_area.width, input_prefix, editor_area.height);
         // A split shares one status line across both panes, drawn by the app.
         let status_height = u16::from(self.statusline_shown() && !self.split);
-        let picker_height = self
-            .pickers
-            .last()
-            .map_or(0, |controller| controller.picker.height(editor_area.width));
+        let picker_height = self.pickers.last().map_or_else(
+            || {
+                self.input
+                    .offered()
+                    .map_or(0, |completion| completion.list_height())
+            },
+            |controller| controller.picker.height(editor_area.width),
+        );
         // A long list must never squeeze the input out of the frame: the cursor
         // would then be placed outside it.
         let picker_height = picker_height.min(
@@ -1340,6 +1353,13 @@ impl Editor {
             controller
                 .picker
                 .render(&(), sections[1], frame.buffer_mut());
+            self.selection_exclusions.push(sections[1]);
+        } else if let Some(completion) = self
+            .input
+            .offered()
+            .filter(|completion| completion.list_height() > 0)
+        {
+            completion.render_list(sections[1], frame.buffer_mut(), &theme);
             self.selection_exclusions.push(sections[1]);
         }
         self.selection_exclusions.push(input_area);

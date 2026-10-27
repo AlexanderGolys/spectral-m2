@@ -49,13 +49,15 @@ The usual editing keys are available for horizontal movement, `Ctrl` with the ar
 
 ## Completion
 
-As you type, the rest of a completion is drawn after the cursor as a muted hint. `Tab` takes it, and pressing `Tab` again cycles through the other completions rather than completing further; `Shift+Tab` cycles backwards. A name Macaulay2 already knows is not completed. `Tab` only completes; `Alt+Tab` inserts a tab. What completes depends on where the cursor is, as Macaulay2 reads the code before it:
+As you type, an inline hint shows the rest of the preferred completion only when there are fewer candidates than *hint completion below* (10 by default). `Tab` opens the candidate list above the input; if a hint was visible, it also inserts that completion immediately. Otherwise the next `Tab` inserts the first candidate. Further presses cycle through the list, and `Ctrl+Tab` or `Shift+Tab` cycles backwards. `Esc` dismisses the list. A name Macaulay2 already knows is not completed. `Alt+Tab` inserts a tab. What completes depends on where the cursor is, as Macaulay2 reads the code before it:
 
-- a name: every symbol Macaulay2 knows, the names its own terminal completes. Names the session bound come first, then shorter names before longer ones. Completion starts once the name is as long as the *complete after* setting (one character by default).
+- a name: every symbol Macaulay2 knows, the names its own terminal completes. Frequently used symbols come first, with shorter names and then alphabetical order breaking ties. Completion starts once the name is as long as the *complete after* setting (one character by default).
 - a string literal: a file or directory, so `load "ri` completes to `load "ring.m2`.
 - a comment: nothing.
 
 Macaulay2 reports its names as it starts and after every cell, without evaluating anything extra, so a name bound with `=` or a top-level `:=`, or exported by a package just loaded, completes from the next keystroke on.
+
+Usage counts references to known global symbols in successfully evaluated source. Counts for names introduced during the session, such as a ring named `R`, affect completion order only in that session and are discarded on restart. Counts for symbols known when Macaulay2 starts are saved in `completion-usage.json` beside the settings and retained across restarts. Function parameters, loop variables, exception bindings, and names introduced by `:=` or `local` do not add to a symbol's count. Comments, strings, assignment targets, and choosing or cycling a completion do not count either.
 
 Commands and their files complete too; see [Commands and pickers](commands.md).
 

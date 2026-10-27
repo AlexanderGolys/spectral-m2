@@ -22,6 +22,7 @@ Changes are kept between sessions. The appearance is saved to `appearance.json` 
 | Max output height | Rows a returned value shows before its middle folds away. |
 | Scrolloff | Context rows retained above and below the input cursor. |
 | Complete after | Characters of a name, or of a file name in a string, typed before it is completed. |
+| Hint completion below | Show an inline hint only when the number of candidates is less than this value. Defaults to 10; 0 disables hints. Saved as `input.hintCompletionBelow`, an integer from 0 to 65535. |
 
 **Rendering**
 

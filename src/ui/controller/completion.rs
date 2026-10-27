@@ -3,11 +3,15 @@
 //! name of something M2 knows. Names are the ones M2's own readline completes,
 //! reported by M2 as it starts and as each cell binds more.
 
-use std::collections::BTreeSet;
+mod usage;
+
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
 use m2_syn::{lex_str_recovering, LexError, LexErrorKind, Spanned, TokenTree, TriviaKind};
 
+use self::usage::Usage;
 use super::commands::{self, Command, Operand};
 use crate::code::file::{self, Entries};
 use crate::input::Completion;
@@ -17,10 +21,25 @@ const RAW_STRING_OPENER: &str = "///";
 
 /// Every name M2 has reported, those the session bound kept apart from those
 /// it started with.
-#[derive(Default)]
 pub struct Names {
     started: BTreeSet<String>,
     bound: BTreeSet<String>,
+    locals: BTreeSet<String>,
+    usage: Usage,
+    /// Frequencies for names introduced by this session, never saved to disk.
+    session_usage: BTreeMap<String, u64>,
+}
+
+impl Default for Names {
+    fn default() -> Self {
+        Self {
+            started: BTreeSet::new(),
+            bound: BTreeSet::new(),
+            locals: BTreeSet::new(),
+            usage: Usage::load(),
+            session_usage: BTreeMap::new(),
+        }
+    }
 }
 
 impl Names {
@@ -28,6 +47,8 @@ impl Names {
     pub fn reset(&mut self, names: Vec<String>) {
         self.started = names.into_iter().collect();
         self.bound.clear();
+        self.locals.clear();
+        self.session_usage.clear();
     }
 
     /// Add names the session has bound since.
@@ -35,22 +56,43 @@ impl Names {
         self.bound.extend(names);
     }
 
+    /// Save library-symbol frequencies and retain session-name frequencies only in memory.
+    pub fn record(&mut self, source: &str) {
+        let used = usage::references(source, &mut self.locals);
+        let mut library = Vec::new();
+        for name in used {
+            if self.started.contains(&name) {
+                library.push(name);
+            } else if self.bound.contains(&name) {
+                let count = self.session_usage.entry(name).or_default();
+                *count = count.saturating_add(1);
+            }
+        }
+        self.usage.record(library);
+    }
+
+    /// The saved library count or the current session's count for a candidate.
+    fn frequency(&self, name: &str) -> u64 {
+        if self.started.contains(name) {
+            self.usage.count(name)
+        } else {
+            self.session_usage.get(name).copied().unwrap_or_default()
+        }
+    }
+
     /// Whether M2 knows `name`, so there is nothing left to complete.
     fn knows(&self, name: &str) -> bool {
         self.started.contains(name) || self.bound.contains(name)
     }
 
-    /// The names starting with `prefix`: the session's own first, as the likelier
-    /// to be meant, then each group shortest first.
+    /// Prefix matches ranked by usage, then by length and name for stable ties.
     fn starting_with(&self, prefix: &str) -> Vec<String> {
         let matching = |names: &BTreeSet<String>| {
-            let mut found: Vec<String> = names
+            names
                 .range(prefix.to_string()..)
                 .take_while(|name| name.starts_with(prefix))
                 .cloned()
-                .collect();
-            found.sort_by_key(String::len);
-            found
+                .collect::<Vec<String>>()
         };
         let mut found = matching(&self.bound);
         found.extend(
@@ -58,6 +100,13 @@ impl Names {
                 .into_iter()
                 .filter(|name| !self.bound.contains(name)),
         );
+        found.sort_by(|left, right| {
+            (Reverse(self.frequency(left)), left.len(), left).cmp(&(
+                Reverse(self.frequency(right)),
+                right.len(),
+                right,
+            ))
+        });
         found
     }
 }
@@ -154,7 +203,14 @@ pub fn complete(request: Request<'_>) -> Option<Completion> {
         complete_after,
     } = request;
     if let Some(command) = picked.filter(|_| cursor == text.len()) {
-        return Completion::new(text, 0..text.len(), vec![commands::completed(command)]);
+        let mut candidates = vec![commands::completed(command)];
+        candidates.extend(
+            commands::matching(text.strip_prefix(commands::PREFIX)?)
+                .into_iter()
+                .filter(|candidate| candidate.action != command.action)
+                .map(commands::completed),
+        );
+        return Completion::new(text, 0..text.len(), candidates);
     }
     if text.starts_with(commands::PREFIX) {
         let (Operand::File, range) = commands::operand(text).filter(|_| cursor == text.len())?;
@@ -200,17 +256,59 @@ mod tests {
     }
 
     #[test]
-    fn the_sessions_own_names_come_first_then_shorter_ones() {
+    fn unused_names_are_ordered_by_length_then_name() {
         let mut names = Names::default();
         names.reset(["identity", "ideal", "image"].map(String::from).to_vec());
         names.bind(vec!["idealOfCurve".to_string()]);
 
         assert_eq!(
             names.starting_with("ide"),
-            ["idealOfCurve", "ideal", "identity"]
+            ["ideal", "identity", "idealOfCurve"]
         );
         names.reset(vec!["ideal".to_string()]);
         assert_eq!(names.starting_with("ide"), ["ideal"]);
+    }
+
+    #[test]
+    fn global_usage_outweighs_name_length_but_local_usage_does_not() {
+        let mut names = Names::default();
+        names.reset(["identity", "ideal", "image"].map(String::from).to_vec());
+        names.record("identity; ideal; identity; unknown");
+        names.record("f = ideal -> (local image; ideal + image)");
+        assert_eq!(names.starting_with("i"), ["identity", "ideal", "image"]);
+        assert_eq!(names.usage.count("identity"), 2);
+        assert_eq!(names.usage.count("ideal"), 1);
+        assert_eq!(names.usage.count("image"), 0);
+        assert_eq!(names.usage.count("unknown"), 0);
+
+        names.record("ideal := 1");
+        names.record("ideal; ideal");
+        assert_eq!(names.usage.count("ideal"), 1);
+        names.reset(["ideal"].map(String::from).to_vec());
+        names.record("ideal");
+        assert_eq!(names.usage.count("ideal"), 2);
+    }
+
+    #[test]
+    fn session_names_gain_rank_without_persisting_their_counts() {
+        let mut names = Names::default();
+        names.reset(vec!["rank".into()]);
+        names.bind(vec!["R".into(), "RingOfCurve".into()]);
+        names.record("R = QQ[x]; RingOfCurve = R");
+        for _ in 0..100 {
+            names.record("RingOfCurve; rank RingOfCurve");
+        }
+        assert_eq!(names.starting_with("R"), ["RingOfCurve", "R"]);
+        assert_eq!(names.frequency("RingOfCurve"), 200);
+        assert_eq!(names.usage.count("R"), 0);
+        assert_eq!(names.usage.count("RingOfCurve"), 0);
+        assert_eq!(names.usage.count("rank"), 100);
+
+        names.reset(vec!["rank".into()]);
+        names.bind(vec!["R".into(), "RingOfCurve".into()]);
+        assert_eq!(names.frequency("RingOfCurve"), 0);
+        assert_eq!(names.starting_with("R"), ["R", "RingOfCurve"]);
+        assert_eq!(names.frequency("rank"), 100);
     }
 
     fn request<'a>(text: &'a str, names: &'a Names) -> Request<'a> {
@@ -282,6 +380,113 @@ mod tests {
         }
         editor.handle_input(KeyCode::BackTab.into());
         assert_eq!(editor.submission(), "I = identityMapOf");
+    }
+
+    #[test]
+    fn tab_reveals_a_list_before_inserting_when_the_threshold_is_reached() {
+        let mut editor = typing_editor(&["ideal", "identity", "identityMap"], "identity");
+        let mut settings = editor.input.settings();
+        settings.hint_completion_below = 3;
+        editor.input.set_settings(settings);
+        let typed = editor.submission().to_string();
+
+        editor.handle_input(KeyCode::Tab.into());
+        assert_eq!(editor.submission(), typed);
+        let completion = editor.input.offered().unwrap();
+        assert!(!completion.hinted(settings.hint_completion_below));
+        assert_eq!(completion.list_height(), 5);
+
+        editor.handle_input(KeyCode::Tab.into());
+        assert_eq!(editor.submission(), "I = ideal");
+        editor.handle_input(KeyCode::Tab.into());
+        assert_eq!(editor.submission(), "I = identity");
+        editor.handle_input(
+            crate::ui::key::KeyEvent::from(KeyCode::Tab) + crate::ui::key::KeyMod::Ctrl,
+        );
+        assert_eq!(editor.submission(), "I = ideal");
+
+        editor.handle_input(KeyCode::Char('x').into());
+        editor.refresh_completion();
+        assert!(editor.input.offered().is_none());
+    }
+
+    #[test]
+    fn zero_disables_hints_and_escape_dismisses_the_list_without_editing() {
+        let mut editor = typing_editor(&["ideal"], "ideal");
+        let mut settings = editor.input.settings();
+        settings.hint_completion_below = 0;
+        editor.input.set_settings(settings);
+        let typed = editor.submission().to_string();
+        editor.handle_input(KeyCode::Tab.into());
+        assert_eq!(editor.submission(), typed);
+        assert_eq!(editor.input.offered().unwrap().list_height(), 3);
+        editor.handle_input(KeyCode::Esc.into());
+        assert_eq!(editor.submission(), typed);
+        assert!(editor.input.offered().is_none());
+    }
+
+    #[test]
+    fn evaluated_usage_changes_the_first_completion_and_the_list_is_drawn_above_input() {
+        use crate::code::highlight::SyntaxHighlighter;
+        use crate::ui::cell::CellState;
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let mut editor = Editor::new(String::new());
+        editor.apply(EditorUpdate::KnownNames(vec![
+            "ideal".into(),
+            "identity".into(),
+        ]));
+        editor.apply(EditorUpdate::Pending {
+            id: 1,
+            cells: vec![("identity; identity".into(), Vec::new())],
+        });
+        assert_eq!(
+            editor.names.usage.count("identity"),
+            0,
+            "queued text has not been used"
+        );
+        editor.apply(EditorUpdate::CellSucceeded {
+            id: 1,
+            index: 0,
+            number: 1,
+            state: CellState::Null,
+            outputs: Vec::new(),
+            printed: None,
+            value: None,
+        });
+        assert_eq!(editor.names.usage.count("identity"), 2);
+        let mut settings = editor.input.settings();
+        settings.hint_completion_below = 2;
+        editor.input.set_settings(settings);
+        editor.paste("I = id");
+        editor.handle_input(KeyCode::Tab.into());
+        assert_eq!(editor.submission(), "I = id");
+
+        for (width, height) in [(40, 12), (16, 7)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    editor.draw(frame, frame.area(), &mut SyntaxHighlighter::new(), false);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let rows: Vec<String> = (0..height)
+                .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect();
+            let candidate = rows
+                .iter()
+                .position(|row| row.contains("> identity"))
+                .expect("ranked candidates are drawn");
+            let input = rows
+                .iter()
+                .position(|row| row.contains("I = id"))
+                .expect("input remains visible");
+            assert!(candidate < input);
+            let cursor = terminal.get_cursor_position().unwrap();
+            assert!(cursor.x < width && cursor.y < height);
+        }
+        editor.handle_input(KeyCode::Tab.into());
+        assert_eq!(editor.submission(), "I = identity");
     }
 
     #[test]

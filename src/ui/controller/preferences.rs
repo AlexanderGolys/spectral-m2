@@ -40,6 +40,7 @@ const TABS: &[SettingsTab] = &[
             Setting::OutputRows,
             Setting::Input(InputSetting::Scrolloff),
             Setting::Input(InputSetting::CompleteAfter),
+            Setting::Input(InputSetting::HintCompletionBelow),
         ],
     },
     SettingsTab {

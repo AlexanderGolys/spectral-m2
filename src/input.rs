@@ -44,7 +44,7 @@ use crate::ui::wrap::{offset_at_column, HardWrap, TextLayout, WrapPolicy};
 pub enum InputAction {
     InsertNewline = "insert a line break",
     InsertTab = "insert a tab",
-    NextCompletion = "take the completion shown after the cursor, or the next one",
+    NextCompletion = "show completion candidates, insert a hint, or take the next candidate",
     PreviousCompletion = "take the previous completion",
     DeleteBack = "delete before the cursor",
     DeleteForward = "delete under the cursor",
@@ -89,6 +89,9 @@ pub struct InputSettings {
     pub scrolloff: u8,
     /// Characters of a name typed before it is completed.
     pub complete_after: u8,
+    /// Show an inline completion hint only below this many candidates.
+    #[serde(rename = "hintCompletionBelow", alias = "hint_completion_below")]
+    pub hint_completion_below: u16,
 }
 
 impl Default for InputSettings {
@@ -97,6 +100,7 @@ impl Default for InputSettings {
             max_height_percent: 75,
             scrolloff: 2,
             complete_after: 1,
+            hint_completion_below: 10,
         }
     }
 }
@@ -110,6 +114,8 @@ pub enum InputSetting {
     Scrolloff,
     /// Name length that starts completion.
     CompleteAfter,
+    /// Candidate count below which an inline hint is shown.
+    HintCompletionBelow,
 }
 
 impl InputSetting {
@@ -119,6 +125,7 @@ impl InputSetting {
             Self::MaxHeight => "max input height",
             Self::Scrolloff => "scrolloff",
             Self::CompleteAfter => "complete after",
+            Self::HintCompletionBelow => "hint completion below",
         }
     }
 
@@ -128,6 +135,9 @@ impl InputSetting {
             Self::MaxHeight => "share of the pane multiline input may grow into",
             Self::Scrolloff => "context rows kept around the input cursor",
             Self::CompleteAfter => "characters of a name typed before it is completed",
+            Self::HintCompletionBelow => {
+                "show an inline hint below this many candidates; zero disables hints"
+            }
         }
     }
 
@@ -137,15 +147,23 @@ impl InputSetting {
             Self::MaxHeight => format!("{}%", settings.max_height_percent),
             Self::Scrolloff => format!("{} rows", settings.scrolloff),
             Self::CompleteAfter => format!("{} characters", settings.complete_after),
+            Self::HintCompletionBelow => format!("{} candidates", settings.hint_completion_below),
         }
     }
 
     /// Adjust this setting by one picker step.
     pub fn adjust(self, settings: &mut InputSettings, delta: i8) {
+        if matches!(self, Self::HintCompletionBelow) {
+            settings.hint_completion_below = settings
+                .hint_completion_below
+                .saturating_add_signed(i16::from(delta));
+            return;
+        }
         let field = match self {
             Self::MaxHeight => &mut settings.max_height_percent,
             Self::Scrolloff => &mut settings.scrolloff,
             Self::CompleteAfter => &mut settings.complete_after,
+            Self::HintCompletionBelow => unreachable!(),
         };
         let step = delta.unsigned_abs()
             * if matches!(self, Self::MaxHeight) {
@@ -902,6 +920,9 @@ impl InputCode {
         let Some(completion) = self.completion.as_mut() else {
             return;
         };
+        if completion.reveal(self.settings.hint_completion_below) {
+            return;
+        }
         let (range, chosen) = completion.take(action == InputAction::NextCompletion);
         let chosen = chosen.to_string();
         self.field.replace(range, &chosen);
@@ -948,6 +969,10 @@ impl InputCode {
 
     fn interpret_key(&mut self, key: KeyEvent) -> Option<char> {
         use InputAction::*;
+        if key.code == KeyCode::Esc {
+            self.completion = None;
+            return None;
+        }
         let action = match key.code {
             KeyCode::Char('l') if key.ctrl() => Some(Clear),
             KeyCode::Char('a') if key.ctrl() => Some(SelectAll),
@@ -964,6 +989,7 @@ impl InputCode {
             // sends for Shift+Enter when it cannot report the modifier.
             KeyCode::Char('j') if key.ctrl() => Some(InsertNewline),
             KeyCode::Tab if key.alt() => Some(InsertTab),
+            KeyCode::Tab if key.ctrl() => Some(PreviousCompletion),
             KeyCode::Tab => Some(NextCompletion),
             KeyCode::BackTab => Some(PreviousCompletion),
             KeyCode::Backspace => Some(DeleteBack),
@@ -1129,11 +1155,14 @@ impl InputCode {
         let text = self.text();
         let width = context.width().saturating_sub(context.prefix());
         let visual_lines = self.lines(width);
-        let ghost = self.offered().map(|completion| {
-            let (row, _) = self.visual_cursor(width);
-            let offset = self.field.cursor() - visual_lines[row].range.start;
-            (row, offset, completion.ghost().to_string())
-        });
+        let ghost = self
+            .offered()
+            .filter(|completion| completion.hinted(self.settings.hint_completion_below))
+            .map(|completion| {
+                let (row, _) = self.visual_cursor(width);
+                let offset = self.field.cursor() - visual_lines[row].range.start;
+                (row, offset, completion.ghost().to_string())
+            });
 
         let mut lines = Vec::new();
         for (index, visual_line) in visual_lines.iter().enumerate() {
@@ -1449,6 +1478,21 @@ mod tests {
     use crate::ui::controller::settings::theme::groups::Groups;
     use crate::ui::key::KeyMod::{self, Alt, Ctrl, Shift};
     use ratatui::style::Modifier;
+
+    #[test]
+    fn completion_hint_threshold_is_a_persisted_u16_with_compatible_defaults() {
+        let old: InputSettings = serde_json::from_str(r#"{"complete_after":2}"#).unwrap();
+        assert_eq!(old.hint_completion_below, 10);
+        let mut settings: InputSettings =
+            serde_json::from_str(r#"{"hintCompletionBelow":65535}"#).unwrap();
+        InputSetting::HintCompletionBelow.adjust(&mut settings, 1);
+        assert_eq!(settings.hint_completion_below, u16::MAX);
+        let json = serde_json::to_value(settings).unwrap();
+        assert_eq!(json["hintCompletionBelow"], u16::MAX);
+        settings.hint_completion_below = 0;
+        InputSetting::HintCompletionBelow.adjust(&mut settings, -1);
+        assert_eq!(settings.hint_completion_below, 0);
+    }
 
     #[test]
     fn editor_owns_modified_newlines_and_tabs() {

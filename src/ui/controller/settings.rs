@@ -60,7 +60,7 @@ pub fn write<T: Serialize>(path: &Path, record: &T) -> io::Result<()> {
 }
 
 #[cfg(not(test))]
-fn config_file(name: &str) -> Option<PathBuf> {
+pub(super) fn config_file(name: &str) -> Option<PathBuf> {
     let config = env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
@@ -70,7 +70,7 @@ fn config_file(name: &str) -> Option<PathBuf> {
 /// Tests have no configuration directory, so a developer's saved settings neither
 /// leak into them nor are overwritten by them.
 #[cfg(test)]
-fn config_file(_: &str) -> Option<PathBuf> {
+pub(super) fn config_file(_: &str) -> Option<PathBuf> {
     None
 }
 

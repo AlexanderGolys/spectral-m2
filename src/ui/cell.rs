@@ -523,6 +523,11 @@ pub struct EvaluationBlock {
 }
 
 impl EvaluationBlock {
+    /// Source of an evaluation cell, used to count the symbols it references.
+    pub fn source(&self, index: usize) -> Option<&str> {
+        self.cells.get(index).map(|(cell, _)| cell.text.as_str())
+    }
+
     fn code_style(state: &EvaluationState, after_error: bool, context: &RenderContext) -> Style {
         let groups = context.groups();
         if matches!(state, EvaluationState::Failed(_) | EvaluationState::Invalid) {

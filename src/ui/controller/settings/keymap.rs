@@ -280,6 +280,7 @@ impl Default for Keymaps {
                 key!(Backspace),
                 key!(Delete),
                 key!(Tab),
+                key!(Tab + Ctrl),
                 key!(BackTab),
             ]),
             rebinds: Vec::new(),

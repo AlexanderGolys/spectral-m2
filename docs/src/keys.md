@@ -18,8 +18,8 @@
 | `Shift+Home`, `Shift+End` | Extend selection to a line boundary; with `Ctrl`, to the start or end of the input. |
 | `Ctrl+A` | Select the whole input. |
 | `Ctrl+Y` | Copy selected input text. |
-| `Tab` | Take the completion shown after the cursor; again, the next one. |
-| `Shift+Tab` | Take the previous completion. |
+| `Tab` | Open the completion list, inserting a visible hint immediately; otherwise insert on the next press, then cycle candidates. |
+| `Ctrl+Tab`, `Shift+Tab` | Cycle completion candidates backwards. |
 | `Alt+Tab` | Insert a tab. |
 | `Ctrl+L` | Clear the input. |
 | `Ctrl+/` | Toggle commands. |

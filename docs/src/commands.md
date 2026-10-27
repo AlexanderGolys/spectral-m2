@@ -20,7 +20,7 @@ Commands are handled by Spectral rather than sent to Macaulay2.
 
 Views open beside the session.
 
-While a command's name is being typed, `Tab` completes it to the command selected in the picker, closing the picker, or followed by a space when it takes a file; `Shift+Tab` selects the next command. The cursor moves with `Left` and `Right` as in any input, and the completion shows only while it is at the end of the name. The part of each command typed so far is bold in the picker. After `/save ` or `/load `, `Tab` completes the file name: directories and `.m2` files whose names start with what is typed, hidden ones only once a `.` is typed.
+While a command's name is being typed, `Tab` completes it to the command selected in the picker, closing the picker, or followed by a space when it takes a file; `Shift+Tab` selects the next command and `Ctrl+Tab` the previous one. The cursor moves with `Left` and `Right` as in any input, and the inline completion hint shows only while it is at the end of the name and the candidate count is below *hint completion below*. The part of each command typed so far is bold in the picker. After `/save ` or `/load `, `Tab` opens the file candidates, inserting a visible hint immediately, or on the next press otherwise: directories and `.m2` files whose names start with what is typed, hidden ones only once a `.` is typed.
 
 A file name without an extension gets `.m2`, and a leading `~` is the home directory. Picking `/load` from the picker types it into the input, ready for the file name; picking `/save` keeps the session at once.
 
