@@ -196,3 +196,11 @@ Type = { fg = "yellow" }
 Variable = { fg = "fg0" }
 ViewLabelActive = { fg = "fg0" }
 Warning = { fg = "yellow" }
+Selection = { bg = "bg_visual_red" }
+ErrorCode = { bg = "bg_diff_red" }
+Printed = { fg = "grey2", bg = "bg1" }
+StatuslineBg = { fg = "fg1", bg = "bg_statusline3" }
+StatuslineInactive = { fg = "grey1", bg = "bg_statusline2" }
+Statusline1 = { fg = "fg1" }
+Statusline2 = { fg = "aqua" }
+Statusline3 = { fg = "grey1" }

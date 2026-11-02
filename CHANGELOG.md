@@ -4,6 +4,11 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Every colour drawn now comes from the active scheme's own palette. The computed shades (printed-text desaturation, recent-label darkening, the error-surface tint and Catppuccin's blended selection) are gone, along with the `saturation`, `lightening`, `darken`, `tint` and `bg_blend` keys.
+- Selection, error-code, printed-output and status-line colours are chosen per scheme from its upstream visual, diff and statusline colours instead of shared links to syntax colours.
+
 ## [1.1.0] - 2026-10-27
 
 ### Added

@@ -215,6 +215,14 @@ Type = { fg = "bright_yellow" }
 Variable = { fg = "light1" }
 ViewLabelActive = { fg = "bright_blue" }
 Warning = { fg = "bright_yellow" }
+Selection = { bg = "dark3" }
+ErrorCode = { bg = "dark2" }
+Printed = { fg = "light3", bg = "dark2" }
+StatuslineBg = { fg = "light1", bg = "dark2" }
+StatuslineInactive = { fg = "light4", bg = "dark1" }
+Statusline1 = { fg = "light1" }
+Statusline2 = { fg = "bright_blue" }
+Statusline3 = { fg = "gray_244" }
 
 [variant_overrides.dark.medium]
 Bg0 = { bg = "dark0" }
@@ -274,6 +282,13 @@ Type = { fg = "faded_yellow" }
 Variable = { fg = "dark1" }
 ViewLabelActive = { fg = "faded_blue" }
 Warning = { fg = "faded_yellow" }
+Selection = { bg = "light3" }
+ErrorCode = { bg = "light2" }
+Printed = { fg = "dark3", bg = "light2" }
+StatuslineBg = { fg = "dark1", bg = "light2" }
+StatuslineInactive = { fg = "dark4", bg = "light1" }
+Statusline1 = { fg = "dark1" }
+Statusline2 = { fg = "faded_blue" }
 
 [variant_overrides.light.medium]
 Accent = { fg = "faded_aqua" }
@@ -325,6 +340,13 @@ Type = { fg = "faded_yellow" }
 Variable = { fg = "dark1" }
 ViewLabelActive = { fg = "faded_blue" }
 Warning = { fg = "faded_yellow" }
+Selection = { bg = "light3" }
+ErrorCode = { bg = "light2" }
+Printed = { fg = "dark3", bg = "light2" }
+StatuslineBg = { fg = "dark1", bg = "light2" }
+StatuslineInactive = { fg = "dark4", bg = "light1" }
+Statusline1 = { fg = "dark1" }
+Statusline2 = { fg = "faded_blue" }
 
 [variant_overrides.light.soft]
 Accent = { fg = "faded_aqua" }
@@ -376,3 +398,10 @@ Type = { fg = "faded_yellow" }
 Variable = { fg = "dark1" }
 ViewLabelActive = { fg = "faded_blue" }
 Warning = { fg = "faded_yellow" }
+Selection = { bg = "light3" }
+ErrorCode = { bg = "light2" }
+Printed = { fg = "dark3", bg = "light2" }
+StatuslineBg = { fg = "dark1", bg = "light2" }
+StatuslineInactive = { fg = "dark4", bg = "light1" }
+Statusline1 = { fg = "dark1" }
+Statusline2 = { fg = "faded_blue" }
