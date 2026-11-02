@@ -462,6 +462,9 @@ impl App {
             workspace.editor.language_server(),
             workspace.editor.semantic_highlighting(),
         );
+        for (page, examples) in workspace.session.take_example_sources() {
+            workspace.highlighter.analyse_examples(page, &examples);
+        }
         let (draft, pending, revision) = workspace.editor.analysis_input();
         let state = (
             workspace.session.source_revision(),
@@ -476,6 +479,13 @@ impl App {
         }
         let polled = workspace.highlighter.poll();
         recolored |= polled.recolored;
+        if !polled.examples.is_empty() {
+            for (page, number, source, spans) in polled.examples {
+                crate::ui::render::markup::colour_example(page, number, source, spans);
+            }
+            running &= workspace.editor.apply(EditorUpdate::ExamplesComputed);
+            dirty = true;
+        }
         if recolored {
             workspace.editor.rehighlight(&mut workspace.highlighter);
             dirty = true;

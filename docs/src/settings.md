@@ -36,7 +36,7 @@ Changes are kept between sessions. The appearance is saved to `appearance.json` 
 
 ## Semantic highlighting
 
-Install the optional language server, `m2-ls` 2.0 or later, with `cargo install m2-ls` and restart Spectral. Semantic colors apply to live input, submitted cells, code previews, and the source shown with syntax trees. Analysis includes earlier session source, queued cells, and the current continuation; it does not evaluate code or inspect runtime values. Dynamically created bindings and side effects may remain unknown.
+Install the optional language server, `m2-ls` 2.0 or later, with `cargo install m2-ls` and restart Spectral. Semantic colors apply to live input, submitted cells, code previews, the source shown with syntax trees, and documentation examples. A page's examples are analysed together, in the order they run, by a second `m2-ls` kept apart from the session, so the session never sees their names and they never see the session's. Analysis includes earlier session source, queued cells, and the current continuation; it does not evaluate code or inspect runtime values. Dynamically created bindings and side effects may remain unknown.
 
 Without the server, or if it stops responding, source keeps its syntax colors. Switch *language server* off and on to retry. Completion and syntax diagnostics continue to use the shell's existing providers.
 
