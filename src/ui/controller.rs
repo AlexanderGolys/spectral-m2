@@ -1299,7 +1299,6 @@ impl Editor {
             self.frame_stats.tick();
         }
         self.selection_exclusions.clear();
-        let theme = *scheme();
         let input_prefix = UI.prompt_width();
         frame.render_widget(Clear, area);
 
@@ -1308,11 +1307,11 @@ impl Editor {
         let input_height = self
             .input
             .height(editor_area.width, input_prefix, editor_area.height);
-        // A split shares one status line across both panes, drawn by the app.
-        let status_height = u16::from(self.statusline_shown() && !self.split);
+        // Each pane of a split keeps its own status line, which marks the pane
+        // with focus.
+        let status_height = u16::from(self.statusline_shown());
         let picker_height = self
-            .pickers
-            .last()
+            .shown_picker()
             .map_or(0, |controller| controller.picker.height(editor_area.width));
         // A long list must never squeeze the input out of the frame: the cursor
         // would then be placed outside it.
@@ -1359,7 +1358,7 @@ impl Editor {
 
         self.feed_area = sections[0];
         self.draw_feed(frame, sections[0], &context);
-        if let Some(controller) = self.pickers.last() {
+        if let Some(controller) = self.shown_picker() {
             controller
                 .picker
                 .render(&(), sections[1], frame.buffer_mut());
@@ -1384,23 +1383,49 @@ impl Editor {
             frame.set_cursor_position(cursor);
         }
         TuiBlock::default()
-            .style(theme.statusline_bg())
+            .style(self.status_background())
             .render(status_area, frame.buffer_mut());
-        self.status_line.render(
-            &StatusLineContext {
-                location: Some(self.location()),
-                idle_left: self.shell_state(),
-                ..StatusLineContext::default()
-            },
-            status_area,
-            frame.buffer_mut(),
-        );
+        let context = StatusLineContext {
+            location: Some(self.location()),
+            idle_left: self.shell_state(),
+            inactive: self.status_inactive(),
+            ..StatusLineContext::default()
+        };
+        // The keys a pane answers are only worth showing while keys reach it.
+        match context.inactive {
+            true => StatusLine::default().render(&context, status_area, frame.buffer_mut()),
+            false => self
+                .status_line
+                .render(&context, status_area, frame.buffer_mut()),
+        }
         if status_height > 0 {
             self.selection_exclusions.push(status_area);
         }
         self.draw_highlight_debug(frame);
         self.capture_screen(frame);
         self.paint_screen_selection(frame);
+    }
+
+    /// The picker this pane shows: in a split only the pane with focus draws the
+    /// open picker, since it is that pane the keys reach.
+    pub(crate) fn shown_picker(&self) -> Option<&PickerController> {
+        self.pickers
+            .last()
+            .filter(|_| !self.split || self.pane_focused)
+    }
+
+    /// Whether this pane's status line is drawn as the one without focus.
+    pub(crate) fn status_inactive(&self) -> bool {
+        self.split && !self.pane_focused
+    }
+
+    /// The status line's own surface: the active one, or in a split the quieter
+    /// one of the pane without focus.
+    pub(crate) fn status_background(&self) -> ratatui::style::Style {
+        match self.status_inactive() {
+            true => scheme().statusline_inactive(),
+            false => scheme().statusline_bg(),
+        }
     }
 
     /// Whether the settings give the status line a row.

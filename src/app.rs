@@ -363,16 +363,12 @@ impl App {
             UI.screen_margin.min(screen.width),
             screen.height,
         );
-        let mut area = Rect::new(
+        let area = Rect::new(
             margin.right(),
             screen.y,
             screen.width - margin.width,
             screen.height,
         );
-        let shared_status = (split && workspace.editor.statusline_shown()).then(|| {
-            area.height = area.height.saturating_sub(1);
-            Rect::new(area.x, area.bottom(), area.width, 1)
-        });
         self.layout(area);
         let workspace = &mut self.workspace;
         if let Some(divider) = self.divider {
@@ -409,12 +405,6 @@ impl App {
                     &mut self.panes.list[pane].viewport,
                 ),
             }
-        }
-        if let Some(status) = shared_status {
-            let beside = &self.panes.list[Panes::SPLIT];
-            workspace
-                .editor
-                .draw_shared_status(frame, status, beside.view, active == Panes::SPLIT);
         }
         workspace.editor.draw_margin(frame, margin);
     }

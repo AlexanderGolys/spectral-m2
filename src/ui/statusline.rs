@@ -2,7 +2,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::Modifier;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -47,6 +47,9 @@ pub struct StatusLineContext {
     pub idle_left: Option<TextSpan>,
     pub center: Option<Vec<TextSpan>>,
     pub right: Vec<TextSpan>,
+    /// Drawn for a pane of a split without focus: every part in the quiet
+    /// colour of [`HLGroup::StatuslineInactive`].
+    pub inactive: bool,
 }
 
 impl StatusLineContext {
@@ -183,9 +186,20 @@ impl Element for StatusLine {
             },
         };
         let groups = scheme();
-        let left = Self::line(&left, groups, HLGroup::Statusline1);
-        let center = center.map(|spans| Self::line(&spans, groups, HLGroup::Statusline2));
-        let right = Self::line(&right, groups, HLGroup::Statusline3);
+        let mut left = Self::line(&left, groups, HLGroup::Statusline1);
+        let mut center = center.map(|spans| Self::line(&spans, groups, HLGroup::Statusline2));
+        let mut right = Self::line(&right, groups, HLGroup::Statusline3);
+        if context.inactive {
+            let quiet = groups.style(HLGroup::StatuslineInactive);
+            for span in left
+                .spans
+                .iter_mut()
+                .chain(right.spans.iter_mut())
+                .chain(center.iter_mut().flat_map(|line| line.spans.iter_mut()))
+            {
+                span.style = Style::new().fg(quiet.fg.unwrap_or_default());
+            }
+        }
         let center_range = center.as_ref().map(|line| {
             let start = width.saturating_sub(line.width()) / 2;
             start..start + line.width().min(width)
