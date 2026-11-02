@@ -31,13 +31,23 @@ Error = { required = true, captures = ["error"] }
 Warning = { required = true }
 Info = { required = true }
 Hint = { required = true }
+# Interface surfaces: each scheme picks these from its own palette, following its
+# upstream statusline, visual-selection and diff colours, instead of inheriting a
+# shared link to a syntax colour.
+Selection = { required = true }
+ErrorCode = { required = true }
+Printed = { required = true }
+StatuslineBg = { required = true }
+StatuslineInactive = { required = true }
+Statusline1 = { required = true }
+Statusline2 = { required = true }
+Statusline3 = { required = true }
 
 Bg5 = { link="Bg4" }
 Canvas = { link = "Bg0" }
 Code = { link = "Bg1" }
 Raised = { link = "Bg2" }
 Pending = { link = "Bg2" }
-Selection = { link = "Bg3" }
 Focus = { link = "Bg4" }
 Comment = { link = "Muted", italic = true, captures = ["comment"] }
 Constant = { link = "Number" }
@@ -85,7 +95,6 @@ DiagnosticInfo = { sp_from = "Info.fg", underline = true }
 DiagnosticHint = { sp_from = "Hint.fg", underline = true }
 Value = { link = "Text" }
 FractionRule = { sp_from = "Operator.fg", underline = true }
-Printed = { link = "String", bg_from = "Raised.bg", saturation = 55.0, lightening = 15.0 }
 Picker = { link = "Raised" }
 PickerSelected = { link = "Focus" }
 InputPrompt = { link = "Accent" }
@@ -95,7 +104,7 @@ Separator = { fg_from = "Canvas.bg" }
 ValueBorder = { link = "Faint" }
 OutputNumber = { link = "Accent" }
 RecentOutput = { link = "Accent", bold = true }
-RecentCellNumber = { link = "Accent", darken = 0.25 }
+RecentCellNumber = { link = "Accent" }
 CellNumber = { link = "Muted" }
 PendingCellMarker = { link = "Muted" }
 QueuedCellMarker = { link = "Muted" }
@@ -106,13 +115,8 @@ PendingSeparator = { link = "Muted" }
 MutedCodeText = { link = "Muted" }
 ErrorBorder = { link = "Error" }
 ErrorMessage = { link = "Error" }
-ErrorCode = { link = "Code", tint_from = "Error.fg", tint = 0.12 }
 WarningBorder = { link = "Warning" }
 InfoBorder = { link = "Info" }
-Statusline1 = { link = "String" }
-Statusline2 = { link = "Warning" }
-Statusline3 = { link = "Error" }
-StatuslineBg = { link = "Code" }
 StatuslineError = { link = "Error" }
 StatuslineWarning = { link = "Warning" }
 KeymapHint = { link = "Accent" }

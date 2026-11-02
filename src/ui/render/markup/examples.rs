@@ -19,7 +19,9 @@ use unicode_width::UnicodeWidthStr;
 use crate::backend::transcript::{captured_error, strip_m2_location};
 use crate::backend::{M2Response, M2Value};
 use crate::code::highlight::Highlighter;
+use crate::code::semantic::merge;
 use crate::ui::block::Block;
+use crate::ui::block::HLSpan;
 use crate::ui::cell::{response_blocks, CellState, EvaluationBlock, OutputBlock, TextBlock};
 use crate::ui::config::UI;
 use crate::ui::render::{RenderContext, RECENT_OUTPUTS};
@@ -41,6 +43,29 @@ thread_local! {
 /// from from now on.
 pub fn remember(page: u64, number: u32, response: M2Response) {
     COMPUTED.with_borrow_mut(|computed| computed.insert((page, number), Rc::new(response)));
+}
+
+/// An example's code and the language server's colours computed for it.
+type Coloured = (String, Vec<HLSpan>);
+
+thread_local! {
+    /// The language server's colours for examples, by page and input number.
+    static COLOURED: RefCell<HashMap<(u64, u32), Coloured>> = RefCell::default();
+}
+
+/// Keep the language server's colours for example `number` of `page`.
+pub fn colour(page: u64, number: u32, source: String, spans: Vec<HLSpan>) {
+    COLOURED.with_borrow_mut(|coloured| coloured.insert((page, number), (source, spans)));
+}
+
+/// `source`, example `number` of `page`, coloured by its syntax and, once the
+/// language server has analysed the page, by its meaning as session code is.
+fn highlighted(page: u64, number: u32, source: &str) -> Vec<HLSpan> {
+    let lexical = CODE.with_borrow_mut(|highlighter| highlighter.highlight(source));
+    COLOURED.with_borrow(|coloured| match coloured.get(&(page, number)) {
+        Some((analysed, semantic)) if analysed == source => merge(lexical, semantic),
+        _ => lexical,
+    })
 }
 
 fn computed(page: u64, number: u32) -> Option<Rc<M2Response>> {
@@ -199,15 +224,15 @@ impl Example {
         })
     }
 
-    /// The example's input, waiting for what it answers.
-    fn input(&self) -> EvaluationBlock {
-        let marked = CODE.with_borrow_mut(|highlighter| highlighter.highlight(&self.source));
+    /// The example's input on `page`, waiting for what it answers.
+    fn input(&self, page: u64) -> EvaluationBlock {
+        let marked = highlighted(page, self.number, &self.source);
         EvaluationBlock::new(0, [(self.source.clone(), marked)])
     }
 
     /// The example answered as `response` says, the way a live cell is.
-    fn computed(&self, response: &M2Response) -> EvaluationBlock {
-        let mut block = self.input();
+    fn computed(&self, page: u64, response: &M2Response) -> EvaluationBlock {
+        let mut block = self.input(page);
         if response.is_error {
             let error = captured_error(&response.transcript, &self.source);
             let printed = (!error.printed.is_empty()).then(|| TextBlock::printed(error.printed));
@@ -228,8 +253,8 @@ impl Example {
     }
 
     /// The example answered as its documentation recorded.
-    fn block(self) -> EvaluationBlock {
-        let mut block = self.input();
+    fn block(self, page: u64) -> EvaluationBlock {
+        let mut block = self.input(page);
         let printed = (!self.printed.is_empty()).then(|| TextBlock::printed(self.printed));
         if let Some(error) = self.error {
             block.fail(0, self.number, printed, error);
@@ -366,8 +391,8 @@ pub fn render(
     let mut rendered = Vec::new();
     for example in transcript(source, example_width)? {
         let block = match computed(page, example.number) {
-            Some(response) => example.computed(&response),
-            None => example.block(),
+            Some(response) => example.computed(page, &response),
+            None => example.block(page),
         };
         rendered.extend(painted(&block, example_width, context));
     }
@@ -462,6 +487,44 @@ mod tests {
     const EXAMPLE_WIDTH: usize = 77;
     /// A page none of whose examples were computed again.
     const UNCOMPUTED: u64 = 0;
+
+    /// The language server's colours reach an example's input on its own page
+    /// only, and only while they were computed for the code shown.
+    #[test]
+    fn analysed_examples_draw_their_semantic_colours() {
+        use crate::ui::controller::settings::theme::groups::HLGroup;
+        let source = "R = QQ[x]";
+        let marked_as = |spans: &[HLSpan], group| {
+            spans.iter().any(|span| {
+                span.content == (0..1) && (span.kind == group || span.mark == Some(group))
+            })
+        };
+        let page = 41;
+        assert!(!marked_as(
+            &highlighted(page, 1, source),
+            HLGroup::RingGenerator
+        ));
+
+        colour(
+            page,
+            1,
+            source.to_string(),
+            vec![HLSpan::new(0..1, HLGroup::RingGenerator)],
+        );
+
+        assert!(marked_as(
+            &highlighted(page, 1, source),
+            HLGroup::RingGenerator
+        ));
+        assert!(!marked_as(
+            &highlighted(page + 1, 1, source),
+            HLGroup::RingGenerator
+        ));
+        assert!(!marked_as(
+            &highlighted(page, 1, "S = QQ[x]"),
+            HLGroup::RingGenerator
+        ));
+    }
 
     /// The value M2 printed for `lines`, run at a print width of `width`.
     fn value(lines: &[&str], width: usize) -> String {

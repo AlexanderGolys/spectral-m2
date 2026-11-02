@@ -4,6 +4,20 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Documentation examples are coloured by the language server, as session code is, when semantic highlighting is on. Each page's examples are analysed together in a document of their own, apart from the session.
+
+- Dragging across part of a typeset picture, such as one row of a matrix, highlights the whole picture, matching what the selection copies.
+
+- A modifier held for a tmux binding or a system shortcut no longer stays held after focus moves away and back, which turned later keys into shortcuts. Keys chorded with Super (outside macOS), Hyper or Meta are left to the window manager and terminal instead of typing their letter.
+
+### Changed
+
+- Every colour drawn now comes from the active scheme's own palette. The computed shades (printed-text desaturation, recent-label darkening, the error-surface tint and Catppuccin's blended selection) are gone, along with the `saturation`, `lightening`, `darken`, `tint` and `bg_blend` keys.
+- Selection, error-code, printed-output and status-line colours are chosen per scheme from its upstream visual, diff and statusline colours instead of shared links to syntax colours.
+- In a split, each pane draws its own status line under it, and the pane without focus draws it in the inactive colours, so the focused pane is always marked. The view's status line no longer repeats the shell's location, and an open picker shows only in the pane with focus.
+
 ## [1.1.0] - 2026-10-27
 
 ### Added

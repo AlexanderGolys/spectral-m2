@@ -5,7 +5,7 @@
 //! link and Tree-sitter captures, and each scheme file, which colours the required
 //! groups from its palette and may override any other. [`Groups::resolve`] layers
 //! them (variant override, then scheme, then shared default), follows links and
-//! channel references, applies colour adjustments, and yields one ratatui [`Style`]
+//! channel references, and yields one ratatui [`Style`]
 //! per [`HLGroup`]. Rendering only ever sees the resolved [`Groups`].
 
 use std::collections::HashMap;
@@ -24,9 +24,10 @@ use super::palette::Palette;
 /// [`Style`]. Every key is optional, and a declaration replaces a lower layer's one for
 /// the same group as a whole rather than merging with it.
 ///
-/// Keys apply in field order: start from `link`, set the channels, toggle
-/// modifiers, then adjust colours. Colours are native palette names; `Group.fg`,
-/// `Group.bg` and `Group.sp` name another group's resolved channel.
+/// Keys apply in field order: start from `link`, set the channels, then toggle
+/// modifiers. Colours are native palette names; `Group.fg`, `Group.bg` and
+/// `Group.sp` name another group's resolved channel. Nothing computes a colour, so
+/// every colour drawn is one of the scheme's own.
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct StyleDeclaration {
@@ -55,19 +56,6 @@ pub struct StyleDeclaration {
     crossed_out: Option<bool>,
     /// Drawn by the terminal blended toward its background.
     dim: Option<bool>,
-    /// Foreground kept at this percentage of its saturation, hue unchanged.
-    saturation: Option<f32>,
-    /// Foreground moved this percentage of the way to white.
-    lightening: Option<f32>,
-    /// Foreground blended toward black by this fraction.
-    darken: Option<f32>,
-    /// Background blended toward a palette colour by `bg_blend_amount`, a fraction,
-    /// for schemes whose guidelines specify an overlay's opacity.
-    bg_blend: Option<String>,
-    bg_blend_amount: Option<f32>,
-    /// Background blended toward another group's channel by `tint`, a fraction.
-    tint_from: Option<String>,
-    tint: Option<f32>,
 }
 
 /// Declarations keyed by highlight group name, as one TOML table holds them.
@@ -336,77 +324,8 @@ impl StyleResolver<'_> {
                 };
             }
         }
-        if declaration.saturation.is_some() || declaration.lightening.is_some() {
-            let saturation = declaration.saturation.unwrap_or(100.0);
-            let lightening = declaration.lightening.unwrap_or(0.0);
-            for amount in [saturation, lightening] {
-                if !amount.is_finite() || !(0.0..=100.0).contains(&amount) {
-                    return Err("saturation and lightening must be between 0 and 100".into());
-                }
-            }
-            style = softened(style, saturation, lightening);
-        }
-        if let Some(amount) = declaration.darken {
-            if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
-                return Err("darken must be between 0 and 1".into());
-            }
-            if let Some(fg) = style.fg {
-                style.fg = Some(super::palette::blend(fg, Color::Rgb(0, 0, 0), amount)?);
-            }
-        }
-        match (&declaration.bg_blend, declaration.bg_blend_amount) {
-            (Some(color), Some(amount)) => {
-                let bg = style.bg.ok_or("bg_blend needs a background")?;
-                let color = self
-                    .palette
-                    .resolve(Some(color))?
-                    .expect("a named palette color exists");
-                style.bg = Some(super::palette::blend(bg, color, amount)?);
-            }
-            (None, None) => {}
-            _ => return Err("bg_blend and bg_blend_amount must be set together".into()),
-        }
-        match (&declaration.tint_from, declaration.tint) {
-            (Some(reference), Some(amount)) => {
-                if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
-                    return Err("tint must be between 0 and 1".into());
-                }
-                if let (Some(bg), Some(fg)) = (style.bg, self.channel(reference)?) {
-                    style.bg = Some(super::palette::blend(bg, fg, amount)?);
-                }
-            }
-            (None, None) => {}
-            _ => return Err("tint_from and tint must be set together".into()),
-        }
         Ok(style)
     }
-}
-
-/// `style` with its foreground desaturated to `saturation` percent of what it was and
-/// lightened by `lightening` percent of the way to white, its hue untouched. A colour
-/// that is not RGB has no channels to move and is left as it is.
-fn softened(style: Style, saturation: f32, lightening: f32) -> Style {
-    let Some(Color::Rgb(r, g, b)) = style.fg else {
-        return style;
-    };
-    let [r, g, b] = [r, g, b].map(|channel| f32::from(channel) / 255.0);
-    let (high, low) = (r.max(g).max(b), r.min(g).min(b));
-    let chroma = high - low;
-    let value = high + (1.0 - high) * lightening / 100.0;
-    let kept = if high == 0.0 { 0.0 } else { chroma / high } * saturation / 100.0;
-    let floor = value * (1.0 - kept);
-    // The same position between the darkest and brightest channel as before, which is
-    // what keeps the hue where it was.
-    let channel = |from: f32| {
-        let along = if chroma == 0.0 {
-            0.0
-        } else {
-            (from - low) / chroma
-        };
-        let byte = (floor + (value - floor) * along) * 255.0;
-        byte.round().clamp(0.0, 255.0) as u8
-    };
-    style.fg(Color::Rgb(channel(r), channel(g), channel(b)))
 }
 
 /// The one scheme in effect, republished whenever the appearance changes.
@@ -544,6 +463,7 @@ accessors! {
     warning_border: WarningBorder,
     info_border: InfoBorder,
     statusline_bg: StatuslineBg,
+    statusline_inactive: StatuslineInactive,
 }
 
 /// The default appearance's resolved scheme, used before any theme is published.
@@ -559,26 +479,6 @@ mod tests {
 
     use super::*;
     use crate::ui::controller::settings::theme::SCHEMES;
-
-    /// HSV saturation and hue of an RGB foreground, or None for any other colour.
-    fn saturation_and_hue(style: Style) -> Option<(f32, f32)> {
-        let Some(Color::Rgb(r, g, b)) = style.fg else {
-            return None;
-        };
-        let [r, g, b] = [r, g, b].map(|channel| f32::from(channel) / 255.0);
-        let (high, low) = (r.max(g).max(b), r.min(g).min(b));
-        let chroma = high - low;
-        let hue = if chroma == 0.0 {
-            0.0
-        } else if high == r {
-            ((g - b) / chroma).rem_euclid(6.0)
-        } else if high == g {
-            (b - r) / chroma + 2.0
-        } else {
-            (r - g) / chroma + 4.0
-        } * 60.0;
-        Some((if high == 0.0 { 0.0 } else { chroma / high }, hue))
-    }
 
     fn fixture() -> (StyleTable, Palette) {
         let file: super::super::SchemeFile =
@@ -717,7 +617,7 @@ mod tests {
             "CompletionHint = { link = 'NoSuchGroup' }",
             "CompletionHint = { fg_from = 'Text.typo' }",
             "CompletionHint = { fg = 'invented_color' }",
-            "CompletionHint = { bg = 'base', bg_blend = 'red', bg_blend_amount = 1.5 }",
+            "CompletionHint = { bg_from = 'NoSuchGroup.bg' }",
         ] {
             let overrides = toml::from_str(source).unwrap();
             assert!(
@@ -743,26 +643,59 @@ mod tests {
         .contains("missing required highlight group `Text`"));
     }
 
+    /// No group draws a colour its scheme does not name: every channel of every
+    /// group, in every variant, is one of that variant's native palette colours.
     #[test]
-    fn printed_text_is_a_quieter_shade_of_a_string() {
-        for groups in SCHEMES
-            .iter()
-            .flat_map(|scheme| scheme.variants())
-            .map(|variant| variant.groups())
-        {
-            let (string, printed) = (
-                saturation_and_hue(groups.String).expect("schemes colour in RGB"),
-                saturation_and_hue(groups.Printed).expect("schemes colour in RGB"),
-            );
-            assert!(
-                printed.0 < string.0,
-                "printed text should be less saturated"
-            );
-            let apart = (printed.1 - string.1).abs();
-            assert!(
-                apart.min(360.0 - apart) < 30.0,
-                "printed text should keep the hue"
-            );
+    fn every_colour_drawn_comes_from_its_own_palette() {
+        for scheme in SCHEMES.iter() {
+            for variant in scheme.variants() {
+                let native: HashSet<Color> = variant
+                    .palette()
+                    .colors()
+                    .into_iter()
+                    .map(|(_, color)| color)
+                    .collect();
+                for (group, style) in variant.groups().highlight_groups() {
+                    for color in [style.fg, style.bg, style.underline_color]
+                        .into_iter()
+                        .flatten()
+                    {
+                        assert!(
+                            native.contains(&color),
+                            "{} {}: {group} draws {color:?}, outside its palette",
+                            scheme.label(),
+                            variant.label(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Each scheme names its own interface surfaces, and each one stands apart from
+    /// what it is drawn over: a selection from the code, output and canvas under
+    /// it, an error from the code it marks, a status line from the panes above it.
+    #[test]
+    fn interface_surfaces_stand_apart_in_every_variant() {
+        for scheme in SCHEMES.iter() {
+            for variant in scheme.variants() {
+                let groups = variant.groups();
+                let name = format!("{} {}", scheme.label(), variant.label());
+                let bg = |style: Style| style.bg.unwrap_or_else(|| panic!("{name}: no background"));
+                let selection = bg(groups.Selection);
+                for under in [groups.Canvas, groups.Code, groups.Printed] {
+                    assert_ne!(selection, bg(under), "{name}: selection");
+                }
+                assert_ne!(bg(groups.ErrorCode), bg(groups.Code), "{name}: error code");
+                let status = bg(groups.StatuslineBg);
+                assert_ne!(status, bg(groups.Canvas), "{name}: status line");
+                assert_ne!(status, bg(groups.Code), "{name}: status line");
+                assert_ne!(
+                    status,
+                    bg(groups.StatuslineInactive),
+                    "{name}: inactive status line"
+                );
+            }
         }
     }
 

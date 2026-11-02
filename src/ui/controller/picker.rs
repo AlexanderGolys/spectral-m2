@@ -425,12 +425,6 @@ impl Picker {
         });
     }
 
-    /// Replace the current tab's items while retaining the selection where possible.
-    pub fn set_items(&mut self, items: Vec<Box<dyn PickerItem>>) {
-        self.tabs[self.tab].items = items;
-        self.measure();
-    }
-
     /// Replace every tab while retaining the tab and selection shown where possible.
     pub fn set_tabs(&mut self, tabs: Vec<PickerTab>) {
         assert!(!tabs.is_empty(), "a picker shows at least one tab");

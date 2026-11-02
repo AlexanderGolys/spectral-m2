@@ -154,7 +154,6 @@ Punctuation = { fg = "overlay2" }
 Quote = { fg = "pink" }
 Regex = { fg = "pink" }
 Repeat = { fg = "mauve" }
-Selection = { bg = "base", bg_blend = "overlay2", bg_blend_amount = 0.25 }
 Statement = { fg = "mauve" }
 StorageClass = { fg = "mauve" }
 String = { fg = "green" }
@@ -164,3 +163,11 @@ Type = { fg = "yellow" }
 Variable = { fg = "text" }
 ViewLabelActive = { fg = "blue", italic = true }
 Warning = { fg = "yellow" }
+Selection = { bg = "surface1" }
+ErrorCode = { bg = "surface0" }
+Printed = { fg = "subtext1", bg = "surface0" }
+StatuslineBg = { fg = "subtext1", bg = "crust" }
+StatuslineInactive = { fg = "overlay0", bg = "mantle" }
+Statusline1 = { fg = "text" }
+Statusline2 = { fg = "blue" }
+Statusline3 = { fg = "overlay1" }

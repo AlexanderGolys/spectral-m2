@@ -101,6 +101,10 @@ pub struct Session {
     example_timeout: Duration,
     /// The pages whose examples were asked for, so each is computed once.
     computed_pages: HashSet<u64>,
+    /// Pages whose examples wait to be coloured by the language server, each
+    /// with its examples' input numbers and code in the order they ran.
+    analysed_pages: HashSet<u64>,
+    example_sources: Vec<(u64, Vec<(u32, String)>)>,
 }
 
 impl Session {
@@ -128,6 +132,8 @@ impl Session {
             examples: ExampleRunner::new(),
             example_timeout: Duration::ZERO,
             computed_pages: HashSet::new(),
+            analysed_pages: HashSet::new(),
+            example_sources: Vec::new(),
         }
     }
 
@@ -148,10 +154,22 @@ impl Session {
             return;
         };
         let page = markup::page(html);
-        if self.example_timeout.is_zero() || !self.computed_pages.insert(page) {
+        let analysing = self.analysed_pages.insert(page);
+        let computing = !self.example_timeout.is_zero() && self.computed_pages.insert(page);
+        if !analysing && !computing {
             return;
         }
         let examples = markup::examples(html, *example_width);
+        if analysing && !examples.is_empty() {
+            let sources = examples
+                .iter()
+                .map(|example| (example.number, example.source.clone()))
+                .collect();
+            self.example_sources.push((page, sources));
+        }
+        if !computing {
+            return;
+        }
         if !examples.is_empty() {
             let package = markup::source_package(html);
             let page = ExamplePage {
@@ -161,6 +179,12 @@ impl Session {
             };
             self.examples.run(page, self.example_timeout);
         }
+    }
+
+    /// The pages of documentation examples shown since last asked, for the
+    /// language server to colour.
+    pub fn take_example_sources(&mut self) -> Vec<(u64, Vec<(u32, String)>)> {
+        std::mem::take(&mut self.example_sources)
     }
 
     pub fn version(&self) -> Result<String> {

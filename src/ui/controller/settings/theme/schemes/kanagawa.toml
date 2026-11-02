@@ -474,6 +474,14 @@ Type = { fg = "waveAqua2" }
 Variable = { fg = "fujiWhite" }
 ViewLabelActive = { fg = "springBlue" }
 Warning = { fg = "roninYellow" }
+Selection = { bg = "waveBlue2" }
+ErrorCode = { bg = "winterRed" }
+Printed = { fg = "oldWhite", bg = "sumiInk4" }
+StatuslineBg = { fg = "oldWhite", bg = "sumiInk4" }
+StatuslineInactive = { fg = "fujiGray", bg = "sumiInk0" }
+Statusline1 = { fg = "fujiWhite" }
+Statusline2 = { fg = "crystalBlue" }
+Statusline3 = { fg = "fujiGray" }
 
 [variant_overrides.dark.dragon]
 Accent = { fg = "dragonYellow" }
@@ -522,6 +530,12 @@ Text = { fg = "dragonWhite" }
 Type = { fg = "dragonAqua" }
 Variable = { fg = "dragonWhite" }
 ViewLabelActive = { fg = "dragonTeal" }
+Printed = { fg = "dragonGray", bg = "dragonBlack4" }
+StatuslineBg = { fg = "dragonGray", bg = "dragonBlack4" }
+StatuslineInactive = { fg = "dragonAsh", bg = "dragonBlack0" }
+Statusline1 = { fg = "dragonWhite" }
+Statusline2 = { fg = "dragonBlue2" }
+Statusline3 = { fg = "dragonAsh" }
 
 [variant_overrides.light.lotus]
 Accent = { fg = "lotusYellow" }
@@ -577,3 +591,11 @@ Type = { fg = "lotusAqua" }
 Variable = { fg = "lotusInk1" }
 ViewLabelActive = { fg = "lotusTeal2" }
 Warning = { fg = "lotusOrange2" }
+Selection = { bg = "lotusBlue2" }
+ErrorCode = { bg = "lotusRed4" }
+Printed = { fg = "lotusInk2", bg = "lotusWhite4" }
+StatuslineBg = { fg = "lotusInk1", bg = "lotusWhite4" }
+StatuslineInactive = { fg = "lotusGray3", bg = "lotusWhite0" }
+Statusline1 = { fg = "lotusInk1" }
+Statusline2 = { fg = "lotusBlue4" }
+Statusline3 = { fg = "lotusGray3" }

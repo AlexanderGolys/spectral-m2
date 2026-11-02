@@ -140,8 +140,9 @@ impl Viewport {
 }
 
 impl Editor {
-    /// A view's status: the session's state on the left, the views in the
-    /// centre, and the keys it answers to on the right. While the view has focus
+    /// A view's status: the session's state on the left, unless the shell beside
+    /// it shows that, the views in the centre, and the keys it answers to on the
+    /// right while it has focus. While the view has focus
     /// the centre lists every view `Left` and `Right` step through, its own
     /// highlighted; otherwise it names the view alone.
     fn preview_status(&self, view: ViewKind, focused: bool) -> StatusLineContext {
@@ -174,32 +175,21 @@ impl Editor {
                 ]
             })
             .unwrap_or_default();
+        // Beside the shell, whose own status line says where the session works and
+        // what it is doing, a view names only itself and its keys.
+        let (location, idle_left) = match self.split {
+            true => (None, None),
+            false => (Some(self.location()), self.shell_state()),
+        };
         StatusLineContext {
-            location: Some(self.location()),
-            idle_left: self.shell_state(),
+            location,
+            idle_left,
             center: Some(center),
-            right,
-        }
-    }
-
-    /// One status line across both panes of a split: the session's state on the
-    /// left, the view beside it in the centre, and the focused pane's keys on the
-    /// right.
-    pub fn draw_shared_status(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        view: ViewKind,
-        view_focused: bool,
-    ) {
-        let buffer = frame.buffer_mut();
-        TuiBlock::default()
-            .style(scheme().statusline_bg())
-            .render(area, buffer);
-        let status = self.preview_status(view, view_focused);
-        match view_focused && self.pickers.is_empty() && !self.cancel_hint_shown {
-            true => StatusLine::default().render(&status, area, buffer),
-            false => self.status_line.render(&status, area, buffer),
+            right: match focused {
+                true => right,
+                false => Vec::new(),
+            },
+            inactive: self.status_inactive(),
         }
     }
 
@@ -248,18 +238,16 @@ impl Editor {
         }
         self.selection_exclusions.clear();
         self.input.hide();
-        let theme = *scheme();
         frame.render_widget(Clear, area);
         let canvas = self.view_canvas();
         TuiBlock::default()
             .style(canvas)
             .render(area, frame.buffer_mut());
         let picker_height = self
-            .pickers
-            .last()
+            .shown_picker()
             .map_or(0, |controller| controller.picker.height(area.width))
             .min(area.height.saturating_sub(1));
-        let status_height = u16::from(!self.split).min(area.height);
+        let status_height = u16::from(!self.split || self.statusline_shown()).min(area.height);
         let sections = Layout::vertical([
             Constraint::Min(0),
             Constraint::Length(picker_height),
@@ -317,17 +305,17 @@ impl Editor {
         }
         self.feed_top = viewport.scroll as i64;
         self.selection_exclusions.extend([sections[1], sections[2]]);
-        if let Some(controller) = self.pickers.last() {
+        if let Some(controller) = self.shown_picker() {
             controller
                 .picker
                 .render(&(), sections[1], frame.buffer_mut());
         }
         if status_height > 0 {
             TuiBlock::default()
-                .style(theme.statusline_bg())
+                .style(self.status_background())
                 .render(sections[2], frame.buffer_mut());
             let status = self.preview_status(view, self.pane_focused);
-            match self.pickers.is_empty() {
+            match self.shown_picker().is_none() {
                 true => StatusLine::default().render(&status, sections[2], frame.buffer_mut()),
                 false => self.status_line.render(
                     &StatusLineContext {
@@ -467,7 +455,49 @@ mod tests {
         let code = editor.view_canvas().bg.unwrap_or(Color::Reset);
         let buffer = terminal.backend().buffer();
         assert!(buffer.content().iter().any(|cell| cell.symbol() == "p"));
-        assert!(buffer.content().iter().all(|cell| cell.bg == code));
+        // Every row above the view's own status line.
+        let rows = buffer.area.height - 1;
+        assert!((0..rows).all(|y| (0..buffer.area.width).all(|x| buffer[(x, y)].bg == code)));
+    }
+
+    /// Each pane of a split draws its own status line, the one without focus in
+    /// the inactive colours and without the keys, which reach the other pane.
+    #[test]
+    fn a_split_marks_the_pane_with_focus_on_its_status_line() {
+        let mut editor = Editor::new(String::new());
+        let status_row = |editor: &mut Editor, focused: bool| {
+            editor.set_context(true, true, focused);
+            let mut terminal = Terminal::new(TestBackend::new(80, 6)).expect("test terminal");
+            terminal
+                .draw(|frame| {
+                    editor.draw_preview(
+                        frame,
+                        frame.area(),
+                        &mut SyntaxHighlighter::new(),
+                        CommittedCells {
+                            cells: &[],
+                            revision: 0,
+                        },
+                        ViewKind::Values,
+                        &mut Viewport::default(),
+                    )
+                })
+                .expect("draw");
+            let buffer = terminal.backend().buffer().clone();
+            let y = buffer.area.height - 1;
+            let text: String = (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect();
+            (buffer[(0, y)].bg, text)
+        };
+        let groups = *scheme();
+        let (active_bg, active) = status_row(&mut editor, true);
+        let (inactive_bg, inactive) = status_row(&mut editor, false);
+        assert_eq!(Some(active_bg), groups.statusline_bg().bg);
+        assert_eq!(Some(inactive_bg), groups.statusline_inactive().bg);
+        assert_ne!(active_bg, inactive_bg);
+        assert!(active.contains("view"), "{active}");
+        assert!(!inactive.contains("view"), "{inactive}");
     }
 
     #[test]

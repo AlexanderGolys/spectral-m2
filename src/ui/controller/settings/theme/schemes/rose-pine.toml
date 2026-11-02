@@ -115,7 +115,6 @@ Quote = { fg = "iris" }
 Regex = { fg = "iris" }
 Repeat = { fg = "pine" }
 Statement = { fg = "pine" }
-StatuslineBg = { bg = "surface" }
 StorageClass = { fg = "pine" }
 String = { fg = "gold" }
 Symbol = { fg = "text" }
@@ -124,3 +123,11 @@ Type = { fg = "foam" }
 Variable = { fg = "text", italic = true }
 ViewLabelActive = { fg = "iris" }
 Warning = { fg = "gold" }
+Selection = { bg = "highlight_med" }
+ErrorCode = { bg = "overlay" }
+Printed = { fg = "subtle", bg = "overlay" }
+StatuslineBg = { fg = "subtle", bg = "overlay" }
+StatuslineInactive = { fg = "muted", bg = "surface" }
+Statusline1 = { fg = "text" }
+Statusline2 = { fg = "foam" }
+Statusline3 = { fg = "muted" }

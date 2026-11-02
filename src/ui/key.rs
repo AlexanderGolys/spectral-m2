@@ -44,17 +44,39 @@ impl Keyboard {
             }
             return None;
         }
-        (event.kind != KeyEventKind::Release).then(|| {
+        if event.kind == KeyEventKind::Release || foreign(event.modifiers) {
+            return None;
+        }
+        Some({
             let mut key = KeyEvent::from(event);
             key.modifiers |= self.modifiers;
             key
         })
     }
 
+    /// Forget every held modifier. A key released while another program has the
+    /// keyboard, as when a tmux binding switches panes or the system switches
+    /// windows, never reports its release here; holding on to it would turn every
+    /// later key into a shortcut.
+    pub fn release_all(&mut self) {
+        self.modifiers = 0;
+    }
+
     /// Whether the platform's primary command modifier is held on its own.
     pub const fn ctrl(&self) -> bool {
         self.modifiers & KeyMod::Ctrl as u8 != 0
     }
+}
+
+/// Whether a key carries a modifier the shell binds nothing to, such as Super
+/// outside macOS, Hyper or Meta. Such chords belong to the window manager or the
+/// terminal; the shell neither runs them nor types their letter.
+fn foreign(modifiers: CrosstermModifiers) -> bool {
+    let mut foreign = CrosstermModifiers::HYPER | CrosstermModifiers::META;
+    if cfg!(not(target_os = "macos")) {
+        foreign |= CrosstermModifiers::SUPER;
+    }
+    modifiers.intersects(foreign)
 }
 
 impl KeyMod {
@@ -286,6 +308,35 @@ mod tests {
     #[test]
     fn modifier_addition_is_commutative() {
         assert_eq!(KeyCode::Left + Ctrl + Shift, KeyCode::Left + Shift + Ctrl);
+    }
+
+    #[test]
+    fn keys_held_with_a_foreign_modifier_are_left_alone() {
+        let mut keyboard = Keyboard::default();
+        let hyper = CrosstermKeyEvent::new(KeyCode::Char('x'), CrosstermModifiers::HYPER);
+        assert!(keyboard.event(hyper).is_none());
+        if cfg!(not(target_os = "macos")) {
+            let sup = CrosstermKeyEvent::new(KeyCode::Char('x'), CrosstermModifiers::SUPER);
+            assert!(keyboard.event(sup).is_none());
+        }
+    }
+
+    #[test]
+    fn modifiers_released_elsewhere_are_forgotten() {
+        let mut keyboard = Keyboard::default();
+        let code = if cfg!(target_os = "macos") {
+            ModifierKeyCode::LeftSuper
+        } else {
+            ModifierKeyCode::LeftControl
+        };
+        keyboard.event(CrosstermKeyEvent::new(
+            KeyCode::Modifier(code),
+            CrosstermModifiers::NONE,
+        ));
+        assert!(keyboard.ctrl());
+        keyboard.release_all();
+        let typed = CrosstermKeyEvent::new(KeyCode::Char('x'), CrosstermModifiers::NONE);
+        assert_eq!(keyboard.event(typed), Some(KeyCode::Char('x').into()));
     }
 
     #[test]

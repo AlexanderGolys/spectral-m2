@@ -18,7 +18,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::maths::{MathStyle, Shift};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
-use crate::ui::block::{Link, Text, TextSpan};
+use crate::ui::block::{HLSpan, Link, Text, TextSpan};
 use crate::ui::controller::settings::theme::groups::HLGroup;
 use crate::ui::present::{wrap, SpanLine};
 use crate::ui::render::RenderContext;
@@ -197,6 +197,13 @@ fn document(html: &str, example_width: usize, context: &RenderContext) -> Option
 /// Update a page's examples and discard only layouts containing its old answers.
 pub fn remember_example(page_id: u64, number: u32, response: M2Response) {
     examples::remember(page_id, number, response);
+    DOCUMENTS.with_borrow_mut(|documents| documents.retain(|entry| page(&entry.html) != page_id));
+}
+
+/// Colour example `number` of `page` as the language server analysed it, and
+/// discard only layouts of that page.
+pub fn colour_example(page_id: u64, number: u32, source: String, spans: Vec<HLSpan>) {
+    examples::colour(page_id, number, source, spans);
     DOCUMENTS.with_borrow_mut(|documents| documents.retain(|entry| page(&entry.html) != page_id));
 }
 

@@ -191,6 +191,14 @@ Type = { fg = "blue1" }
 Variable = { fg = "fg" }
 ViewLabelActive = { fg = "fg" }
 Warning = { fg = "yellow" }
+Selection = { bg = "blue7" }
+ErrorCode = { bg = "bg_highlight" }
+Printed = { fg = "fg_dark", bg = "bg_highlight" }
+StatuslineBg = { fg = "fg_dark", bg = "bg_highlight" }
+StatuslineInactive = { fg = "dark3", bg = "bg_dark1" }
+Statusline1 = { fg = "fg" }
+Statusline2 = { fg = "blue" }
+Statusline3 = { fg = "comment" }
 
 [variant_overrides.dark.moon]
 Property = { fg = "teal" }

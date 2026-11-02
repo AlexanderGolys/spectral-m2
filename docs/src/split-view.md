@@ -14,7 +14,7 @@ Choose `code`, `values`, `stdout`, `output`, or `ast` in the command picker, or 
 
 Every view shows the session's committed cells with its own scroll position, so scrolling a view never moves the shell feed. Each new input or result brings every view back to its newest content.
 
-Both panes share one status line along the bottom: the session's state on the left, the view beside it in the middle, and the keys of the focused pane on the right.
+Each pane has its own status line. The shell's shows where the session works and what it is doing, the view's names the view, and only the pane with focus lists the keys it answers. The pane with focus draws its status line in the theme's status-line colours; the other pane's is drawn in quieter, inactive colours, so you can always tell which pane your keys reach. An open picker appears in the pane with focus.
 
 ## Focus, resize, and close
 

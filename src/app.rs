@@ -105,6 +105,13 @@ impl App {
                 true
             }
             Event::Mouse(mouse) => self.handle_mouse(mouse),
+            // Keys pressed while another program had the keyboard -- a tmux
+            // binding, a window switch -- release there, unseen.
+            Event::FocusLost | Event::FocusGained => {
+                self.keyboard.release_all();
+                self.workspace.editor.hold_control(false);
+                true
+            }
             _ => true,
         }
     }
@@ -363,16 +370,12 @@ impl App {
             UI.screen_margin.min(screen.width),
             screen.height,
         );
-        let mut area = Rect::new(
+        let area = Rect::new(
             margin.right(),
             screen.y,
             screen.width - margin.width,
             screen.height,
         );
-        let shared_status = (split && workspace.editor.statusline_shown()).then(|| {
-            area.height = area.height.saturating_sub(1);
-            Rect::new(area.x, area.bottom(), area.width, 1)
-        });
         self.layout(area);
         let workspace = &mut self.workspace;
         if let Some(divider) = self.divider {
@@ -409,12 +412,6 @@ impl App {
                     &mut self.panes.list[pane].viewport,
                 ),
             }
-        }
-        if let Some(status) = shared_status {
-            let beside = &self.panes.list[Panes::SPLIT];
-            workspace
-                .editor
-                .draw_shared_status(frame, status, beside.view, active == Panes::SPLIT);
         }
         workspace.editor.draw_margin(frame, margin);
     }
@@ -465,6 +462,9 @@ impl App {
             workspace.editor.language_server(),
             workspace.editor.semantic_highlighting(),
         );
+        for (page, examples) in workspace.session.take_example_sources() {
+            workspace.highlighter.analyse_examples(page, &examples);
+        }
         let (draft, pending, revision) = workspace.editor.analysis_input();
         let state = (
             workspace.session.source_revision(),
@@ -479,6 +479,13 @@ impl App {
         }
         let polled = workspace.highlighter.poll();
         recolored |= polled.recolored;
+        if !polled.examples.is_empty() {
+            for (page, number, source, spans) in polled.examples {
+                crate::ui::render::markup::colour_example(page, number, source, spans);
+            }
+            running &= workspace.editor.apply(EditorUpdate::ExamplesComputed);
+            dirty = true;
+        }
         if recolored {
             workspace.editor.rehighlight(&mut workspace.highlighter);
             dirty = true;

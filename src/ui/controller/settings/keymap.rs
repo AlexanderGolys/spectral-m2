@@ -81,6 +81,18 @@ impl Keymaps {
         remappable
     }
 
+    /// The bindings that hold their key, with that key, in action order.
+    pub fn fixed(&self) -> Vec<(Action, KeyEvent)> {
+        let mut fixed: Vec<_> = self
+            .bindings
+            .iter()
+            .filter(|(_, binding)| !binding.remappable)
+            .map(|(key, binding)| (binding.action, *key))
+            .collect();
+        fixed.sort_by_key(|(action, _)| *action);
+        fixed
+    }
+
     /// Whether a shortcut leaves text entry and terminal control keys available.
     fn valid_shortcut(key: KeyEvent) -> bool {
         if matches!(key.code, F(2..=24)) {
@@ -220,6 +232,115 @@ macro_rules! key {
     };
 }
 
+/// The editing and navigation keys the input, the views and the pickers keep for
+/// themselves, each group with what it does. No shortcut may take one of them.
+pub fn editing_keys() -> Vec<(Vec<KeyEvent>, &'static str)> {
+    vec![
+        (
+            vec![key!(Left), key!(Right), key!(Up), key!(Down)],
+            "move the cursor; in a view, change view and scroll",
+        ),
+        (
+            vec![key!(Left + Ctrl), key!(Right + Ctrl)],
+            "move by word; beside a split, step its view",
+        ),
+        (
+            vec![key!(Home), key!(End)],
+            "move to the start or end of the line",
+        ),
+        (
+            vec![key!(Home + Ctrl), key!(End + Ctrl)],
+            "move to the start or end of the input",
+        ),
+        (
+            vec![key!(Left + Shift), key!(Right + Shift)],
+            "select a character",
+        ),
+        (
+            vec![key!(Left + Ctrl + Shift), key!(Right + Ctrl + Shift)],
+            "select a word",
+        ),
+        (
+            vec![key!(Home + Shift), key!(End + Shift)],
+            "select to the start or end of the line",
+        ),
+        (
+            vec![key!(Home + Ctrl + Shift), key!(End + Ctrl + Shift)],
+            "select to the start or end of the input",
+        ),
+        (vec![key!(Char('a') + Ctrl)], "select the whole input"),
+        (
+            vec![key!(Up + Ctrl), key!(Down + Ctrl)],
+            "recall earlier or later input",
+        ),
+        (vec![key!(Backspace), key!(Delete)], "delete a character"),
+        (
+            vec![
+                key!(Backspace + Ctrl),
+                key!(Backspace + Alt),
+                key!(Char('h') + Ctrl),
+            ],
+            "delete the word before the cursor",
+        ),
+        (
+            vec![key!(Delete + Ctrl), key!(Delete + Alt)],
+            "delete the word after the cursor",
+        ),
+        (vec![key!(Char('l') + Ctrl)], "clear the input"),
+        (vec![key!(Char('z') + Ctrl)], "undo"),
+        (vec![key!(Char('z') + Ctrl + Shift)], "redo"),
+        (
+            vec![
+                key!(Enter + Shift),
+                key!(Enter + Alt),
+                key!(Char(' ') + Shift),
+                key!(Char('j') + Ctrl),
+            ],
+            "insert a newline",
+        ),
+        (
+            vec![key!(Tab), key!(BackTab)],
+            "next or previous completion; in a picker, switch tabs",
+        ),
+    ]
+}
+
+/// A binding the user cannot move, listed so every key the shell answers is shown.
+pub struct FixedRow {
+    label: &'static str,
+    keys: String,
+}
+
+impl FixedRow {
+    /// Show what `keys` do.
+    pub fn new(label: &'static str, keys: &[KeyEvent]) -> Self {
+        let keys = keys
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Self { label, keys }
+    }
+}
+
+impl PickerItem for FixedRow {
+    fn cells(&self) -> Vec<Line<'static>> {
+        let groups = scheme();
+        vec![
+            Span::styled(self.label, groups.keymap_action_label()).into(),
+            Span::styled(self.keys.clone(), groups.style(HLGroup::KeymapHint)).into(),
+        ]
+    }
+
+    fn description(&self) -> Option<&str> {
+        Some("built in; this key cannot be rebound")
+    }
+
+    fn handle(&mut self, _: PickerInput) -> Option<EditorEvent> {
+        None
+    }
+}
+
 impl Default for Keymaps {
     fn default() -> Self {
         Self {
@@ -243,45 +364,10 @@ impl Default for Keymaps {
                 keymap!(fixed ScrollFeedUp <- PageUp),
                 keymap!(fixed ScrollFeedDown <- PageDown),
             ]),
-            reserved: HashSet::from([
-                key!(Char('l') + Ctrl),
-                key!(Char('a') + Ctrl),
-                key!(Char(' ') + Shift),
-                key!(Enter + Shift),
-                key!(Enter + Alt),
-                key!(Char('j') + Ctrl),
-                key!(Char('z') + Ctrl),
-                key!(Char('z') + Ctrl + Shift),
-                key!(Char('h') + Ctrl),
-                key!(Backspace + Ctrl),
-                key!(Backspace + Alt),
-                key!(Delete + Ctrl),
-                key!(Delete + Alt),
-                key!(Left + Ctrl),
-                key!(Right + Ctrl),
-                key!(Left + Ctrl + Shift),
-                key!(Right + Ctrl + Shift),
-                key!(Home + Ctrl),
-                key!(End + Ctrl),
-                key!(Home + Ctrl + Shift),
-                key!(End + Ctrl + Shift),
-                key!(Left + Shift),
-                key!(Right + Shift),
-                key!(Home + Shift),
-                key!(End + Shift),
-                key!(Left),
-                key!(Right),
-                key!(Up),
-                key!(Down),
-                key!(Up + Ctrl),
-                key!(Down + Ctrl),
-                key!(Home),
-                key!(End),
-                key!(Backspace),
-                key!(Delete),
-                key!(Tab),
-                key!(BackTab),
-            ]),
+            reserved: editing_keys()
+                .into_iter()
+                .flat_map(|(keys, _)| keys)
+                .collect(),
             rebinds: Vec::new(),
         }
     }
@@ -492,6 +578,30 @@ mod tests {
             row.cells()[1].to_string(),
             key!(Char('l') + Alt).to_string()
         );
+    }
+
+    /// The keymaps overlay lists the movable shortcuts, the fixed ones and the
+    /// editing keys; together they must be every key the shell answers.
+    #[test]
+    fn the_overlay_lists_every_binding_and_every_reserved_key() {
+        let keymaps = Keymaps::default();
+        let listed: HashSet<KeyEvent> = keymaps
+            .remappable()
+            .into_iter()
+            .chain(keymaps.fixed())
+            .map(|(_, key)| key)
+            .collect();
+        assert!(keymaps.bindings.keys().all(|key| listed.contains(key)));
+        assert_eq!(listed.len(), keymaps.bindings.len());
+        assert!(keymaps
+            .fixed()
+            .iter()
+            .any(|(action, _)| *action == Action::Submit));
+        let editing: HashSet<KeyEvent> = editing_keys()
+            .into_iter()
+            .flat_map(|(keys, _)| keys)
+            .collect();
+        assert_eq!(editing, keymaps.reserved);
     }
 
     #[test]

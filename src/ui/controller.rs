@@ -22,7 +22,7 @@ use self::commands::Command;
 use self::completion::{Names, Request};
 use self::picker::{Picker, PickerController, PickerItem, PickerMode, PickerTab};
 use self::screen::{ScreenCapture, ScreenSelection};
-use self::settings::keymap::{self, KeymapRow, Keymaps};
+use self::settings::keymap::{self, FixedRow, KeymapRow, Keymaps};
 use self::settings::theme::groups::{publish, scheme, HLGroup};
 use self::settings::theme::Appearance;
 use self::settings::{Persisted, Preferences, SavedSettings, Settings, StatusLinePosition};
@@ -867,21 +867,44 @@ impl Editor {
     }
 
     fn keymaps_picker(&self) -> Picker {
-        Picker::tabbed(
-            vec![PickerTab {
-                label: "keymaps",
-                items: self.keymap_items(),
-            }],
-            Some(keymap::restore_defaults()),
-        )
+        Picker::tabbed(self.keymap_tabs(), Some(keymap::restore_defaults()))
     }
 
-    fn keymap_items(&self) -> Vec<Box<dyn PickerItem>> {
-        self.keymaps
+    /// Every key the shell answers: the shortcuts that may move, then the ones
+    /// built in, so the list is the whole keyboard and not only what can change.
+    fn keymap_tabs(&self) -> Vec<PickerTab> {
+        let shortcuts = self
+            .keymaps
             .remappable()
             .into_iter()
             .map(|(action, key)| Box::new(KeymapRow::new(action, key)) as Box<dyn PickerItem>)
-            .collect()
+            .collect();
+        let fixed = self
+            .keymaps
+            .fixed()
+            .into_iter()
+            .map(|(action, key)| FixedRow::new(action.description(), &[key]))
+            .chain(
+                keymap::editing_keys()
+                    .into_iter()
+                    .map(|(keys, label)| FixedRow::new(label, &keys)),
+            )
+            .chain([FixedRow::new(
+                "close a picker or the highlight inspector",
+                &[KeyCode::Esc.into()],
+            )])
+            .map(|row| Box::new(row) as Box<dyn PickerItem>)
+            .collect();
+        vec![
+            PickerTab {
+                label: "shortcuts",
+                items: shortcuts,
+            },
+            PickerTab {
+                label: "built in",
+                items: fixed,
+            },
+        ]
     }
 
     fn handle_picker_key(&mut self, key: KeyEvent) -> Reaction {
@@ -1019,15 +1042,15 @@ impl Editor {
             EditorEvent::RestoreKeymaps => {
                 self.keymaps = Keymaps::default();
                 self.save_settings();
-                let items = self.keymap_items();
-                self.pickers.last_mut().unwrap().picker.set_items(items);
+                let tabs = self.keymap_tabs();
+                self.pickers.last_mut().unwrap().picker.set_tabs(tabs);
             }
             EditorEvent::SetPreferences(preferences) => self.set_preferences(preferences),
             EditorEvent::Rebind(action, key) => {
                 if self.keymaps.rebind(action, key) {
                     self.save_settings();
-                    let items = self.keymap_items();
-                    self.pickers.last_mut().unwrap().picker.set_items(items);
+                    let tabs = self.keymap_tabs();
+                    self.pickers.last_mut().unwrap().picker.set_tabs(tabs);
                 }
             }
         }
@@ -1276,7 +1299,6 @@ impl Editor {
             self.frame_stats.tick();
         }
         self.selection_exclusions.clear();
-        let theme = *scheme();
         let input_prefix = UI.prompt_width();
         frame.render_widget(Clear, area);
 
@@ -1285,11 +1307,11 @@ impl Editor {
         let input_height = self
             .input
             .height(editor_area.width, input_prefix, editor_area.height);
-        // A split shares one status line across both panes, drawn by the app.
-        let status_height = u16::from(self.statusline_shown() && !self.split);
+        // Each pane of a split keeps its own status line, which marks the pane
+        // with focus.
+        let status_height = u16::from(self.statusline_shown());
         let picker_height = self
-            .pickers
-            .last()
+            .shown_picker()
             .map_or(0, |controller| controller.picker.height(editor_area.width));
         // A long list must never squeeze the input out of the frame: the cursor
         // would then be placed outside it.
@@ -1336,7 +1358,7 @@ impl Editor {
 
         self.feed_area = sections[0];
         self.draw_feed(frame, sections[0], &context);
-        if let Some(controller) = self.pickers.last() {
+        if let Some(controller) = self.shown_picker() {
             controller
                 .picker
                 .render(&(), sections[1], frame.buffer_mut());
@@ -1361,23 +1383,49 @@ impl Editor {
             frame.set_cursor_position(cursor);
         }
         TuiBlock::default()
-            .style(theme.statusline_bg())
+            .style(self.status_background())
             .render(status_area, frame.buffer_mut());
-        self.status_line.render(
-            &StatusLineContext {
-                location: Some(self.location()),
-                idle_left: self.shell_state(),
-                ..StatusLineContext::default()
-            },
-            status_area,
-            frame.buffer_mut(),
-        );
+        let context = StatusLineContext {
+            location: Some(self.location()),
+            idle_left: self.shell_state(),
+            inactive: self.status_inactive(),
+            ..StatusLineContext::default()
+        };
+        // The keys a pane answers are only worth showing while keys reach it.
+        match context.inactive {
+            true => StatusLine::default().render(&context, status_area, frame.buffer_mut()),
+            false => self
+                .status_line
+                .render(&context, status_area, frame.buffer_mut()),
+        }
         if status_height > 0 {
             self.selection_exclusions.push(status_area);
         }
         self.draw_highlight_debug(frame);
         self.capture_screen(frame);
         self.paint_screen_selection(frame);
+    }
+
+    /// The picker this pane shows: in a split only the pane with focus draws the
+    /// open picker, since it is that pane the keys reach.
+    pub(crate) fn shown_picker(&self) -> Option<&PickerController> {
+        self.pickers
+            .last()
+            .filter(|_| !self.split || self.pane_focused)
+    }
+
+    /// Whether this pane's status line is drawn as the one without focus.
+    pub(crate) fn status_inactive(&self) -> bool {
+        self.split && !self.pane_focused
+    }
+
+    /// The status line's own surface: the active one, or in a split the quieter
+    /// one of the pane without focus.
+    pub(crate) fn status_background(&self) -> ratatui::style::Style {
+        match self.status_inactive() {
+            true => scheme().statusline_inactive(),
+            false => scheme().statusline_bg(),
+        }
     }
 
     /// Whether the settings give the status line a row.

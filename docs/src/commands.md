@@ -7,7 +7,7 @@ Commands are handled by Spectral rather than sent to Macaulay2.
 | Command | Key | Effect |
 | --- | --- | --- |
 | `/settings` | `Ctrl+O` | Open settings, appearance included. |
-| `/keymaps` | `Ctrl+K` | Show and edit the remappable bindings. |
+| `/keymaps` | `Ctrl+K` | Show every binding and edit the remappable ones. |
 | `/clear` | `Alt+L` | Clear the focused workspace's feed. |
 | `/code` | `F2` | Show all committed input cells beside the session. |
 | `/values` | `F3` | Show the returned values beside the session. |

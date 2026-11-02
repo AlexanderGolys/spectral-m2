@@ -70,6 +70,13 @@ pub enum SourceId {
     Pending(u64),
     /// The editable input in an interpreter generation.
     Draft(u64),
+    /// A documentation example: its page and its input number there.
+    Example {
+        /// The page, as `markup::page` names it.
+        page: u64,
+        /// The example's input number on that page.
+        number: u32,
+    },
 }
 
 /// One segment's byte range in the analysis document.
@@ -129,6 +136,11 @@ pub struct SemanticHighlighter {
     /// Whether its semantic tokens color source.
     semantic: bool,
     version: i32,
+    /// A second server analysing documentation examples, page by page, apart
+    /// from the session so neither sees the other's names.
+    examples: Option<Client>,
+    /// The page of examples it was last given.
+    example_document: Option<Arc<Document>>,
 }
 
 /// What changed since the highlighter was last polled.
@@ -140,6 +152,9 @@ pub struct Polled {
     pub started: Option<ServerInfo>,
     /// Why the language server stopped.
     pub failure: Option<String>,
+    /// Semantic colours of documentation examples: page, input number, source
+    /// and spans.
+    pub examples: Vec<(u64, u32, String, Vec<HLSpan>)>,
 }
 
 impl SemanticHighlighter {
@@ -154,6 +169,8 @@ impl SemanticHighlighter {
             server: false,
             semantic: false,
             version: 0,
+            examples: None,
+            example_document: None,
         }
     }
 
@@ -165,6 +182,9 @@ impl SemanticHighlighter {
         if restarted {
             self.server = server;
             self.client = server.then(Client::start);
+        }
+        if !(server && semantic) {
+            self.examples = None;
         }
         if !restarted && self.semantic == semantic {
             return false;
@@ -208,6 +228,34 @@ impl SemanticHighlighter {
         }
     }
 
+    /// Have the documentation examples of `page`, in the order they ran, coloured
+    /// by the language server like session code, in a document of their own.
+    pub fn analyse_examples(&mut self, page: u64, examples: &[(u32, String)]) {
+        if !self.semantic || examples.is_empty() {
+            return;
+        }
+        let mut document = Document::new(0);
+        for (number, source) in examples {
+            document.push(
+                SourceId::Example {
+                    page,
+                    number: *number,
+                },
+                source,
+            );
+        }
+        self.version = self
+            .version
+            .checked_add(1)
+            .expect("LSP document version exhausted");
+        document.version = self.version;
+        let document = Arc::new(document);
+        self.example_document = Some(document.clone());
+        self.examples
+            .get_or_insert_with(Client::start)
+            .update(document);
+    }
+
     fn clear_current(&mut self) {
         if let Some(document) = &self.document {
             for segment in &document.segments {
@@ -248,6 +296,37 @@ impl SemanticHighlighter {
                 }
             }
         }
+        let events = self.examples.as_ref().map_or_else(Vec::new, Client::poll);
+        for event in events {
+            match event {
+                Event::Started(_) => {}
+                Event::Tokens {
+                    document,
+                    legend,
+                    tokens,
+                } => {
+                    if self
+                        .example_document
+                        .as_ref()
+                        .is_some_and(|current| current.version == document.version)
+                    {
+                        polled
+                            .examples
+                            .extend(project(&document, &legend, &tokens).filter_map(
+                                |(id, source, spans)| match id {
+                                    SourceId::Example { page, number } => {
+                                        Some((page, number, source, spans))
+                                    }
+                                    _ => None,
+                                },
+                            ));
+                    }
+                }
+                // The session's server reports its own failure; examples simply
+                // keep their syntax colours.
+                Event::Failed(_) => self.examples = None,
+            }
+        }
         polled
     }
 
@@ -257,24 +336,8 @@ impl SemanticHighlighter {
         legend: &SemanticTokensLegend,
         tokens: &[SemanticToken],
     ) {
-        let spans = decode(&document.text, legend, tokens);
-        for segment in &document.segments {
-            let first = spans.partition_point(|span| span.content.end <= segment.range.start);
-            let projected = spans[first..]
-                .iter()
-                .take_while(|span| span.content.start < segment.range.end)
-                .filter_map(|span| {
-                    let start = span.content.start.max(segment.range.start);
-                    let end = span.content.end.min(segment.range.end);
-                    (start < end).then(|| {
-                        span.with_content(start - segment.range.start..end - segment.range.start)
-                    })
-                })
-                .collect();
-            self.spans.insert(
-                segment.id,
-                (document.text[segment.range.clone()].to_string(), projected),
-            );
+        for (id, source, spans) in project(document, legend, tokens) {
+            self.spans.insert(id, (source, spans));
         }
         self.revision = self.revision.wrapping_add(1);
     }
@@ -318,6 +381,35 @@ impl Highlighter for SemanticHighlighter {
             None => lexical,
         }
     }
+}
+
+/// Decoded tokens cut along `document`'s segments: each segment's identity,
+/// source, and spans relative to its start.
+fn project<'a>(
+    document: &'a Document,
+    legend: &SemanticTokensLegend,
+    tokens: &[SemanticToken],
+) -> impl Iterator<Item = (SourceId, String, Vec<HLSpan>)> + 'a {
+    let spans = decode(&document.text, legend, tokens);
+    document.segments.iter().map(move |segment| {
+        let first = spans.partition_point(|span| span.content.end <= segment.range.start);
+        let projected = spans[first..]
+            .iter()
+            .take_while(|span| span.content.start < segment.range.end)
+            .filter_map(|span| {
+                let start = span.content.start.max(segment.range.start);
+                let end = span.content.end.min(segment.range.end);
+                (start < end).then(|| {
+                    span.with_content(start - segment.range.start..end - segment.range.start)
+                })
+            })
+            .collect();
+        (
+            segment.id,
+            document.text[segment.range.clone()].to_string(),
+            projected,
+        )
+    })
 }
 
 /// `spans` of `old` carried onto `new`, read as one edit of the range between
@@ -483,7 +575,7 @@ fn classify(legend: &SemanticTokensLegend, token: &SemanticToken) -> Option<HLGr
 /// language-server highlights over Tree-sitter ones: a semantic group overrides
 /// what it styles, and an empty one leaves the syntax colour. Semantic spans over
 /// text with no syntax group are drawn as they are.
-fn merge(lexical: Vec<HLSpan>, semantic: &[HLSpan]) -> Vec<HLSpan> {
+pub fn merge(lexical: Vec<HLSpan>, semantic: &[HLSpan]) -> Vec<HLSpan> {
     let overlapping = |range: Range<usize>| {
         let first = semantic.partition_point(|overlay| overlay.content.end <= range.start);
         semantic[first..]
