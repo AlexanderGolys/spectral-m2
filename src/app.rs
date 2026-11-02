@@ -105,6 +105,13 @@ impl App {
                 true
             }
             Event::Mouse(mouse) => self.handle_mouse(mouse),
+            // Keys pressed while another program had the keyboard -- a tmux
+            // binding, a window switch -- release there, unseen.
+            Event::FocusLost | Event::FocusGained => {
+                self.keyboard.release_all();
+                self.workspace.editor.hold_control(false);
+                true
+            }
             _ => true,
         }
     }
