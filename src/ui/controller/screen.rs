@@ -272,6 +272,40 @@ impl ScreenCapture {
         (!(pictured && line.trim().is_empty())).then(|| line.to_string())
     }
 
+    /// The cells a selection over `region` is drawn on: the text it copies, and
+    /// every piece of each picture it touches. A picture copies whole however
+    /// little of it the drag crosses, so it is highlighted whole as well, rather
+    /// than as the rows and columns the pointer happened to sweep.
+    fn highlighted(&self, region: Region) -> Vec<ScreenPosition> {
+        let mut cells = Vec::new();
+        let mut touched = HashSet::new();
+        for row in region.rows() {
+            for column in region.columns(row, self.area) {
+                let at = ScreenPosition::new(column, row);
+                let Some(cell) = self.cell(at).filter(|cell| cell.selectable) else {
+                    continue;
+                };
+                match cell.picture {
+                    Some(showing) => {
+                        touched.insert(showing);
+                    }
+                    None => cells.push(at),
+                }
+            }
+        }
+        for (&row, captured) in &self.rows {
+            for (cell, column) in captured.iter().zip(self.area.x..) {
+                if cell
+                    .picture
+                    .is_some_and(|showing| touched.contains(&showing))
+                {
+                    cells.push(ScreenPosition::new(column, row));
+                }
+            }
+        }
+        cells
+    }
+
     /// What a double click at `at` picks out, and how to read it: a whole picture,
     /// the block from a bracket to its partner, or a word.
     fn pick(&self, at: ScreenPosition) -> Option<(Region, Reach)> {
@@ -569,17 +603,10 @@ impl Editor {
         let Some(capture) = self.capture_of(selection) else {
             return;
         };
-        let region = selection.region();
         let buffer = frame.buffer_mut();
-        for content_row in region.rows() {
-            let Some(y) = capture.line(content_row) else {
-                continue;
-            };
-            for x in region.columns(content_row, capture.area) {
-                let at = ScreenPosition::new(x, content_row);
-                if capture.cell(at).is_some_and(|cell| cell.selectable) {
-                    buffer[(x, y)].set_style(scheme().selection());
-                }
+        for at in capture.highlighted(selection.region()) {
+            if let Some(y) = capture.line(at.row) {
+                buffer[(at.column, y)].set_style(scheme().selection());
             }
         }
     }
@@ -756,6 +783,53 @@ mod tests {
             panic!("a drag copies its text");
         };
         assert_eq!(text, "A_1,A_1\nooooo");
+    }
+
+    /// A drag that crosses one row of a typeset matrix copies the whole matrix,
+    /// so the whole matrix is highlighted, not only the row the pointer swept.
+    #[test]
+    fn a_picture_touched_by_a_drag_is_highlighted_whole() {
+        let area = Rect::new(0, 0, 6, 3);
+        let showing = Showing {
+            image: ImageId::from(3),
+            column: 2,
+            row: 0,
+        };
+        let cell = |picture: Option<Showing>| ScreenCell {
+            symbol: if picture.is_some() { "M" } else { "x" }.to_string(),
+            picture,
+            selectable: true,
+            copyable: true,
+        };
+        // A three-row matrix in columns 2 to 4, text around it.
+        let row = || {
+            (0..6)
+                .map(|column| cell((2..5).contains(&column).then_some(showing)))
+                .collect()
+        };
+        let capture = ScreenCapture {
+            area,
+            top: 0,
+            rows: (0..3).map(|y| (y, row())).collect(),
+        };
+        let region = Region::Flow {
+            start: ScreenPosition::new(0, 1),
+            end: ScreenPosition::new(3, 1),
+        };
+
+        let lit: HashSet<(u16, i64)> = capture
+            .highlighted(region)
+            .into_iter()
+            .map(|at| (at.column, at.row))
+            .collect();
+
+        for y in 0..3 {
+            for x in 2..5 {
+                assert!(lit.contains(&(x, y)), "matrix cell {x},{y} is not lit");
+            }
+        }
+        assert!(lit.contains(&(0, 1)) && lit.contains(&(1, 1)));
+        assert!(!lit.contains(&(5, 1)) && !lit.contains(&(0, 0)));
     }
 
     #[test]

@@ -6,6 +6,8 @@ All notable changes to Spectral M2 are documented here.
 
 ### Fixed
 
+- Dragging across part of a typeset picture, such as one row of a matrix, highlights the whole picture, matching what the selection copies.
+
 - A modifier held for a tmux binding or a system shortcut no longer stays held after focus moves away and back, which turned later keys into shortcuts. Keys chorded with Super (outside macOS), Hyper or Meta are left to the window manager and terminal instead of typing their letter.
 
 ### Changed
