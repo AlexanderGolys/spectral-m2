@@ -22,7 +22,7 @@ use self::commands::Command;
 use self::completion::{Names, Request};
 use self::picker::{Picker, PickerController, PickerItem, PickerMode, PickerTab};
 use self::screen::{ScreenCapture, ScreenSelection};
-use self::settings::keymap::{self, KeymapRow, Keymaps};
+use self::settings::keymap::{self, FixedRow, KeymapRow, Keymaps};
 use self::settings::theme::groups::{publish, scheme, HLGroup};
 use self::settings::theme::Appearance;
 use self::settings::{Persisted, Preferences, SavedSettings, Settings, StatusLinePosition};
@@ -867,21 +867,44 @@ impl Editor {
     }
 
     fn keymaps_picker(&self) -> Picker {
-        Picker::tabbed(
-            vec![PickerTab {
-                label: "keymaps",
-                items: self.keymap_items(),
-            }],
-            Some(keymap::restore_defaults()),
-        )
+        Picker::tabbed(self.keymap_tabs(), Some(keymap::restore_defaults()))
     }
 
-    fn keymap_items(&self) -> Vec<Box<dyn PickerItem>> {
-        self.keymaps
+    /// Every key the shell answers: the shortcuts that may move, then the ones
+    /// built in, so the list is the whole keyboard and not only what can change.
+    fn keymap_tabs(&self) -> Vec<PickerTab> {
+        let shortcuts = self
+            .keymaps
             .remappable()
             .into_iter()
             .map(|(action, key)| Box::new(KeymapRow::new(action, key)) as Box<dyn PickerItem>)
-            .collect()
+            .collect();
+        let fixed = self
+            .keymaps
+            .fixed()
+            .into_iter()
+            .map(|(action, key)| FixedRow::new(action.description(), &[key]))
+            .chain(
+                keymap::editing_keys()
+                    .into_iter()
+                    .map(|(keys, label)| FixedRow::new(label, &keys)),
+            )
+            .chain([FixedRow::new(
+                "close a picker or the highlight inspector",
+                &[KeyCode::Esc.into()],
+            )])
+            .map(|row| Box::new(row) as Box<dyn PickerItem>)
+            .collect();
+        vec![
+            PickerTab {
+                label: "shortcuts",
+                items: shortcuts,
+            },
+            PickerTab {
+                label: "built in",
+                items: fixed,
+            },
+        ]
     }
 
     fn handle_picker_key(&mut self, key: KeyEvent) -> Reaction {
@@ -1019,15 +1042,15 @@ impl Editor {
             EditorEvent::RestoreKeymaps => {
                 self.keymaps = Keymaps::default();
                 self.save_settings();
-                let items = self.keymap_items();
-                self.pickers.last_mut().unwrap().picker.set_items(items);
+                let tabs = self.keymap_tabs();
+                self.pickers.last_mut().unwrap().picker.set_tabs(tabs);
             }
             EditorEvent::SetPreferences(preferences) => self.set_preferences(preferences),
             EditorEvent::Rebind(action, key) => {
                 if self.keymaps.rebind(action, key) {
                     self.save_settings();
-                    let items = self.keymap_items();
-                    self.pickers.last_mut().unwrap().picker.set_items(items);
+                    let tabs = self.keymap_tabs();
+                    self.pickers.last_mut().unwrap().picker.set_tabs(tabs);
                 }
             }
         }
