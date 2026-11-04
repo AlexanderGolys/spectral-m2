@@ -4,16 +4,37 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-04
+
 ### Added
 
 - Added `hintCompletionBelow`, a 16-bit candidate threshold for inline completion hints, adjustable in settings; 0 disables hints.
 - Completion candidates open on the first `Tab`, which also inserts a visible hint; otherwise the second `Tab` inserts, subsequent presses cycle, and `Ctrl+Tab` cycles backwards.
 - Symbol completions are ranked by usage counts from successfully evaluated source. Library-symbol counts persist; counts for session-created names stay in memory and reset with the session. Scoped locals, comments, strings, and assignment targets are excluded.
+- A *statusline* settings tab, composing the idle line: choose where it names the colour scheme, the working directory and the commands and settings keys, on the left, centre or right, or not at all.
+- A *matrix row spacing* setting, `125%` by default, for how far apart the rows of a typeset matrix stand.
+- A highlight debug panel showing the groups and palette of the current theme.
+
+### Changed
+
+- Text-editing keys can now be rebound alongside the global commands, each in a context with its own tab of the keymaps picker. Keys are labelled with words instead of symbols.
+- `null`, `pi`, `ii`, `EulerConstant`, `CatalanConstant` and `infinity` in values take the builtin colour code gives them.
+- The imaginary unit is pictured upright instead of bold.
+- `key => value` is written with a plain `=>` in Unicode output instead of `=⇒`.
+- Domain types in method installations are coloured as methods.
+- Source paths in documentation are shortened to the file and its directory; the link still leads to the full path.
+- Everforest: error titles are bold, error messages plain, and modifier keywords red. In pickers, unselected values are gray; the selected row has a blue background, a bold name and value, and orange arrows; descriptions are italic.
+- Theme files that were never edited now follow new defaults when Spectral M2 updates.
 
 ### Fixed
 
 - Cancelling a computation also interrupts external programs launched by Macaulay2, so the session can resume while preserving its state.
 - Rings retain their type colour when returned as mathematical values, and a real or complex field's precision subscript shares the field's type colour in text and typeset output.
+- Typeset formulas sit on the baseline of the text around them rather than too low by an amount growing with their height, and the key of a tall value lines up with its fraction bar or brace.
+- A formula holding `\pi` or `\gamma` is no longer refused and left without colour.
+- Cancelling a cell immediately after submitting it no longer leaves the session blocked for good.
+- Output arriving late from a cancelled cell is no longer filed under the next cell.
+- An existing `groups.toml` keeps loading when a capture has since moved between the default groups.
 
 ## [1.1.0] - 2026-10-27
 
@@ -160,7 +181,8 @@ First crates.io release.
 - Reorganized the shell around workspace sessions, typed feed blocks, responsive panes, and independently rendered previews.
 - Made installation Cargo-managed and removed manual binary copying and local-bin symlinks.
 
-[Unreleased]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v0.4.0...v1.0.0
 [0.4.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v0.3.0...v0.4.0

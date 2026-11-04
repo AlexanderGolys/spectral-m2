@@ -34,7 +34,7 @@ const STARTUP_FILE: &str = "backend.m2";
 /// separator: no diagnostic, prompt or ordinary value begins with it, and the
 /// M2 side writes it immediately before the frame's JSON.
 const FRAME_MARK: u8 = 0x1D;
-/// The arrow of `key => value`, an equals sign drawn on to `⇒` for its length.
+/// The arrow of `key => value`.
 pub const OPTION_ARROW: &str = "=>";
 /// [`OPTION_ARROW`] standing apart from what it joins.
 pub const SPACED_OPTION_ARROW: &str = " => ";
