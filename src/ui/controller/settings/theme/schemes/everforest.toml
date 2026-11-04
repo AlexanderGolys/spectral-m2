@@ -159,18 +159,18 @@ Number = { fg = "purple" }
 Operator = { fg = "orange" }
 Package = { fg = "yellow", italic = true }
 Parameter = { fg = "fg" }
-Picker = { bg = "bg3", fg = "fg" }
+Picker = { bg = "bg1", fg = "fg" }
 # Preserve the picker's independently styled text and key hints on selection.
-PickerSelected = { bg = "bg_green" }
+PickerSelected = { bg = "bg3" }
 PickerSelectedLabel = { fg = "fg", bold = true }
-PickerSelectedMarker = { fg = "aqua" }
+PickerSelectedMarker = { fg = "aqua", bold=true}
 Property = { fg = "blue" }
 Punctuation = { fg = "grey2" }
 Quote = { fg = "yellow" }
 Regex = { fg = "green" }
 Repeat = { fg = "red" }
-SettingsItemDescription = { fg = "fg", italic = true }
-SettingsItemLabel = { fg = "fg" }
+SettingsItemDescription = { fg = "aqua", italic = true }
+SettingsItemLabel = { fg = "grey2" }
 SettingsItemValue = { fg = "grey2" }
 SettingsItemValueSelected = { fg = "aqua", bold = true }
 Statement = { fg = "red" }
