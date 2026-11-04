@@ -15,6 +15,7 @@ use std::{env, fs, mem, thread};
 
 use crate::cli::M2Options;
 use crate::errors::{Error, Result};
+use crate::ui::controller::settings::theme::groups::HLGroup;
 use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
 use regex::Regex;
@@ -23,6 +24,10 @@ use term_maths::RenderedBlock;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const EVALUATION_TIMEOUT: Duration = Duration::from_secs(300);
+/// How long after a submission is written before it may be interrupted: a signal
+/// reaching M2 just as its read of the submission wakes leaves it blocked on stdin for
+/// good, answering neither later signals nor later input.
+const INTERRUPT_GRACE: Duration = Duration::from_millis(20);
 const STARTUP_SCRIPT: &str = include_str!("backend/m2_startup.m2");
 const STARTUP_FILE: &str = "backend.m2";
 /// Introduces a result frame on the child's output stream. ASCII group
@@ -30,16 +35,19 @@ const STARTUP_FILE: &str = "backend.m2";
 /// M2 side writes it immediately before the frame's JSON.
 const FRAME_MARK: u8 = 0x1D;
 /// The arrow of `key => value`, an equals sign drawn on to `⇒` for its length.
-pub const OPTION_ARROW: &str = "=⇒";
+pub const OPTION_ARROW: &str = "=>";
 /// [`OPTION_ARROW`] standing apart from what it joins.
-pub const SPACED_OPTION_ARROW: &str = " =⇒ ";
+pub const SPACED_OPTION_ARROW: &str = " => ";
 
-/// Appended to every submission. The statement that closes an input -- see the
+/// Appended to every submission, with the submission's number filled in. The statement that closes an input -- see the
 /// M2 side for why the hooks cannot do it alone for a statement that errored. It
 /// hands over the top level's local dictionaries, which only a statement typed
 /// at the top level can reach, so the names bound there are reported too.
-const CELL_TERMINATOR: &str = r#"(User#"spectral end of cell")(localDictionaries());"#;
+fn cell_terminator(submission: u64) -> String {
+    format!(r#"(User#"spectral end of cell")({submission}, localDictionaries());"#)
+}
 
+// @##issue backend.rs is not appropriate place for renderer regex
 static M2_ARRAY: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\\begin\{array\}\{[clr]+\}").expect("valid M2 array pattern"));
 
@@ -74,6 +82,9 @@ struct Frame {
     /// The input number M2 gave this statement, absent on the startup frame.
     #[serde(default)]
     number: u32,
+    /// The submission this frame answers, absent on the startup frame.
+    #[serde(default)]
+    submission: u64,
     #[serde(default)]
     error: bool,
     value: Option<M2Value>,
@@ -126,6 +137,7 @@ pub enum M2Value {
 /// What a token is in code, which decides how it is coloured.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Role {
     Null,
     Boolean,
@@ -136,6 +148,25 @@ pub enum Role {
     Keyword,
     Operator,
     Command,
+}
+
+impl Role {
+    /// The group code paints the same thing with, so a value reads as it would
+    /// typed: `null` as a builtin, `true` as a Boolean, a name as a function.
+    pub(super) const fn group(self) -> HLGroup {
+        match self {
+            Role::Null => HLGroup::Builtin,
+            Role::Boolean => HLGroup::Boolean,
+            Role::String => HLGroup::String,
+            Role::Function => HLGroup::Function,
+            Role::Type => HLGroup::Type,
+            Role::Package => HLGroup::Package,
+            Role::Keyword => HLGroup::Keyword,
+            Role::Operator => HLGroup::Operator,
+            Role::Command => HLGroup::Macro,
+            _ => HLGroup::Text,
+        }
+    }
 }
 
 /// The characters a value's text layout may draw with.
@@ -413,6 +444,8 @@ pub struct M2Backend {
     names: Vec<String>,
     startup_output: String,
     startup_options: M2Options,
+    /// Number of the latest submission; its frame is the only one that closes it.
+    submission: u64,
 }
 
 impl M2Backend {
@@ -509,6 +542,7 @@ impl M2Backend {
             names: Vec::new(),
             startup_output: String::new(),
             startup_options: options.clone(),
+            submission: 0,
         };
         let ready = backend.wait_for_ready()?;
         backend.version = ready.ready.unwrap_or_default();
@@ -643,7 +677,9 @@ impl M2Backend {
         if cancelled.load(Ordering::Acquire) {
             return Err(Error::Cancelled);
         }
-        let written = writeln!(self.input, "{}\n{CELL_TERMINATOR}", code.trim_end())
+        self.submission += 1;
+        let terminator = cell_terminator(self.submission);
+        let written = writeln!(self.input, "{}\n{terminator}", code.trim_end())
             .and_then(|()| self.input.flush());
         if let Err(error) = written {
             return match error.kind() {
@@ -654,9 +690,13 @@ impl M2Backend {
 
         let mut transcript = String::new();
         let deadline = Instant::now() + timeout;
+        let written_at = Instant::now();
         let mut interrupted = false;
         loop {
-            if !interrupted && cancelled.load(Ordering::Acquire) {
+            if !interrupted
+                && cancelled.load(Ordering::Acquire)
+                && written_at.elapsed() >= INTERRUPT_GRACE
+            {
                 // External programs may own the computation while M2 waits.
                 // The child's private group keeps the signal away from the UI.
                 self.signal_group(Signal::SIGINT)?;
@@ -673,6 +713,11 @@ impl M2Backend {
                 Ok(Chunk::Text(text)) => transcript.push_str(&text),
                 Ok(Chunk::Frame(frame)) => {
                     let frame: Frame = serde_json::from_str(&frame)?;
+                    if frame.submission != self.submission {
+                        // Closes an earlier submission: its output is not ours.
+                        transcript.clear();
+                        continue;
+                    }
                     return Ok(M2Response {
                         number: frame.number,
                         is_error: frame.error,
@@ -826,13 +871,29 @@ mod tests {
                     &cancelled,
                 )
             });
-            assert!(matches!(response, Ok(_) | Err(Error::Cancelled)));
+            assert!(
+                matches!(response, Ok(_) | Err(Error::Cancelled)),
+                "{:?}",
+                response.as_ref().err()
+            );
             let next = backend
                 .evaluate_within("1+1", Duration::from_secs(2))
                 .expect("evaluate after cancellation");
             assert!(!next.is_error, "{}", next.transcript);
             assert_eq!(next.rendered_value().as_deref(), Some("2"));
         }
+    }
+
+    #[test]
+    fn a_frame_for_an_earlier_submission_is_not_filed_under_the_current_cell() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        let stray = cell_terminator(0);
+        let response = backend
+            .evaluate(&format!("{stray}\n7 + 1"), None)
+            .expect("evaluate with a stray frame ahead of the value");
+        assert_eq!(response.rendered_value().as_deref(), Some("8"));
+        let next = backend.evaluate("2", None).expect("evaluate after");
+        assert_eq!(next.rendered_value().as_deref(), Some("2"));
     }
 
     #[test]

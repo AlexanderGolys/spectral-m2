@@ -108,10 +108,13 @@ pub struct Settings {
     /// while it runs.
     pub semantic_highlighting: bool,
     pub statusline: StatusLinePosition,
+    pub idle_statusline: IdleStatusLine,
     pub maths: MathDisplay,
     pub fractions: FractionStyle,
     /// Whether rings are drawn as blackboard glyphs (`ℤ`) rather than by name (`ZZ`).
     pub math_fonts: bool,
+    /// Distance between the rows of a typeset matrix, as a percentage of TeX's own.
+    pub matrix_row_spacing_percent: u16,
     /// Rows a returned value shows before its middle folds away.
     pub output_rows: usize,
     /// Seconds each documentation example may take to be computed again, so
@@ -125,9 +128,11 @@ impl Default for Settings {
             language_server: true,
             semantic_highlighting: true,
             statusline: StatusLinePosition::default(),
+            idle_statusline: IdleStatusLine::default(),
             maths: MathDisplay::default(),
             fractions: FractionStyle::default(),
             math_fonts: false,
+            matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
             output_rows: UI.max_output_rows,
             example_seconds: 0,
         }
@@ -151,6 +156,19 @@ impl Settings {
         .max(UI.min_output_rows);
     }
 
+    /// Move the matrix row spacing by picker steps, within the range it may take.
+    pub fn adjust_matrix_row_spacing(&mut self, delta: i8) {
+        let step = u16::from(delta.unsigned_abs()) * UI.matrix_row_spacing_step;
+        self.matrix_row_spacing_percent = match delta > 0 {
+            true => self.matrix_row_spacing_percent.saturating_add(step),
+            false => self.matrix_row_spacing_percent.saturating_sub(step),
+        }
+        .clamp(
+            UI.min_matrix_row_spacing_percent,
+            UI.max_matrix_row_spacing_percent,
+        );
+    }
+
     /// Move the examples timeout by picker steps of a second, down to off.
     pub fn adjust_example_seconds(&mut self, delta: i8) {
         let step = u16::from(delta.unsigned_abs());
@@ -172,11 +190,13 @@ impl Settings {
             self.maths,
             self.fractions,
             self.math_fonts,
+            self.matrix_row_spacing_percent,
             self.output_rows,
         ) != (
             other.maths,
             other.fractions,
             other.math_fonts,
+            other.matrix_row_spacing_percent,
             other.output_rows,
         )
     }
@@ -192,6 +212,39 @@ cyclic! {
         BelowInput = "below input",
         AboveInput = "above input",
         Off = "off",
+    }
+}
+
+cyclic! {
+    /// The side of the status line an idle segment sits on, if any.
+    #[discriminated_str(label)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum SegmentPlacement {
+        Left = "left",
+        Center = "centre",
+        Right = "right",
+        Hidden = "off",
+    }
+}
+
+/// Where each segment sits while the session has nothing else to say. Segments
+/// sharing a side keep the order of these fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IdleStatusLine {
+    pub scheme: SegmentPlacement,
+    pub directory: SegmentPlacement,
+    pub hints: SegmentPlacement,
+}
+
+impl Default for IdleStatusLine {
+    fn default() -> Self {
+        Self {
+            scheme: SegmentPlacement::Left,
+            directory: SegmentPlacement::Left,
+            hints: SegmentPlacement::Right,
+        }
     }
 }
 
@@ -221,6 +274,24 @@ mod tests {
         assert!(
             settings.example_timeout().is_zero(),
             "off is as low as it goes"
+        );
+    }
+
+    #[test]
+    fn the_matrix_row_spacing_stays_within_its_range() {
+        let mut settings = Settings::default();
+        settings.adjust_matrix_row_spacing(i8::MIN);
+        settings.adjust_matrix_row_spacing(i8::MIN);
+        settings.adjust_matrix_row_spacing(-1);
+        assert_eq!(
+            settings.matrix_row_spacing_percent,
+            UI.min_matrix_row_spacing_percent
+        );
+        settings.matrix_row_spacing_percent = UI.max_matrix_row_spacing_percent;
+        settings.adjust_matrix_row_spacing(1);
+        assert_eq!(
+            settings.matrix_row_spacing_percent,
+            UI.max_matrix_row_spacing_percent
         );
     }
 

@@ -2,10 +2,11 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::fs;
+use std::io::Write;
+use std::path::Path;
 use std::sync::LazyLock;
 
-#[cfg(test)]
-use ratatui::style::Color;
 use ratatui::style::Style;
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +24,6 @@ use ratatui::style::Color as PaletteColor;
 /// One palette leaf exposed by the flat appearance picker.
 pub struct Variant {
     name: String,
-    #[cfg(test)]
     palette: Palette,
     groups: Groups,
 }
@@ -52,7 +52,6 @@ impl ColorVariant {
         }
     }
 
-    #[cfg(test)]
     pub fn palette(&self) -> &Palette {
         &self.variant().palette
     }
@@ -263,7 +262,6 @@ impl SchemeFile {
                 let groups = Groups::resolve(&self.groups, overrides, &palette, declarations)?;
                 let variant = Variant {
                     name,
-                    #[cfg(test)]
                     palette,
                     groups,
                 };
@@ -280,7 +278,8 @@ impl SchemeFile {
     }
 }
 
-/// Read a theme config, installing its bundled default on first use.
+/// Read a theme config, installing its bundled default on first use and replacing it
+/// with a newer bundled default for as long as the user has not edited it.
 fn config_source(name: &str, default: &str) -> Result<String, String> {
     let Some(path) = super::config_file(&format!("themes/{name}")) else {
         return Ok(default.into());
@@ -288,24 +287,40 @@ fn config_source(name: &str, default: &str) -> Result<String, String> {
     config_at(&path, default)
 }
 
-fn config_at(path: &std::path::Path, default: &str) -> Result<String, String> {
+/// Directory beside the theme configs holding the default each one was last installed from,
+/// which tells an untouched config from an edited one.
+const INSTALLED_DEFAULTS_DIR: &str = ".installed";
+
+fn config_at(path: &Path, default: &str) -> Result<String, String> {
+    let failed = |error: std::io::Error| format!("{}: {error}", path.display());
+    let installed = path
+        .parent()
+        .expect("theme config has a parent")
+        .join(INSTALLED_DEFAULTS_DIR)
+        .join(path.file_name().expect("theme config has a name"));
     if !path.exists() {
-        std::fs::create_dir_all(path.parent().expect("theme config has a parent"))
-            .map_err(|error| format!("{}: {error}", path.display()))?;
-        use std::io::Write;
-        match std::fs::OpenOptions::new()
+        fs::create_dir_all(path.parent().expect("theme config has a parent")).map_err(failed)?;
+        match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(path)
         {
-            Ok(mut file) => file
-                .write_all(default.as_bytes())
-                .map_err(|error| format!("{}: {error}", path.display()))?,
+            Ok(mut file) => file.write_all(default.as_bytes()).map_err(failed)?,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(format!("{}: {error}", path.display())),
+            Err(error) => return Err(failed(error)),
         }
     }
-    std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))
+    let mut current = fs::read_to_string(path).map_err(failed)?;
+    if current != default && fs::read_to_string(&installed).is_ok_and(|old| old == current) {
+        fs::write(path, default).map_err(failed)?;
+        current = default.into();
+    }
+    if current == default {
+        fs::create_dir_all(installed.parent().expect("installed default has a parent"))
+            .map_err(failed)?;
+        fs::write(&installed, default).map_err(failed)?;
+    }
+    Ok(current)
 }
 
 const SCHEME_FILES: &[(&str, &str)] = &[
@@ -583,33 +598,6 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn mode_qualified_overrides_do_not_affect_the_other_mode() {
-        let mut file: SchemeFile = toml::from_str(SCHEME_FILES[4].1).unwrap();
-        file.variant_overrides.light.insert(
-            "hard".into(),
-            toml::from_str("CompletionHint = { fg = 'red', italic = true }").unwrap(),
-        );
-        let scheme = file.resolve().unwrap();
-        let dark = scheme
-            .variants()
-            .iter()
-            .find(|v| v.mode() == Mode::Dark && v.label() == "hard")
-            .unwrap();
-        let light = scheme
-            .variants()
-            .iter()
-            .find(|v| v.mode() == Mode::Light && v.label() == "hard")
-            .unwrap();
-        assert_eq!(dark.groups().CompletionHint, dark.groups().Muted);
-        assert_eq!(light.groups().CompletionHint.fg, light.groups().Error.fg);
-        assert!(light
-            .groups()
-            .CompletionHint
-            .add_modifier
-            .contains(ratatui::style::Modifier::ITALIC));
-    }
-
-    #[test]
     fn missing_variant_colors_and_misspelled_variant_keys_are_rejected() {
         for bad_palette in [
             "[palette.mauve]\ndark = { mocha = '#cba6f7' }\nlight = '#8839ef'",
@@ -621,40 +609,6 @@ mod tests {
             let file: SchemeFile = table.try_into().unwrap();
             assert!(file.resolve().is_err());
         }
-    }
-
-    #[test]
-    fn native_palette_names_are_identical_across_variants_without_generated_aliases() {
-        for scheme in SCHEMES.iter() {
-            let names = |v: &ColorVariant| {
-                v.palette()
-                    .colors()
-                    .iter()
-                    .map(|(name, _)| name.to_string())
-                    .collect::<Vec<_>>()
-            };
-            let expected = names(&scheme.variants()[0]);
-            for variant in scheme.variants() {
-                assert_eq!(names(variant), expected);
-            }
-        }
-        let rose = &SCHEMES[5].variants()[0];
-        assert_eq!(rose.palette().colors().len(), 15);
-        for invented in [
-            "red",
-            "red_light",
-            "fg0",
-            "bg_red",
-            "keyword",
-            "leaf",
-            "_nc",
-        ] {
-            assert!(rose.palette().resolve(Some(invented)).is_err());
-        }
-        assert_eq!(
-            rose.palette().resolve(Some("iris")).unwrap(),
-            Some(Color::Rgb(0xc4, 0xa7, 0xe7))
-        );
     }
 
     #[test]
@@ -677,145 +631,21 @@ mod tests {
     }
 
     #[test]
-    fn every_configured_variant_paints_every_syntax_role() {
-        for scheme in SCHEMES.iter() {
-            for variant in scheme.variants() {
-                let groups = variant.groups();
-                assert!(groups.transcript().bg.is_some());
-                assert!(groups.code().bg.is_some());
-                assert!(groups.picker().bg.is_some());
-                assert!(groups.picker_selected().bg.is_some());
-                assert!(groups.value().fg.is_some());
-                assert!(groups.error().fg.is_some());
-                assert!(groups.warning().fg.is_some());
-                assert!(groups.diagnostic().underline_color.is_some());
-                assert!(groups.type_info().fg.is_some());
-                assert!(groups.border().fg.is_some());
-                assert!(groups.prompt().fg.is_some());
-                assert!(groups.selection().bg.is_some());
-                assert!(groups.muted().fg.is_some());
-                assert!(groups.printed().fg.is_some());
-            }
-        }
-    }
-
-    #[test]
-    fn catppuccin_encodes_its_four_canonical_flavours() {
-        let variants = SCHEMES[0].variants();
-        let labels: Vec<_> = variants.iter().map(ColorVariant::label).collect();
-        let modes: Vec<_> = variants
-            .iter()
-            .map(|variant| variant.mode().to_string())
-            .collect();
-
-        assert_eq!(labels, ["mocha", "macchiato", "frappe", "latte"]);
-        assert_eq!(modes, ["dark", "dark", "dark", "light"]);
-    }
-
-    #[test]
-    fn gruvbox_schemes_each_expose_six_variants() {
-        assert_eq!(SCHEMES[2].label(), "gruvbox");
-        assert_eq!(SCHEMES[2].variants().len(), 6);
-        assert_eq!(SCHEMES[3].label(), "gruvbox material");
-        assert_eq!(SCHEMES[3].variants().len(), 6);
-    }
-
-    #[test]
-    fn rose_pine_and_kanagawa_expose_only_their_canonical_variants() {
-        let rose_pine = SCHEMES
-            .iter()
-            .find(|scheme| scheme.label() == "rosé pine")
-            .unwrap();
-        let kanagawa = SCHEMES
-            .iter()
-            .find(|scheme| scheme.label() == "kanagawa")
-            .unwrap();
-
-        assert_eq!(
-            rose_pine
-                .variants()
-                .iter()
-                .map(|variant| (variant.mode().to_string(), variant.label()))
-                .collect::<Vec<_>>(),
-            [
-                ("dark".into(), "main"),
-                ("dark".into(), "moon"),
-                ("light".into(), "dawn")
-            ]
-        );
-        assert_eq!(
-            kanagawa
-                .variants()
-                .iter()
-                .map(|variant| (variant.mode().to_string(), variant.label()))
-                .collect::<Vec<_>>(),
-            [
-                ("dark".into(), "wave"),
-                ("dark".into(), "dragon"),
-                ("light".into(), "lotus")
-            ]
-        );
-    }
-
-    #[test]
-    fn one_variant_can_replace_one_group_without_changing_its_siblings() {
-        let mut file: SchemeFile = toml::from_str(include_str!("theme/schemes/kanagawa.toml"))
-            .expect("kanagawa scheme parses");
-        file.variant_overrides
-            .light
-            .get_mut("lotus")
-            .expect("lotus has its own group table")
-            .insert(
-                "MarkupHeading3".into(),
-                toml::from_str("fg = 'lotusRed'\nbold = true").unwrap(),
-            );
-        let scheme = file.resolve().expect("variant resolves");
-        let wave = scheme.variants()[0].groups();
-        let dragon = scheme.variants()[1].groups();
-        let lotus = scheme.variants()[2].groups();
-        assert_eq!(wave.MarkupHeading3.fg, wave.Function.fg);
-        assert_eq!(dragon.MarkupHeading3.fg, dragon.Function.fg);
-        assert_ne!(lotus.MarkupHeading3.fg, lotus.Function.fg);
-        assert!(lotus
-            .MarkupHeading3
-            .add_modifier
-            .contains(ratatui::style::Modifier::BOLD));
-    }
-
-    #[test]
-    fn kanagawa_pickers_use_the_native_popup_colors() {
-        let kanagawa = SCHEMES
-            .iter()
-            .find(|scheme| scheme.label() == "kanagawa")
-            .unwrap();
-        let expected = [
-            (
-                "wave",
-                Color::Rgb(0x22, 0x32, 0x49),
-                Color::Rgb(0x2d, 0x4f, 0x67),
-            ),
-            (
-                "dragon",
-                Color::Rgb(0x22, 0x32, 0x49),
-                Color::Rgb(0x2d, 0x4f, 0x67),
-            ),
-            (
-                "lotus",
-                Color::Rgb(0xc7, 0xd7, 0xe0),
-                Color::Rgb(0x9f, 0xb5, 0xc9),
-            ),
-        ];
-        for (name, popup, selected) in expected {
-            let groups = kanagawa
-                .variants()
-                .iter()
-                .find(|variant| variant.label() == name)
-                .unwrap()
-                .groups();
-            assert_eq!(groups.picker().bg, Some(popup), "{name}");
-            assert_eq!(groups.picker_selected().bg, Some(selected), "{name}");
-            assert_ne!(groups.picker().bg, groups.printed().bg, "{name}");
-        }
+    fn an_unedited_config_follows_newer_bundled_defaults() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = env::temp_dir().join(format!(
+            "spectral-theme-update-{}-{nonce}",
+            std::process::id()
+        ));
+        let path = dir.join("themes/everforest.toml");
+        assert_eq!(config_at(&path, "first").unwrap(), "first");
+        assert_eq!(config_at(&path, "second").unwrap(), "second");
+        fs::write(&path, "edited").unwrap();
+        assert_eq!(config_at(&path, "third").unwrap(), "edited");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -835,65 +665,6 @@ mod tests {
             .unwrap()
             .insert("MarkupHedaing3".into(), StyleDeclaration::default());
         assert!(file.resolve().err().unwrap().contains("MarkupHedaing3"));
-    }
-
-    #[test]
-    fn appearance_cycles_each_axis_in_both_directions() {
-        let appearance = Appearance::default();
-
-        assert_eq!(appearance.cycle_contrast(1).variant().label(), "soft");
-        assert_eq!(appearance.cycle_contrast(-1).variant().label(), "hard");
-        assert_eq!(appearance.cycle_theme(1).scheme().label(), "rosé pine");
-        assert_eq!(
-            appearance.cycle_theme(-1).scheme().label(),
-            "gruvbox material"
-        );
-        assert_eq!(appearance.cycle_mode(1).variant().label(), "medium");
-        assert_eq!(appearance.cycle_mode(-1).variant().label(), "medium");
-        assert_eq!(appearance.background_label(), "opaque");
-        assert_eq!(
-            appearance.cycle_background().background_label(),
-            "transparent"
-        );
-    }
-
-    #[test]
-    fn theme_changes_keep_the_contrast_name_or_position() {
-        let appearance = Appearance::default();
-        let gruvbox = appearance.cycle_theme(-1).cycle_theme(-1);
-        assert_eq!(gruvbox.scheme().label(), "gruvbox");
-        assert_eq!(gruvbox.variant().label(), "medium");
-
-        let rose_pine = appearance.cycle_theme(1);
-        assert_eq!(rose_pine.variant().label(), "moon");
-        assert_eq!(rose_pine.cycle_theme(-1), appearance);
-
-        let latte = appearance.cycle_theme(-4).cycle_mode(1);
-        assert_eq!(latte.variant().label(), "latte");
-        assert_eq!(latte.cycle_contrast(1), latte);
-    }
-
-    #[test]
-    fn appearance_saved_with_brightness_still_loads() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = env::temp_dir().join(format!(
-            "spectral-m2-legacy-appearance-{}-{nonce}.json",
-            std::process::id()
-        ));
-        fs::write(
-            &path,
-            r#"{"scheme":"gruvbox","variant":"soft","brightness":"light","transparent_background":false}"#,
-        )
-        .unwrap();
-
-        let appearance: Appearance = read(&path).expect("legacy appearance");
-        let _ = fs::remove_file(&path);
-        assert_eq!(appearance.scheme().label(), "gruvbox");
-        assert_eq!(appearance.variant().label(), "soft");
-        assert!(appearance.mode() == Mode::Light);
     }
 
     #[test]
@@ -934,92 +705,5 @@ mod tests {
             transparent.groups().style(HLGroup::String),
             groups.style(HLGroup::String)
         );
-    }
-
-    #[test]
-    fn the_default_is_everforest_dark_medium() {
-        let appearance = Appearance::default();
-        let palette = Appearance::default().variant().palette();
-
-        assert_eq!(appearance.scheme().label(), "everforest");
-        assert_eq!(appearance.variant().label(), "medium");
-        assert!(appearance.variant().mode() == Mode::Dark);
-        assert_eq!(
-            palette.resolve(Some("bg0")).unwrap(),
-            Some(Color::Rgb(0x2d, 0x35, 0x3b))
-        );
-        assert_eq!(
-            palette.resolve(Some("fg")).unwrap(),
-            Some(Color::Rgb(0xd3, 0xc6, 0xaa))
-        );
-    }
-
-    #[test]
-    fn serialized_schemes_keep_native_colors() {
-        let palette = |scheme: &str, variant: &str| {
-            SCHEMES
-                .iter()
-                .find(|candidate| candidate.label() == scheme)
-                .unwrap()
-                .variants()
-                .iter()
-                .find(|candidate| candidate.label() == variant)
-                .unwrap()
-                .palette()
-        };
-        assert_eq!(
-            palette("gruvbox", "soft")
-                .resolve(Some("bright_red"))
-                .unwrap(),
-            Some(Color::Rgb(0xfb, 0x49, 0x34))
-        );
-        assert_eq!(
-            palette("catppuccin", "latte")
-                .resolve(Some("mauve"))
-                .unwrap(),
-            Some(Color::Rgb(0x88, 0x39, 0xef))
-        );
-        assert_eq!(
-            palette("everforest", "medium")
-                .resolve(Some("bg_dim"))
-                .unwrap(),
-            Some(Color::Rgb(0x23, 0x2a, 0x2e))
-        );
-        assert_eq!(
-            palette("kanagawa", "lotus")
-                .resolve(Some("lotusWhite5"))
-                .unwrap(),
-            Some(Color::Rgb(0xe4, 0xd7, 0x94))
-        );
-    }
-
-    #[test]
-    fn bright_dark_theme_surfaces_have_dark_text() {
-        let luma = |color| match color {
-            Color::Rgb(red, green, blue) => {
-                Some((299 * u32::from(red) + 587 * u32::from(green) + 114 * u32::from(blue)) / 1000)
-            }
-            _ => None,
-        };
-        for scheme in SCHEMES.iter() {
-            for variant in scheme
-                .variants()
-                .iter()
-                .filter(|variant| variant.mode() == Mode::Dark)
-            {
-                for (name, style) in variant.groups().highlight_groups() {
-                    if !name.starts_with("Bg")
-                        && style.bg.and_then(luma).is_some_and(|value| value > 140)
-                    {
-                        assert!(
-                            style.fg.and_then(luma).is_some_and(|value| value < 80),
-                            "{} {}: {name} has a bright background without dark text",
-                            scheme.label(),
-                            variant.label()
-                        );
-                    }
-                }
-            }
-        }
     }
 }

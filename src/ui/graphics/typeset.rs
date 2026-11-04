@@ -24,6 +24,8 @@ const SVG_END: &str = "</svg>";
 const BREAK_AFTER: [char; 1] = [','];
 /// How far, in ems, an item may start before a separator ends and still follow it.
 const BREAK_TOLERANCE: f64 = 1e-6;
+/// The percentage of row spacing that TeX's `\arraystretch` calls one.
+const PERCENT_PER_ARRAYSTRETCH: u16 = 100;
 
 /// A formula set as a picture, with the places its rows may break.
 pub struct Typeset {
@@ -67,16 +69,21 @@ pub struct Rgb(pub [u8; 3]);
 /// `tex`, in display style and painted `colour`, as an SVG of [`EM`] units per em.
 #[cfg(test)]
 pub fn svg(tex: &str, Rgb([r, g, b]): Rgb) -> Result<String, Unset> {
-    svg_colored(tex, tex, Rgb([r, g, b])).map(|typeset| typeset.svg)
+    svg_colored(tex, tex, Rgb([r, g, b]), PERCENT_PER_ARRAYSTRETCH).map(|typeset| typeset.svg)
 }
 
 /// Paint a formula from coloured TeX while retaining its original spacing and geometry.
 /// Colour scopes can change atom classes in the layout engine, so only their paint
 /// is transferred; the unmodified formula remains responsible for every position.
-pub fn svg_colored(tex: &str, painted: &str, colour: Rgb) -> Result<Typeset, Unset> {
-    let mut original = display(tex, colour)?;
+pub fn svg_colored(
+    tex: &str,
+    painted: &str,
+    colour: Rgb,
+    matrix_row_spacing_percent: u16,
+) -> Result<Typeset, Unset> {
+    let mut original = display(tex, colour, matrix_row_spacing_percent)?;
     if tex != painted {
-        if let Ok(paint) = display(painted, colour) {
+        if let Ok(paint) = display(painted, colour, matrix_row_spacing_percent) {
             if original.items.len() == paint.items.len()
                 && original
                     .items
@@ -227,9 +234,15 @@ fn typewriter_paths(list: &mut DisplayList, font: &TerminalFont) -> String {
 }
 
 /// Lay out the source without modifying its mathematical atom classes.
-fn display(tex: &str, Rgb([r, g, b]): Rgb) -> Result<DisplayList, Unset> {
+fn display(
+    tex: &str,
+    Rgb([r, g, b]): Rgb,
+    matrix_row_spacing_percent: u16,
+) -> Result<DisplayList, Unset> {
     let channel = |value: u8| f32::from(value) / f32::from(u8::MAX);
-    let ast = parse(tex).map_err(|error| Unset(error.to_string()))?;
+    let arraystretch = f64::from(matrix_row_spacing_percent) / f64::from(PERCENT_PER_ARRAYSTRETCH);
+    let stretched = format!(r"\def\arraystretch{{{arraystretch}}}{tex}");
+    let ast = parse(&stretched).map_err(|error| Unset(error.to_string()))?;
     let options = LayoutOptions::default()
         .with_style(MathStyle::Display)
         .with_color(Color::rgb(channel(r), channel(g), channel(b)));
@@ -302,7 +315,9 @@ mod tests {
         ] {
             let painted = crate::ui::render::maths::colored_tex(tex, &groups);
             let original = svg(tex, INK).unwrap();
-            let colored = svg_colored(tex, &painted, INK).unwrap().svg;
+            let colored = svg_colored(tex, &painted, INK, PERCENT_PER_ARRAYSTRETCH)
+                .unwrap()
+                .svg;
             assert_ne!(
                 original, colored,
                 "colours were not transferred: {tex}: {painted}"
@@ -312,6 +327,20 @@ mod tests {
                 colors.replace_all(&colored, "PAINT"),
                 "{tex}"
             );
+        }
+    }
+
+    #[test]
+    fn matrix_rows_stand_further_apart_at_a_wider_spacing() {
+        for tex in [
+            r"\left(\!\begin{array}{cc}\frac{1}{2}&x\\\frac{3}{4}&y\end{array}\!\right)",
+            r"\left(\begin{matrix}\frac{1}{2}&x\\\frac{3}{4}&y\end{matrix}\right)",
+        ] {
+            let height = |percent| {
+                let list = display(tex, INK, percent).unwrap();
+                list.height + list.depth
+            };
+            assert!(height(200) > height(100), "{tex}");
         }
     }
 
@@ -327,7 +356,7 @@ mod tests {
         let Some(font) = TerminalFont::load(fontdb::Family::Monospace) else {
             return;
         };
-        let mut list = display(r"\texttt{ideal}\,x", INK).unwrap();
+        let mut list = display(r"\texttt{ideal}\,x", INK, PERCENT_PER_ARRAYSTRETCH).unwrap();
         let glyphs = list.items.len();
         let paths = typewriter_paths(&mut list, &font);
         assert_eq!(paths.matches("<path").count(), "ideal".len());

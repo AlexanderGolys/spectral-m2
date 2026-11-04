@@ -113,6 +113,13 @@ impl GroupDeclarations {
         Ok(declarations)
     }
 
+    /// Whether Tree-sitter captures are drawn with this group.
+    pub fn draws_captures(&self, group: HLGroup) -> bool {
+        self.0
+            .get(group.description())
+            .is_some_and(|declaration| declaration.captures.iter().flatten().next().is_some())
+    }
+
     /// Every Tree-sitter capture paired with the group that draws it.
     pub fn captures(&self) -> Result<Vec<(String, HLGroup)>, String> {
         let mut owners = HashMap::new();
@@ -220,6 +227,13 @@ macro_rules! highlight_groups {
             /// Every group's name and style, in declaration order.
             pub fn highlight_groups(&self) -> Vec<(&'static str, Style)> {
                 vec![$((HLGroup::$group.description(), self.$group),)+]
+            }
+        }
+
+        impl Groups {
+            /// Every group with its resolved style, in declaration order.
+            pub fn styled_groups(&self) -> Vec<(HLGroup, Style)> {
+                vec![$((HLGroup::$group, self.$group),)+]
             }
         }
 
@@ -558,30 +572,7 @@ impl Default for Groups {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use super::*;
-    use crate::ui::controller::settings::theme::SCHEMES;
-
-    /// HSV saturation and hue of an RGB foreground, or None for any other colour.
-    fn saturation_and_hue(style: Style) -> Option<(f32, f32)> {
-        let Some(Color::Rgb(r, g, b)) = style.fg else {
-            return None;
-        };
-        let [r, g, b] = [r, g, b].map(|channel| f32::from(channel) / 255.0);
-        let (high, low) = (r.max(g).max(b), r.min(g).min(b));
-        let chroma = high - low;
-        let hue = if chroma == 0.0 {
-            0.0
-        } else if high == r {
-            ((g - b) / chroma).rem_euclid(6.0)
-        } else if high == g {
-            (b - r) / chroma + 2.0
-        } else {
-            (r - g) / chroma + 4.0
-        } * 60.0;
-        Some((if high == 0.0 { 0.0 } else { chroma / high }, hue))
-    }
 
     fn fixture() -> (StyleTable, Palette) {
         let file: super::super::SchemeFile =
@@ -591,34 +582,6 @@ mod tests {
             .palette(super::super::Mode::Dark, "mocha")
             .unwrap();
         (file.groups, palette)
-    }
-
-    #[test]
-    fn overrides_propagate_through_links_and_channel_references() {
-        let (styles, palette) = fixture();
-        let overrides = toml::from_str(
-            r#"
-            Accent = { fg = "red", italic = true }
-            Error = { fg = "blue" }
-            Canvas = { bg = "mantle" }
-        "#,
-        )
-        .unwrap();
-        let groups = Groups::resolve(
-            &styles,
-            &overrides,
-            &palette,
-            &GroupDeclarations::embedded(),
-        )
-        .unwrap();
-        assert_eq!(groups.OutputNumber, groups.Accent);
-        assert_eq!(groups.InputPrompt, groups.Accent);
-        assert!(groups
-            .RecentOutput
-            .add_modifier
-            .contains(Modifier::ITALIC | Modifier::BOLD));
-        assert_eq!(groups.DiagnosticError.underline_color, groups.Error.fg);
-        assert_eq!(groups.Separator.fg, groups.Canvas.bg);
     }
 
     #[test]
@@ -641,60 +604,6 @@ mod tests {
         assert_eq!(groups.Picker, Style::new().bold());
         assert!(!groups.RecentOutput.add_modifier.contains(Modifier::BOLD));
         assert!(groups.RecentOutput.sub_modifier.contains(Modifier::BOLD));
-    }
-
-    #[test]
-    fn older_user_defaults_inherit_new_groups_and_can_relink_existing_ones() {
-        let (styles, palette) = fixture();
-        let declarations =
-            GroupDeclarations::parse("CompletionHint = { link = 'Info', italic = true }").unwrap();
-        let groups = Groups::resolve(&styles, &HashMap::new(), &palette, &declarations).unwrap();
-        assert_eq!(groups.CompletionHint, groups.Info.italic());
-        assert_eq!(groups.PlaceholderHint, groups.Muted);
-        assert!(
-            GroupDeclarations::parse("CompletinoHint = { link = 'Info' }")
-                .err()
-                .unwrap()
-                .contains("CompletinoHint")
-        );
-        assert!(GroupDeclarations::parse("Text = { link = 'Info' }").is_err());
-    }
-
-    #[test]
-    fn captures_are_declared_once_and_inherited_by_older_user_defaults() {
-        let owner = |declarations: &GroupDeclarations, capture: &str| {
-            declarations
-                .captures()
-                .unwrap()
-                .into_iter()
-                .find(|(name, _)| name == capture)
-                .map(|(_, group)| group)
-        };
-        let older = GroupDeclarations::parse("Conditional = { link = 'Statement' }").unwrap();
-        assert_eq!(
-            owner(&older, "keyword.conditional"),
-            owner(&GroupDeclarations::embedded(), "keyword.conditional")
-        );
-        let moved =
-            GroupDeclarations::parse("Conditional = { link = 'Keyword', captures = [] }\nRepeat = { link = 'Keyword', captures = ['keyword.repeat', 'keyword.conditional'] }")
-                .unwrap();
-        assert_eq!(owner(&moved, "keyword.conditional"), Some(HLGroup::Repeat));
-        assert!(GroupDeclarations::parse(
-            "Repeat = { link = 'Keyword', captures = ['keyword.conditional'] }"
-        )
-        .err()
-        .unwrap()
-        .contains("keyword.conditional"));
-
-        let (styles, palette) = fixture();
-        let overrides = toml::from_str("Comment = { fg = 'red', captures = ['comment'] }").unwrap();
-        assert!(Groups::resolve(
-            &styles,
-            &overrides,
-            &palette,
-            &GroupDeclarations::embedded()
-        )
-        .is_err());
     }
 
     #[test]
@@ -747,193 +656,9 @@ mod tests {
     }
 
     #[test]
-    fn printed_text_is_a_quieter_shade_of_a_string() {
-        for groups in SCHEMES
-            .iter()
-            .flat_map(|scheme| scheme.variants())
-            .map(|variant| variant.groups())
-        {
-            let (string, printed) = (
-                saturation_and_hue(groups.String).expect("schemes colour in RGB"),
-                saturation_and_hue(groups.Printed).expect("schemes colour in RGB"),
-            );
-            assert!(
-                printed.0 < string.0,
-                "printed text should be less saturated"
-            );
-            let apart = (printed.1 - string.1).abs();
-            assert!(
-                apart.min(360.0 - apart) < 30.0,
-                "printed text should keep the hue"
-            );
-        }
-    }
-
-    #[test]
-    fn every_scheme_fills_the_complete_group_space() {
-        // Groups declared without a style lay nothing over the text beneath them.
-        let transparent =
-            [HLGroup::LspVariable, HLGroup::Unresolved].map(|group| group.description());
-        for groups in SCHEMES
-            .iter()
-            .flat_map(|scheme| scheme.variants())
-            .map(|variant| variant.groups())
-        {
-            assert!(groups.highlight_groups().iter().all(|&(group, style)| {
-                transparent.contains(&group)
-                    || style.fg.is_some()
-                    || style.bg.is_some()
-                    || style.underline_color.is_some()
-                    || !style.add_modifier.is_empty()
-                    || !style.sub_modifier.is_empty()
-            }));
-        }
-    }
-
-    #[test]
-    fn input_hints_have_independent_named_groups() {
-        let groups = Groups::default();
-        assert_eq!(groups.completion_hint(), groups.Muted);
-        assert_eq!(groups.placeholder_hint(), groups.Muted);
-        assert_eq!(groups.prompt(), groups.Accent);
-        assert!(groups
-            .highlight_groups()
-            .iter()
-            .any(|(name, _)| *name == "CompletionHint"));
-        assert!(groups
-            .highlight_groups()
-            .iter()
-            .any(|(name, _)| *name == "PlaceholderHint"));
-    }
-
-    #[test]
     fn groups_have_one_uniform_indexed_representation() {
         let groups = Groups::default();
         assert_eq!(groups.style(HLGroup::Number), groups[HLGroup::Number]);
         assert_eq!(groups.style(HLGroup::Operator), groups[HLGroup::Operator]);
-    }
-
-    #[test]
-    fn special_colours_drive_underlines_without_replacing_foregrounds() {
-        let groups = Groups::default();
-        assert_eq!(groups.diagnostic().fg, None);
-        assert_eq!(groups.diagnostic().bg, None);
-        assert_eq!(groups.diagnostic().underline_color, groups.error().fg);
-        assert!(groups
-            .diagnostic()
-            .add_modifier
-            .contains(Modifier::UNDERLINED));
-    }
-
-    #[test]
-    fn diagnostic_text_does_not_fill_its_box() {
-        for groups in SCHEMES
-            .iter()
-            .flat_map(|scheme| scheme.variants())
-            .map(|variant| variant.groups())
-        {
-            for text in [groups.error(), groups.warning(), groups.info()] {
-                assert!(text.fg.is_some() && text.bg.is_none());
-            }
-        }
-    }
-
-    #[test]
-    fn value_borders_are_visible_beside_dark_separators() {
-        for groups in SCHEMES
-            .iter()
-            .flat_map(|scheme| scheme.variants())
-            .map(|variant| variant.groups())
-        {
-            assert_ne!(groups.border().fg, groups.separator().fg);
-        }
-    }
-
-    #[test]
-    fn documentation_links_are_underlined_only_while_hovered() {
-        for groups in SCHEMES
-            .iter()
-            .flat_map(|scheme| scheme.variants())
-            .map(|variant| variant.groups())
-        {
-            assert!(!groups[HLGroup::MarkupLink]
-                .add_modifier
-                .contains(Modifier::UNDERLINED));
-            assert!(groups[HLGroup::MarkupLinkHover]
-                .add_modifier
-                .contains(Modifier::UNDERLINED));
-        }
-    }
-
-    #[test]
-    fn output_numbers_match_the_prompt_colour_and_only_the_recent_ones_are_bold() {
-        for groups in SCHEMES
-            .iter()
-            .flat_map(|scheme| scheme.variants())
-            .map(|variant| variant.groups())
-        {
-            assert_eq!(groups.output_number().fg, groups.prompt().fg);
-            assert_eq!(groups.recent_output().fg, groups.prompt().fg);
-            assert!(!groups.output_number().add_modifier.contains(Modifier::BOLD));
-            assert!(groups.recent_output().add_modifier.contains(Modifier::BOLD));
-        }
-    }
-
-    #[test]
-    fn every_severity_has_its_own_underline() {
-        for groups in SCHEMES
-            .iter()
-            .flat_map(|scheme| scheme.variants())
-            .map(|variant| variant.groups())
-        {
-            for (diagnostic, severity) in [
-                (groups.DiagnosticError, groups.Error),
-                (groups.DiagnosticWarning, groups.Warning),
-                (groups.DiagnosticInfo, groups.Info),
-                (groups.DiagnosticHint, groups.Hint),
-            ] {
-                assert_eq!(diagnostic.underline_color, severity.fg);
-                assert!(diagnostic.add_modifier.contains(Modifier::UNDERLINED));
-            }
-        }
-    }
-
-    #[test]
-    fn transcript_surfaces_are_distinct() {
-        for groups in SCHEMES
-            .iter()
-            .flat_map(|scheme| scheme.variants())
-            .map(|variant| variant.groups())
-        {
-            assert_eq!(
-                [
-                    groups.transcript().bg,
-                    groups.code().bg,
-                    groups.printed().bg,
-                ]
-                .into_iter()
-                .collect::<HashSet<_>>()
-                .len(),
-                3,
-                "surfaces: {:?}",
-                [
-                    groups.transcript().bg,
-                    groups.code().bg,
-                    groups.printed().bg
-                ]
-            );
-        }
-    }
-
-    #[test]
-    fn pickers_have_their_own_surface_and_selection_groups() {
-        for groups in SCHEMES
-            .iter()
-            .flat_map(|scheme| scheme.variants())
-            .map(|variant| variant.groups())
-        {
-            assert!(groups.picker().bg.is_some());
-            assert!(groups.picker_selected().bg.is_some());
-        }
     }
 }

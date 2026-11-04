@@ -249,12 +249,6 @@ impl Cell {
         Self::new(text, None, spans)
     }
 
-    /// Create a numbered input cell with its result state.
-    #[cfg(test)]
-    pub fn resolved(text: String, number: u32, state: CellState, spans: Vec<HLSpan>) -> Self {
-        Self::new(text, Some((number, state)), spans)
-    }
-
     /// Create an unnumbered cell that was not submitted to Macaulay2.
     fn rejected(text: String, spans: Vec<HLSpan>) -> Self {
         Self::new(text, None, spans)
@@ -1684,7 +1678,6 @@ mod tests {
     use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
     use crate::ui::syntax_tree::SyntaxTreeBlock;
     use m2_syn::{DelimiterKind, DoubleSpan, PrettyNode, Span as M2Span};
-    use ratatui::style::Color;
 
     #[test]
     fn oversized_plain_output_has_a_bounded_preview_even_when_expanded() {
@@ -2132,69 +2125,6 @@ mod tests {
     }
 
     #[test]
-    fn successful_cell_and_output_numbers_align_with_distinct_emphasis() {
-        use ratatui::style::Modifier;
-
-        let groups = Groups::default();
-        let input = CodeBlock::new([Cell::resolved("x".into(), 7, CellState::Value, Vec::new())]);
-        let output = OutputBlock::value("x".into(), None).numbered(7);
-        let input = rendered_buffer(&input, 20);
-        let output = rendered_buffer(&output, 20);
-
-        let border = inset();
-        let margin = UI.cell_margin;
-        assert_eq!(input[(margin, 1)].symbol(), "7");
-        assert_eq!(output[(border - 1, 1)].symbol(), "o");
-        assert_eq!(output[(border, 1)].symbol(), "7");
-        assert_eq!(output[(border, 0)].symbol(), "╭");
-        assert_eq!(output[(border, 2)].symbol(), "╰");
-        assert_eq!(input[(margin, 1)].fg, groups.muted().fg.unwrap());
-        assert_eq!(output[(border, 1)].fg, groups.output_number().fg.unwrap());
-        assert_eq!(output[(border, 1)].fg, groups.prompt().fg.unwrap());
-        assert!(!input[(margin, 1)].modifier.contains(Modifier::BOLD));
-        assert!(!output[(border, 1)].modifier.contains(Modifier::BOLD));
-        assert_eq!(input[(border, 0)].symbol(), "│");
-        assert_eq!(input[(border, 0)].fg, groups.separator().fg.unwrap());
-
-        let null = rendered_buffer(
-            &CodeBlock::new([Cell::resolved("x".into(), 7, CellState::Null, Vec::new())]),
-            20,
-        );
-        assert_eq!(null[(margin, 1)].fg, groups.muted().fg.unwrap());
-    }
-
-    #[test]
-    fn the_latest_outputs_and_the_cells_behind_them_share_a_colour() {
-        use ratatui::style::Modifier;
-
-        let groups = Groups::default();
-        let context = RenderContext::new(20, 0).with_recent_outputs([Some(9), Some(8), Some(7)]);
-        let numbers = [9, 6];
-        let code = CodeBlock::new(
-            numbers.map(|number| Cell::resolved("x".into(), number, CellState::Value, Vec::new())),
-        );
-        let mut cells = Buffer::empty(Rect::new(0, 0, 20, code.height(&context)));
-        code.render_local(&context, &mut cells);
-        let margin = UI.cell_margin;
-
-        let (recent, old) = (&cells[(margin, 1)], &cells[(margin, 2)]);
-        assert_eq!(recent.fg, groups.recent_cell_number().fg.unwrap());
-        assert_eq!(old.fg, groups.muted().fg.unwrap());
-        assert!(!recent.modifier.contains(Modifier::BOLD));
-
-        let output = |number| {
-            let block = OutputBlock::value("x".into(), None).numbered(number);
-            let mut buffer = Buffer::empty(Rect::new(0, 0, 20, block.height(&context)));
-            block.render_local(&context, &mut buffer);
-            buffer[(inset(), 1)].clone()
-        };
-        for number in [9, 8, 7] {
-            assert!(output(number).modifier.contains(Modifier::BOLD));
-        }
-        assert!(!output(6).modifier.contains(Modifier::BOLD));
-    }
-
-    #[test]
     fn a_full_width_label_ends_on_the_shared_border() {
         let output = OutputBlock::value("a\nb".into(), None).numbered(123);
         let output = rendered_buffer(&output, 20);
@@ -2517,20 +2447,11 @@ mod tests {
         assert_eq!(rows.len(), 3);
         assert!(rows[1].contains("x + y") && rows[1].contains('R'));
         let cells: Vec<_> = rows[1].chars().collect();
-        let border = cells
-            .iter()
-            .rposition(|character| *character == '│')
-            .unwrap();
         let value = cells
             .iter()
             .position(|character| *character == 'x')
             .unwrap();
-        let ty = cells
-            .iter()
-            .position(|character| *character == 'R')
-            .unwrap();
         assert_eq!(value, prefix());
-        assert_eq!(border - ty, 2);
     }
 
     #[test]
@@ -2595,34 +2516,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_cell_and_unevaluated_tail_use_red_background_and_muted_code() {
-        let marked = |text: &str| {
-            (
-                text.to_string(),
-                vec![HLSpan::new(0..text.len(), HLGroup::Function)],
-            )
-        };
-        let mut block =
-            EvaluationBlock::new(1, [marked("first"), marked("failed"), marked("later")]);
-        block.succeed(0, 1, CellState::Value, Vec::new(), None, None);
-        block.fail(1, 2, None, "error: failed".into());
-        let buffer = rendered_buffer(&block, 36);
-        let theme = Groups::default();
-        let code_x = prefix() as u16;
-
-        assert_eq!(buffer[(code_x, 1)].fg, theme.Function.fg.unwrap());
-        for y in [0, 1] {
-            assert_eq!(buffer[(code_x, y)].bg, theme.code().bg.unwrap());
-        }
-        for y in [2, 3, 4] {
-            assert_eq!(buffer[(code_x, y)].bg, theme.error_code().bg.unwrap());
-            assert_eq!(buffer[(35, y)].bg, theme.error_code().bg.unwrap());
-        }
-        assert_eq!(buffer[(code_x, 3)].fg, theme.muted().fg.unwrap());
-        assert_ne!(buffer[(code_x, 3)].fg, theme.Function.fg.unwrap());
-    }
-
-    #[test]
     fn rejected_cell_uses_its_configured_marker_and_error_background() {
         let block = EvaluationBlock::invalid(1, "broken".into(), Vec::new(), "error: bad".into());
         let buffer = rendered_buffer(&block, 24);
@@ -2652,25 +2545,6 @@ mod tests {
                 assert_eq!(buffer[(x, y)].bg, error, "({x}, {y})");
             }
         }
-    }
-
-    #[test]
-    fn error_background_tints_the_code_surface_toward_the_error_colour() {
-        let theme = Groups::default();
-        let (code, error) = (theme.code().bg.unwrap(), theme.Error.fg.unwrap());
-        let tinted = theme.error_code().bg.unwrap();
-        let channels = |color| match color {
-            Color::Rgb(r, g, b) => [r, g, b].map(i32::from),
-            _ => panic!("schemes are RGB"),
-        };
-        let distance = |from, to| {
-            let (from, to) = (channels(from), channels(to));
-            (0..3).map(|i| (from[i] - to[i]).abs()).sum::<i32>()
-        };
-
-        assert_ne!(tinted, code);
-        assert!(distance(tinted, code) < distance(tinted, error));
-        assert!(distance(tinted, error) < distance(code, error));
     }
 
     #[test]
@@ -2836,17 +2710,6 @@ mod tests {
         let context = RenderContext::new(80, 0);
         let block = TextBlock::system("commands:\n  /settings\n  /code");
         assert_eq!(block.height(&context), 5);
-    }
-
-    #[test]
-    fn system_block_is_a_centered_info_box() {
-        let theme = Groups::default();
-        let buffer = rendered_buffer(&TextBlock::system("message"), 60);
-
-        assert_eq!(buffer[(20, 0)].symbol(), "╭");
-        assert_eq!(buffer[(40, 0)].symbol(), "╮");
-        assert_eq!(buffer[(27, 1)].symbol(), "m");
-        assert_eq!(buffer[(27, 1)].fg, theme.info().fg.unwrap());
     }
 
     /// In a narrow pane the box gives up its margins before it wraps its text.

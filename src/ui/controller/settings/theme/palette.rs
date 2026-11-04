@@ -45,7 +45,6 @@ impl Palette {
     }
 
     /// Every native color in deterministic name order.
-    #[cfg(test)]
     pub fn colors(&self) -> Vec<(&str, Color)> {
         let mut colors = self
             .0

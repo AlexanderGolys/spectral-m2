@@ -191,13 +191,14 @@ pub fn refresh_cell_size() -> bool {
     true
 }
 
-/// A formula to draw: its TeX, that TeX with theme colour scopes, and the M2 code
-/// a copy of its picture gives.
+/// A formula to draw: its TeX, that TeX with theme colour scopes, the M2 code
+/// a copy of its picture gives, and how far apart its matrix rows stand.
 #[derive(Clone, Copy, Debug)]
 pub struct Typesetting<'a> {
     pub tex: &'a str,
     pub painted: &'a str,
     pub code: &'a str,
+    pub matrix_row_spacing_percent: u16,
 }
 
 /// A formula's placeholder lines and the one its baseline runs through.
@@ -290,8 +291,8 @@ fn gallery() -> MutexGuard<'static, Gallery> {
         .expect("the gallery lock is never held across a panic")
 }
 
-/// A formula as set in one colour.
-type FormulaKey = (String, Rgb);
+/// A formula as set in one colour at one matrix row spacing.
+type FormulaKey = (String, Rgb, u16);
 /// A formula's picture at a column count and cell pixel size, for its copied code.
 /// Values sharing TeX but not code each get their own picture to copy from.
 type ImageKey = (FormulaKey, u16, Size, String, Placement);
@@ -319,18 +320,24 @@ struct Gallery {
 impl Gallery {
     fn formula(
         &mut self,
-        Typesetting { tex, painted, code }: Typesetting,
+        Typesetting {
+            tex,
+            painted,
+            code,
+            matrix_row_spacing_percent,
+        }: Typesetting,
         colour: Rgb,
         canvas: Canvas,
         width: u16,
         placement: Placement,
     ) -> Option<(Arc<KittyImage>, usize)> {
-        let key = (painted.to_string(), colour);
+        let key = (painted.to_string(), colour, matrix_row_spacing_percent);
         let formula = self
             .formulas
             .entry(key.clone())
             .or_insert_with(|| {
-                let typeset = typeset::svg_colored(tex, painted, colour).ok()?;
+                let typeset =
+                    typeset::svg_colored(tex, painted, colour, matrix_row_spacing_percent).ok()?;
                 let tree = Tree::from_str(&typeset.svg, &Options::default()).ok()?;
                 Some(Arc::new(Formula {
                     tree,
@@ -544,7 +551,13 @@ mod tests {
     }
 
     fn formula(tex: &str) -> Formula {
-        let typeset = typeset::svg_colored(tex, tex, Rgb([255, 255, 255])).unwrap();
+        let typeset = typeset::svg_colored(
+            tex,
+            tex,
+            Rgb([255, 255, 255]),
+            UI.matrix_row_spacing_percent,
+        )
+        .unwrap();
         Formula {
             tree: Tree::from_str(&typeset.svg, &Options::default()).unwrap(),
             breaks: typeset.breaks,
@@ -687,6 +700,25 @@ mod tests {
     }
 
     #[test]
+    fn another_matrix_row_spacing_makes_another_picture() {
+        let mut gallery = GALLERY.lock().unwrap();
+        let tex = r"\begin{array}{c}x\\y\end{array}";
+        let formula = |matrix_row_spacing_percent| Typesetting {
+            tex,
+            painted: tex,
+            code: tex,
+            matrix_row_spacing_percent,
+        };
+        let ink = Rgb([1, 2, 3]);
+        let placement = Placement::Alone;
+
+        let tight = gallery.formula(formula(100), ink, CANVAS, 80, placement);
+        let spaced = gallery.formula(formula(200), ink, CANVAS, 80, placement);
+
+        assert!(!Arc::ptr_eq(&tight.unwrap().0, &spaced.unwrap().0));
+    }
+
+    #[test]
     fn a_formula_is_made_once_and_sent_once_whatever_the_wider_width() {
         let mut gallery = GALLERY.lock().unwrap();
         gallery.unsent.clear();
@@ -696,6 +728,7 @@ mod tests {
             tex: "x^2",
             painted: r"\textcolor{red}{x^2}",
             code: "x^2",
+            matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
         };
 
         let placement = Placement::AmongText;

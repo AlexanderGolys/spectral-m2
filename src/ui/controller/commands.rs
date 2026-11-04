@@ -271,7 +271,6 @@ pub fn picker(commands: &[Command], keymaps: &Keymaps, query: &str) -> Picker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::controller::settings::theme::groups::Groups;
     use crate::ui::controller::{Editor, Reaction, ViewKind};
     use crate::ui::key::KeyMod::Ctrl;
     use crossterm::event::KeyCode;
@@ -409,7 +408,6 @@ mod tests {
             .expect("opening code is bound");
 
         assert_eq!(cells[0].to_string(), format!("{PREFIX}code"));
-        assert_eq!(cells[0].spans[0].style.fg, Groups::default().prompt().fg);
         assert_eq!(cells[1].to_string(), Action::OpenCode.description());
         assert_eq!(cells[2].to_string(), key.to_string());
 

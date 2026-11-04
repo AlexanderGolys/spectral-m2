@@ -1,4 +1,5 @@
-//! Event-driven status text rendered below the input.
+//! The status line: the idle line the settings compose, with each side taken
+//! over while the session's state has something to say there.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
@@ -10,25 +11,13 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use super::block::{Element, Text, TextSpan};
 use super::config::UI;
 use super::controller::settings::theme::groups::{scheme, Groups, HLGroup};
+use super::controller::settings::{IdleStatusLine, SegmentPlacement};
 
-/// A request to replace or clear the status line.
-pub enum StatusLineEvent {
-    Show {
-        alignment: Alignment,
-        spans: Vec<TextSpan>,
-    },
-}
-
-/// One aligned status message supplied by a UI controller.
-struct StatusMessage {
-    alignment: Alignment,
-    spans: Vec<TextSpan>,
-}
-
-/// The current status message and its left, centered, and right composition.
+/// The status line's own memory between draws.
 #[derive(Default)]
 pub struct StatusLine {
-    message: Option<StatusMessage>,
+    /// Keys the session's state calls for, in place of the right side.
+    pub state_keys: Option<Vec<TextSpan>>,
 }
 
 /// Where the session works: its colour scheme and directory.
@@ -41,10 +30,11 @@ pub struct StatusLocation {
 /// scheme.
 #[derive(Default)]
 pub struct StatusLineContext {
-    /// Leads the idle left side, its directory trimmed to keep that side within
-    /// half the line.
+    pub idle: IdleStatusLine,
     pub location: Option<StatusLocation>,
-    pub idle_left: Option<TextSpan>,
+    pub hints: Vec<TextSpan>,
+    /// What the session is doing, in place of the left side.
+    pub state: Option<TextSpan>,
     pub center: Option<Vec<TextSpan>>,
     pub right: Vec<TextSpan>,
 }
@@ -52,32 +42,44 @@ pub struct StatusLineContext {
 impl StatusLineContext {
     const SEPARATOR: &str = " · ";
 
-    /// The location, then the session's state, within half of `width` columns.
-    fn idle_left(&self, width: usize) -> Vec<TextSpan> {
-        let Some(location) = &self.location else {
-            return self.idle_left.clone().into_iter().collect();
-        };
-        let separator = || TextSpan::new(Self::SEPARATOR, HLGroup::StatuslineSeparator);
-        let state = self
-            .idle_left
+    /// The idle segments placed on `side`, the directory trimmed to keep them
+    /// within half of `width` columns.
+    fn idle_side(&self, side: SegmentPlacement, width: usize) -> Vec<TextSpan> {
+        let scheme = self
+            .location
+            .as_ref()
+            .filter(|_| self.idle.scheme == side)
+            .map(|location| {
+                vec![TextSpan::new(
+                    location.scheme.clone(),
+                    HLGroup::StatuslineScheme,
+                )]
+            });
+        let hints = (self.idle.hints == side && !self.hints.is_empty()).then(|| self.hints.clone());
+        let fixed = scheme
             .iter()
-            .flat_map(|state| [separator(), state.clone()])
-            .collect::<Vec<_>>();
-        let fixed = [&location.scheme, Self::SEPARATOR]
-            .into_iter()
-            .chain(state.iter().map(|span| &span.content[..]))
-            .map(UnicodeWidthStr::width)
+            .chain(&hints)
+            .map(|segment| {
+                Self::SEPARATOR.width()
+                    + segment
+                        .iter()
+                        .map(|span| span.content.width())
+                        .sum::<usize>()
+            })
             .sum::<usize>();
-        let directory = trimmed(&location.directory, (width / 2).saturating_sub(fixed));
-        let mut spans = vec![TextSpan::new(
-            location.scheme.clone(),
-            HLGroup::StatuslineScheme,
-        )];
-        if !directory.is_empty() {
-            spans.extend([separator(), TextSpan::new(directory, HLGroup::Statusline1)]);
-        }
-        spans.extend(state);
-        spans
+        let directory = self
+            .location
+            .as_ref()
+            .filter(|_| self.idle.directory == side)
+            .map(|location| trimmed(&location.directory, (width / 2).saturating_sub(fixed)))
+            .filter(|directory| !directory.is_empty())
+            .map(|directory| vec![TextSpan::new(directory, HLGroup::Statusline1)]);
+        let separator = TextSpan::new(Self::SEPARATOR, HLGroup::StatuslineSeparator);
+        [scheme, directory, hints]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(&separator)
     }
 }
 
@@ -117,18 +119,13 @@ fn trimmed(path: &str, width: usize) -> String {
 }
 
 impl StatusLine {
-    pub fn handle(&mut self, event: StatusLineEvent) {
-        self.message = match event {
-            StatusLineEvent::Show { alignment, spans } => Some(StatusMessage { alignment, spans }),
-        };
-    }
-
     fn line(spans: &[TextSpan], groups: &Groups, group: HLGroup) -> Line<'static> {
         let mut line = spans.line(groups);
         for (source, span) in spans.iter().zip(&mut line.spans) {
             if !matches!(
                 source.kind,
                 HLGroup::KeymapHint
+                    | HLGroup::Statusline1
                     | HLGroup::StatuslineHintLabel
                     | HLGroup::StatuslineSeparator
                     | HLGroup::StatuslineScheme
@@ -162,26 +159,19 @@ impl Element for StatusLine {
             return;
         }
         let width = usize::from(area.width);
-        let (left, center, right) = match &self.message {
-            None => (
-                context.idle_left(width),
-                context.center.clone(),
-                context.right.clone(),
-            ),
-            Some(message) => match message.alignment {
-                Alignment::Left => (message.spans.clone(), context.center.clone(), Vec::new()),
-                Alignment::Center => (
-                    context.idle_left(width),
-                    Some(message.spans.clone()),
-                    Vec::new(),
-                ),
-                Alignment::Right => (
-                    context.idle_left(width),
-                    context.center.clone(),
-                    message.spans.clone(),
-                ),
-            },
-        };
+        let left = context.state.clone().map_or_else(
+            || context.idle_side(SegmentPlacement::Left, width),
+            |state| vec![state],
+        );
+        let center = context.center.clone().or_else(|| {
+            let idle = context.idle_side(SegmentPlacement::Center, width);
+            (!idle.is_empty()).then_some(idle)
+        });
+        let right = self
+            .state_keys
+            .clone()
+            .or_else(|| (!context.right.is_empty()).then(|| context.right.clone()))
+            .unwrap_or_else(|| context.idle_side(SegmentPlacement::Right, width));
         let groups = scheme();
         let left = Self::line(&left, groups, HLGroup::Statusline1);
         let center = center.map(|spans| Self::line(&spans, groups, HLGroup::Statusline2));
@@ -240,22 +230,91 @@ mod tests {
         assert_eq!(cell.underline_color, ratatui::style::Color::Reset);
     }
 
-    fn left_side(directory: &str, width: u16) -> String {
-        let context = StatusLineContext {
+    fn context(directory: &str) -> StatusLineContext {
+        StatusLineContext {
             location: Some(StatusLocation {
                 scheme: "everforest".into(),
                 directory: directory.into(),
             }),
+            hints: vec![TextSpan::new("hints", HLGroup::StatuslineHintLabel)],
             ..StatusLineContext::default()
-        };
+        }
+    }
+
+    fn drawn(line: &StatusLine, context: &StatusLineContext, width: u16) -> String {
         let area = Rect::new(0, 0, width, 1);
         let mut buffer = Buffer::empty(area);
-        StatusLine::default().render(&context, area, &mut buffer);
+        line.render(context, area, &mut buffer);
         (0..width)
             .map(|x| buffer[(x, 0)].symbol())
             .collect::<String>()
             .trim()
             .to_string()
+    }
+
+    fn left_side(directory: &str, width: u16) -> String {
+        let context = StatusLineContext {
+            hints: Vec::new(),
+            ..context(directory)
+        };
+        drawn(&StatusLine::default(), &context, width)
+    }
+
+    #[test]
+    fn the_idle_line_puts_each_segment_on_its_chosen_side() {
+        use SegmentPlacement::{Center, Hidden, Left, Right};
+        let idle = |scheme, directory, hints| StatusLineContext {
+            idle: IdleStatusLine {
+                scheme,
+                directory,
+                hints,
+            },
+            ..context("~/m2")
+        };
+        let separator = StatusLineContext::SEPARATOR;
+
+        let swapped = drawn(&StatusLine::default(), &idle(Right, Hidden, Left), 60);
+        assert!(swapped.starts_with("hints"), "{swapped}");
+        assert!(swapped.ends_with("everforest"), "{swapped}");
+        assert!(!swapped.contains("~/m2"), "{swapped}");
+
+        let together = drawn(&StatusLine::default(), &idle(Center, Center, Center), 60);
+        assert_eq!(
+            together,
+            format!("everforest{separator}~/m2{separator}hints")
+        );
+
+        assert_eq!(
+            drawn(&StatusLine::default(), &idle(Hidden, Hidden, Hidden), 60),
+            ""
+        );
+    }
+
+    #[test]
+    fn a_running_state_takes_over_only_the_left_side() {
+        let running = StatusLineContext {
+            state: Some(TextSpan::new("running", HLGroup::StatuslineWarning)),
+            ..context("~/m2")
+        };
+
+        let shown = drawn(&StatusLine::default(), &running, 60);
+
+        assert!(shown.starts_with("running"), "{shown}");
+        assert!(!shown.contains("everforest"), "{shown}");
+        assert!(shown.ends_with("hints"), "{shown}");
+    }
+
+    #[test]
+    fn state_keys_take_over_only_the_right_side() {
+        let line = StatusLine {
+            state_keys: Some(vec![TextSpan::new("keys", HLGroup::StatuslineHintLabel)]),
+        };
+
+        let shown = drawn(&line, &context("~/m2"), 60);
+
+        assert!(shown.starts_with("everforest"), "{shown}");
+        assert!(shown.ends_with("keys"), "{shown}");
+        assert!(!shown.contains("hints"), "{shown}");
     }
 
     #[test]

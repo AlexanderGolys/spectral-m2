@@ -58,6 +58,7 @@ tree-sitter-macaulay2 = "=6.2.0"
 
 [lints.rust]
 missing_docs = "deny"
+unreachable_patterns = "allow"
 
 [dev-dependencies]
 

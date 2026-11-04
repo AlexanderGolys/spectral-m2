@@ -36,6 +36,7 @@ impl Hint {
         "Newline ends expression if it can, otherwise acts as whitespace",
         "Start typing `/` to open sp2 commands list",
         "Use `/code` in the command picker to toggle submitted session code",
+        "Jump to the content of markup link by clicking it with ctrl key",
     ];
 }
 

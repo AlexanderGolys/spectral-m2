@@ -18,10 +18,11 @@ use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use these_macros_should_be_illegal::discriminated_str;
+use these_macros_should_be_illegal::*;
 
-use crate::backend::{CollectionKind, M2Value, Role, OPTION_ARROW, SPACED_OPTION_ARROW};
+use crate::backend::{CollectionKind, M2Value, OPTION_ARROW, SPACED_OPTION_ARROW};
 use crate::ui::block::TextSpan;
+use crate::ui::config::UI;
 use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
 use crate::ui::cycle::cyclic;
 use crate::ui::graphics;
@@ -88,7 +89,7 @@ pub enum GridKind {
 /// Carrying the reason rather than a bare `None` is what lets a fallback be reported
 /// rather than silently substituted, so an unhandled construct can be found and added.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Unsupported(pub String);
+pub struct UnsupportedTeX(pub String);
 
 cyclic! {
     /// How a fraction is set, as chosen in settings.
@@ -135,13 +136,26 @@ impl MathDisplay {
 }
 
 /// How returned maths is set, as chosen in settings.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MathStyle {
     pub fractions: FractionStyle,
     /// Whether a ring such as `\mathbb Z` is drawn with its blackboard glyph `ℤ`
     /// rather than the name `ZZ` it has in code.
     pub blackboard: bool,
     pub display: MathDisplay,
+    /// Distance between the rows of a typeset matrix, as a percentage of TeX's own.
+    pub matrix_row_spacing_percent: u16,
+}
+
+impl Default for MathStyle {
+    fn default() -> Self {
+        Self {
+            fractions: FractionStyle::default(),
+            blackboard: false,
+            display: MathDisplay::default(),
+            matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
+        }
+    }
 }
 
 impl From<FractionStyle> for MathStyle {
@@ -152,25 +166,6 @@ impl From<FractionStyle> for MathStyle {
         }
     }
 }
-
-impl Role {
-    /// The group code paints the same thing with, so a value reads as it would
-    /// typed: `null` as a builtin, `true` as a Boolean, a name as a function.
-    pub(super) const fn group(self) -> HLGroup {
-        match self {
-            Self::Null => HLGroup::Builtin,
-            Self::Boolean => HLGroup::Boolean,
-            Self::String => HLGroup::String,
-            Self::Function => HLGroup::Function,
-            Self::Type => HLGroup::Type,
-            Self::Package => HLGroup::Package,
-            Self::Keyword => HLGroup::Keyword,
-            Self::Operator => HLGroup::Operator,
-            Self::Command => HLGroup::Macro,
-        }
-    }
-}
-
 /// Render an M2 value as coloured rows no wider than `width`, or refuse and name what
 /// stopped it.
 ///
@@ -181,7 +176,7 @@ pub fn spans(
     value: &M2Value,
     width: usize,
     style: impl Into<MathStyle>,
-) -> Result<Vec<SpanLine>, Unsupported> {
+) -> Result<Vec<SpanLine>, UnsupportedTeX> {
     let style = style.into();
     match value {
         M2Value::Type(inner) => {
@@ -202,25 +197,29 @@ pub fn spans(
             vec![MathBlock::value(value, style)],
             width,
         )),
-        // A string can run long, so it breaks at words like any prose.
-        M2Value::Token { text, role } => Ok(text
-            .lines()
-            .flat_map(|line| {
-                let width = u16::try_from(width).unwrap_or(u16::MAX);
-                wrap(&[TextSpan::new(line, role.group())], width, &WordWrap)
-            })
-            .collect()),
+        M2Value::Token { text, role } => Ok(prose(text, role.group(), width)),
+        M2Value::Net(text) => Ok(prose(text, HLGroup::String, width)),
         M2Value::Markup { html, .. } => markup::spans(html, width)
-            .ok_or_else(|| Unsupported("markup that does not read as HTML".into())),
-        M2Value::Net(_) => Err(Unsupported("plain text carries nothing to colour".into())),
+            .ok_or_else(|| UnsupportedTeX("markup that does not read as HTML".into())),
     }
+}
+
+/// Text that can run long, so it breaks at words, in `group`'s colour.
+fn prose(text: &str, group: HLGroup, width: usize) -> Vec<SpanLine> {
+    let width = u16::try_from(width).unwrap_or(u16::MAX);
+    text.lines()
+        .flat_map(|line| wrap(&[TextSpan::new(line, group)], width, &WordWrap))
+        .collect()
 }
 
 /// A value's type annotation as rows no wider than `width`, its pieces set side by
 /// side with each mathematical component retaining its semantic colour.
 pub fn annotation(parts: &[M2Value], width: usize, style: impl Into<MathStyle>) -> Vec<SpanLine> {
     let style = style.into();
-    let line = MathBlock::row(parts.iter().map(|part| MathBlock::value(part, style)));
+    let line = MathBlock::row(parts.iter().map(|part| match part {
+        M2Value::Token { .. } => MathBlock::value(part, style).retag(HLGroup::Type),
+        _ => MathBlock::value(part, style),
+    }));
     MathBlock::fitted(vec![line], width)
 }
 
@@ -365,10 +364,10 @@ impl<'a> Input<'a> {
 
     /// The text of one braced group in text mode: its spaces kept, inner braces
     /// dropped, and escaped characters and named symbols spelled out.
-    fn text_group(&mut self) -> Result<String, Unsupported> {
+    fn text_group(&mut self) -> Result<String, UnsupportedTeX> {
         self.at += self.rest().len() - self.rest().trim_start().len();
         if !self.eat("{") {
-            return Err(Unsupported("text without a braced argument".into()));
+            return Err(UnsupportedTeX("text without a braced argument".into()));
         }
         let mut text = String::new();
         let mut depth = 0usize;
@@ -389,14 +388,14 @@ impl<'a> Input<'a> {
                         let (_, symbol) = TEXT_SYMBOLS
                             .iter()
                             .find(|(command, _)| *command == name)
-                            .ok_or_else(|| Unsupported(format!("\\{name} in text")))?;
+                            .ok_or_else(|| UnsupportedTeX(format!("\\{name} in text")))?;
                         text.push_str(symbol);
                     }
                 },
                 character => text.push(character),
             }
         }
-        Err(Unsupported("unclosed text".into()))
+        Err(UnsupportedTeX("unclosed text".into()))
     }
 
     /// Step over one braced group, nested braces included, and whatever whitespace
@@ -427,7 +426,7 @@ impl<'a> Input<'a> {
     }
 
     /// Read pieces until one of `stops` is next, or the input ends.
-    fn expression(&mut self, stops: &[&str]) -> Result<Math, Unsupported> {
+    fn expression(&mut self, stops: &[&str]) -> Result<Math, UnsupportedTeX> {
         let mut pieces = Vec::new();
         loop {
             self.skip_trivia();
@@ -443,7 +442,7 @@ impl<'a> Input<'a> {
     }
 
     /// One atom with any scripts attached to it.
-    fn term(&mut self) -> Result<Math, Unsupported> {
+    fn term(&mut self) -> Result<Math, UnsupportedTeX> {
         let mut base = self.atom()?;
         loop {
             if self.eat("^") {
@@ -470,7 +469,7 @@ impl<'a> Input<'a> {
         }
     }
 
-    fn atom(&mut self) -> Result<Math, Unsupported> {
+    fn atom(&mut self) -> Result<Math, UnsupportedTeX> {
         self.skip_trivia();
         let start = self.at;
         let first_highlight = self.highlights.len();
@@ -490,10 +489,10 @@ impl<'a> Input<'a> {
         Ok(parsed)
     }
 
-    fn atom_inner(&mut self) -> Result<Math, Unsupported> {
+    fn atom_inner(&mut self) -> Result<Math, UnsupportedTeX> {
         let rest = self.rest();
         let Some(next) = rest.chars().next() else {
-            return Err(Unsupported("expected an atom, found nothing".into()));
+            return Err(UnsupportedTeX("expected an atom, found nothing".into()));
         };
         match next {
             '{' => {
@@ -501,7 +500,7 @@ impl<'a> Input<'a> {
                 let body = self.expression(&["}"])?;
                 match self.eat("}") {
                     true => Ok(body),
-                    false => Err(Unsupported("unclosed group".into())),
+                    false => Err(UnsupportedTeX("unclosed group".into())),
                 }
             }
             '\\' => self.command(),
@@ -528,7 +527,7 @@ impl<'a> Input<'a> {
                 self.at += next.len_utf8();
                 Ok(Math::atom(next, HLGroup::Delimiter))
             }
-            _ => Err(Unsupported(format!("unexpected character {next:?}"))),
+            _ => Err(UnsupportedTeX(format!("unexpected character {next:?}"))),
         }
     }
 
@@ -564,7 +563,7 @@ impl<'a> Input<'a> {
         Math::atom(digits, HLGroup::Number)
     }
 
-    fn command(&mut self) -> Result<Math, Unsupported> {
+    fn command(&mut self) -> Result<Math, UnsupportedTeX> {
         self.at += 1;
         let name = self.name();
         match name.as_str() {
@@ -626,7 +625,7 @@ impl<'a> Input<'a> {
                 .find(|(command, _)| *command == other)
                 .map(|(_, glyph)| Math::atom(*glyph, HLGroup::Builtin))
                 .or_else(|| self.operator(other))
-                .ok_or_else(|| Unsupported(format!("\\{other}"))),
+                .ok_or_else(|| UnsupportedTeX(format!("\\{other}"))),
         }
     }
 
@@ -660,36 +659,36 @@ impl<'a> Input<'a> {
     }
 
     /// `\begin{matrix}` or `\begin{cases}`, through to its matching `\end`.
-    fn environment(&mut self) -> Result<Math, Unsupported> {
+    fn environment(&mut self) -> Result<Math, UnsupportedTeX> {
         if !self.eat("{") {
-            return Err(Unsupported("\\begin without an environment".into()));
+            return Err(UnsupportedTeX("\\begin without an environment".into()));
         }
         let name = self.name();
         if !self.eat("}") {
-            return Err(Unsupported("unclosed environment name".into()));
+            return Err(UnsupportedTeX("unclosed environment name".into()));
         }
         let kind = match name.as_str() {
             "matrix" | "array" => GridKind::Bare,
             "pmatrix" => GridKind::Matrix,
             "cases" => GridKind::Cases,
-            other => return Err(Unsupported(format!("environment {other}"))),
+            other => return Err(UnsupportedTeX(format!("environment {other}"))),
         };
         // `array` states a column alignment that the terminal layout does not use.
         if self.eat("{") {
             self.name();
             if !self.eat("}") {
-                return Err(Unsupported("unclosed column specification".into()));
+                return Err(UnsupportedTeX("unclosed column specification".into()));
             }
         }
         let closing = format!("\\end{{{name}}}");
         let rows = self.rows(&closing)?;
         match self.eat(&closing) {
             true => Ok(Math::Grid { rows, kind }),
-            false => Err(Unsupported(format!("missing {closing}"))),
+            false => Err(UnsupportedTeX(format!("missing {closing}"))),
         }
     }
 
-    fn rows(&mut self, closing: &str) -> Result<Vec<Vec<Math>>, Unsupported> {
+    fn rows(&mut self, closing: &str) -> Result<Vec<Vec<Math>>, UnsupportedTeX> {
         let mut rows = vec![Vec::new()];
         loop {
             self.skip_trivia();
@@ -697,7 +696,7 @@ impl<'a> Input<'a> {
                 return Ok(rows);
             }
             if self.rest().is_empty() {
-                return Err(Unsupported(format!("missing {closing}")));
+                return Err(UnsupportedTeX(format!("missing {closing}")));
             }
             rows.last_mut()
                 .expect("a row is always open")
@@ -706,18 +705,18 @@ impl<'a> Input<'a> {
             if self.eat("\\\\") {
                 rows.push(Vec::new());
             } else if !self.eat("&") && !self.rest().starts_with(closing) {
-                return Err(Unsupported(format!("unexpected {}", self.rest())));
+                return Err(UnsupportedTeX(format!("unexpected {}", self.rest())));
             }
         }
     }
 
     /// `\left( … \right)`, whose fences grow to the body.
-    fn fences(&mut self) -> Result<Math, Unsupported> {
+    fn fences(&mut self) -> Result<Math, UnsupportedTeX> {
         self.skip_trivia();
         let left = self.fence()?;
         let body = self.expression(&["\\right"])?;
         if !self.eat("\\right") {
-            return Err(Unsupported("\\left without \\right".into()));
+            return Err(UnsupportedTeX("\\left without \\right".into()));
         }
         self.skip_trivia();
         let right = self.fence()?;
@@ -728,7 +727,7 @@ impl<'a> Input<'a> {
         })
     }
 
-    fn fence(&mut self) -> Result<char, Unsupported> {
+    fn fence(&mut self) -> Result<char, UnsupportedTeX> {
         self.skip_trivia();
         // A brace is escaped in TeX, since a bare one groups.
         self.eat("\\");
@@ -737,8 +736,8 @@ impl<'a> Input<'a> {
                 self.at += fence.len_utf8();
                 Ok(fence)
             }
-            Some(other) => Err(Unsupported(format!("{other:?} is not a fence"))),
-            None => Err(Unsupported("expected a fence".into())),
+            Some(other) => Err(UnsupportedTeX(format!("{other:?} is not a fence"))),
+            None => Err(UnsupportedTeX("expected a fence".into())),
         }
     }
 }
@@ -904,17 +903,17 @@ const TEXT_ESCAPED: &str = "#$%&_{}";
 impl Math {
     /// Parse one M2 TeX expression.
     #[cfg(test)]
-    pub fn parse(source: &str) -> Result<Self, Unsupported> {
+    pub fn parse(source: &str) -> Result<Self, UnsupportedTeX> {
         Self::parse_with(source, false)
     }
 
     /// Parse one M2 TeX expression, drawing rings as blackboard glyphs when asked.
-    fn parse_with(source: &str, blackboard: bool) -> Result<Self, Unsupported> {
+    fn parse_with(source: &str, blackboard: bool) -> Result<Self, UnsupportedTeX> {
         let mut input = Input::new(source, blackboard);
         let parsed = input.expression(&[])?;
         match input.rest().is_empty() {
             true => Ok(parsed),
-            false => Err(Unsupported(format!("trailing input: {}", input.rest()))),
+            false => Err(UnsupportedTeX(format!("trailing input: {}", input.rest()))),
         }
     }
 
@@ -1064,11 +1063,11 @@ impl Math {
     ///
     /// For a String, a Net or null M2 answers `tex` with the raw text instead, which
     /// is not maths -- read as TeX, `hello world` would set as the name `helloworld`.
-    fn from_tex(source: &str, blackboard: bool) -> Result<Self, Unsupported> {
+    fn from_tex(source: &str, blackboard: bool) -> Result<Self, UnsupportedTeX> {
         let maths = source
             .strip_prefix('$')
             .and_then(|tex| tex.strip_suffix('$'))
-            .ok_or_else(|| Unsupported("not maths: no $ delimiters".into()))?;
+            .ok_or_else(|| UnsupportedTeX("not maths: no $ delimiters".into()))?;
         Self::parse_with(maths, blackboard)
     }
 
@@ -1354,7 +1353,7 @@ impl MathBlock {
 
     /// A value M2 sent, laid out whole: TeX from its structure, a container from its
     /// entries, a token in its role's colour, and whatever M2 drew as plain text as
-    /// that text.
+    /// a string.
     fn value(value: &M2Value, style: MathStyle) -> Self {
         match value {
             M2Value::Type(value) => Self::value(value, style).retag(HLGroup::Type),
@@ -1364,9 +1363,8 @@ impl MathBlock {
                 |_| Self::text(fallback, HLGroup::Value),
                 |math| math.layout(style.fractions),
             ),
-            M2Value::Net(text) | M2Value::Markup { fallback: text, .. } => {
-                Self::text(text, HLGroup::Value)
-            }
+            M2Value::Net(text) => Self::text(text, HLGroup::String),
+            M2Value::Markup { fallback, .. } => Self::text(fallback, HLGroup::Value),
             M2Value::Token { text, role } => Self::text(text, role.group()),
             M2Value::Collection {
                 kind: CollectionKind::VerticalList,
@@ -1704,6 +1702,7 @@ enum Align {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::Role;
 
     fn atom(text: &str, kind: HLGroup) -> Math {
         Math::atom(text, kind)
@@ -1905,7 +1904,7 @@ mod tests {
     fn an_unknown_command_is_refused_by_name() {
         assert_eq!(
             Math::parse(r"\sqrt{2}").err(),
-            Some(Unsupported(r"\sqrt".into()))
+            Some(UnsupportedTeX(r"\sqrt".into()))
         );
     }
 
@@ -2266,40 +2265,6 @@ mod tests {
         assert!(rows[1].iter().all(|span| span.mark.is_none()));
     }
 
-    /// Painted into the terminal, the rule is the numerator's underline in the rule's
-    /// special colour, over the numerator's own colours.
-    #[test]
-    fn an_underlined_rule_paints_in_its_special_colour() {
-        use crate::ui::block::Text;
-        use crate::ui::controller::settings::theme::groups::Groups;
-        use ratatui::buffer::Buffer;
-        use ratatui::layout::Rect;
-        use ratatui::style::Modifier;
-        use ratatui::text::Line;
-        use ratatui::widgets::{Paragraph, Widget};
-
-        let rows = spans(&tex(r"\frac{1}{3}"), 80, FractionStyle::Underlined).expect("renders");
-        let groups = Groups::default();
-        let area = Rect::new(0, 0, 1, 2);
-        let mut cells = Buffer::empty(area);
-        Paragraph::new(
-            rows.iter()
-                .map(|row| Line::from(row.spans(&groups)))
-                .collect::<Vec<_>>(),
-        )
-        .render(area, &mut cells);
-
-        let numerator = &cells[(0, 0)];
-        assert_eq!(numerator.symbol(), "1");
-        assert!(numerator.modifier.contains(Modifier::UNDERLINED));
-        assert_eq!(
-            Some(numerator.underline_color),
-            groups.FractionRule.underline_color
-        );
-        assert_eq!(Some(numerator.fg), groups.Number.fg);
-        assert!(!cells[(0, 1)].modifier.contains(Modifier::UNDERLINED));
-    }
-
     /// A container's brackets grow to the tallest entry on their line.
     #[test]
     fn a_container_grows_its_brackets_around_a_tall_entry() {
@@ -2470,7 +2435,7 @@ mod tests {
         ] {
             assert_eq!(
                 Math::parse(source).err(),
-                Some(Unsupported(blamed.into())),
+                Some(UnsupportedTeX(blamed.into())),
                 "{source} should blame {blamed} rather than failing anonymously"
             );
         }

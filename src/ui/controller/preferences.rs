@@ -7,7 +7,7 @@ use these_macros_should_be_illegal::discriminated_str;
 use super::picker::{PickerItem, PickerOption, PickerTab, PickerValue, Row};
 use super::settings::theme::groups::scheme;
 use super::settings::theme::Appearance;
-use super::settings::{Preferences, StatusLinePosition};
+use super::settings::{Preferences, SegmentPlacement, StatusLinePosition};
 use super::EditorEvent;
 use crate::code::semantic::SERVER_EXECUTABLE;
 use crate::input::InputSetting;
@@ -35,12 +35,20 @@ const TABS: &[SettingsTab] = &[
     SettingsTab {
         label: "layout",
         settings: &[
-            Setting::Statusline,
             Setting::Input(InputSetting::MaxHeight),
             Setting::OutputRows,
             Setting::Input(InputSetting::Scrolloff),
             Setting::Input(InputSetting::CompleteAfter),
             Setting::Input(InputSetting::HintCompletionBelow),
+        ],
+    },
+    SettingsTab {
+        label: "statusline",
+        settings: &[
+            Setting::StatuslinePosition,
+            Setting::StatuslineScheme,
+            Setting::StatuslineDirectory,
+            Setting::StatuslineHints,
         ],
     },
     SettingsTab {
@@ -51,6 +59,7 @@ const TABS: &[SettingsTab] = &[
             Setting::Maths,
             Setting::Fractions,
             Setting::MathFonts,
+            Setting::MatrixRowSpacing,
             Setting::ExampleTimeout,
         ],
     },
@@ -83,6 +92,13 @@ fn switch(chosen: &bool, on: &str) -> PickerValue {
     PickerValue::among(&[false, true], chosen, |&chosen| match chosen {
         true => on.into(),
         false => "off".into(),
+    })
+}
+
+/// The side `chosen` names, among those a status line segment may take.
+fn placement(chosen: &SegmentPlacement) -> PickerValue {
+    PickerValue::among(SegmentPlacement::CHOICES, chosen, |&placement| {
+        placement.label().into()
     })
 }
 
@@ -132,12 +148,16 @@ impl AppearanceField {
 enum Setting {
     Appearance(AppearanceField),
     Input(InputSetting),
-    Statusline,
+    StatuslinePosition,
+    StatuslineScheme,
+    StatuslineDirectory,
+    StatuslineHints,
     LanguageServer,
     SemanticHighlighting,
     Maths,
     Fractions,
     MathFonts,
+    MatrixRowSpacing,
     OutputRows,
     ExampleTimeout,
 }
@@ -148,12 +168,16 @@ impl Setting {
         match self {
             Self::Appearance(field) => field.label(),
             Self::Input(field) => field.label(),
-            Self::Statusline => "statusline",
+            Self::StatuslinePosition => "position",
+            Self::StatuslineScheme => "colour scheme",
+            Self::StatuslineDirectory => "directory",
+            Self::StatuslineHints => "key hints",
             Self::LanguageServer => "language server",
             Self::SemanticHighlighting => "semantic highlighting",
             Self::Maths => "maths",
             Self::Fractions => "fractions",
             Self::MathFonts => "math fonts",
+            Self::MatrixRowSpacing => "matrix row spacing",
             Self::OutputRows => "max output height",
             Self::ExampleTimeout => "compute examples",
         }
@@ -170,10 +194,16 @@ impl Setting {
             Self::Input(field) => field.description(),
             Self::LanguageServer => "analyse the session's source with m2-ls when it is installed",
             Self::SemanticHighlighting => "enrich source colors using the language server",
-            Self::Statusline => "where the status line sits",
+            Self::StatuslinePosition => "where the status line sits",
+            Self::StatuslineScheme => "where the idle line names the colour scheme",
+            Self::StatuslineDirectory => "where the idle line names the working directory",
+            Self::StatuslineHints => "where the idle line names the commands and settings keys",
             Self::Maths => "draw returned maths as Unicode text, plain ASCII, or typeset pictures",
             Self::Fractions => "how rational values are drawn",
             Self::MathFonts => "use TeX math fonts like mathbb, mathcal",
+            Self::MatrixRowSpacing => {
+                "distance between the rows of a typeset matrix, relative to TeX's own"
+            }
             Self::OutputRows => "rows a value shows before its middle folds away",
             Self::ExampleTimeout => {
                 "run documentation examples again, each for at most this long, to draw their values"
@@ -190,11 +220,14 @@ impl Setting {
                 |&appearance| field.shown(appearance).into(),
             ),
             Self::Input(field) => PickerValue::Stepped(field.value(preferences.input)),
-            Self::Statusline => PickerValue::among(
+            Self::StatuslinePosition => PickerValue::among(
                 StatusLinePosition::CHOICES,
                 &editor.statusline,
                 |&position| position.label().into(),
             ),
+            Self::StatuslineScheme => placement(&editor.idle_statusline.scheme),
+            Self::StatuslineDirectory => placement(&editor.idle_statusline.directory),
+            Self::StatuslineHints => placement(&editor.idle_statusline.hints),
             Self::Maths => PickerValue::among(MathDisplay::CHOICES, &editor.maths, |&display| {
                 PickerOption {
                     label: display.label().to_string(),
@@ -210,6 +243,9 @@ impl Setting {
                 })
             }
             Self::MathFonts => switch(&editor.math_fonts, "on"),
+            Self::MatrixRowSpacing => {
+                PickerValue::Stepped(format!("{}%", editor.matrix_row_spacing_percent))
+            }
             Self::LanguageServer => switch(&editor.language_server, SERVER_EXECUTABLE),
             Self::SemanticHighlighting => switch(&editor.semantic_colors(), "on"),
             Self::OutputRows => PickerValue::Stepped(format!("{} rows", editor.output_rows)),
@@ -229,10 +265,23 @@ impl Setting {
                 preferences.appearance = cycled(&field.choices(appearance), appearance, delta);
             }
             Self::Input(field) => field.adjust(&mut preferences.input, delta),
-            Self::Statusline => editor.statusline = editor.statusline.cycle(delta),
+            Self::StatuslinePosition => editor.statusline = editor.statusline.cycle(delta),
+            Self::StatuslineScheme => {
+                let scheme = &mut editor.idle_statusline.scheme;
+                *scheme = scheme.cycle(delta);
+            }
+            Self::StatuslineDirectory => {
+                let directory = &mut editor.idle_statusline.directory;
+                *directory = directory.cycle(delta);
+            }
+            Self::StatuslineHints => {
+                let hints = &mut editor.idle_statusline.hints;
+                *hints = hints.cycle(delta);
+            }
             Self::Maths => editor.maths = editor.maths.cycle(delta),
             Self::Fractions => editor.fractions = editor.fractions.cycle(delta),
             Self::MathFonts => editor.math_fonts = !editor.math_fonts,
+            Self::MatrixRowSpacing => editor.adjust_matrix_row_spacing(delta),
             Self::LanguageServer => editor.language_server = !editor.language_server,
             Self::SemanticHighlighting => {
                 editor.semantic_highlighting = !editor.semantic_highlighting
@@ -255,13 +304,17 @@ impl Setting {
     }
 
     /// Whether the setting takes effect: semantic colors need the language
-    /// server, and typeset pictures set fractions and fonts themselves.
+    /// server, typeset pictures set fractions and fonts themselves, only they
+    /// space matrix rows, and segments need a status line to sit on.
     fn applies(self, preferences: Preferences) -> bool {
         let editor = preferences.editor;
+        let pictured = editor.maths == MathDisplay::Typeset && editor.maths.available();
         match self {
             Self::SemanticHighlighting => editor.language_server,
-            Self::Fractions | Self::MathFonts => {
-                editor.maths != MathDisplay::Typeset || !editor.maths.available()
+            Self::Fractions | Self::MathFonts => !pictured,
+            Self::MatrixRowSpacing => pictured,
+            Self::StatuslineScheme | Self::StatuslineDirectory | Self::StatuslineHints => {
+                editor.statusline != StatusLinePosition::Off
             }
             _ => true,
         }
@@ -298,6 +351,35 @@ mod tests {
         preferences.editor.maths = MathDisplay::Unicode;
         for setting in [Setting::Fractions, Setting::MathFonts] {
             assert!(setting.row(preferences).selectable());
+        }
+    }
+
+    #[test]
+    fn matrix_row_spacing_is_only_adjustable_while_maths_is_drawn_as_pictures() {
+        let mut preferences = Preferences::default();
+        preferences.editor.maths = MathDisplay::Typeset;
+        assert_eq!(
+            Setting::MatrixRowSpacing.row(preferences).selectable(),
+            MathDisplay::Typeset.available()
+        );
+        preferences.editor.maths = MathDisplay::Unicode;
+        assert!(!Setting::MatrixRowSpacing.row(preferences).selectable());
+    }
+
+    #[test]
+    fn segment_rows_lock_while_the_status_line_is_off() {
+        let segments = [
+            Setting::StatuslineScheme,
+            Setting::StatuslineDirectory,
+            Setting::StatuslineHints,
+        ];
+        let mut preferences = Preferences::default();
+        for segment in segments {
+            assert!(segment.row(preferences).selectable());
+        }
+        preferences.editor.statusline = StatusLinePosition::Off;
+        for segment in segments {
+            assert!(!segment.row(preferences).selectable());
         }
     }
 

@@ -14,7 +14,7 @@ Muted = { required = true }
 Faint = { required = true }
 Keyword = { required = true, captures = ["keyword", "keyword.modifier"] }
 Function = { required = true, captures = ["function", "function.call"] }
-Type = { required = true, captures = ["type", "type.parameter"] }
+Type = { required = true, captures = ["type"] }
 String = { required = true, captures = ["string"] }
 Number = { required = true, captures = ["number"] }
 Operator = { required = true, captures = ["operator", "keyword.operator"] }
@@ -52,7 +52,7 @@ Debug = { link = "Keyword", captures = ["keyword.debug"] }
 Delimiter = { link = "Muted", captures = ["punctuation.delimiter"] }
 Punctuation = { link = "Muted", captures = ["punctuation.bracket"] }
 Variable = { link = "Text", captures = ["variable"] }
-Method = { link = "Function" }
+Method = { link = "Function", captures = ["type.parameter"] }
 TypeParameter = { link = "Type" }
 SemanticCommand = { link = "Function" }
 RingGenerator = { link = "Parameter" }

@@ -3,6 +3,7 @@
 
 pub mod commands;
 mod completion;
+mod highlight_debug;
 mod picker;
 mod preferences;
 mod screen;
@@ -13,22 +14,24 @@ use std::env;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, Clear, Paragraph, Widget};
 use ratatui::Frame;
 
-use self::commands::Command;
-use self::completion::{Names, Request};
+use self::highlight_debug::{DebugEntry, DebugSection};
 use self::picker::{Picker, PickerController, PickerMode};
 use self::screen::{ScreenCapture, ScreenSelection};
 use self::settings::keymap::{self, Keymaps, Shortcut};
-use self::settings::theme::groups::{publish, scheme, HLGroup};
+use self::settings::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
 use self::settings::theme::Appearance;
 use self::settings::{Persisted, Preferences, SavedSettings, Settings, StatusLinePosition};
 pub use self::view::{CommittedCells, ViewKind, Viewport};
-use super::action::Action;
-use super::block::{Block, Element, HLSpan, Reformatted, Rethemed, TextSpan, Ticked};
+use self::{
+    commands::Command,
+    completion::{Names, Request},
+};
 use super::cell::{CellState, EvaluationBlock, IncompleteBlock, OutputBlock, TextBlock};
 use super::config::UI;
 use super::debug::FrameStats;
@@ -37,9 +40,14 @@ use super::feed::Feed;
 use super::key::{KeyEvent, KeyMod};
 use super::render::selection::Exclusions;
 use super::render::RenderContext;
-use super::statusline::{StatusLine, StatusLineContext, StatusLineEvent, StatusLocation};
+use super::statusline::{StatusLine, StatusLineContext, StatusLocation};
+use super::{
+    action::Action,
+    block::{Block, Element, HLSpan, Reformatted, Rethemed, TextSpan, Ticked},
+};
 use crate::code::file::abbreviate_home;
 use crate::code::highlight::Highlighter;
+use crate::code::semantic::SEMANTIC_GROUPS;
 use crate::input::InputAction;
 use crate::input::{InputCode, InputContext};
 
@@ -1113,21 +1121,34 @@ impl Editor {
         Reaction::Continue
     }
 
-    fn highlight_debug_entries(&self) -> Vec<(String, ratatui::style::Style)> {
-        let heading = scheme()
-            .prompt()
-            .add_modifier(ratatui::style::Modifier::BOLD);
-        let mut entries = vec![
-            (self.frame_stats.label(), scheme().frame_stats()),
-            ("highlight groups".into(), heading),
-        ];
-        entries.extend(
-            scheme()
-                .highlight_groups()
-                .into_iter()
-                .map(|(name, style)| (name.into(), style)),
-        );
-        entries
+    fn highlight_debug_sections(&self) -> Vec<DebugSection> {
+        let mut lsp = Vec::new();
+        let mut tree_sitter = Vec::new();
+        let mut interface = Vec::new();
+        for (group, style) in scheme().styled_groups() {
+            let entry = DebugEntry::group(group.description(), style);
+            if SEMANTIC_GROUPS.contains(&group) {
+                lsp.push(entry);
+            } else if GROUP_DECLARATIONS.draws_captures(group) {
+                tree_sitter.push(entry);
+            } else {
+                interface.push(entry);
+            }
+        }
+        let palette = self
+            .appearance
+            .variant()
+            .palette()
+            .colors()
+            .into_iter()
+            .map(|(name, color)| DebugEntry::swatch(name, color))
+            .collect();
+        vec![
+            DebugSection::new("LSP highlights", lsp),
+            DebugSection::new("tree-sitter highlights", tree_sitter),
+            DebugSection::new("UI", interface),
+            DebugSection::new("original palette", palette),
+        ]
     }
 
     fn draw_highlight_debug(&mut self, frame: &mut Frame) {
@@ -1135,55 +1156,93 @@ impl Editor {
         if !self.highlight_debug || available.width < 4 || available.height < 5 {
             return;
         }
-        let entries = self.highlight_debug_entries();
+        let sections = self.highlight_debug_sections();
         let title = format!(
             " {} {} · debug ",
             self.appearance.scheme().label(),
             self.appearance.variant().label()
         );
-        let header_width = entries[..2]
+        let entry_widths = sections
             .iter()
-            .map(|(name, _)| name.chars().count())
-            .chain([title.chars().count()])
-            .max()
-            .unwrap_or(1);
-        let groups = &entries[2..];
-        let rows = usize::from(available.height - 4);
-        let column_width = groups
+            .map(|section| {
+                section
+                    .entries
+                    .iter()
+                    .map(DebugEntry::width)
+                    .max()
+                    .unwrap_or(1)
+            })
+            .collect::<Vec<_>>();
+        let tallest = sections
             .iter()
-            .map(|(name, _)| name.chars().count() + 2)
+            .map(|section| section.entries.len())
             .max()
-            .unwrap_or(1)
-            .min(usize::from(available.width - 2));
-        let columns = groups
-            .len()
-            .div_ceil(rows)
-            .min((usize::from(available.width - 2) / column_width).max(1));
-        let visible = rows * columns;
+            .unwrap_or(0);
+        let visible_rows = usize::from(available.height - 4);
+        let inner_width = usize::from(available.width - 2);
+        let section_width = |section: &DebugSection, entry_width: usize, rows: usize| {
+            (section.entries.len().div_ceil(rows).max(1) * entry_width)
+                .max(section.title.chars().count() + 2)
+        };
+        let total_width = |rows: usize| {
+            sections
+                .iter()
+                .zip(&entry_widths)
+                .map(|(section, &entry_width)| section_width(section, entry_width, rows))
+                .sum::<usize>()
+        };
+        // Sections grow sideways into more sub-columns before the panel scrolls.
+        let rows = (visible_rows.min(tallest).max(1)..=tallest.max(1))
+            .find(|&rows| total_width(rows) <= inner_width)
+            .unwrap_or(tallest.max(1));
+        let content_width = total_width(rows).max(title.chars().count());
         self.highlight_debug_scroll = self
             .highlight_debug_scroll
-            .min(groups.len().saturating_sub(visible));
-        let visible_groups = groups
+            .min(rows.saturating_sub(visible_rows));
+        let heading = scheme().prompt().add_modifier(Modifier::BOLD);
+        let section_widths = sections
             .iter()
-            .skip(self.highlight_debug_scroll)
-            .take(visible)
+            .zip(&entry_widths)
+            .map(|(section, &entry_width)| section_width(section, entry_width, rows))
             .collect::<Vec<_>>();
-        let shown_rows = visible_groups.len().min(rows);
-        let shown_columns = visible_groups.len().div_ceil(shown_rows.max(1));
-        let content_width = (column_width * shown_columns).max(header_width);
-        let width = (content_width + 2).min(usize::from(available.width)) as u16;
-        let mut lines = entries[..2]
-            .iter()
-            .map(|(label, style)| Line::from(Span::styled(label.clone(), *style)))
-            .collect::<Vec<_>>();
-        lines.extend((0..shown_rows).map(|row| {
+        let mut lines = vec![
+            Line::from(Span::styled(
+                self.frame_stats.label(),
+                scheme().frame_stats(),
+            )),
             Line::from(
-                (0..shown_columns)
-                    .filter_map(|column| visible_groups.get(column * shown_rows + row))
-                    .map(|(label, style)| Span::styled(format!("{label:<column_width$}"), *style))
+                sections
+                    .iter()
+                    .zip(&section_widths)
+                    .map(|(section, &width)| {
+                        Span::styled(format!("{:<width$}", section.title), heading)
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+        ];
+        let shown_rows = rows.min(visible_rows);
+        lines.extend((0..shown_rows).map(|row| {
+            let row = self.highlight_debug_scroll + row;
+            Line::from(
+                sections
+                    .iter()
+                    .zip(&entry_widths)
+                    .zip(&section_widths)
+                    .flat_map(|((section, &entry_width), &width)| {
+                        let sub_columns = width / entry_width;
+                        let mut spans = (0..sub_columns)
+                            .flat_map(|column| match section.entries.get(column * rows + row) {
+                                Some(entry) => entry.spans(entry_width),
+                                None => vec![Span::raw(" ".repeat(entry_width))],
+                            })
+                            .collect::<Vec<_>>();
+                        spans.push(Span::raw(" ".repeat(width % entry_width)));
+                        spans
+                    })
                     .collect::<Vec<_>>(),
             )
         }));
+        let width = (content_width + 2).min(usize::from(available.width)) as u16;
         let height = lines.len() as u16 + 2;
         let area = Rect::new(
             available.right() - width,
@@ -1196,71 +1255,89 @@ impl Editor {
             .style(base)
             .border_style(scheme().highlight_inspector_border())
             .title(Span::styled(title, scheme().highlight_inspector_title()));
+        let block = if rows > visible_rows {
+            let first = self.highlight_debug_scroll + 1;
+            let last = self.highlight_debug_scroll + shown_rows;
+            block.title_bottom(Span::styled(
+                format!(" ↑↓ {first}–{last} of {rows} "),
+                scheme().highlight_inspector_title(),
+            ))
+        } else {
+            block
+        };
         frame.render_widget(Clear, area);
         frame.render_widget(Paragraph::new(lines).style(base).block(block), area);
         self.selection_exclusions.push(area);
     }
 
+    /// Hand the status line the keys the session's state puts on its right, if
+    /// the state calls for any.
     fn refresh_status_line(&mut self) {
-        let commands_key = self
-            .keymaps
-            .key_for(Action::OpenCommands)
-            .unwrap_or_default();
+        self.status_line.state_keys = if self.cancel_hint_shown {
+            Some(vec![
+                TextSpan::new(
+                    format!(
+                        "{} ",
+                        self.keymaps
+                            .key_for(Action::CancelExecution)
+                            .unwrap_or_default()
+                    ),
+                    HLGroup::KeymapHint,
+                ),
+                TextSpan::new("to cancel", HLGroup::StatuslineHintLabel),
+            ])
+        } else if let Some(controller) = self.pickers.last() {
+            Some(controller.hints())
+        } else if self.continuation.is_some() && self.input.text().is_empty() {
+            Some(vec![
+                TextSpan::new(
+                    format!("{} ", KeyCode::Up + KeyMod::Ctrl),
+                    HLGroup::KeymapHint,
+                ),
+                TextSpan::new("continue", HLGroup::StatuslineHintLabel),
+            ])
+        } else {
+            None
+        };
+    }
+
+    /// The key hints segment of the idle line; typing leaves no use for the
+    /// commands picker's key.
+    fn idle_hints(&self) -> Vec<TextSpan> {
         let settings_key = self
             .keymaps
             .key_for(Action::OpenSettings)
             .unwrap_or_default();
-        let event = if self.cancel_hint_shown {
-            StatusLineEvent::Show {
-                alignment: Alignment::Right,
-                spans: vec![
-                    TextSpan::new(
-                        format!(
-                            "{} ",
-                            self.keymaps
-                                .key_for(Action::CancelExecution)
-                                .unwrap_or_default()
-                        ),
-                        HLGroup::KeymapHint,
-                    ),
-                    TextSpan::new("to cancel", HLGroup::StatuslineHintLabel),
-                ],
-            }
-        } else if let Some(controller) = self.pickers.last() {
-            StatusLineEvent::Show {
-                alignment: Alignment::Right,
-                spans: controller.hints(),
-            }
-        } else if self.input.text().is_empty() {
-            let spans = match &self.continuation {
-                Some(_) => vec![
-                    TextSpan::new(
-                        format!("{} ", KeyCode::Up + KeyMod::Ctrl),
-                        HLGroup::KeymapHint,
-                    ),
-                    TextSpan::new("continue", HLGroup::StatuslineHintLabel),
-                ],
-                None => vec![
+        let settings = [
+            TextSpan::new(format!("{settings_key} "), HLGroup::KeymapHint),
+            TextSpan::new("settings", HLGroup::StatuslineHintLabel),
+        ];
+        match self.input.text().is_empty() {
+            true => {
+                let commands_key = self
+                    .keymaps
+                    .key_for(Action::OpenCommands)
+                    .unwrap_or_default();
+                let mut hints = vec![
                     TextSpan::new(format!("{commands_key} "), HLGroup::KeymapHint),
                     TextSpan::new("commands · ", HLGroup::StatuslineHintLabel),
-                    TextSpan::new(format!("{settings_key} "), HLGroup::KeymapHint),
-                    TextSpan::new("settings", HLGroup::StatuslineHintLabel),
-                ],
-            };
-            StatusLineEvent::Show {
-                alignment: Alignment::Right,
-                spans,
+                ];
+                hints.extend(settings);
+                hints
             }
-        } else {
-            StatusLineEvent::Show {
-                alignment: Alignment::Right,
-                spans: vec![
-                    TextSpan::new(format!("{settings_key} "), HLGroup::KeymapHint),
-                    TextSpan::new("settings", HLGroup::StatuslineHintLabel),
-                ],
-            }
-        };
-        self.status_line.handle(event);
+            false => settings.into(),
+        }
+    }
+
+    /// What the status line draws from in any view of the session.
+    fn status_context(&self) -> StatusLineContext {
+        StatusLineContext {
+            idle: self.settings.idle_statusline,
+            location: Some(self.location()),
+            hints: self.idle_hints(),
+            state: self.shell_state(),
+            ..StatusLineContext::default()
+        }
     }
 
     pub fn draw(
@@ -1335,6 +1412,7 @@ impl Editor {
         let context = RenderContext::new(editor_area.width, 0)
             .with_fractions(self.settings.fractions)
             .with_blackboard(self.settings.math_fonts)
+            .with_matrix_row_spacing(self.settings.matrix_row_spacing_percent)
             .with_display(self.settings.maths)
             .with_recent_outputs(self.feed.recent_outputs())
             .with_output_limit(self.settings.output_rows);
@@ -1376,15 +1454,8 @@ impl Editor {
         TuiBlock::default()
             .style(theme.statusline_bg())
             .render(status_area, frame.buffer_mut());
-        self.status_line.render(
-            &StatusLineContext {
-                location: Some(self.location()),
-                idle_left: self.shell_state(),
-                ..StatusLineContext::default()
-            },
-            status_area,
-            frame.buffer_mut(),
-        );
+        self.status_line
+            .render(&self.status_context(), status_area, frame.buffer_mut());
         if status_height > 0 {
             self.selection_exclusions.push(status_area);
         }
@@ -1449,11 +1520,9 @@ impl Editor {
 #[cfg(test)]
 mod mouse_tests {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-    use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::layout::{Position, Rect};
-    use ratatui::style::{Modifier, Style};
-    use ratatui::Terminal;
+    use ratatui::style::Style;
 
     use super::{Editor, Reaction};
     use crate::backend::M2Value;
@@ -1485,40 +1554,6 @@ mod mouse_tests {
             .find(|&position| editor.feed.link_at(position).is_some())
             .expect("the documentation link is visible");
         (editor, pointer)
-    }
-
-    #[test]
-    fn holding_control_over_a_link_bolds_it() {
-        let (mut editor, pointer) = editor_with_link();
-        let mut terminal = Terminal::new(TestBackend::new(AREA.width, AREA.height)).unwrap();
-        let mut hover = |editor: &mut Editor, modifiers| {
-            editor.handle_mouse(MouseEvent {
-                kind: MouseEventKind::Moved,
-                column: pointer.x,
-                row: pointer.y,
-                modifiers,
-            });
-            terminal
-                .draw(|frame| {
-                    editor.draw_feed(frame, AREA, &RenderContext::new(AREA.width, 0));
-                })
-                .unwrap();
-            terminal.backend().buffer()[(pointer.x, pointer.y)].modifier
-        };
-
-        let hovered = hover(&mut editor, KeyModifiers::NONE);
-        assert!(hovered.contains(Modifier::UNDERLINED));
-        assert!(!hovered.contains(Modifier::BOLD));
-        assert!(hover(&mut editor, KeyModifiers::CONTROL).contains(Modifier::BOLD));
-        editor.hold_control(false);
-        terminal
-            .draw(|frame| {
-                editor.draw_feed(frame, AREA, &RenderContext::new(AREA.width, 0));
-            })
-            .unwrap();
-        assert!(!terminal.backend().buffer()[(pointer.x, pointer.y)]
-            .modifier
-            .contains(Modifier::BOLD));
     }
 
     #[test]

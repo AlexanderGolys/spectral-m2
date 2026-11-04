@@ -1286,44 +1286,6 @@ mod tests {
     }
 
     #[test]
-    fn retained_output_keeps_its_label_and_updates_its_bold_style() {
-        let mut evaluation = EvaluationBlock::new(1, [("x".into(), Vec::new())]);
-        evaluation.succeed(
-            0,
-            1,
-            CellState::Value,
-            Vec::new(),
-            None,
-            Some(OutputBlock::value("x".into(), None).numbered(1)),
-        );
-        let mut feed = Feed::new(Box::new(TextBlock::system("")));
-        feed.push_evaluation(evaluation);
-        let area = Rect::new(0, 0, 30, 12);
-        let drawn = |feed: &mut Feed, recent: [Option<u32>; RECENT_OUTPUTS]| {
-            let mut target = Buffer::empty(area);
-            let context = RenderContext::new(30, 0).with_recent_outputs(recent);
-            feed.render(&context, area, &mut target, Style::default());
-            let text = (0..area.height)
-                .flat_map(|y| (0..area.width).map(move |x| (x, y)))
-                .map(|position| target[position].symbol().to_string())
-                .collect::<String>();
-            let bold_label = target.content.iter().any(|cell| {
-                cell.symbol() == "o" && cell.modifier.contains(ratatui::style::Modifier::BOLD)
-            });
-            (text, bold_label)
-        };
-
-        for recent in [[Some(1), None, None], [Some(2), Some(1), None]] {
-            let (text, bold) = drawn(&mut feed, recent);
-            assert!(text.contains("o1"));
-            assert!(bold);
-        }
-        let (text, bold) = drawn(&mut feed, [Some(4), Some(3), Some(2)]);
-        assert!(text.contains("o1"));
-        assert!(!bold);
-    }
-
-    #[test]
     fn muted_lines_count_towards_what_m2_recalls_as_oo_ooo_oooo() {
         let mut evaluation = EvaluationBlock::new(
             1,

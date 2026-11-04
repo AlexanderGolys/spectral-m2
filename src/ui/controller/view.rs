@@ -140,9 +140,8 @@ impl Viewport {
 }
 
 impl Editor {
-    /// A view's status: the session's state on the left, the views in the
-    /// centre, and the keys it answers to on the right. While the view has focus
-    /// the centre lists every view `Left` and `Right` step through, its own
+    /// A view's status: the views in the centre and, while it has focus, the
+    /// keys it answers to on the right. While the view has focus the centre lists every view `Left` and `Right` step through, its own
     /// highlighted; otherwise it names the view alone.
     fn preview_status(&self, view: ViewKind, focused: bool) -> StatusLineContext {
         let shown: &[ViewKind] = match focused {
@@ -167,6 +166,7 @@ impl Editor {
         let right = self
             .keymaps
             .key_for(Action::ClosePane)
+            .filter(|_| focused)
             .map(|key| {
                 vec![
                     TextSpan::new(format!("{key} "), HLGroup::KeymapHint),
@@ -175,10 +175,9 @@ impl Editor {
             })
             .unwrap_or_default();
         StatusLineContext {
-            location: Some(self.location()),
-            idle_left: self.shell_state(),
             center: Some(center),
             right,
+            ..self.status_context()
         }
     }
 
@@ -497,6 +496,19 @@ mod tests {
             listed(false),
             [(view.label().to_string(), HLGroup::ViewLabelActive)]
         );
+    }
+
+    #[test]
+    fn only_a_focused_view_claims_the_right_side_of_the_status_line() {
+        let editor = Editor::new(String::new());
+        assert!(!editor
+            .preview_status(ViewKind::Values, true)
+            .right
+            .is_empty());
+        assert!(editor
+            .preview_status(ViewKind::Values, false)
+            .right
+            .is_empty());
     }
 
     #[test]

@@ -431,6 +431,32 @@ fn utf16_offset(text: &str, column: u32) -> Option<usize> {
     (units == column).then_some(text.len())
 }
 
+/// Every highlight group a semantic token can resolve to.
+pub const SEMANTIC_GROUPS: [HLGroup; 22] = [
+    HLGroup::Type,
+    HLGroup::Function,
+    HLGroup::LspVariable,
+    HLGroup::Parameter,
+    HLGroup::Property,
+    HLGroup::Namespace,
+    HLGroup::Symbol,
+    HLGroup::Keyword,
+    HLGroup::String,
+    HLGroup::Number,
+    HLGroup::Operator,
+    HLGroup::Comment,
+    HLGroup::Method,
+    HLGroup::StorageClass,
+    HLGroup::TypeParameter,
+    HLGroup::Macro,
+    HLGroup::Attribute,
+    HLGroup::RingGenerator,
+    HLGroup::SemanticCommand,
+    HLGroup::Option,
+    HLGroup::File,
+    HLGroup::Unresolved,
+];
+
 fn classify(legend: &SemanticTokensLegend, token: &SemanticToken) -> Option<HLGroup> {
     let token_type = legend.token_types.get(token.token_type as usize)?.as_str();
     let has = |name: &str| {

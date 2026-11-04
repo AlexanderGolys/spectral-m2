@@ -68,6 +68,20 @@ impl RenderContext {
         }
     }
 
+    /// Space the rows of typeset matrices at `percent` of TeX's own distance.
+    pub fn with_matrix_row_spacing(self, percent: u16) -> Self {
+        Self {
+            math: MathStyle {
+                matrix_row_spacing_percent: percent.clamp(
+                    UI.min_matrix_row_spacing_percent,
+                    UI.max_matrix_row_spacing_percent,
+                ),
+                ..self.math
+            },
+            ..self
+        }
+    }
+
     /// Set returned maths with fractions in `fractions`.
     pub fn with_fractions(self, fractions: FractionStyle) -> Self {
         Self {

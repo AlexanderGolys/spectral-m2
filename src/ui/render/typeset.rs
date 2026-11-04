@@ -28,7 +28,8 @@ pub fn lines(
     Block::value(value, width.max(1), groups, style, None, picture).lines
 }
 
-/// The pieces of a type annotation, which carry their own spacing, set together:
+/// The pieces of a type annotation, which carry their own spacing, set together in
+/// the type colour wherever they name words rather than maths:
 /// as one formula with its words in a typewriter font when every piece has a TeX
 /// form, so cell boundaries never widen the gaps between them; else side by side.
 pub fn annotation(
@@ -37,11 +38,17 @@ pub fn annotation(
     groups: &Groups,
     style: MathStyle,
 ) -> Vec<Line<'static>> {
-    let block =
-        |part: &M2Value| Block::value(part, width.max(1), groups, style, None, graphics::typeset);
+    let is_word = |part: &M2Value| matches!(part, M2Value::Token { .. });
+    let block = |part: &M2Value, ink| {
+        Block::value(part, width.max(1), groups, style, ink, graphics::typeset)
+    };
+    let label = groups.style(HLGroup::Type);
     let blocks = match formula(parts) {
-        Some(formula) => vec![block(&formula)],
-        None => parts.iter().map(block).collect(),
+        Some(formula) => vec![block(&formula, parts.iter().any(is_word).then_some(label))],
+        None => parts
+            .iter()
+            .map(|part| block(part, is_word(part).then_some(label)))
+            .collect(),
     };
     Block::pack(blocks, width.max(1))
         .into_iter()
@@ -205,6 +212,7 @@ impl Block {
                             tex: &tex,
                             painted: &painted,
                             code,
+                            matrix_row_spacing_percent: style.matrix_row_spacing_percent,
                         };
                         if let Some(Pictured { lines, baseline }) = picture(
                             formula,
@@ -237,8 +245,9 @@ impl Block {
                 }
             }
             M2Value::Token { text, role } => Self::wrapped(text, text_ink(role.group()), width),
-            M2Value::Net(text) | M2Value::Markup { fallback: text, .. } => {
-                Self::wrapped(text, text_ink(HLGroup::Value), width)
+            M2Value::Net(text) => Self::wrapped(text, text_ink(HLGroup::String), width),
+            M2Value::Markup { fallback, .. } => {
+                Self::wrapped(fallback, text_ink(HLGroup::Value), width)
             }
             M2Value::Collection { kind, items } if *kind != CollectionKind::VerticalList => {
                 let (open, close) = kind.delimiters();
@@ -376,6 +385,49 @@ mod tests {
             .iter()
             .flat_map(|line| &line.spans)
             .all(|span| span.style == groups.style(HLGroup::Type)));
+    }
+
+    #[test]
+    fn the_words_of_an_annotation_are_in_the_type_colour() {
+        let groups = Groups::default();
+        let word = |text: &str, role| M2Value::Token {
+            text: text.into(),
+            role,
+        };
+        for parts in [
+            vec![
+                word("Expression", Role::Type),
+                word(" of class ", Role::String),
+                word("Holder", Role::Type),
+            ],
+            vec![word("free module", Role::String)],
+        ] {
+            let lines = annotation(&parts, 80, &groups, MathStyle::default());
+            for span in lines.iter().flat_map(|line| &line.spans) {
+                assert!(
+                    span.content.trim().is_empty() || span.style == groups.style(HLGroup::Type),
+                    "{span:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_net_is_coloured_as_a_string() {
+        let groups = Groups::default();
+        let value = M2Value::Net("LOUD".into());
+        let block = Block::value(
+            &value,
+            80,
+            &groups,
+            MathStyle::default(),
+            None,
+            |_, _, _| None,
+        );
+        assert!(block.lines[0]
+            .spans
+            .iter()
+            .any(|span| span.content == "LOUD" && span.style == groups.style(HLGroup::String)));
     }
 
     #[test]

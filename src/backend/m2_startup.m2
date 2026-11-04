@@ -158,8 +158,30 @@ announceReady := (() -> (
                    else "href=\"" | escapeAttribute format key | "\"");
             page = substring(page, match#0#0 + match#0#1));
         linked | page);
+    -- A source position is linked as `file:///dir/name.m2#L1:C2-L3:C4` and
+    -- spelled with its whole directory, which is most of a line and none of
+    -- what is wanted. Its link stays, and its text keeps the file's name, one
+    -- directory above it, and the position; any directories further up are
+    -- folded into `[...]/`.
+    foldedPath := path -> (
+        parts := select(separate("/", path), part -> part != "");
+        parents := drop(parts, -1);
+        if #parents == 0 then last parts
+        else if #parents == 1 then (if first path == "/" then "/" else "") | concatenate between("/", parts)
+        else "[...]/" | concatenate between("/", parts_{-2, -1}));
+    shortenedPaths := page -> (
+        pattern := ///(<a href="file://([^"#]*)[^"]*">)([^<]*)</a>///;
+        shortened := "";
+        while (match := regex(pattern, page)) =!= null do (
+            path := substring(match#2, page);
+            text := substring(match#3, page);
+            shortened = shortened | substring(page, 0, match#0#0) | substring(match#1, page)
+                | (if substring(text, 0, #path) == path then foldedPath path | substring(text, #path)
+                   else text) | "</a>";
+            page = substring(page, match#0#0 + match#0#1));
+        shortened | page);
     render hypertextType := HashTable => value -> hashTable {
-        symbol markup => hashTable {symbol html => linkedKeys html value, symbol fallback =>
+        symbol markup => hashTable {symbol html => shortenedPaths linkedKeys html value, symbol fallback =>
                 toString net value, symbol exampleWidth => exampleWidth}
     };
     -- Only what M2 itself draws as a plain table: a class that still uses
@@ -266,7 +288,8 @@ announceReady := (() -> (
     );
     -- `locals` are the top level's own local dictionaries, holding what a
     -- top-level `x := 1` binds; only the statement typed there can reach them.
-    sendResult := locals -> emitFrame hashTable {
+    sendResult := (submission, locals) -> emitFrame hashTable {
+        "submission" => submission,
         "names" => newNames join(dictionaryPath, locals),
         "number" => lineNumber,
         "value" => renderedValue,
@@ -344,10 +367,13 @@ announceReady := (() -> (
     -- the shell's `iN` contiguous. A failed input is rewound past as well, so the
     -- next cell reuses its number: nothing can refer to it, a statement that
     -- throws having bound no `oN` and left `oo` where it was.
+    -- `submission` is the shell's own count of what it has sent, echoed back so a
+    -- frame that arrives for an earlier submission is recognised and dropped
+    -- instead of being filed under the cell now waiting.
     -- Keep interruption from leaving a partial frame or half-reset cell state.
-    User#"spectral end of cell" = locals -> shield (
+    User#"spectral end of cell" = (submission, locals) -> shield (
         lineNumber = lineNumber - 1;
-        sendResult locals;
+        sendResult(submission, locals);
         if not completed then
             lineNumber = lineNumber - 1;
         forgetResult();

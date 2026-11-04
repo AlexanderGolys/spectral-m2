@@ -125,6 +125,13 @@ pub struct UiConfig {
     pub max_output_preview_cells: usize,
     /// The fewest rows a folded value may keep: a head row, three fold rows, and a tail.
     pub min_output_rows: usize,
+    /// Distance between the rows of a typeset matrix, as a percentage of TeX's own,
+    /// which leaves stacked fractions in neighbouring rows almost touching.
+    pub matrix_row_spacing_percent: u16,
+    pub min_matrix_row_spacing_percent: u16,
+    pub max_matrix_row_spacing_percent: u16,
+    /// Percentage points one picker step moves the matrix row spacing.
+    pub matrix_row_spacing_step: u16,
     /// Columns kept between a syntax tree's deepest row and its source ranges.
     pub tree_location_gap: usize,
     /// Blank rows inside the band of printed output, above and below its text.
@@ -219,6 +226,10 @@ pub const UI: UiConfig = UiConfig {
     max_output_preview_bytes: 256 * 1024,
     max_output_preview_cells: 256 * 1024,
     min_output_rows: 5,
+    matrix_row_spacing_percent: 125,
+    min_matrix_row_spacing_percent: 100,
+    max_matrix_row_spacing_percent: 300,
+    matrix_row_spacing_step: 5,
 
     tree_location_gap: 2,
     printed_margin: 1,

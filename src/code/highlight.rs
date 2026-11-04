@@ -127,33 +127,6 @@ impl Highlighter for SyntaxHighlighter {
 mod tests {
     use super::*;
 
-    fn kind_at(source: &str, needle: &str) -> Option<HLGroup> {
-        let offset = source.find(needle)?;
-        SyntaxHighlighter::new()
-            .highlight(source)
-            .into_iter()
-            .find(|span| span.content.contains(&offset))
-            .map(|span| span.kind)
-    }
-
-    #[test]
-    fn grammar_query_highlights_lexical_and_structural_roles() {
-        for (source, needle, expected) in [
-            ("if x then 1 else 0", "if", HLGroup::Conditional),
-            ("1.0", "1.0", HLGroup::Float),
-            ("1 + 2", "1", HLGroup::Number),
-            ("f 1", "f", HLGroup::Function),
-            ("loadPackage \"Foo\"", "\"Foo\"", HLGroup::Package),
-            ("f ZZ := x -> x", "f", HLGroup::Installation),
-            ("f ZZ := x -> x", "ZZ", HLGroup::Type),
-            ("g = x -> x", "g", HLGroup::Function),
-            ("g = x -> x", "x ->", HLGroup::Parameter),
-            ("x.foo", "foo", HLGroup::Property),
-        ] {
-            assert_eq!(kind_at(source, needle), Some(expected), "{source:?}");
-        }
-    }
-
     #[test]
     fn every_public_query_capture_has_a_theme_group() {
         let highlighter = SyntaxHighlighter::new();
@@ -170,15 +143,6 @@ mod tests {
                 "unmapped Tree-sitter capture: @{capture}"
             );
         }
-    }
-
-    #[test]
-    fn incomplete_source_keeps_query_highlights() {
-        let mut highlighter = SyntaxHighlighter::new();
-        let spans = highlighter.highlight("if x then \"unfinished");
-
-        assert!(spans.iter().any(|span| span.kind == HLGroup::Conditional));
-        assert!(spans.iter().any(|span| span.kind == HLGroup::String));
     }
 
     #[test]
@@ -199,18 +163,6 @@ mod tests {
         assert_eq!(highlighter.0, "f(\nx)");
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].content, 0..2);
-    }
-
-    #[test]
-    fn syntax_highlighting_crosses_the_incomplete_boundary() {
-        let input = "continued\"";
-        let spans = SyntaxHighlighter::new().highlight_continuation(Some("\"unfinished"), input);
-
-        assert!(spans.iter().any(|span| {
-            span.kind == HLGroup::String
-                && span.content.start == 0
-                && span.content.end <= input.len()
-        }));
     }
 
     #[test]

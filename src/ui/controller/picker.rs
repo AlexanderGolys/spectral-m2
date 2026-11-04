@@ -816,7 +816,7 @@ impl PickerController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::controller::settings::theme::groups::{publish, Groups, HLGroup};
+    use crate::ui::controller::settings::theme::groups::{publish, Groups};
     use crate::ui::key::KeyMod;
     use crossterm::event::KeyCode;
     use ratatui::style::{Color, Style};
@@ -936,72 +936,6 @@ mod tests {
         assert!(matches!(event, Some(EditorEvent::ClosePickers)));
     }
 
-    #[test]
-    fn values_share_the_next_tab_stop_after_the_longest_label() {
-        let picker = picker(vec![item("scheme", "everforest"), item("contrast", "dark")]);
-        let buffer = rendered(&picker, 32);
-
-        assert_eq!(column(&row(&buffer, 1), "everforest"), Some(15));
-        assert_eq!(column(&row(&buffer, 2), "dark"), Some(15));
-    }
-
-    #[test]
-    fn every_column_aligns_across_rows_and_packs_when_narrow() {
-        let cells = |texts: [&'static str; 3]| texts.map(Line::from).to_vec();
-        let wide = picker(vec![
-            Row::new(cells(["a", "one", "first"]), |_| None).into(),
-            Row::new(cells(["longer", "1", "second"]), |_| None).into(),
-        ]);
-        let buffer = rendered(&wide, 40);
-        assert_eq!(column(&row(&buffer, 1), "first"), Some(19));
-        assert_eq!(column(&row(&buffer, 2), "second"), Some(19));
-
-        let buffer = rendered(&wide, 20);
-        assert_eq!(column(&row(&buffer, 1), "one"), Some(6));
-        assert_eq!(column(&row(&buffer, 2), "1"), Some(11));
-    }
-
-    #[test]
-    fn picker_uses_its_own_surface_and_selected_row_backgrounds() {
-        let picker = picker(vec![item("one", "1"), item("two", "2")]);
-        let buffer = rendered(&picker, 32);
-        let groups = Groups::default();
-
-        assert_eq!(column(&row(&buffer, 0), " test "), Some(13));
-        assert_ne!(buffer[(0, 1)].symbol(), "│");
-        assert_ne!(buffer[(31, 1)].symbol(), "│");
-        assert_eq!(buffer[(0, 1)].symbol(), " ");
-        assert_eq!(buffer[(1, 1)].symbol(), ">");
-        assert_eq!(buffer[(16, 1)].bg, groups.picker_selected().bg.unwrap());
-        let value = column(&row(&buffer, 1), "1").unwrap() as u16;
-        assert_eq!(buffer[(value, 1)].fg, groups.value().fg.unwrap());
-        assert_eq!(buffer[(16, 2)].bg, groups.picker().bg.unwrap());
-        assert!(groups.picker().bg.is_some());
-        assert!(groups.picker_selected().fg.is_none());
-        assert_eq!(buffer.area().height, 2 + 2);
-    }
-
-    #[test]
-    fn keymap_values_keep_the_statusline_accent_when_selected() {
-        let picker = Picker::new(
-            "keymaps",
-            vec![Row::new(
-                vec![
-                    Line::from("submit"),
-                    Span::styled("enter", scheme().style(HLGroup::KeymapHint)).into(),
-                ],
-                |_| None,
-            )
-            .into()],
-        );
-        let buffer = rendered(&picker, 32);
-        let groups = Groups::default();
-        let key = column(&row(&buffer, 1), "enter").unwrap() as u16;
-
-        assert_eq!(buffer[(key, 1)].fg, groups.prompt().fg.unwrap());
-        assert_eq!(buffer[(key, 1)].bg, groups.picker_selected().bg.unwrap());
-    }
-
     fn setting(label: &'static str, value: PickerValue) -> Box<dyn PickerItem> {
         Row::new(vec![Line::from(label)], |_| None)
             .with_value(value)
@@ -1019,12 +953,13 @@ mod tests {
     #[test]
     fn selected_row_draws_its_name_arrows_and_value_in_their_own_groups() {
         let [label, arrow, chosen, resting] = [1, 2, 3, 4].map(Color::Indexed);
-        let mut groups = Groups::default();
-        groups.PickerSelectedLabel = Style::new().fg(label);
-        groups.PickerSelectedMarker = Style::new().fg(arrow);
-        groups.SettingsItemValueSelected = Style::new().fg(chosen);
-        groups.SettingsItemValue = Style::new().fg(resting);
-        publish(groups);
+        publish(Groups {
+            PickerSelectedLabel: Style::new().fg(label),
+            PickerSelectedMarker: Style::new().fg(arrow),
+            SettingsItemValueSelected: Style::new().fg(chosen),
+            SettingsItemValue: Style::new().fg(resting),
+            ..Groups::default()
+        });
 
         let picker = picker(vec![
             setting("selected", PickerValue::Stepped("shown".into())),

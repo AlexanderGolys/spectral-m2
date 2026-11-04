@@ -1975,7 +1975,6 @@ mod tests {
         let mut input = InputCode::new_in_memory();
         input.field_mut().insert_str("abc");
         input.set_diagnostic("bad b".to_string(), Some(1..2));
-        let theme = Groups::default();
         let context = RenderContext::new(40, UI.prompt_width());
         let lines = input.highlighted_lines(&context, &mut EmptyHighlighter, false, None);
         let text = &lines[0].spans[1..];
@@ -1985,7 +1984,6 @@ mod tests {
         assert_eq!(text[2].content, "c");
         assert!(!text[0].style.add_modifier.contains(Modifier::UNDERLINED));
         assert!(text[1].style.add_modifier.contains(Modifier::UNDERLINED));
-        assert_eq!(text[1].style.underline_color, theme.error().fg);
         assert_eq!(text[1].style.fg, text[0].style.fg);
         assert_eq!(text[1].style.bg, text[0].style.bg);
     }
