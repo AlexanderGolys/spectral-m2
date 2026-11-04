@@ -73,6 +73,7 @@ announceReady := (() -> (
     --     markup => {html, fallback,    hashtable => {{key, value}, ...}
     --         exampleWidth}
     --     collection => {kind, items}   type => rendered type value
+    --     option => {key, value}
     --
     -- A value is either drawn whole by one of M2's own formatters, or it is a
     -- container whose entries are rendered one by one, so the shell can set
@@ -197,6 +198,11 @@ announceReady := (() -> (
             table value
         else drawnWhole value
     );
+    -- `key => value` is sent in its two parts, each drawn as what it is on its
+    -- own, rather than as one formula M2's TeX would make of both.
+    render Option := HashTable => value -> hashTable {
+        symbol option => hashTable {symbol key => render value#0, symbol value => render value#1}
+    };
     -- The kind names the nearest of the shell's collection kinds, so a list
     -- subclass such as Hybrid arrives as the List it is drawn as.
     collection := (kind, value) -> hashTable {
@@ -249,6 +255,9 @@ announceReady := (() -> (
         value Core#"private dictionary"#"postfixOperators");
     render Keyword := HashTable => value -> asToken(toString value,
         if member(value, operators) then "operator" else "keyword");
+    -- A bare symbol is a name in code, though its TeX sets it as maths. A ring's
+    -- variable is an element of that ring rather than a Symbol, and stays maths.
+    render Symbol := HashTable => value -> asToken(toString value, "symbol");
     -- What is typed bare to steer the session, `exit` or `help`.
     render Command := HashTable => value -> asToken(toString value, "command");
     -- `Ext`, `HH` and the like are applied as functions, though they are

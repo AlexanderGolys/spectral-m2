@@ -115,54 +115,30 @@ impl WrappedText {
     }
 }
 
-/// Break logical lines at exactly the available width, mid-token if necessary.
-/// Code has no reliable word boundaries to break on and the caller needs the
-/// cursor to map onto a predictable column, so every row but the last is full.
+/// Word wrapping for text being edited. A line ending exactly on the width gets
+/// an empty row after it, so the caret has somewhere inside the pane to sit and
+/// the next character appears where the caret already is.
 #[derive(Default)]
-pub struct HardWrap;
+pub struct CaretWrap;
 
-impl WrapPolicy for HardWrap {
+impl WrapPolicy for CaretWrap {
     fn wrap_logical_line(&self, line: &str, width: u16, offset: usize) -> Vec<VisualLine> {
-        let width = width as usize;
-        if width == 0 || line.is_empty() {
-            return iter::once(VisualLine {
-                range: 0..line.len(),
-                hard_continuation: false,
-            })
-            .map(|line| line.shifted(offset))
-            .collect();
-        }
-        let mut rows = Vec::new();
-        let mut start = 0;
-        let mut columns = 0;
-        let mut hard_continuation = false;
-        for (byte, character) in line.char_indices() {
-            let cells = character.width().unwrap_or(0);
-            if columns > 0 && columns + cells > width {
-                rows.push(VisualLine {
-                    range: start..byte,
-                    hard_continuation,
-                });
-                start = byte;
-                columns = 0;
-                hard_continuation = true;
-            }
-            columns += cells;
-        }
-        rows.push(VisualLine {
-            range: start..line.len(),
-            hard_continuation,
+        let mut rows = WordWrap.wrap_logical_line(line, width, offset);
+        let ends_on_width = rows.last().is_some_and(|row| {
+            let columns: usize = line[row.range.start - offset..row.range.end - offset]
+                .chars()
+                .map(|character| character.width().unwrap_or(0))
+                .sum();
+            width > 0 && columns == usize::from(width)
         });
-        // A line that ends exactly on a boundary gets an empty row after it, so
-        // the caret has somewhere inside the pane to sit and the next character
-        // appears where the caret already is.
-        if columns == width {
+        if ends_on_width {
+            let end = offset + line.len();
             rows.push(VisualLine {
-                range: line.len()..line.len(),
+                range: end..end,
                 hard_continuation: true,
             });
         }
-        rows.into_iter().map(|line| line.shifted(offset)).collect()
+        rows
     }
 }
 
@@ -190,14 +166,24 @@ impl WrapPolicy for WordWrap {
         let mut hard_continuation = false;
 
         while start < count {
-            if count - start <= width {
+            // The first character past the row, measured in terminal columns.
+            let mut hard_end = start;
+            let mut columns = 0;
+            while hard_end < count {
+                let cells = characters[hard_end].1.width().unwrap_or(0);
+                if hard_end > start && columns + cells > width {
+                    break;
+                }
+                columns += cells;
+                hard_end += 1;
+            }
+            if hard_end == count {
                 rows.push(VisualLine {
                     range: byte_at(start)..line.len(),
                     hard_continuation,
                 });
                 break;
             }
-            let hard_end = start + width;
             let (end, next, hard_break) = if let Some(index) = (start + 1..hard_end)
                 .rev()
                 .find(|&index| characters[index].1 == ' ')
@@ -373,6 +359,29 @@ mod tests {
         assert!(!lines[0].hard_continuation);
         assert_eq!(lines[1].range, 4..8);
         assert!(lines[1].hard_continuation);
+    }
+
+    #[test]
+    fn edited_text_breaks_between_words_and_leaves_the_caret_a_row() {
+        let text = "abc defg";
+        let rows: Vec<_> = CaretWrap
+            .wrap(text, 4)
+            .into_iter()
+            .map(|row| &text[row.range])
+            .collect();
+        assert_eq!(rows, ["abc", "defg", ""]);
+    }
+
+    #[test]
+    fn word_wrap_measures_wide_characters_by_their_columns() {
+        let text = "ααα 中中中";
+        for row in WordWrap.wrap(text, 4) {
+            let columns: usize = text[row.range]
+                .chars()
+                .map(|character| character.width().unwrap_or(0))
+                .sum();
+            assert!(columns <= 4);
+        }
     }
 
     #[test]

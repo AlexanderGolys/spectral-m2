@@ -250,7 +250,7 @@ impl<'a> BlockView<'a> {
             );
             let mut source = Exclusions::default();
             block.local_selection_exclusions(context, &mut source);
-            exclusions.extend(
+            exclusions.merge(
                 source.project(start..start + rows)
                     + Offset::new(i32::from(area.x), i32::from(area.y + y)),
             );
@@ -655,7 +655,7 @@ impl Feed {
                 Rect::new(area.x, y, area.width, rows),
                 target,
             );
-            exclusions.extend(
+            exclusions.merge(
                 block_exclusions.project(start..start + rows)
                     + Offset::new(i32::from(area.x), i32::from(y)),
             );

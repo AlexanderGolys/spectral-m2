@@ -4,6 +4,17 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- A bare symbol, such as an option's name, is drawn as a name in code rather than as italic maths. A ring's variables are still maths.
+- An option on its own or in a list, `a => 1`, is drawn part by part rather than as one formula, so only actual maths in it is typeset.
+- Arrows in typeset formulas keep their normal length.
+- The input breaks long lines between words rather than mid-word.
+
+### Fixed
+
+- Copying code, printed text or a value that only wrapped on screen gives back one line instead of a line per row. Documentation pages and table cells still copy row by row.
+
 ## [1.2.2] - 2026-11-04
 
 ### Changed

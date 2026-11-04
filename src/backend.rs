@@ -116,6 +116,11 @@ pub enum M2Value {
     Net(String),
     /// Key/value parts composed into one brace-delimited row grid.
     HashTable(Vec<[M2Value; 2]>),
+    /// `key => value`, each part drawn as what it is on its own.
+    Option {
+        key: Box<M2Value>,
+        value: Box<M2Value>,
+    },
     /// Entries M2 rendered one by one, set inside the delimiters of their kind.
     Collection {
         kind: CollectionKind,
@@ -148,6 +153,7 @@ pub enum Role {
     Keyword,
     Operator,
     Command,
+    Symbol,
 }
 
 impl Role {
@@ -164,6 +170,7 @@ impl Role {
             Role::Keyword => HLGroup::Keyword,
             Role::Operator => HLGroup::Operator,
             Role::Command => HLGroup::Macro,
+            Role::Symbol => HLGroup::Variable,
             _ => HLGroup::Text,
         }
     }
@@ -331,6 +338,10 @@ impl M2Value {
                 })),
                 spelling,
             ),
+            Self::Option { key, value } => key
+                .block(spelling)
+                .beside(&RenderedBlock::from_text(spelling.arrow()))
+                .beside(&value.block(spelling)),
             Self::Collection {
                 kind: CollectionKind::VerticalList,
                 items,
@@ -1501,6 +1512,38 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         };
         assert!(matches!(&entries[0][1], M2Value::Tex { fallback, .. }
             if fallback.starts_with("MutableHashTable{")));
+
+        // Options arrive in their parts, so a list of them is no one formula.
+        let options = backend
+            .evaluate("{someKey => 1/2}", Some(5))
+            .expect("evaluate a list of options");
+        let Some(M2Value::Collection { items, .. }) = &options.value else {
+            panic!("the list was not opened: {:?}", options.value);
+        };
+        let M2Value::Option { key, value } = &items[0] else {
+            panic!("the option was not opened: {:?}", items[0]);
+        };
+        assert!(matches!(
+            **key,
+            M2Value::Token {
+                role: Role::Symbol,
+                ..
+            }
+        ));
+        assert!(matches!(**value, M2Value::Tex { .. }));
+
+        // A bare symbol is a name; a ring's variable of the same name is maths.
+        let symbol = backend
+            .evaluate("symbol someName", Some(3))
+            .expect("evaluate a symbol");
+        assert!(
+            matches!(&symbol.value, Some(M2Value::Token { text, role: Role::Symbol })
+            if text == "someName")
+        );
+        let variable = backend
+            .evaluate("(QQ[someName])_0", Some(4))
+            .expect("evaluate a variable");
+        assert!(matches!(&variable.value, Some(M2Value::Tex { .. })));
     }
 
     // A container's inherited TeX only spells out its structure, `Shout{...}`,

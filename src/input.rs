@@ -38,7 +38,7 @@ use crate::ui::graphics::kitty::PLACEHOLDER;
 use crate::ui::key::KeyEvent;
 use crate::ui::render::{Highlights, Prompt, RenderContext};
 use crate::ui::text_object::{Bracket, CharClass};
-use crate::ui::wrap::{offset_at_column, HardWrap, TextLayout, WrapPolicy};
+use crate::ui::wrap::{offset_at_column, CaretWrap, TextLayout, WrapPolicy};
 
 /// A text-editing operation owned and interpreted by the input field.
 #[discriminated_str(description)]
@@ -1301,7 +1301,7 @@ fn apply_selection(
 }
 
 impl TextLayout for InputCode {
-    type Wrapping = HardWrap;
+    type Wrapping = CaretWrap;
 
     fn text(&self) -> &str {
         self.field.text()
@@ -1318,7 +1318,7 @@ impl InputCode {
     pub fn visual_cursor(&self, width: u16) -> (usize, usize) {
         let text = self.text();
         let cursor = self.field.cursor();
-        let rows = HardWrap.wrap(text, width);
+        let rows = CaretWrap.wrap(text, width);
         let row = rows
             .iter()
             .rposition(|row| row.range.start <= cursor)
@@ -1333,7 +1333,7 @@ impl InputCode {
     }
 
     pub fn cursor_at_visual(&self, width: u16, row: usize, column: usize) -> usize {
-        let rows = HardWrap.wrap(self.text(), width);
+        let rows = CaretWrap.wrap(self.text(), width);
         let line = &rows[row.min(rows.len().saturating_sub(1))];
         line.range.start + offset_at_column(&self.text()[line.range.clone()], column)
     }

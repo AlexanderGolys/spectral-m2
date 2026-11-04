@@ -425,6 +425,19 @@ impl Block for CodeBlock {
             self.layout().prefix(),
             self.height(context),
         ));
+        let layout = self.layout();
+        let mut row = 1;
+        for cell in &self.cells {
+            let width = context.width().saturating_sub(cell.marker().width(layout));
+            let wrapped = cell.wrapped(width);
+            exclusions.mark_wrapped_rows(
+                row,
+                context.width(),
+                wrapped.text().split('\n'),
+                &cell.text,
+            );
+            row = row.saturating_add(wrapped.height());
+        }
     }
 }
 
@@ -900,6 +913,19 @@ impl Block for EvaluationBlock {
         let code_height = self.code_height(context);
         let code_area_height = code_height + self.output_margin();
         exclusions.push(Rect::new(0, 0, self.layout().prefix(), code_area_height));
+        let layout = self.layout();
+        let code_width = self.code_width(context);
+        let mut row = 1;
+        for (cell, state) in &self.cells {
+            let wrapped = cell.wrapped(code_width.saturating_sub(state.marker().width(layout)));
+            exclusions.mark_wrapped_rows(
+                row,
+                context.width(),
+                wrapped.text().split('\n'),
+                &cell.text,
+            );
+            row = row.saturating_add(wrapped.height());
+        }
         let mut y = code_area_height;
         for block in self.outputs() {
             let height = block.height(context);
@@ -1044,6 +1070,15 @@ impl Block for TextBlock {
         }
     }
     fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
+        if matches!(self.kind, TextKind::Printed { .. }) {
+            let body = self.body(context);
+            exclusions.mark_wrapped_rows(
+                UI.printed_margin,
+                context.width(),
+                body.iter().map(String::as_str),
+                &self.text,
+            );
+        }
         match self.kind {
             TextKind::System => Bordered::exclude_frame(
                 Rect::new(0, 0, context.width(), self.height(context)),
@@ -1178,7 +1213,10 @@ impl OutputBlock {
         } else {
             match cell.value.as_ref() {
                 Some(
-                    M2Value::HashTable(_) | M2Value::Collection { .. } | M2Value::Markup { .. },
+                    M2Value::HashTable(_)
+                    | M2Value::Option { .. }
+                    | M2Value::Collection { .. }
+                    | M2Value::Markup { .. },
                 ) => text.lines().map(str::to_string).collect(),
                 _ => word_lines(&text, width),
             }
@@ -1241,6 +1279,7 @@ impl OutputBlock {
                     Some(
                         value @ (M2Value::Tex { .. }
                         | M2Value::Collection { .. }
+                        | M2Value::Option { .. }
                         | M2Value::HashTable(_)),
                     ),
                 ) => Some(
@@ -1301,6 +1340,21 @@ impl OutputBlock {
 
     fn cell_fold(&self, cell: &OutputCell, context: &RenderContext) -> Option<(usize, usize)> {
         self.fold(self.unfolded_lines(cell, context).len(), context)
+    }
+
+    /// What `cell`'s value reads as on one row, before any wrapping.
+    fn unwrapped_text(cell: &OutputCell, context: &RenderContext) -> String {
+        let spans = match &cell.value {
+            Some(M2Value::Tex { source, .. }) => source
+                .strip_prefix('$')
+                .and_then(|tex| tex.strip_suffix('$'))
+                .and_then(|tex| maths::inline(tex, context.math().blackboard)),
+            _ => None,
+        };
+        spans.map_or_else(
+            || cell.text.clone(),
+            |spans| spans.iter().map(|span| span.content.as_str()).collect(),
+        )
     }
 
     /// Value rows with three rows for the fold control.
@@ -1551,6 +1605,13 @@ impl Block for OutputBlock {
                 exclusions.push(Rect::new(area.x, row + row_count!(head), area.width, 3));
             }
             let values = self.value_lines(cell, context);
+            let drawn: Vec<String> = values.iter().map(ToString::to_string).collect();
+            exclusions.mark_wrapped_rows(
+                row,
+                area.width,
+                drawn.iter().map(String::as_str),
+                &Self::unwrapped_text(cell, context),
+            );
             let types = self.type_lines(cell, context);
             let width = types.iter().map(Line::width).max().unwrap_or_default() as u16;
             let start =
@@ -2774,5 +2835,36 @@ mod tests {
         let before = cell.wrapped(8).text().to_string();
         cell.rehighlight(SourceId::Draft(0), &mut SemanticWords);
         assert_eq!(cell.wrapped(8).text(), before);
+    }
+
+    #[test]
+    fn a_formula_that_only_wrapped_is_marked_to_copy_as_one_line() {
+        let names = [
+            "alphaName",
+            "betaName",
+            "gammaName",
+            "deltaName",
+            "epsilonName",
+        ];
+        let tex = names
+            .iter()
+            .map(|name| format!(r"\mathit{{{name}}}"))
+            .collect::<Vec<_>>()
+            .join(",\\:");
+        let block = OutputBlock::rendered(
+            M2Value::Tex {
+                source: format!("${tex}$"),
+                fallback: names.join(", "),
+                code: names.join(", "),
+            },
+            None,
+        );
+        let context = RenderContext::new(30, 0);
+        let mut exclusions = Exclusions::default();
+        block.local_selection_exclusions(&context, &mut exclusions);
+        let seams = (0..block.height(&context))
+            .filter(|&row| exclusions.seam_at(Position::new(0, row)).is_some())
+            .count();
+        assert!(seams > 0, "{exclusions:?}");
     }
 }

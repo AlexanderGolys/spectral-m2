@@ -282,7 +282,7 @@ impl Editor {
                     _ => "no committed syntax trees",
                 };
                 self.selection_exclusions
-                    .extend(BlockView::new(&blocks, empty).render(
+                    .merge(BlockView::new(&blocks, empty).render(
                         &context,
                         sections[0],
                         frame.buffer_mut(),
@@ -297,7 +297,7 @@ impl Editor {
                     ViewKind::StdOut => self.feed.printed(),
                     _ => self.feed.outputs(),
                 };
-                self.selection_exclusions.extend(
+                self.selection_exclusions.merge(
                     BlockView::new(&blocks, "no matching output").render(
                         &context,
                         sections[0],

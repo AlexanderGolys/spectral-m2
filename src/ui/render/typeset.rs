@@ -357,32 +357,39 @@ impl Block {
                 groups,
                 ink,
             ),
-            M2Value::HashTable(entries) => Self::vertical(
-                entries
-                    .iter()
-                    .map(|[key, value]| {
-                        Self::value(
-                            key,
-                            width.saturating_sub(4).max(1),
-                            groups,
-                            style,
-                            ink,
-                            picture,
-                        )
-                        .beside(Self::text(SPACED_OPTION_ARROW, text_ink(HLGroup::Operator)))
-                        .beside(Self::value(
-                            value,
-                            width.saturating_sub(4).max(1),
-                            groups,
-                            style,
-                            ink,
-                            picture,
-                        ))
-                    })
-                    .collect(),
-                groups,
-                ink,
-            ),
+            M2Value::Option { key, value } => {
+                let part = |part| Self::value(part, width, groups, style, ink, picture);
+                part(key)
+                    .beside(Self::text(SPACED_OPTION_ARROW, text_ink(HLGroup::Operator)))
+                    .beside(part(value))
+            }
+            M2Value::HashTable(entries) => {
+                let part = |part| {
+                    Self::value(
+                        part,
+                        width.saturating_sub(4).max(1),
+                        groups,
+                        style,
+                        ink,
+                        picture,
+                    )
+                };
+                Self::vertical(
+                    entries
+                        .iter()
+                        .map(|[key, value]| {
+                            part(key)
+                                .beside(Self::text(
+                                    SPACED_OPTION_ARROW,
+                                    text_ink(HLGroup::Operator),
+                                ))
+                                .beside(part(value))
+                        })
+                        .collect(),
+                    groups,
+                    ink,
+                )
+            }
         }
     }
 
@@ -497,21 +504,60 @@ mod tests {
     }
 
     #[test]
-    fn an_option_arrow_is_pictured_long() {
+    fn a_list_of_options_is_text_around_any_maths_in_it() {
         let groups = Groups::default();
-        let value = M2Value::Tex {
-            source: r"$a\ \Rightarrow \ 1$".into(),
-            fallback: "a => 1".into(),
-            code: "a => 1".into(),
-        };
-        let picture: Picture = |formula, _, _| {
-            Some(Pictured {
-                lines: vec![Line::raw(formula.tex.to_string())],
-                baseline: 0,
+        let name = |text: &str| {
+            Box::new(M2Value::Token {
+                text: text.into(),
+                role: Role::Symbol,
             })
         };
-        let block = Block::value(&value, 80, &groups, MathStyle::default(), None, picture);
-        assert_eq!(text(&block.lines), [r"a\ \Longrightarrow \ 1"]);
+        let names_only = M2Value::Collection {
+            kind: CollectionKind::List,
+            items: vec![M2Value::Option {
+                key: name("Strategy"),
+                value: Box::new(M2Value::Token {
+                    text: "false".into(),
+                    role: Role::Boolean,
+                }),
+            }],
+        };
+        let block = Block::value(
+            &names_only,
+            80,
+            &groups,
+            MathStyle::default(),
+            None,
+            |_, _, _| panic!("an option of names has no maths to picture"),
+        );
+        assert_eq!(
+            text(&block.lines),
+            [format!("{{Strategy{SPACED_OPTION_ARROW}false}}")]
+        );
+
+        let with_maths = M2Value::Collection {
+            kind: CollectionKind::List,
+            items: vec![M2Value::Option {
+                key: name("half"),
+                value: Box::new(M2Value::Tex {
+                    source: r"$\frac{1}{2}$".into(),
+                    fallback: "1/2".into(),
+                    code: "1/2".into(),
+                }),
+            }],
+        };
+        let block = Block::value(
+            &with_maths,
+            80,
+            &groups,
+            MathStyle::default(),
+            None,
+            spelled,
+        );
+        let drawn = text(&block.lines).join("");
+        assert!(drawn.contains("half"), "{drawn}");
+        assert!(drawn.contains(SPACED_OPTION_ARROW), "{drawn}");
+        assert!(!drawn.contains(r"\Rightarrow"), "{drawn}");
     }
 
     #[test]

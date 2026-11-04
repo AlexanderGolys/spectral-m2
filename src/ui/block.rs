@@ -71,7 +71,7 @@ pub trait Block {
     ) {
         let mut local = Exclusions::default();
         self.local_selection_exclusions(&context.with_width(area.width), &mut local);
-        exclusions.extend(local + Offset::new(i32::from(area.x), i32::from(area.y)));
+        exclusions.merge(local + Offset::new(i32::from(area.x), i32::from(area.y)));
     }
 }
 

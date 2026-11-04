@@ -17,6 +17,7 @@ use crate::ui::graphics::{
     self,
     kitty::{ImageId, Piece},
 };
+use crate::ui::render::selection::Seam;
 use crate::ui::text_object::{Bracket, CharClass};
 
 /// A selectable cell position: a content row and a screen column, so a
@@ -128,6 +129,8 @@ pub struct ScreenCell {
     /// Whether the cell lies outside every selection exclusion, such as a frame,
     /// so a row of such cells with no text still copies as an empty line.
     copyable: bool,
+    /// How the cell's row joins the row above when it only wraps it.
+    seam: Option<Seam>,
 }
 
 impl ScreenCell {
@@ -202,7 +205,7 @@ impl ScreenCapture {
     /// column, a tall fence as the bracket it draws; every picture copies once.
     fn text(&self, region: Region, reach: Reach) -> Option<String> {
         let mut copied = HashSet::new();
-        let mut lines = Vec::new();
+        let mut lines: Vec<String> = Vec::new();
         let mut band: Vec<Vec<(u16, &ScreenCell)>> = Vec::new();
         for row in region.rows() {
             let Some(cells) = self.rows.get(&row) else {
@@ -217,7 +220,18 @@ impl ScreenCapture {
                 band.push(selected);
             }
             if !band.is_empty() && (!self.joined_below(row) || row == *region.rows().end()) {
-                lines.extend(Self::band_line(&band, reach, &mut copied));
+                let seam = band[0].first().and_then(|(_, cell)| cell.seam);
+                match (
+                    Self::band_line(&band, reach, &mut copied),
+                    seam,
+                    lines.last_mut(),
+                ) {
+                    (Some(line), Some(seam), Some(above)) => {
+                        above.push_str(seam.text());
+                        above.push_str(line.trim_start());
+                    }
+                    (line, ..) => lines.extend(line),
+                }
                 band.clear();
             }
         }
@@ -524,17 +538,24 @@ impl Editor {
                     })
                     .collect();
                 let selectable = selectable_columns(&symbols, &allowed);
+                let seams: Vec<Option<Seam>> = (area.x..area.right())
+                    .map(|x| self.selection_exclusions.seam_at(Position::new(x, y)))
+                    .collect();
                 let cells = symbols
                     .into_iter()
                     .zip(pictures)
                     .zip(selectable)
                     .zip(allowed)
-                    .map(|(((symbol, picture), selectable), copyable)| ScreenCell {
-                        symbol,
-                        picture,
-                        selectable,
-                        copyable,
-                    })
+                    .zip(seams)
+                    .map(
+                        |((((symbol, picture), selectable), copyable), seam)| ScreenCell {
+                            symbol,
+                            picture,
+                            selectable,
+                            copyable,
+                            seam,
+                        },
+                    )
                     .collect();
                 (row, cells)
             })
@@ -648,6 +669,7 @@ mod tests {
                     picture: None,
                     selectable: true,
                     copyable: true,
+                    seam: None,
                 })
                 .collect()
         };
@@ -658,6 +680,26 @@ mod tests {
                 .map(|row| (row, line()))
                 .collect(),
         }
+    }
+
+    #[test]
+    fn a_wrapped_row_copies_as_part_of_the_line_it_continues() {
+        let area = Rect::new(0, 0, 2, 3);
+        let mut capture = pane(area, "ab");
+        for cell in capture.rows.get_mut(&1).unwrap() {
+            cell.seam = Some(Seam::Space);
+        }
+        for cell in capture.rows.get_mut(&2).unwrap() {
+            cell.seam = Some(Seam::Direct);
+        }
+        let region = Region::Flow {
+            start: ScreenPosition::new(0, 0),
+            end: ScreenPosition::new(1, 2),
+        };
+        assert_eq!(
+            capture.text(region, Reach::Copyable).as_deref(),
+            Some("ab abab")
+        );
     }
 
     fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
@@ -683,6 +725,7 @@ mod tests {
                         picture: None,
                         selectable: symbol != ' ',
                         copyable: line.is_some(),
+                        seam: None,
                     }
                 })
                 .collect()
@@ -725,12 +768,14 @@ mod tests {
             }),
             selectable: true,
             copyable: true,
+            seam: None,
         };
         let text = |symbol: &str| ScreenCell {
             symbol: symbol.to_string(),
             picture: None,
             selectable: true,
             copyable: true,
+            seam: None,
         };
         // The same two-by-two picture shown twice, at columns 0 and 3.
         let pictured = |between: &str| vec![piece(0), piece(0), text(between), piece(3), piece(3)];
@@ -783,6 +828,7 @@ mod tests {
             picture: None,
             selectable: true,
             copyable: true,
+            seam: None,
         }
     }
 
@@ -859,6 +905,7 @@ mod tests {
             }),
             selectable: true,
             copyable: true,
+            seam: None,
         };
         // `{a/b, c/d}` with each fraction a picture two rows high, between braces
         // drawn from their halves.

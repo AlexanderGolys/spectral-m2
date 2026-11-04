@@ -1501,7 +1501,7 @@ impl Editor {
                 .canvas(context.groups().transcript()),
         );
         self.feed_top = -(self.feed.offset() as i64);
-        self.selection_exclusions.extend(exclusions);
+        self.selection_exclusions.merge(exclusions);
         if let Some(link) = self.pointer.and_then(|pointer| self.feed.link_at(pointer)) {
             let hovered = context.groups().style(match self.control_held {
                 true => HLGroup::MarkupLinkOpen,

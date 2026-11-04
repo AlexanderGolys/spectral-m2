@@ -193,10 +193,9 @@ pub fn spans(
         M2Value::Collection { kind, items } if *kind != CollectionKind::VerticalList => Ok(
             MathBlock::fitted(MathBlock::listed(*kind, items, width, style), width),
         ),
-        M2Value::Collection { .. } | M2Value::HashTable(_) => Ok(MathBlock::fitted(
-            vec![MathBlock::value(value, style)],
-            width,
-        )),
+        M2Value::Collection { .. } | M2Value::HashTable(_) | M2Value::Option { .. } => Ok(
+            MathBlock::fitted(vec![MathBlock::value(value, style)], width),
+        ),
         M2Value::Token { text, role } => Ok(prose(text, role.group(), width)),
         M2Value::Net(text) => Ok(prose(text, HLGroup::String, width)),
         M2Value::Markup { html, .. } => markup::spans(html, width)
@@ -772,11 +771,8 @@ const CONSTANT_COMMANDS: [(&str, &str); 3] = [
 /// is drawn, and `CatalanConstant`.
 const CONSTANT_LETTERS: [(&str, &str); 3] = [("mathbf", "i"), ("mathrm", "i"), ("mathrm", "G")];
 /// How a picture redraws what M2 sets: the bold imaginary unit stands out among italic
-/// letters, so it is upright; `=>` is as long as the terminal's [`OPTION_ARROW`].
-const PICTURED_FORMS: [(&str, &str); 2] = [
-    (r"\mathbf{i}", r"\mathrm{i}"),
-    (r"\Rightarrow", r"\Longrightarrow"),
-];
+/// letters, so it is upright.
+const PICTURED_FORMS: [(&str, &str); 1] = [(r"\mathbf{i}", r"\mathrm{i}")];
 /// The words code paints as Booleans.
 const BOOLEAN_WORDS: [&str; 2] = ["true", "false"];
 /// The word code paints as a builtin among those M2 sets in typewriter face.
@@ -1376,6 +1372,11 @@ impl MathBlock {
                 .into_iter()
                 .next()
                 .expect("an unbounded width takes a collection on one line"),
+            M2Value::Option { key, value } => Self::row([
+                Self::value(key, style),
+                Self::atom(SPACED_OPTION_ARROW, HLGroup::Operator),
+                Self::value(value, style),
+            ]),
             M2Value::HashTable(entries) => Self::braced(
                 entries
                     .iter()
