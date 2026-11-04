@@ -21,7 +21,7 @@ use super::block::{Block, Element, HLSpan, Link, Text};
 use super::element::paste;
 use super::render::maths::MathDisplay;
 use super::render::selection::Exclusions;
-use super::render::spin::{busy_frame, Tick};
+use super::render::spin::busy_frame;
 use super::render::{markup, maths};
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::wrap::WrappedText;
@@ -184,10 +184,7 @@ impl CellMarker {
                     CellState::Value | CellState::Muted | CellState::Null => groups.cell_number(),
                 },
             ),
-            Self::Pending => (
-                busy_frame(&Tick::new(0)).into(),
-                groups.pending_cell_marker(),
-            ),
+            Self::Pending => (busy_frame().into(), groups.pending_cell_marker()),
             Self::Queued => (
                 UI.glyphs.unevaluated_cell.current().into(),
                 groups.queued_cell_marker(),
@@ -1055,6 +1052,7 @@ struct OutputCell {
 /// Retained ordinary value rows, independent of folding and output labels.
 struct ValueLayout {
     width: u16,
+    pixel_cell: Option<ratatui::layout::Size>,
     math: maths::MathStyle,
     groups: &'static crate::ui::controller::settings::theme::groups::Groups,
     lines: Rc<Vec<Line<'static>>>,
@@ -1184,8 +1182,12 @@ impl OutputBlock {
                 return lines;
             }
         }
+        let pixel_cell = (style.display == MathDisplay::Typeset)
+            .then(super::graphics::cell_size)
+            .flatten();
         if let Some(layout) = cell.layout.borrow().as_ref().filter(|layout| {
             layout.width == width as u16
+                && layout.pixel_cell == pixel_cell
                 && layout.math == style
                 && std::ptr::eq(layout.groups, theme)
         }) {
@@ -1205,6 +1207,13 @@ impl OutputBlock {
                 (MathDisplay::Typeset, Some(value)) => {
                     Some(super::render::typeset::lines(value, width, theme, style))
                 }
+                (MathDisplay::Ascii, Some(M2Value::Type(value))) => Some(
+                    value
+                        .ascii()
+                        .lines()
+                        .map(|line| Line::from(Span::styled(line.to_string(), theme.type_info())))
+                        .collect(),
+                ),
                 (
                     MathDisplay::Ascii,
                     Some(
@@ -1251,6 +1260,7 @@ impl OutputBlock {
         let lines = Rc::new(lines);
         cell.layout.replace(Some(ValueLayout {
             width: width as u16,
+            pixel_cell,
             math: style,
             groups: theme,
             lines: lines.clone(),

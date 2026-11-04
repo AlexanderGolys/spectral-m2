@@ -1,22 +1,11 @@
-//! Semantic content retained beside the cells it last resolved into.
+//! Wrapping of semantic lines of spans.
 //!
-//! Content is held as lines of spans carrying [`HLGroup`]s, never resolved `Style`s,
-//! because a scheme decides how groups map onto styles and a scheme can change. A
-//! resolution runs three stages the content itself outlives: wrapping the spans to a
-//! width, resolving their groups through a scheme, and painting the result into cells.
-//!
-//! Only the ends of that pipeline are kept. Between resolutions the cells are what
-//! every parent pastes, so nothing here runs again until a width or a scheme moves.
+//! Content is held as lines of spans carrying `HLGroup`s, never resolved `Style`s,
+//! because a scheme decides how groups map onto styles and a scheme can change. Wrapping
+//! therefore works on the spans themselves and leaves their groups untouched.
 
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::text::Line;
-use ratatui::widgets::{Paragraph, Widget};
-
-use super::block::{Text, TextSpan};
-use super::controller::settings::theme::groups::Groups;
-use super::wrap::{WordWrap, WrapPolicy};
+use super::block::TextSpan;
+use super::wrap::WrapPolicy;
 
 /// One logical line of semantic spans, before any width is known.
 pub type SpanLine = Vec<TextSpan>;
@@ -52,56 +41,11 @@ pub fn wrap(line: &[TextSpan], width: u16, policy: &dyn WrapPolicy) -> Vec<SpanL
         .collect()
 }
 
-/// Semantic lines an element re-resolves on demand, beside the cells they last painted.
-///
-/// The wrapping policy is fixed per presentation rather than per resolution, because
-/// it belongs to the kind of content held: prose breaks at words, code at the token
-/// boundaries its own spans already mark.
-pub struct Presentation {
-    lines: Vec<SpanLine>,
-    policy: Box<dyn WrapPolicy + Send>,
-    cells: Buffer,
-}
-
-impl Presentation {
-    pub fn new(lines: Vec<SpanLine>, policy: impl WrapPolicy + Send + 'static) -> Self {
-        Self {
-            lines,
-            policy: Box::new(policy),
-            cells: Buffer::empty(Rect::ZERO),
-        }
-    }
-
-    /// Hold prose, broken at word boundaries.
-    pub fn prose(lines: Vec<SpanLine>) -> Self {
-        Self::new(lines, WordWrap)
-    }
-
-    /// Rebuild the cells by wrapping to `width` and resolving groups through `groups`.
-    pub fn resolve(&mut self, width: u16, groups: &Groups, base: Style) {
-        let rows = self
-            .lines
-            .iter()
-            .flat_map(|line| wrap(line, width, self.policy.as_ref()))
-            .map(|row| Line::from(row.spans(groups)))
-            .collect::<Vec<_>>();
-        let height = u16::try_from(rows.len()).unwrap_or(u16::MAX);
-        let area = Rect::new(0, 0, width, height);
-        self.cells = Buffer::empty(area);
-        Paragraph::new(rows)
-            .style(base)
-            .render(area, &mut self.cells);
-    }
-
-    pub fn cells(&self) -> &Buffer {
-        &self.cells
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ui::controller::settings::theme::groups::HLGroup;
+    use crate::ui::wrap::WordWrap;
 
     fn line() -> SpanLine {
         vec![
@@ -133,33 +77,5 @@ mod tests {
         assert_eq!(rows[0][0].content, "abcd");
         assert_eq!(rows[1][0].content, "efgh");
         assert!(rows.iter().all(|row| row[0].kind == HLGroup::Variable));
-    }
-
-    #[test]
-    fn resolving_paints_each_group_through_the_scheme() {
-        let groups = Groups::default();
-        let mut presentation = Presentation::prose(vec![line()]);
-
-        presentation.resolve(20, &groups, Style::new());
-
-        let cells = presentation.cells();
-        assert_eq!(cells.area().width, 20);
-        assert_eq!(cells[(0, 0)].symbol(), "h");
-        assert_eq!(cells[(0, 0)].fg, groups.style(HLGroup::Keyword).fg.unwrap());
-        assert_eq!(
-            cells[(6, 0)].fg,
-            groups.style(HLGroup::Variable).fg.unwrap()
-        );
-    }
-
-    #[test]
-    fn rescheming_repaints_the_same_wrapped_content() {
-        let mut presentation = Presentation::prose(vec![line()]);
-        presentation.resolve(8, &Groups::default(), Style::new());
-        let wrapped = presentation.cells().area().height;
-
-        presentation.resolve(8, &Groups::default(), Style::new());
-
-        assert_eq!(presentation.cells().area().height, wrapped);
     }
 }

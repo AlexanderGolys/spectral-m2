@@ -184,6 +184,14 @@ pub fn spans(
 ) -> Result<Vec<SpanLine>, Unsupported> {
     let style = style.into();
     match value {
+        M2Value::Type(inner) => {
+            let mut rows = spans(inner, width, style)
+                .unwrap_or_else(|_| MathBlock::fitted(vec![MathBlock::value(inner, style)], width));
+            for span in rows.iter_mut().flatten() {
+                span.kind = HLGroup::Type;
+            }
+            Ok(rows)
+        }
         M2Value::Tex { source, .. } => {
             Ok(Math::from_tex(source, style.blackboard)?.wrapped(width, style.fractions))
         }
@@ -209,21 +217,25 @@ pub fn spans(
 }
 
 /// A value's type annotation as rows no wider than `width`, its pieces set side by
-/// side from their own structure and painted in the type's colour throughout.
+/// side with each mathematical component retaining its semantic colour.
 pub fn annotation(parts: &[M2Value], width: usize, style: impl Into<MathStyle>) -> Vec<SpanLine> {
     let style = style.into();
     let line = MathBlock::row(parts.iter().map(|part| MathBlock::value(part, style)));
     MathBlock::fitted(vec![line], width)
-        .into_iter()
-        .map(|row| {
-            row.into_iter()
-                .map(|span| TextSpan {
-                    kind: HLGroup::Type,
-                    ..span
-                })
-                .collect()
-        })
-        .collect()
+}
+
+/// The TeX between a pair of `$` set on a single row, as running text sets maths:
+/// fractions along the row. `None` when this renderer does not read it, or it needs
+/// more rows than one -- a matrix cannot sit inside a line of prose.
+pub fn inline(tex: &str, blackboard: bool) -> Option<String> {
+    let rows = Math::parse_with(tex, blackboard)
+        .ok()?
+        .layout(FractionStyle::Inline)
+        .into_rows();
+    let [row] = rows.as_slice() else {
+        return None;
+    };
+    Some(row.iter().map(|span| span.content.as_str()).collect())
 }
 
 /// `text` as TeX set in a typewriter font, escaped so it reads back as written.
@@ -433,9 +445,17 @@ impl<'a> Input<'a> {
                     exponent: Box::new(self.atom()?),
                 };
             } else if self.eat("_") {
+                let start = self.at;
+                let first_highlight = self.highlights.len();
+                let mut subscript = self.atom()?;
+                if base.is_type_name() && matches!(&subscript, Math::Atom { .. }) {
+                    subscript = subscript.retag(HLGroup::Type);
+                    self.highlights.truncate(first_highlight);
+                    self.highlights.push((start..self.at, HLGroup::Type));
+                }
                 base = Math::Index {
                     base: Box::new(base),
-                    subscript: Box::new(self.atom()?),
+                    subscript: Box::new(subscript),
                 };
             } else {
                 return Ok(base);
@@ -729,7 +749,7 @@ const SPACING: [&str; 8] = [
 ];
 const OPERATORS: &str = "+-=<>/*@:~?!%";
 /// Operators TeX spells as a command, with the glyph a terminal draws for each.
-const OPERATOR_COMMANDS: [(&str, &str); 17] = [
+const OPERATOR_COMMANDS: [(&str, &str); 20] = [
     ("wedge", "\u{2227}"),
     ("vee", "\u{2228}"),
     ("otimes", "\u{2297}"),
@@ -747,6 +767,10 @@ const OPERATOR_COMMANDS: [(&str, &str); 17] = [
     ("Longleftarrow", "\u{27F8}"),
     ("leq", "\u{2264}"),
     ("geq", "\u{2265}"),
+    ("infty", "\u{221E}"),
+    ("cdots", "\u{22EF}"),
+    // U+2026 is East Asian Ambiguous, so the low ellipsis is three full stops.
+    ("ldots", "..."),
 ];
 const DELIMITERS: &str = "()[]{}|.";
 /// The pieces a fence grows from when taller than a row: top, extension, bottom,
@@ -895,6 +919,15 @@ impl Math {
         self.retag(kind)
     }
 
+    /// Whether this is a type name, including an interval field's prefix.
+    fn is_type_name(&self) -> bool {
+        match self {
+            Self::Atom { kind, .. } => *kind == HLGroup::Type,
+            Self::Row(pieces) => !pieces.is_empty() && pieces.iter().all(Self::is_type_name),
+            _ => false,
+        }
+    }
+
     /// Give every atom in a subtree a different role.
     fn retag(self, kind: HLGroup) -> Self {
         match self {
@@ -957,8 +990,12 @@ impl Math {
                             }
                             _ => subscript.inline_operand(FractionStyle::Inline),
                         };
-                        base.beside(MathBlock::atom("_", HLGroup::Operator))
-                            .beside(written)
+                        let separator = if subscript.is_type_name() {
+                            HLGroup::Type
+                        } else {
+                            HLGroup::Operator
+                        };
+                        base.beside(MathBlock::atom("_", separator)).beside(written)
                     }
                 }
             }
@@ -1150,6 +1187,14 @@ pub struct MathBlock {
 }
 
 impl MathBlock {
+    /// Paint a complete semantic value without changing its layout.
+    fn retag(mut self, kind: HLGroup) -> Self {
+        for span in self.rows.iter_mut().flatten() {
+            span.kind = kind;
+        }
+        self
+    }
+
     fn atom(text: &str, kind: HLGroup) -> Self {
         Self {
             rows: vec![vec![TextSpan::new(text, kind)]],
@@ -1178,7 +1223,7 @@ impl MathBlock {
         self.rows
     }
 
-    #[cfg(test)]
+    /// The row that aligns with neighbouring blocks.
     pub const fn baseline(&self) -> usize {
         self.baseline
     }
@@ -1277,6 +1322,7 @@ impl MathBlock {
     /// that text.
     fn value(value: &M2Value, style: MathStyle) -> Self {
         match value {
+            M2Value::Type(value) => Self::value(value, style).retag(HLGroup::Type),
             M2Value::Tex {
                 source, fallback, ..
             } => Math::from_tex(source, style.blackboard).map_or_else(
@@ -1719,6 +1765,35 @@ mod tests {
         let parsed = Math::parse(r"\mathbb{Z}").expect("a ring parses");
 
         assert_eq!(parsed, atom("ZZ", HLGroup::Type));
+    }
+
+    #[test]
+    fn a_rings_precision_subscript_shares_its_type_colour() {
+        let groups = Groups::default();
+        for precision in ["53", "p"] {
+            let source = format!(r"{{\mathbb R}}_{{{precision}}}");
+            let rows = Math::parse(&source)
+                .unwrap()
+                .wrapped(80, FractionStyle::Stacked);
+            assert!(rows.iter().flatten().all(|span| span.kind == HLGroup::Type));
+            let painted = colored_tex(&source, &groups);
+            let Color::Rgb(r, g, b) = groups.style(HLGroup::Type).fg.unwrap() else {
+                panic!("the theme has an RGB type colour");
+            };
+            assert!(
+                painted.contains(&format!(
+                    r"_{{\color{{#{r:02x}{g:02x}{b:02x}}}{{{precision}}}}}"
+                )),
+                "{painted}"
+            );
+        }
+        let rows = Math::parse("x_{2}")
+            .unwrap()
+            .wrapped(80, FractionStyle::Stacked);
+        assert!(rows
+            .iter()
+            .flatten()
+            .any(|span| span.kind == HLGroup::Number));
     }
 
     #[test]
@@ -2383,6 +2458,7 @@ mod tests {
             (r"$x\mid\midx$", "x||x"),
             (r"$x\ \Rightarrow \ x$", "x⇒x"),
             (r"$x\Longrightarrow x$", "x⟹x"),
+            (r"$x\ \Rightarrow \ \infty$", "x⇒∞"),
         ] {
             assert_eq!(rendered(source, false), drawn);
             let kinds = Math::from_tex(source, false)
@@ -2398,6 +2474,12 @@ mod tests {
                 "{source} should colour its operators alone, got {kinds:?}"
             );
         }
+    }
+
+    #[test]
+    fn ellipses_are_drawn_on_the_row_of_their_neighbours() {
+        assert_eq!(rendered(r"$x,\cdots$", false), "x, ⋯");
+        assert_eq!(rendered(r"$x,\ldots$", false), "x, ...");
     }
 
     #[test]

@@ -511,7 +511,10 @@ mod tests {
         };
         assert_eq!(key!(Char('o') + Ctrl).to_string(), format!("{ctrl}+o"));
         assert_eq!(key!(Char('/') + Ctrl).to_string(), format!("{ctrl}+/"));
-        assert_eq!(key!(Left + Ctrl + Shift).to_string(), format!("{ctrl}+shift+left"));
+        assert_eq!(
+            key!(Left + Ctrl + Shift).to_string(),
+            format!("{ctrl}+shift+left")
+        );
 
         let keymaps = Keymaps::default();
         for (command, _) in keymaps.remappable() {

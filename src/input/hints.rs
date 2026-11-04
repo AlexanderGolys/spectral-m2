@@ -30,7 +30,7 @@ impl Hint {
         "Use `help x` to see the documentation node with key x",
         "Use `help(m, T, S)` to see the docs of method `m` with domain `(T, S)`",
         "Use prefix `?` to see a brief documentation summary of an object",
-        "Use `method T` to see all methods having type T as domain component",
+        "Use `method T` to see all installed methods  you can use for type T",
         "Use `method foo` to see all methods installed for function `foo`",
         "Factorial has higher precedence than adjacency, so `sin(2)! == sin(6)`",
         "Newline ends expression if it can, otherwise acts as whitespace",

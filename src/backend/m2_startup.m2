@@ -72,7 +72,7 @@ announceReady := (() -> (
     --     net => text                   tex => {source, fallback, code}
     --     markup => {html, fallback,    hashtable => {{key, value}, ...}
     --         exampleWidth}
-    --     collection => {kind, items}
+    --     collection => {kind, items}   type => rendered type value
     --
     -- A value is either drawn whole by one of M2's own formatters, or it is a
     -- container whose entries are rendered one by one, so the shell can set
@@ -211,7 +211,10 @@ announceReady := (() -> (
     -- which is also a Type, draws itself, and so does a family of rings such as
     -- RR and CC, which stands for the ring at default precision.
     render Type := HashTable => value -> (
-        if instance(value, Ring) or instance(value, RingFamily) then renderMutableHashTable value
+        if instance(value, Ring) or instance(value, RingFamily) then
+            if hasAttribute(value, reverseDictionary) then
+                hashTable {symbol type => renderMutableHashTable value}
+            else renderMutableHashTable value
         else asToken(toString value, "type")
     );
     render Package := HashTable => value -> asToken(toString value, "package");

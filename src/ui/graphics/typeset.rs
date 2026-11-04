@@ -287,6 +287,8 @@ mod tests {
             r"x+2=y",
             r"x^{2}+\frac{1}{3}",
             r"\mathbb{Q}\left[x,y\right]",
+            r"{\mathbb R}_{53}\left[x_2\right]",
+            r"{\mathcal O}_{\texttt{Proj}\left({\mathbb R}_{6}\mathopen{}\left[x_{1},\,y_{\left\{\left\{1\right\}\right\}},\,w\right]\right)}^{5}\left(-2\right)",
             r"\left(\begin{matrix}x&2\\3&y\end{matrix}\right)",
             r"\texttt{MdCode}\left\{\texttt{ring R}\right\},\,\texttt{ -- get the ring}",
         ] {

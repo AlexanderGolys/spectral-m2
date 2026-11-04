@@ -33,17 +33,8 @@ pub fn annotation(
     groups: &Groups,
     style: MathStyle,
 ) -> Vec<Line<'static>> {
-    let ink = groups.style(HLGroup::Type);
-    let block = |part: &M2Value| {
-        Block::value(
-            part,
-            width.max(1),
-            groups,
-            style,
-            Some(ink),
-            graphics::typeset,
-        )
-    };
+    let block =
+        |part: &M2Value| Block::value(part, width.max(1), groups, style, None, graphics::typeset);
     let blocks = match formula(parts) {
         Some(formula) => vec![block(&formula)],
         None => parts.iter().map(block).collect(),
@@ -69,7 +60,7 @@ fn formula(parts: &[M2Value]) -> Option<M2Value> {
                 fallback.push_str(net);
                 code.push_str(spelling);
             }
-            M2Value::Token { text, .. } => {
+            M2Value::Token { text, role } if *role != crate::backend::Role::Type => {
                 tex.push_str(&maths::typewriter(text));
                 fallback.push_str(text);
                 code.push_str(text);
@@ -148,7 +139,9 @@ impl Block {
     }
 
     fn fence(&self, text: &str, groups: &Groups, ink: Option<Style>) -> Self {
-        let lines = MathBlock::fence(text, self.lines.len(), self.baseline)
+        let fence = MathBlock::fence(text, self.lines.len(), self.baseline);
+        let baseline = fence.baseline();
+        let lines = fence
             .into_rows()
             .into_iter()
             .map(|row| {
@@ -161,10 +154,7 @@ impl Block {
                 Line::from(spans)
             })
             .collect();
-        Self {
-            lines,
-            baseline: self.baseline,
-        }
+        Self { lines, baseline }
     }
 
     fn fenced(self, open: &str, close: &str, groups: &Groups, ink: Option<Style>) -> Self {
@@ -183,6 +173,14 @@ impl Block {
     ) -> Self {
         let text_ink = |kind| ink.unwrap_or_else(|| groups.style(kind));
         match value {
+            M2Value::Type(value) => Self::value(
+                value,
+                width,
+                groups,
+                style,
+                Some(text_ink(HLGroup::Type)),
+                picture,
+            ),
             M2Value::Tex {
                 source,
                 fallback,
@@ -342,6 +340,37 @@ mod tests {
     use super::*;
     use crate::backend::Role;
 
+    #[test]
+    fn mathematical_types_keep_their_colour_in_pictures_and_text_fallbacks() {
+        let groups = Groups::default();
+        let style = MathStyle::default();
+        let value = M2Value::Type(Box::new(M2Value::Tex {
+            source: "$R$".into(),
+            fallback: "R".into(),
+            code: "R".into(),
+        }));
+        let picture: Picture = |formula, ink, _| {
+            let groups = Groups::default();
+            let Some(Color::Rgb(r, g, b)) = groups.style(HLGroup::Type).fg else {
+                panic!("an RGB type colour");
+            };
+            assert_eq!(ink, Rgb([r, g, b]));
+            assert_eq!(formula.tex, "R");
+            assert_eq!(formula.painted, "R");
+            assert_eq!(formula.code, "R");
+            Some(vec![Line::raw("R")])
+        };
+        let block = Block::value(&value, 80, &groups, style, None, picture);
+        assert_eq!(text(&block.lines), ["R"]);
+        let fallback = Block::value(&value, 80, &groups, style, None, |_, _, _| None);
+        assert_eq!(text(&fallback.lines), ["R"]);
+        assert!(fallback
+            .lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .all(|span| span.style == groups.style(HLGroup::Type)));
+    }
+
     fn picture(formula: Typesetting, _: Rgb, _: u16) -> Option<Vec<Line<'static>>> {
         assert_eq!(formula.tex, r"\frac{2}{3}");
         Some(vec![Line::raw("2"), Line::raw("─"), Line::raw("3")])
@@ -357,6 +386,22 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    #[test]
+    fn angle_bar_delimiters_align_with_a_tall_formula_baseline() {
+        let groups = Groups::default();
+        let value = M2Value::Collection {
+            kind: CollectionKind::AngleBarList,
+            items: vec![M2Value::Tex {
+                source: r"$\frac{2}{3}$".into(),
+                fallback: "2/3".into(),
+                code: "2/3".into(),
+            }],
+        };
+        let block = Block::value(&value, 80, &groups, MathStyle::default(), None, picture);
+        assert_eq!(text(&block.lines), ["  2  ", "<|─|>", "  3  "]);
+        assert_eq!(block.baseline, 1);
     }
 
     #[test]
@@ -395,6 +440,41 @@ mod tests {
             assert!(block.lines[1].spans.iter().any(
                 |span| span.content == "null" && span.style == groups.style(HLGroup::Constant)
             ));
+        }
+    }
+
+    #[test]
+    fn annotation_formulas_keep_component_colours() {
+        let groups = Groups::default();
+        let parts = [M2Value::Tex {
+            source: r"$\texttt{Proj}\left({\mathbb R}_{53}\left[x_1\right]\right)$".into(),
+            fallback: "Proj(RR_53[x_1])".into(),
+            code: "Proj(RR_53[x_1])".into(),
+        }];
+        let rows = maths::annotation(&parts, 80, MathStyle::default());
+        let drawn = annotation(&parts, 80, &groups, MathStyle::default());
+        for kind in [
+            HLGroup::Type,
+            HLGroup::Variable,
+            HLGroup::Number,
+            HLGroup::Delimiter,
+        ] {
+            assert!(rows.iter().flatten().any(|span| span.kind == kind));
+            assert!(drawn
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| span.style == groups.style(kind)));
+        }
+        let joined = formula(&parts).expect("a combined annotation formula");
+        let M2Value::Tex { source, .. } = joined else {
+            panic!("an annotation formula has TeX");
+        };
+        let painted = maths::colored_tex(source.trim_matches('$'), &groups);
+        for kind in [HLGroup::Variable, HLGroup::Number, HLGroup::Delimiter] {
+            let Some(Color::Rgb(r, g, b)) = groups.style(kind).fg else {
+                panic!("an RGB component colour");
+            };
+            assert!(painted.contains(&format!(r"\color{{#{r:02x}{g:02x}{b:02x}}}")));
         }
     }
 

@@ -55,7 +55,7 @@ Variable = { link = "Text", captures = ["variable"] }
 Method = { link = "Function" }
 TypeParameter = { link = "Type" }
 SemanticCommand = { link = "Function" }
-RingGenerator = { link = "Symbol" }
+RingGenerator = { link = "Parameter" }
 Option = { link = "Property" }
 File = { link = "String" }
 # A plain value adds nothing to its syntax colour, as `@lsp.type.variable` in Neovim.

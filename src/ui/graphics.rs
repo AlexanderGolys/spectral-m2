@@ -1,6 +1,6 @@
 //! Pictures in the transcript, drawn through the terminal's graphics protocol.
 //!
-//! What the terminal can draw is learned once, as it starts, and read from here as
+//! What the terminal can draw is learned as it starts, and read from here as
 //! the scheme is: it is a fact about the terminal, not state any element owns. A
 //! picture is made while the value it shows is laid out, kept for every later
 //! layout, and sent to the terminal after the frame that first places it.
@@ -51,7 +51,7 @@ struct Canvas {
 }
 
 /// Set only when the terminal answered that it shows kitty pictures.
-static CANVAS: OnceLock<Canvas> = OnceLock::new();
+static CANVAS: OnceLock<Mutex<Canvas>> = OnceLock::new();
 
 static GALLERY: LazyLock<Mutex<Gallery>> = LazyLock::new(|| {
     Mutex::new(Gallery {
@@ -73,7 +73,7 @@ pub fn detect() {
         false => queried_canvas(),
     };
     if let Some(canvas) = canvas {
-        let _ = CANVAS.set(canvas);
+        let _ = CANVAS.set(Mutex::new(canvas));
     }
 }
 
@@ -159,6 +159,38 @@ pub fn available() -> bool {
     CANVAS.get().is_some()
 }
 
+/// The pixel dimensions used to draw pictures in each terminal cell.
+pub fn cell_size() -> Option<Size> {
+    CANVAS.get()?.lock().ok().map(|canvas| canvas.cell)
+}
+
+/// Refresh the cell's pixel dimensions after terminal zoom or a display change.
+/// Returns whether pictures need to be laid out again, keeping the last valid
+/// dimensions when the terminal reports no pixel size.
+pub fn refresh_cell_size() -> bool {
+    let Some(canvas) = CANVAS.get() else {
+        return false;
+    };
+    let Ok(window) = window_size() else {
+        return false;
+    };
+    if window.columns == 0 || window.rows == 0 {
+        return false;
+    }
+    let cell = Size::new(window.width / window.columns, window.height / window.rows);
+    if cell.width == 0 || cell.height == 0 {
+        return false;
+    }
+    let mut canvas = canvas
+        .lock()
+        .expect("the canvas lock is never held across a panic");
+    if canvas.cell == cell {
+        return false;
+    }
+    canvas.cell = cell;
+    true
+}
+
 /// A formula to draw: its TeX, that TeX with theme colour scopes, and the M2 code
 /// a copy of its picture gives.
 #[derive(Clone, Copy, Debug)]
@@ -172,7 +204,7 @@ pub struct Typesetting<'a> {
 /// placeholder lines no wider than `width`, or none when pictures are unavailable
 /// or the formula cannot be set legibly in that width.
 pub fn typeset(formula: Typesetting, colour: Rgb, width: u16) -> Option<Vec<Line<'static>>> {
-    let canvas = *CANVAS.get()?;
+    let canvas = *CANVAS.get()?.lock().ok()?;
     gallery()
         .formula(formula, colour, canvas, width)
         .map(|image| image.lines())
@@ -185,7 +217,10 @@ pub fn source(id: ImageId) -> Option<String> {
 
 /// Escape sequences storing every picture made since the last call.
 pub fn unsent() -> String {
-    let Some(canvas) = CANVAS.get() else {
+    let Some(canvas) = CANVAS
+        .get()
+        .and_then(|canvas| canvas.lock().ok().map(|canvas| *canvas))
+    else {
         return String::new();
     };
     gallery()
@@ -198,10 +233,11 @@ pub fn unsent() -> String {
 /// Send every picture again through tmux, which drops those sent while its pane
 /// is hidden; called each time the pane regains focus.
 pub fn resend_all() {
-    if !CANVAS
-        .get()
-        .is_some_and(|canvas| canvas.passthrough == Passthrough::Tmux)
-    {
+    if !CANVAS.get().is_some_and(|canvas| {
+        canvas
+            .lock()
+            .is_ok_and(|canvas| canvas.passthrough == Passthrough::Tmux)
+    }) {
         return;
     }
     let mut gallery = gallery();
@@ -222,9 +258,9 @@ fn gallery() -> MutexGuard<'static, Gallery> {
 
 /// A formula as set in one colour.
 type FormulaKey = (String, Rgb);
-/// A formula's picture at a number of columns, for the code it copies as: values
-/// sharing TeX but not code each get their own picture to copy from.
-type ImageKey = (FormulaKey, u16, String);
+/// A formula's picture at a column count and cell pixel size, for its copied code.
+/// Values sharing TeX but not code each get their own picture to copy from.
+type ImageKey = (FormulaKey, u16, Size, String);
 
 /// A formula's vector picture and the places it may be cut into rows.
 struct Formula {
@@ -236,7 +272,7 @@ struct Formula {
 struct Gallery {
     /// Each formula's vector picture, or none when RaTeX refused it.
     formulas: HashMap<FormulaKey, Option<Arc<Formula>>>,
-    /// Each formula rasterised to a number of columns.
+    /// Each formula rasterised to a number of columns at a cell pixel size.
     images: HashMap<ImageKey, Option<Arc<KittyImage>>>,
     last_id: ImageId,
     unsent: Vec<Arc<KittyImage>>,
@@ -266,7 +302,7 @@ impl Gallery {
             })
             .clone()?;
         let raster = Raster::fitted(&formula, canvas, width)?;
-        let image_key = (key, raster.cells.width, code.to_string());
+        let image_key = (key, raster.cells.width, canvas.cell, code.to_string());
         if let Some(image) = self.images.get(&image_key) {
             return image.clone();
         }
@@ -464,6 +500,15 @@ mod tests {
             raster.cells.height > 1,
             "a fraction stands taller than a row"
         );
+
+        let enlarged = Canvas {
+            cell: Size::new(CANVAS.cell.width * 2, CANVAS.cell.height * 2),
+            ..CANVAS
+        };
+        let zoomed = Raster::fitted(&formula, enlarged, 80).unwrap();
+        let zoomed = Pixmap::decode_png(&zoomed.png(&formula.tree).unwrap()).unwrap();
+        assert_eq!(zoomed.width(), pixmap.width() * 2);
+        assert_eq!(zoomed.height(), pixmap.height() * 2);
     }
 
     #[test]
@@ -527,5 +572,20 @@ mod tests {
             gallery.sources.get(&gallery.last_id).map(String::as_str),
             Some(square.code)
         );
+
+        let enlarged = Canvas {
+            cell: Size::new(CANVAS.cell.width * 2, CANVAS.cell.height * 2),
+            ..CANVAS
+        };
+        let original = gallery.formula(square, ink, CANVAS, 80).unwrap();
+        let zoomed = gallery.formula(square, ink, enlarged, 80).unwrap();
+        assert!(!Arc::ptr_eq(&original, &zoomed));
+        assert_eq!(original.lines().len(), zoomed.lines().len());
+        assert_eq!(original.lines()[0].width(), zoomed.lines()[0].width());
+        assert_eq!(gallery.unsent.len(), 2);
+
+        let restored = gallery.formula(square, ink, CANVAS, 80).unwrap();
+        assert!(Arc::ptr_eq(&original, &restored));
+        assert_eq!(gallery.unsent.len(), 2);
     }
 }

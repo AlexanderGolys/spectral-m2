@@ -3,7 +3,7 @@
 use std::sync::LazyLock;
 
 /// A preferred symbol and a plain Unicode fallback for limited terminals.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Glyph {
     preferred: &'static str,
     basic: &'static str,
@@ -171,7 +171,7 @@ pub const UI: UiConfig = UiConfig {
             basic: "x",
         },
         trimmed: Glyph {
-            preferred: "…",
+            preferred: "󰨾 ",
             basic: "...",
         },
         step_back: Glyph {
@@ -188,10 +188,12 @@ pub const UI: UiConfig = UiConfig {
         },
     },
     spinner: SpinnerConfig {
-        frames: &["", "", "", "", "", ""],
-        basic_frames: &["|", "/", "-", "\\"],
+        frames: &["󰋙 ", "󰫃 ", "󰫄 ", "󰫅 ", "󰫆 ", "󰫇 ", "󰫈 ", "󰋘 ", " "],
+        // frames: &["", "", "", "", "", ""],
+        basic_frames: &["<", "^", ">", "v"],
         frame_ms: 80,
     },
+
     typing_prompt_ms: 50,
     prompt_margin: 2,
     cell_margin: 0,
@@ -201,15 +203,19 @@ pub const UI: UiConfig = UiConfig {
     right_margin: 3,
     min_box_width: 8,
     min_input_height: 3,
+
     picker_tab_width: 4,
     picker_column_gap: 2,
     picker_right_margin: 2,
     picker_min_value_width: 14,
+
     statusline_margin: 2,
+
     max_output_rows: 40,
     max_output_preview_bytes: 256 * 1024,
     max_output_preview_cells: 256 * 1024,
     min_output_rows: 5,
+
     tree_location_gap: 2,
     printed_margin: 1,
     type_gap: 2,

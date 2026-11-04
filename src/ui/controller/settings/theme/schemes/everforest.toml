@@ -127,7 +127,7 @@ Builtin = { fg = "purple" }
 Comment = { fg = "grey1", italic = true }
 CompiledFunction = { fg = "green" }
 Conditional = { fg = "red" }
-Constant = { fg = "fg" }
+Constant = { fg = "orange" }
 Debug = { fg = "orange" }
 Delimiter = { fg = "grey1" }
 Documentation = { fg = "fg" }
@@ -147,25 +147,25 @@ MarkupBrief = { fg = "orange", italic = true }
 MarkupHeading1 = { bold = true, fg = "red" }
 MarkupHeading2 = { bold = true, fg = "orange" }
 MarkupHeading3 = { bold = true, fg = "yellow" }
-Muted = { fg = "grey1" }
-Namespace = { fg = "yellow" }
+Muted = { fg = "grey2" }
+Namespace = { fg = "yellow", italic=true }
 Number = { fg = "purple" }
 Operator = { fg = "orange" }
-Package = { fg = "yellow" }
+Package = { fg = "yellow", italic=true}
 Parameter = { fg = "fg" }
-Picker = { bg = "bg2", fg = "fg" }
+Picker = { bg = "bg3", fg = "fg" }
 # Preserve the picker's independently styled text and key hints on selection.
 PickerSelected = { bg = "bg_visual" }
 Property = { fg = "blue" }
-Punctuation = { fg = "fg" }
-Quote = { fg = "yellow" }
+Punctuation = { fg = "grey1" }
+Quote = { fg = "red" }
 Regex = { fg = "yellow" }
 Repeat = { fg = "red" }
 Statement = { fg = "red" }
 Statusline1 = { fg = "statusline1" }
 Statusline2 = { fg = "statusline2" }
 Statusline3 = { fg = "statusline3" }
-StorageClass = { fg = "orange" }
+StorageClass = { fg = "red" }
 String = { fg = "aqua" }
 Symbol = { fg = "fg" }
 Text = { fg = "fg" }

@@ -553,8 +553,10 @@ mod tests {
             tree,
             block: 1,
         }];
-        let mut viewport = Viewport::default();
-        viewport.scroll = 3;
+        let mut viewport = Viewport {
+            scroll: 3,
+            ..Viewport::default()
+        };
         let mut highlighter = ChangingHighlighter {
             revision: 0,
             projections: 0,

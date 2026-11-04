@@ -1,5 +1,6 @@
 //! Documentation markup, as M2 sends it in HTML, drawn as coloured rows.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -13,10 +14,10 @@ use html2text::{Element, Handle, RcDom};
 use m2_syn::native::parse_native;
 use ratatui::layout::{Position, Rect};
 use ratatui::text::{Line, Span};
-use regex::Regex;
+use regex::{Captures, Regex};
 use unicode_width::UnicodeWidthStr;
 
-use super::maths::{MathStyle, Shift};
+use super::maths::{inline, MathStyle, Shift};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::ui::block::{Link, Text, TextSpan};
 use crate::ui::controller::settings::theme::groups::HLGroup;
@@ -47,6 +48,13 @@ static SOURCE_LOCATION: LazyLock<Regex> =
 /// The typewriter spans M2 sets locations and code in, as its HTML spells them.
 static TYPEWRITER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<span class="tt">([^<]*)</span>"#).expect("valid typewriter span pattern")
+});
+
+/// What M2 sets maths in: TeX between `$` signs, for a web page's MathJax to typeset.
+/// Code is matched first so a `$` inside it is left as written.
+static MATHS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)<pre\b.*?</pre>|<code\b.*?</code>|<tt\b.*?</tt>|\$(?<tex>[^$<>]+)\$")
+        .expect("valid maths pattern")
 });
 
 static PROMPT: LazyLock<Regex> =
@@ -113,7 +121,7 @@ type HtmlLine = TaggedLine<Vec<RichAnnotation>>;
 /// Lay HTML out at the available width, retaining document and code semantics.
 pub fn spans(html: &str, width: usize) -> Option<Vec<SpanLine>> {
     let width = width.clamp(1, usize::from(u16::MAX));
-    let tagged = layout(html, width)?;
+    let tagged = layout(html, width, MathStyle::default().blackboard)?;
     Some(
         (0..tagged.len())
             .flat_map(|index| prose(&tagged, index, width))
@@ -283,7 +291,7 @@ pub fn page(html: &str) -> u64 {
 
 /// Every example the page records, in the order M2 ran them.
 pub fn examples(html: &str, example_width: usize) -> Vec<ArchivedExample> {
-    let Some(tagged) = layout(html, usize::from(u16::MAX)) else {
+    let Some(tagged) = layout(html, usize::from(u16::MAX), MathStyle::default().blackboard) else {
         return Vec::new();
     };
     let mut found = Vec::new();
@@ -368,7 +376,7 @@ impl Preformatted {
 
 fn rows(html: &str, example_width: usize, context: &RenderContext) -> Option<Vec<Row>> {
     let width = usize::from(context.width().max(1));
-    let tagged = layout(html, width)?;
+    let tagged = layout(html, width, context.math().blackboard)?;
     let page = page(html);
     let mut result = Vec::new();
     let mut index = 0;
@@ -477,12 +485,37 @@ fn heading_level(line: &HtmlLine) -> usize {
         .unwrap_or(0)
 }
 
-fn layout(html: &str, width: usize) -> Option<Vec<HtmlLine>> {
+/// `html` with each run of TeX outside code set as the text it reads as, where
+/// this renderer reads it. Anything it does not is left for the reader as TeX.
+fn typeset_maths(html: &str, blackboard: bool) -> Cow<'_, str> {
+    MATHS.replace_all(html, |captures: &Captures| {
+        captures
+            .name("tex")
+            .and_then(|tex| inline(&unescape_text(tex.as_str()), blackboard))
+            .map_or_else(|| captures[0].to_string(), |text| escape_text(&text))
+    })
+}
+
+fn escape_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn unescape_text(html: &str) -> String {
+    html.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&amp;", "&")
+}
+
+fn layout(html: &str, width: usize, blackboard: bool) -> Option<Vec<HtmlLine>> {
     let config = html2text::config::with_decorator(Decorator(RichDecorator::new()))
         .link_footnotes(false)
         .unicode_strikeout(false)
         .min_wrap_width(1)
         .allow_width_overflow();
+    let html = typeset_maths(html, blackboard);
     let dom = config.parse_html(html.as_bytes()).ok()?;
     normalize(&dom.document, false);
     let tree = config.dom_to_render_tree(&dom).ok()?;
@@ -553,11 +586,7 @@ fn normalize(node: &Handle, in_examples: bool) -> Vec<Handle> {
         let label = Shift::Lowered
             .form(label)
             .unwrap_or_else(|| format!("_{{{label}}}"));
-        let escaped = label
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;");
-        vec![element("span", &escaped)]
+        vec![element("span", &escape_text(&label))]
     } else if let Some(tag) = replacement {
         // Use the same HTML parser to construct a code element, preserving the
         // original children (including links) instead of matching serialized HTML.
@@ -1554,5 +1583,43 @@ mod tests {
             "the block is padded as an example's input is: {usage:?}"
         );
         assert!(code_rows("<pre>+---+\n| a |\n+---+</pre>").is_empty());
+    }
+
+    fn text_of(html: &str, width: usize) -> String {
+        spans(html, width)
+            .expect("reads")
+            .iter()
+            .flatten()
+            .map(|span| span.content.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn tex_in_a_table_cell_is_set_as_text() {
+        let text = text_of(
+            r"<table><tr><td>$\mathit{opts}$</td><td>$\texttt{OptionTable}\left\{\mathit{Algorithm}\ \Rightarrow \ \mathit{Inhomogeneous},\:\mathit{BasisElementLimit}\ \Rightarrow \ \infty,\:\mathit{DegreeLimit}\ \Rightarrow \ \left\{\,\right\},\:\mathit{MaxReductionCount}\ \Rightarrow \ \cdots\right\}$</td></tr></table>",
+            200,
+        );
+        assert!(!text.contains('$') && !text.contains('\\'), "{text}");
+        assert!(
+            text.contains("opts") && text.contains("OptionTable"),
+            "{text}"
+        );
+        assert!(
+            text.contains("DegreeLimit") && text.contains('\u{21D2}'),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn dollar_signs_in_code_are_left_alone() {
+        let text = text_of("<pre><code>f = \"$a$ and $b$\"</code></pre>", 40);
+        assert!(text.contains("$a$ and $b$"), "{text}");
+    }
+
+    #[test]
+    fn tex_that_is_not_read_stays_as_written() {
+        let text = text_of(r"<p>costs $\unknowncommand{x}$ now</p>", 60);
+        assert!(text.contains(r"$\unknowncommand{x}$"), "{text}");
     }
 }

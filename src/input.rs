@@ -127,7 +127,7 @@ impl InputSetting {
             Self::MaxHeight => "max input height",
             Self::Scrolloff => "scrolloff",
             Self::CompleteAfter => "complete after",
-            Self::HintCompletionBelow => "hint completion below",
+            Self::HintCompletionBelow => "hint below",
         }
     }
 

@@ -4,6 +4,7 @@ pub mod transcript;
 
 use std::fmt::Display;
 use std::io::{BufRead, BufReader, PipeReader, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -14,6 +15,8 @@ use std::{env, fs, mem, thread};
 
 use crate::cli::M2Options;
 use crate::errors::{Error, Result};
+use nix::sys::signal::{killpg, Signal};
+use nix::unistd::Pid;
 use regex::Regex;
 use serde::Deserialize;
 use term_maths::RenderedBlock;
@@ -85,6 +88,8 @@ struct Frame {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum M2Value {
+    /// A type with mathematical structure, such as a named ring or a ring family.
+    Type(Box<M2Value>),
     /// TeX source accompanied by the Net spelling used when it is unsupported,
     /// and the one-line code M2 reads back, which copying its picture gives.
     Tex {
@@ -241,6 +246,7 @@ impl M2Value {
 
     fn block(&self, spelling: Spelling) -> RenderedBlock {
         match self {
+            Self::Type(value) => value.block(spelling),
             Self::Tex { fallback, .. } if spelling == Spelling::Ascii => Self::text_block(fallback),
             Self::Tex {
                 source, fallback, ..
@@ -341,6 +347,7 @@ impl M2Value {
 
     pub fn plain_text(&self) -> Option<&str> {
         match self {
+            Self::Type(value) => value.plain_text(),
             Self::Net(text) | Self::Markup { fallback: text, .. } | Self::Token { text, .. } => {
                 Some(text.as_str())
             }
@@ -478,6 +485,7 @@ impl M2Backend {
                 .arg(format!("needsPackage {}", m2_string_literal(package)));
         }
         let mut process = command
+            .process_group(0)
             .arg("-e")
             .arg(format!("load {}", m2_string_literal(script_path.display())))
             .stdin(Stdio::piped())
@@ -644,11 +652,9 @@ impl M2Backend {
         let mut interrupted = false;
         loop {
             if !interrupted && cancelled.load(Ordering::Acquire) {
-                nix::sys::signal::kill(
-                    nix::unistd::Pid::from_raw(self.process.id() as i32),
-                    nix::sys::signal::Signal::SIGINT,
-                )
-                .map_err(std::io::Error::from)?;
+                // External programs may own the computation while M2 waits.
+                // The child's private group keeps the signal away from the UI.
+                self.signal_group(Signal::SIGINT)?;
                 interrupted = true;
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -695,6 +701,16 @@ impl M2Backend {
     /// Text printed during initialization before the backend became ready.
     pub fn take_startup_output(&mut self) -> String {
         mem::take(&mut self.startup_output)
+    }
+
+    /// Signal everything in the child's private group, not just the child.
+    ///
+    /// `M2` on the `PATH` may be a launcher script rather than M2 itself, and one
+    /// that does not `exec` leaves M2 as its own child: a signal to the direct
+    /// child alone would reach the script and leave M2 running.
+    fn signal_group(&self, signal: Signal) -> Result<()> {
+        killpg(Pid::from_raw(self.process.id() as i32), signal).map_err(std::io::Error::from)?;
+        Ok(())
     }
 }
 
@@ -753,7 +769,7 @@ fn relay_chunks(mut stream: impl BufRead, sender: &Sender<Chunk>) {
 
 impl Drop for M2Backend {
     fn drop(&mut self) {
-        let _ = self.process.kill();
+        let _ = self.signal_group(Signal::SIGKILL);
         let _ = self.process.wait();
     }
 }
@@ -762,6 +778,32 @@ impl Drop for M2Backend {
 mod tests {
     use super::*;
     use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn cancellation_stops_external_commands_and_preserves_session_state() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        backend
+            .evaluate("savedBeforeExternalCommand = 41;", None)
+            .expect("save session state");
+        let cancelled = AtomicBool::new(false);
+        let response = thread::scope(|scope| {
+            scope.spawn(|| {
+                thread::sleep(Duration::from_millis(100));
+                cancelled.store(true, Ordering::Release);
+            });
+            backend.evaluate_with_cancellation(
+                "run \"sleep 10\"",
+                Duration::from_secs(2),
+                &cancelled,
+            )
+        });
+        response.expect("external command stopped before its sleep completed");
+        let next = backend
+            .evaluate_within("savedBeforeExternalCommand + 1", Duration::from_secs(2))
+            .expect("evaluate after cancellation");
+        assert!(!next.is_error, "{}", next.transcript);
+        assert_eq!(next.rendered_value().as_deref(), Some("42"));
+    }
 
     #[test]
     fn cancellation_near_completion_keeps_response_frames_in_sync() {
@@ -1409,7 +1451,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
 
         let field = backend.evaluate("RR", Some(2)).expect("evaluate RR");
         assert!(
-            matches!(&field.value, Some(M2Value::Tex { source, .. }) if source.contains(r"\mathbb")),
+            matches!(&field.value, Some(M2Value::Type(value)) if matches!(value.as_ref(), M2Value::Tex { source, .. } if source.contains(r"\mathbb"))),
             "RR lost its TeX: {:?}",
             field.value
         );
@@ -1595,6 +1637,93 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     }
 
     #[test]
+    fn named_rings_and_ring_families_retain_their_type_role_and_math_layout() {
+        use crate::ui::controller::settings::theme::groups::HLGroup;
+        use crate::ui::render::maths::{self, FractionStyle};
+
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        let ring = backend.evaluate("R = RR[x_(E_F),x_2,x]", Some(1)).unwrap();
+        assert!(!ring.is_error, "{}", ring.transcript);
+        let returned_class = backend.evaluate("class x", Some(2)).unwrap();
+        assert_eq!(returned_class.rendered_value().as_deref(), Some("R"));
+        for value in [
+            ring.value.as_ref().unwrap(),
+            returned_class.value.as_ref().unwrap(),
+        ] {
+            assert!(matches!(value, M2Value::Type(_)), "{value:?}");
+            let spans = maths::spans(value, 80, FractionStyle::Stacked).unwrap();
+            assert!(spans
+                .iter()
+                .flatten()
+                .all(|span| span.kind == HLGroup::Type));
+            assert_eq!(value.ascii(), "R");
+        }
+        let described = backend.evaluate("describe R", Some(3)).unwrap();
+        let rows = maths::spans(
+            described.value.as_ref().unwrap(),
+            160,
+            FractionStyle::Stacked,
+        )
+        .unwrap();
+        let precision = rows
+            .iter()
+            .flatten()
+            .find(|span| span.content.contains('₅'))
+            .expect("RR precision is retained");
+        assert_eq!(precision.kind, HLGroup::Type);
+        let held = backend.evaluate("{R, RR, 2}", Some(4)).unwrap();
+        let Some(M2Value::Collection { items, .. }) = &held.value else {
+            panic!("a list of rings and a number");
+        };
+        assert!(matches!(items[0], M2Value::Type(_)));
+        assert!(matches!(items[1], M2Value::Type(_)));
+        assert!(matches!(items[2], M2Value::Tex { .. }));
+    }
+
+    #[test]
+    fn compound_rings_and_sheaf_subscripts_keep_their_component_colours() {
+        use crate::ui::controller::settings::theme::groups::HLGroup;
+        use crate::ui::render::maths::{self, FractionStyle};
+
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        for code in ["RR[x]", "(OO_(Proj(RR_6[x_1,y_{{1}},w])))^5(-2)"] {
+            let response = backend.evaluate(code, None).expect("evaluate expression");
+            assert!(!response.is_error, "{code}: {}", response.transcript);
+            let Some(value @ M2Value::Tex { .. }) = response.value else {
+                panic!("{code} should retain its mathematical structure");
+            };
+            let rows = maths::spans(&value, 160, FractionStyle::Stacked).unwrap();
+            for kind in [HLGroup::Type, HLGroup::Variable, HLGroup::Delimiter] {
+                assert!(
+                    rows.iter().flatten().any(|span| span.kind == kind),
+                    "{code} lost its {kind:?} colour: {rows:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn precision_fields_retain_their_mathematical_representation() {
+        use crate::ui::controller::settings::theme::groups::HLGroup;
+        use crate::ui::render::maths::{self, FractionStyle};
+
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        for family in ["CC", "CCi", "RR", "RRi"] {
+            for precision in [1, 53, 100] {
+                let code = format!("{family}_{precision}");
+                let response = backend.evaluate(&code, None).expect("evaluate field");
+                assert!(!response.is_error, "{code}: {}", response.transcript);
+                let Some(value @ M2Value::Tex { .. }) = response.value else {
+                    panic!("{code} lost its TeX: {:?}", response.value);
+                };
+                let rows = maths::spans(&value, 80, FractionStyle::Stacked)
+                    .expect("a precision field renders as maths");
+                assert!(rows.iter().flatten().all(|span| span.kind == HLGroup::Type));
+            }
+        }
+    }
+
+    #[test]
     fn inexact_values_render_without_private_core_helpers() {
         let mut backend = M2Backend::spawn().expect("spawn M2");
         let result = backend.evaluate("1.3", Some(1)).expect("evaluate real");
@@ -1675,7 +1804,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     #[test]
     fn writing_after_process_exit_reports_exit_instead_of_broken_pipe() {
         let mut backend = M2Backend::spawn().unwrap();
-        backend.process.kill().unwrap();
+        backend.signal_group(Signal::SIGKILL).unwrap();
         backend.process.wait().unwrap();
         assert!(matches!(
             backend.evaluate("1 + 1", None),

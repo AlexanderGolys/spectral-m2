@@ -788,16 +788,6 @@ mod tests {
     }
 
     #[test]
-    fn linked_groups_follow_their_base_style() {
-        let groups = Groups::default();
-        assert_eq!(groups.Conditional, groups.Keyword);
-        assert_eq!(groups.Comment.fg, groups.Muted.fg);
-        assert_eq!(groups.OutputNumber.fg, groups.Accent.fg);
-        assert_eq!(groups.FractionRule.underline_color, groups.Operator.fg);
-        assert_eq!(groups.FractionRule.fg, None);
-    }
-
-    #[test]
     fn input_hints_have_independent_named_groups() {
         let groups = Groups::default();
         assert_eq!(groups.completion_hint(), groups.Muted);

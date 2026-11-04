@@ -1270,6 +1270,9 @@ impl Editor {
         highlighter: &mut dyn Highlighter,
         in_debugger: bool,
     ) {
+        if crate::ui::graphics::refresh_cell_size() {
+            self.feed.on_event(&Reformatted);
+        }
         if self.pane_focused {
             self.frame_stats.tick();
         }
