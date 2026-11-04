@@ -145,27 +145,27 @@ Float = { fg = "purple" }
 Function = { fg = "green" }
 Hint = { fg = "green" }
 Info = { fg = "blue" }
-Installation = { fg = "orange" }
+Installation = { fg = "green" }
 KeymapActionLabel = { fg = "fg" }
 Keyword = { fg = "red" }
 Macro = { fg = "green" }
 MarkupBrief = { fg = "orange", italic = true }
-MarkupHeading1 = { bold = true, fg = "red" }
-MarkupHeading2 = { bold = true, fg = "orange" }
-MarkupHeading3 = { bold = true, fg = "yellow" }
+MarkupHeading1 = { bold = true, fg = "yellow" }
+MarkupHeading2 = { bold = true, fg = "red" }
+MarkupHeading3 = { bold = true, fg = "orange" }
 Muted = { fg = "grey1" }
 Namespace = { fg = "yellow", italic = true }
 Number = { fg = "purple" }
 Operator = { fg = "orange" }
 Package = { fg = "yellow", italic = true }
 Parameter = { fg = "fg" }
-Picker = { bg = "bg2", fg = "fg" }
+Picker = { bg = "bg3", fg = "fg" }
 # Preserve the picker's independently styled text and key hints on selection.
-PickerSelected = { bg = "bg_blue" }
-PickerSelectedLabel = { fg = "bright_fg", bold = true }
-PickerSelectedMarker = { fg = "orange" }
+PickerSelected = { bg = "bg_visual" }
+PickerSelectedLabel = { fg = "fg", bold = true }
+PickerSelectedMarker = { fg = "aqua" }
 Property = { fg = "blue" }
-Punctuation = { fg = "fg" }
+Punctuation = { fg = "grey1" }
 Quote = { fg = "yellow" }
 Regex = { fg = "green" }
 Repeat = { fg = "red" }
@@ -184,4 +184,4 @@ Text = { fg = "fg" }
 Type = { fg = "yellow" }
 Variable = { fg = "fg" }
 ViewLabelActive = { fg = "fg" }
-Warning = { fg = "yellow" }
+Warning = { fg = "orange" }

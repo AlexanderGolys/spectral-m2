@@ -10,6 +10,7 @@ All notable changes to Spectral M2 are documented here.
 - An option on its own or in a list, `a => 1`, is drawn part by part rather than as one formula, so only actual maths in it is typeset.
 - Arrows in typeset formulas keep their normal length.
 - The input breaks long lines between words rather than mid-word.
+- Everforest's headings, pickers, punctuation, warnings and install messages take new colours.
 
 ### Fixed
 

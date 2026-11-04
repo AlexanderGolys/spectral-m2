@@ -49,10 +49,12 @@ pub enum InputAction {
     InsertTab = "insert a tab",
     NextCompletion = "show completion candidates, insert a hint, or take the next candidate",
     PreviousCompletion = "take the previous completion",
+
     DeleteBack = "delete before the cursor",
     DeleteForward = "delete under the cursor",
     DeleteWordBack = "delete back to where a word-wise move left lands",
     DeleteWordForward = "delete on to where a word-wise move right lands",
+
     Undo = "undo the last edit",
     Redo = "redo the last undone edit",
 
