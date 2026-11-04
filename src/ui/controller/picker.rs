@@ -93,11 +93,18 @@ impl PickerValue {
     /// by why.
     fn line(&self, room: usize, selected: bool) -> Line<'static> {
         let groups = scheme();
+        let (arrow, value) = match selected {
+            true => (
+                groups.picker_selected_marker(),
+                groups.settings_item_value_selected(),
+            ),
+            false => (groups.settings_step_arrow(), groups.settings_item_value()),
+        };
         let (shown, style, note) = match self {
             Self::Choice { options, chosen } => {
                 let option = &options[*chosen];
                 match &option.unavailable {
-                    None => (&option.label, groups.settings_item_value(), None),
+                    None => (&option.label, value, None),
                     Some(note) => (
                         &option.label,
                         groups.settings_item_unavailable(),
@@ -105,11 +112,7 @@ impl PickerValue {
                     ),
                 }
             }
-            Self::Stepped(value) => (value, groups.settings_item_value(), None),
-        };
-        let arrow = match selected {
-            true => groups.picker_selected_marker(),
-            false => groups.settings_step_arrow(),
+            Self::Stepped(shown) => (shown, value, None),
         };
         let (back, forward) = Self::arrows();
         let note = note.map(|note| format!("{}{note}", " ".repeat(UI.picker_column_gap)));
@@ -582,7 +585,7 @@ impl Picker {
         for (index, mut cell) in cells.into_iter().enumerate() {
             if index == 0 && selected {
                 for span in &mut cell.spans {
-                    span.style = span.style.patch(emphasis);
+                    span.style = span.style.patch(groups.picker_selected_label());
                 }
             }
             let start = start(index, used);
@@ -813,9 +816,10 @@ impl PickerController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
+    use crate::ui::controller::settings::theme::groups::{publish, Groups, HLGroup};
     use crate::ui::key::KeyMod;
     use crossterm::event::KeyCode;
+    use ratatui::style::{Color, Style};
 
     #[test]
     fn keymap_capture_precedes_navigation_and_escape_cancels_only_capture() {
@@ -1010,6 +1014,29 @@ mod tests {
             options: vec!["dark".into(), "light".into()],
             chosen,
         }
+    }
+
+    #[test]
+    fn selected_row_draws_its_name_arrows_and_value_in_their_own_groups() {
+        let [label, arrow, chosen, resting] = [1, 2, 3, 4].map(Color::Indexed);
+        let mut groups = Groups::default();
+        groups.PickerSelectedLabel = Style::new().fg(label);
+        groups.PickerSelectedMarker = Style::new().fg(arrow);
+        groups.SettingsItemValueSelected = Style::new().fg(chosen);
+        groups.SettingsItemValue = Style::new().fg(resting);
+        publish(groups);
+
+        let picker = picker(vec![
+            setting("selected", PickerValue::Stepped("shown".into())),
+            setting("resting", PickerValue::Stepped("other".into())),
+        ]);
+        let buffer = rendered(&picker, 60);
+        let fg_at = |y, text| buffer[(column(&row(&buffer, y), text).unwrap() as u16, y)].fg;
+
+        assert_eq!(fg_at(1, "selected"), label);
+        assert_eq!(fg_at(1, UI.glyphs.step_back.current()), arrow);
+        assert_eq!(fg_at(1, "shown"), chosen);
+        assert_eq!(fg_at(2, "other"), resting);
     }
 
     fn tabbed(button: bool) -> Picker {

@@ -88,6 +88,7 @@ FractionRule = { sp_from = "Operator.fg", underline = true }
 Printed = { link = "String", bg_from = "Raised.bg", saturation = 55.0, lightening = 15.0 }
 Picker = { link = "Raised" }
 PickerSelected = { link = "Focus" }
+PickerSelectedLabel = { link = "PickerSelectedMarker" }
 InputPrompt = { link = "Accent" }
 CompletionHint = { link = "Muted" }
 PlaceholderHint = { link = "Muted" }
@@ -106,6 +107,7 @@ PendingSeparator = { link = "Muted" }
 MutedCodeText = { link = "Muted" }
 ErrorBorder = { link = "Error" }
 ErrorMessage = { link = "Error" }
+ErrorTitle = { link = "Error" }
 ErrorCode = { link = "Code", tint_from = "Error.fg", tint = 0.12 }
 WarningBorder = { link = "Warning" }
 InfoBorder = { link = "Info" }
@@ -124,6 +126,7 @@ PickerTab = { link = "Accent" }
 PickerTabSelected = { link = "Accent", reverse = true }
 SettingsItemLabel = { link = "Text" }
 SettingsItemValue = { link = "Accent" }
+SettingsItemValueSelected = { link = "SettingsItemValue" }
 SettingsItemUnavailable = { link = "Faint", dim = true, crossed_out = true }
 SettingsItemDisabled = { link = "Faint", dim = true }
 SettingsUnavailableNote = { link = "Faint", italic = true }

@@ -66,6 +66,10 @@ light = { hard = "#fef2d5", medium = "#faedcd", soft = "#f1e4c5" }
 dark = "#7fbbb3"
 light = "#3a94c5"
 
+[palette."bright_fg"]
+dark = "#ffffff"
+light = "#5c6a72"
+
 [palette."fg"]
 dark = "#d3c6aa"
 light = "#5c6a72"
@@ -133,7 +137,8 @@ Delimiter = { fg = "grey1" }
 Documentation = { fg = "fg" }
 EnumVariant = { fg = "blue" }
 Error = { fg = "red" }
-ErrorMessage = {fg = "red" }
+ErrorMessage = { fg = "red" }
+ErrorTitle = { fg = "red", bold = true }
 Exception = { fg = "red" }
 Faint = { fg = "grey0" }
 Float = { fg = "purple" }
@@ -141,6 +146,7 @@ Function = { fg = "green" }
 Hint = { fg = "green" }
 Info = { fg = "blue" }
 Installation = { fg = "orange" }
+KeymapActionLabel = { fg = "fg" }
 Keyword = { fg = "red" }
 Macro = { fg = "green" }
 MarkupBrief = { fg = "orange", italic = true }
@@ -155,12 +161,18 @@ Package = { fg = "yellow", italic=true}
 Parameter = { fg = "fg" }
 Picker = { bg = "bg3", fg = "fg" }
 # Preserve the picker's independently styled text and key hints on selection.
-PickerSelected = { bg = "bg_visual" }
+PickerSelected = { bg = "bg_blue" }
+PickerSelectedLabel = { fg = "bright_fg", bold = true }
+PickerSelectedMarker = { fg = "orange" }
 Property = { fg = "blue" }
 Punctuation = { fg = "grey1" }
 Quote = { fg = "red" }
 Regex = { fg = "yellow" }
 Repeat = { fg = "red" }
+SettingsItemDescription = { fg = "fg", italic = true }
+SettingsItemLabel = { fg = "fg" }
+SettingsItemValue = { fg = "grey1" }
+SettingsItemValueSelected = { fg = "aqua", bold = true }
 Statement = { fg = "red" }
 Statusline1 = { fg = "statusline1" }
 Statusline2 = { fg = "statusline2" }

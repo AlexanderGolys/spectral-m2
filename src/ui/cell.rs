@@ -1642,7 +1642,7 @@ fn render_error_box(message: &str, context: &RenderContext, area: Rect, buf: &mu
         .into_iter()
         .map(|line| Line::from(Span::styled(line, theme.error_message())))
         .collect();
-    let title = Some(Line::from(Span::styled(" Error ", theme.error())));
+    let title = Some(Line::from(Span::styled(" Error ", theme.error_title())));
     Bordered::new(
         CellLayout::plain().frame(),
         Style::new(),
