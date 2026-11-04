@@ -10,8 +10,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::block::{Element, Text, TextSpan};
 use super::config::UI;
+use super::controller::settings::statusline::{IdleStatusLine, SegmentPlacement};
 use super::controller::settings::theme::groups::{scheme, Groups, HLGroup};
-use super::controller::settings::{IdleStatusLine, SegmentPlacement};
 
 /// The status line's own memory between draws.
 #[derive(Default)]

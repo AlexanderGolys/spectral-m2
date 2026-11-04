@@ -28,6 +28,7 @@ macro_rules! cyclic {
             $vis const CHOICES: &[Self] = &[$(Self::$variant),+];
 
             /// The choice `delta` steps on from this one, wrapping around.
+            #[allow(dead_code)] // a tab's rows are listed, never stepped
             $vis fn cycle(self, delta: i8) -> Self {
                 $crate::ui::cycle::cycled(Self::CHOICES, self, delta)
             }

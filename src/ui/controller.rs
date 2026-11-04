@@ -5,7 +5,6 @@ pub mod commands;
 mod completion;
 mod highlight_debug;
 mod picker;
-mod preferences;
 mod screen;
 pub mod settings;
 mod view;
@@ -24,9 +23,10 @@ use self::highlight_debug::{DebugEntry, DebugSection};
 use self::picker::{Picker, PickerController, PickerMode};
 use self::screen::{ScreenCapture, ScreenSelection};
 use self::settings::keymap::{self, Keymaps, Shortcut};
+use self::settings::statusline::StatusLinePosition;
 use self::settings::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
 use self::settings::theme::Appearance;
-use self::settings::{Persisted, Preferences, SavedSettings, Settings, StatusLinePosition};
+use self::settings::{tabs as settings_tabs, Persisted, SavedSettings, Settings};
 pub use self::view::{CommittedCells, ViewKind, Viewport};
 use self::{
     commands::Command,
@@ -144,7 +144,7 @@ pub enum EditorEvent {
     RestoreDefaults,
     /// Put every shortcut back on its default key, leaving other settings be.
     RestoreKeymaps,
-    SetPreferences(Preferences),
+    SetSettings(Settings),
     Rebind(Shortcut, KeyEvent),
 }
 
@@ -163,7 +163,6 @@ pub struct Editor {
     input: InputCode,
     settings: Settings,
     keymaps: Keymaps,
-    appearance: Appearance,
     status_line: StatusLine,
     continuation: Option<String>,
     processing: bool,
@@ -199,13 +198,17 @@ impl Editor {
         publish(appearance.groups());
         let saved = SavedSettings::load();
         let mut input = InputCode::new();
-        input.set_settings(saved.input);
+        input.set_settings(saved.layout);
         let mut editor = Self {
             feed: Feed::new(Box::new(TextBlock::system(welcome))),
             input,
-            settings: saved.editor,
+            settings: Settings {
+                appearance,
+                layout: saved.layout,
+                statusline: saved.statusline,
+                rendering: saved.rendering,
+            },
             keymaps: Keymaps::replaying(&saved.rebinds),
-            appearance,
             status_line: StatusLine::default(),
             continuation: None,
             processing: false,
@@ -271,17 +274,17 @@ impl Editor {
 
     /// How long each documentation example may take to be computed again.
     pub fn example_timeout(&self) -> Duration {
-        self.settings.example_timeout()
+        self.settings.rendering.example_timeout()
     }
 
     /// Whether the persisted settings run the language server.
     pub fn language_server(&self) -> bool {
-        self.settings.language_server
+        self.settings.rendering.language_server
     }
 
     /// Whether source takes semantic colors from the language server.
     pub fn semantic_highlighting(&self) -> bool {
-        self.settings.semantic_colors()
+        self.settings.rendering.semantic_colors()
     }
 
     /// Source and revision for the current draft, excluding shell commands.
@@ -847,7 +850,7 @@ impl Editor {
             pending: self.feed.incomplete_source(),
             picked: self.picked_command(),
             names: &self.names,
-            complete_after: usize::from(self.input.settings().complete_after),
+            complete_after: usize::from(self.settings.layout.complete_after),
         });
         self.input.offer(completion);
     }
@@ -860,23 +863,14 @@ impl Editor {
 
     fn settings_picker(&self) -> Picker {
         Picker::tabbed(
-            preferences::tabs(self.preferences()),
-            Some(preferences::restore_defaults()),
+            settings_tabs::tabs(self.settings),
+            Some(settings_tabs::restore_defaults()),
         )
     }
 
-    /// Everything the settings picker adjusts, as it stands.
-    fn preferences(&self) -> Preferences {
-        Preferences {
-            appearance: self.appearance,
-            input: self.input.settings(),
-            editor: self.settings,
-        }
-    }
-
-    /// Show the current preferences in the settings picker on top.
+    /// Show the current settings in the settings picker on top.
     fn refresh_settings_picker(&mut self) {
-        let tabs = preferences::tabs(self.preferences());
+        let tabs = settings_tabs::tabs(self.settings);
         self.pickers.last_mut().unwrap().picker.set_tabs(tabs);
     }
 
@@ -1020,7 +1014,7 @@ impl Editor {
             }
             EditorEvent::RestoreDefaults => {
                 self.keymaps = Keymaps::default();
-                self.set_preferences(Preferences::default());
+                self.set_settings(Settings::default());
             }
             EditorEvent::RestoreKeymaps => {
                 self.keymaps = Keymaps::default();
@@ -1028,7 +1022,7 @@ impl Editor {
                 let tabs = keymap::tabs(&self.keymaps);
                 self.pickers.last_mut().unwrap().picker.set_tabs(tabs);
             }
-            EditorEvent::SetPreferences(preferences) => self.set_preferences(preferences),
+            EditorEvent::SetSettings(settings) => self.set_settings(settings),
             EditorEvent::Rebind(shortcut, key) => {
                 if self.keymaps.rebind(shortcut, key) {
                     self.save_settings();
@@ -1040,32 +1034,33 @@ impl Editor {
         Reaction::Continue
     }
 
-    fn set_preferences(&mut self, preferences: Preferences) {
-        if preferences.editor.reformats(&self.settings) {
+    fn set_settings(&mut self, settings: Settings) {
+        if settings.reformats(&self.settings) {
             self.feed.on_event(&Reformatted);
         }
-        self.settings = preferences.editor;
-        self.input.set_settings(preferences.input);
+        self.apply_appearance(settings.appearance);
+        self.settings = settings;
+        self.input.set_settings(settings.layout);
         self.save_settings();
-        self.apply_appearance(preferences.appearance);
         self.refresh_settings_picker();
     }
 
     /// Keep what the settings and keymap pickers changed for the next session.
     fn save_settings(&self) {
         SavedSettings {
-            editor: self.settings,
-            input: self.input.settings(),
+            layout: self.settings.layout,
+            statusline: self.settings.statusline,
+            rendering: self.settings.rendering,
             rebinds: self.keymaps.rebinds().to_vec(),
         }
         .save();
     }
 
     fn apply_appearance(&mut self, appearance: Appearance) {
-        if self.appearance == appearance {
+        if self.settings.appearance == appearance {
             return;
         }
-        self.appearance = appearance;
+        self.settings.appearance = appearance;
         publish(appearance.groups());
         self.feed.on_event(&Rethemed);
         appearance.save();
@@ -1136,6 +1131,7 @@ impl Editor {
             }
         }
         let palette = self
+            .settings
             .appearance
             .variant()
             .palette()
@@ -1159,8 +1155,8 @@ impl Editor {
         let sections = self.highlight_debug_sections();
         let title = format!(
             " {} {} · debug ",
-            self.appearance.scheme().label(),
-            self.appearance.variant().label()
+            self.settings.appearance.scheme().label(),
+            self.settings.appearance.variant().label()
         );
         let entry_widths = sections
             .iter()
@@ -1332,7 +1328,7 @@ impl Editor {
     /// What the status line draws from in any view of the session.
     fn status_context(&self) -> StatusLineContext {
         StatusLineContext {
-            idle: self.settings.idle_statusline,
+            idle: self.settings.statusline.idle,
             location: Some(self.location()),
             hints: self.idle_hints(),
             state: self.shell_state(),
@@ -1384,7 +1380,7 @@ impl Editor {
         let feed_height = editor_area
             .height
             .saturating_sub(input_height + picker_height + status_height);
-        let constraints = if self.settings.statusline == StatusLinePosition::AboveInput {
+        let constraints = if self.settings.statusline.position == StatusLinePosition::AboveInput {
             [
                 Constraint::Min(feed_height),
                 Constraint::Length(picker_height),
@@ -1404,18 +1400,18 @@ impl Editor {
             .constraints(constraints)
             .split(editor_area);
         let (input_area, status_area) =
-            if self.settings.statusline == StatusLinePosition::AboveInput {
+            if self.settings.statusline.position == StatusLinePosition::AboveInput {
                 (sections[3], sections[2])
             } else {
                 (sections[2], sections[3])
             };
         let context = RenderContext::new(editor_area.width, 0)
-            .with_fractions(self.settings.fractions)
-            .with_blackboard(self.settings.math_fonts)
-            .with_matrix_row_spacing(self.settings.matrix_row_spacing_percent)
-            .with_display(self.settings.maths)
+            .with_fractions(self.settings.rendering.fractions)
+            .with_blackboard(self.settings.rendering.math_fonts)
+            .with_matrix_row_spacing(self.settings.rendering.matrix_row_spacing_percent)
+            .with_display(self.settings.rendering.maths)
             .with_recent_outputs(self.feed.recent_outputs())
-            .with_output_limit(self.settings.output_rows);
+            .with_output_limit(self.settings.layout.output_rows);
         let input_context = RenderContext::new(editor_area.width, input_prefix);
 
         self.feed_area = sections[0];
@@ -1466,13 +1462,13 @@ impl Editor {
 
     /// Whether the settings give the status line a row.
     pub fn statusline_shown(&self) -> bool {
-        self.settings.statusline != StatusLinePosition::Off
+        self.settings.statusline.position != StatusLinePosition::Off
     }
 
     /// The colour scheme in use and the directory the session runs in.
     fn location(&self) -> StatusLocation {
         StatusLocation {
-            scheme: self.appearance.scheme().label().to_string(),
+            scheme: self.settings.appearance.scheme().label().to_string(),
             directory: env::current_dir()
                 .map(|directory| abbreviate_home(&directory))
                 .unwrap_or_default(),
@@ -1500,7 +1496,9 @@ impl Editor {
             context,
             area,
             frame.buffer_mut(),
-            self.appearance.canvas(context.groups().transcript()),
+            self.settings
+                .appearance
+                .canvas(context.groups().transcript()),
         );
         self.feed_top = -(self.feed.offset() as i64);
         self.selection_exclusions.extend(exclusions);

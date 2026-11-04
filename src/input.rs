@@ -33,6 +33,7 @@ use crate::ui::block::{HLSpan, Text};
 use crate::ui::config::UI;
 #[cfg(test)]
 use crate::ui::controller::settings::keymap::Keymaps;
+use crate::ui::controller::settings::layout::LayoutSettings;
 use crate::ui::graphics::kitty::PLACEHOLDER;
 use crate::ui::key::KeyEvent;
 use crate::ui::render::{Highlights, Prompt, RenderContext};
@@ -79,108 +80,6 @@ pub enum InputAction {
     SelectAll = "select the whole input",
 
     Clear = "clear input text",
-}
-
-/// User-adjustable layout policy owned by the input component.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct InputSettings {
-    /// Maximum editor-height percentage occupied by the input.
-    pub max_height_percent: u8,
-    /// Context rows retained around the cursor.
-    pub scrolloff: u8,
-    /// Characters of a name typed before it is completed.
-    pub complete_after: u8,
-    /// Show an inline completion hint only below this many candidates.
-    #[serde(rename = "hintCompletionBelow", alias = "hint_completion_below")]
-    pub hint_completion_below: u16,
-}
-
-impl Default for InputSettings {
-    fn default() -> Self {
-        Self {
-            max_height_percent: 75,
-            scrolloff: 2,
-            complete_after: 1,
-            hint_completion_below: 10,
-        }
-    }
-}
-
-/// One input setting exposed through the settings picker.
-#[derive(Clone, Copy)]
-pub enum InputSetting {
-    /// Maximum input height.
-    MaxHeight,
-    /// Cursor context rows.
-    Scrolloff,
-    /// Name length that starts completion.
-    CompleteAfter,
-    /// Candidate count below which an inline hint is shown.
-    HintCompletionBelow,
-}
-
-impl InputSetting {
-    /// Picker label for this setting.
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::MaxHeight => "max input height",
-            Self::Scrolloff => "scrolloff",
-            Self::CompleteAfter => "complete after",
-            Self::HintCompletionBelow => "hint below",
-        }
-    }
-
-    /// What this setting controls.
-    pub const fn description(self) -> &'static str {
-        match self {
-            Self::MaxHeight => "share of the pane multiline input may grow into",
-            Self::Scrolloff => "context rows kept around the input cursor",
-            Self::CompleteAfter => "characters of a name typed before it is completed",
-            Self::HintCompletionBelow => {
-                "show an inline hint below this many candidates; zero disables hints"
-            }
-        }
-    }
-
-    /// Current picker value for this setting.
-    pub fn value(self, settings: InputSettings) -> String {
-        match self {
-            Self::MaxHeight => format!("{}%", settings.max_height_percent),
-            Self::Scrolloff => format!("{} rows", settings.scrolloff),
-            Self::CompleteAfter => format!("{} characters", settings.complete_after),
-            Self::HintCompletionBelow => format!("{} candidates", settings.hint_completion_below),
-        }
-    }
-
-    /// Adjust this setting by one picker step.
-    pub fn adjust(self, settings: &mut InputSettings, delta: i8) {
-        if matches!(self, Self::HintCompletionBelow) {
-            settings.hint_completion_below = settings
-                .hint_completion_below
-                .saturating_add_signed(i16::from(delta));
-            return;
-        }
-        let field = match self {
-            Self::MaxHeight => &mut settings.max_height_percent,
-            Self::Scrolloff => &mut settings.scrolloff,
-            Self::CompleteAfter => &mut settings.complete_after,
-            Self::HintCompletionBelow => unreachable!(),
-        };
-        let step = delta.unsigned_abs()
-            * if matches!(self, Self::MaxHeight) {
-                5
-            } else {
-                1
-            };
-        *field = if delta > 0 {
-            field.saturating_add(step)
-        } else {
-            field.saturating_sub(step)
-        };
-        settings.max_height_percent = settings.max_height_percent.min(100);
-        settings.complete_after = settings.complete_after.max(1);
-    }
 }
 
 /// Editable source, its byte-offset cursor, submission history, and undo.
@@ -711,7 +610,7 @@ pub struct InputCode {
     /// The revision and cursor the completion was offered for; once either
     /// moves it no longer applies.
     completed_for: Option<(u64, usize)>,
-    settings: InputSettings,
+    settings: LayoutSettings,
     diagnostic: Option<String>,
     diagnostic_range: Option<Range<usize>>,
     /// The command typed so far, drawn in the command colour.
@@ -752,7 +651,7 @@ impl InputCode {
             hint: Hint::default(),
             completion: None,
             completed_for: None,
-            settings: InputSettings::default(),
+            settings: LayoutSettings::default(),
             diagnostic: None,
             diagnostic_range: None,
             command_range: None,
@@ -805,12 +704,13 @@ impl InputCode {
     }
 
     /// Return the component's adjustable layout policy.
-    pub const fn settings(&self) -> InputSettings {
+    #[cfg(test)]
+    pub const fn settings(&self) -> LayoutSettings {
         self.settings
     }
 
     /// Replace the component's adjustable layout policy.
-    pub fn set_settings(&mut self, settings: InputSettings) {
+    pub fn set_settings(&mut self, settings: LayoutSettings) {
         self.settings = settings;
     }
 
@@ -1072,7 +972,7 @@ impl InputCode {
             hint: Hint::default(),
             completion: None,
             completed_for: None,
-            settings: InputSettings::default(),
+            settings: LayoutSettings::default(),
             diagnostic: None,
             diagnostic_range: None,
             command_range: None,
@@ -1187,7 +1087,7 @@ impl InputCode {
         let rows = self.visual_rows(width.saturating_sub(prefix)) as u16;
         let chrome = 2 + u16::from(self.diagnostic.is_some());
         let cap = editor_height
-            .saturating_mul(self.settings.max_height_percent.into())
+            .saturating_mul(self.settings.max_input_height_percent.into())
             .saturating_div(100)
             .max(UI.min_input_height);
         rows.saturating_add(chrome).clamp(UI.min_input_height, cap)
@@ -1449,21 +1349,6 @@ mod tests {
     use ratatui::style::Modifier;
 
     #[test]
-    fn completion_hint_threshold_is_a_persisted_u16_with_compatible_defaults() {
-        let old: InputSettings = serde_json::from_str(r#"{"complete_after":2}"#).unwrap();
-        assert_eq!(old.hint_completion_below, 10);
-        let mut settings: InputSettings =
-            serde_json::from_str(r#"{"hintCompletionBelow":65535}"#).unwrap();
-        InputSetting::HintCompletionBelow.adjust(&mut settings, 1);
-        assert_eq!(settings.hint_completion_below, u16::MAX);
-        let json = serde_json::to_value(settings).unwrap();
-        assert_eq!(json["hintCompletionBelow"], u16::MAX);
-        settings.hint_completion_below = 0;
-        InputSetting::HintCompletionBelow.adjust(&mut settings, -1);
-        assert_eq!(settings.hint_completion_below, 0);
-    }
-
-    #[test]
     fn editor_owns_modified_newlines_and_tabs() {
         let mut input = InputCode::new_in_memory();
         for key in [
@@ -1532,7 +1417,7 @@ mod tests {
     fn a_long_paste_grows_the_input_to_its_max_height() {
         let mut input = InputCode::new_in_memory();
         let editor_height = 100;
-        let cap = editor_height * u16::from(input.settings().max_height_percent) / 100;
+        let cap = editor_height * u16::from(input.settings().max_input_height_percent) / 100;
         input.insert(&vec!["f(x)"; usize::from(editor_height)].join("\n"));
 
         assert_eq!(input.height(80, UI.prompt_width(), editor_height), cap);

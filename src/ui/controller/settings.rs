@@ -1,32 +1,35 @@
-//! User-adjustable presentation settings.
+//! User-adjustable settings, one section for each tab of the settings picker.
 //!
-//! Values the user is expected to tune live here rather than as constants, so a
-//! settings picker has one place to read and write and the defaults stay visible.
+//! Values the user is expected to tune live here rather than as constants, so the
+//! settings picker has one place to read and write and the defaults stay visible:
+//! a tab's module holds its values, their defaults and its rows.
 //! Whatever the pickers change is kept between sessions, each record in a file of
 //! its own under the user's configuration directory.
 
+pub mod appearance;
 pub mod keymap;
-use self::keymap::Shortcut;
+pub mod layout;
+pub mod rendering;
+pub mod statusline;
+pub mod tabs;
 pub mod theme;
-
-use these_macros_should_be_illegal::discriminated_str;
 
 #[cfg(not(test))]
 use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
+use self::keymap::Shortcut;
+use self::layout::LayoutSettings;
+use self::rendering::RenderingSettings;
+use self::statusline::StatusLineSettings;
 use self::theme::Appearance;
-use crate::input::InputSettings;
-use crate::ui::config::UI;
-use crate::ui::cycle::cyclic;
 use crate::ui::key::KeyEvent;
-use crate::ui::render::maths::{FractionStyle, MathDisplay};
 
 /// A settings record kept in a file of its own under the configuration directory.
 pub trait Persisted: Serialize + DeserializeOwned + Default {
@@ -75,12 +78,31 @@ pub(super) fn config_file(_: &str) -> Option<PathBuf> {
     None
 }
 
-/// What the settings and keymap pickers adjust, apart from the appearance.
+/// Everything the settings picker adjusts, a section for each of its tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Settings {
+    pub appearance: Appearance,
+    pub layout: LayoutSettings,
+    pub statusline: StatusLineSettings,
+    pub rendering: RenderingSettings,
+}
+
+impl Settings {
+    /// Whether returned values lay out differently, moving their heights.
+    pub fn reformats(&self, other: &Self) -> bool {
+        self.layout.output_rows != other.layout.output_rows
+            || self.rendering.reformats(&other.rendering)
+    }
+}
+
+/// What the settings and keymap pickers adjust, apart from the appearance, which
+/// keeps a file of its own.
 #[derive(Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(from = "StoredSettings")]
 pub struct SavedSettings {
-    pub editor: Settings,
-    pub input: InputSettings,
+    pub layout: LayoutSettings,
+    pub statusline: StatusLineSettings,
+    pub rendering: RenderingSettings,
     /// Every rebind made, in order. Replaying them over the default keymaps restores
     /// the swaps they caused as well as the keys they set.
     pub rebinds: Vec<(Shortcut, KeyEvent)>,
@@ -90,162 +112,43 @@ impl Persisted for SavedSettings {
     const FILE: &'static str = "settings.json";
 }
 
-/// Everything the settings picker adjusts, stepped as one value.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Preferences {
-    pub appearance: Appearance,
-    pub input: InputSettings,
-    pub editor: Settings,
-}
-
-/// Presentation choices shared by the editor and its renderers.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+/// A settings file as read, of this version or of those keeping the values under
+/// `editor` and `input`, whose fields the sections still answer to.
+#[derive(Default, Deserialize)]
 #[serde(default)]
-pub struct Settings {
-    /// Whether an installed language server analyses the session's source.
-    pub language_server: bool,
-    /// Whether the language server enriches source colors, which it can only do
-    /// while it runs.
-    pub semantic_highlighting: bool,
-    pub statusline: StatusLinePosition,
-    pub idle_statusline: IdleStatusLine,
-    pub maths: MathDisplay,
-    pub fractions: FractionStyle,
-    /// Whether rings are drawn as blackboard glyphs (`ℤ`) rather than by name (`ZZ`).
-    pub math_fonts: bool,
-    /// Distance between the rows of a typeset matrix, as a percentage of TeX's own.
-    pub matrix_row_spacing_percent: u16,
-    /// Rows a returned value shows before its middle folds away.
-    pub output_rows: usize,
-    /// Seconds each documentation example may take to be computed again, so
-    /// its value is drawn from its structure; none computes nothing.
-    pub example_seconds: u16,
+struct StoredSettings {
+    layout: LayoutSettings,
+    statusline: StatusLineSettings,
+    rendering: RenderingSettings,
+    rebinds: Vec<(Shortcut, KeyEvent)>,
+    editor: Map<String, Value>,
+    input: Map<String, Value>,
 }
 
-impl Default for Settings {
-    fn default() -> Self {
+impl From<StoredSettings> for SavedSettings {
+    fn from(stored: StoredSettings) -> Self {
+        let rebinds = stored.rebinds;
+        if stored.editor.is_empty() && stored.input.is_empty() {
+            return Self {
+                layout: stored.layout,
+                statusline: stored.statusline,
+                rendering: stored.rendering,
+                rebinds,
+            };
+        }
+        let older: Map<_, _> = stored.editor.into_iter().chain(stored.input).collect();
         Self {
-            language_server: true,
-            semantic_highlighting: true,
-            statusline: StatusLinePosition::default(),
-            idle_statusline: IdleStatusLine::default(),
-            maths: MathDisplay::default(),
-            fractions: FractionStyle::default(),
-            math_fonts: false,
-            matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
-            output_rows: UI.max_output_rows,
-            example_seconds: 0,
+            layout: section_of(&older),
+            statusline: section_of(&older),
+            rendering: section_of(&older),
+            rebinds,
         }
     }
 }
 
-impl Settings {
-    /// Whether source takes semantic colors: chosen, and the server providing them runs.
-    pub const fn semantic_colors(&self) -> bool {
-        self.language_server && self.semantic_highlighting
-    }
-
-    /// Move the output fold threshold by picker steps, keeping room for a head, the
-    /// three fold rows, and a tail.
-    pub fn adjust_output_rows(&mut self, delta: i8) {
-        let step = usize::from(delta.unsigned_abs());
-        self.output_rows = match delta > 0 {
-            true => self.output_rows.saturating_add(step),
-            false => self.output_rows.saturating_sub(step),
-        }
-        .max(UI.min_output_rows);
-    }
-
-    /// Move the matrix row spacing by picker steps, within the range it may take.
-    pub fn adjust_matrix_row_spacing(&mut self, delta: i8) {
-        let step = u16::from(delta.unsigned_abs()) * UI.matrix_row_spacing_step;
-        self.matrix_row_spacing_percent = match delta > 0 {
-            true => self.matrix_row_spacing_percent.saturating_add(step),
-            false => self.matrix_row_spacing_percent.saturating_sub(step),
-        }
-        .clamp(
-            UI.min_matrix_row_spacing_percent,
-            UI.max_matrix_row_spacing_percent,
-        );
-    }
-
-    /// Move the examples timeout by picker steps of a second, down to off.
-    pub fn adjust_example_seconds(&mut self, delta: i8) {
-        let step = u16::from(delta.unsigned_abs());
-        self.example_seconds = match delta > 0 {
-            true => self.example_seconds.saturating_add(step),
-            false => self.example_seconds.saturating_sub(step),
-        };
-    }
-
-    /// How long each documentation example may take to be computed again; zero
-    /// when they are not.
-    pub fn example_timeout(&self) -> Duration {
-        Duration::from_secs(self.example_seconds.into())
-    }
-
-    /// Whether returned values lay out differently, moving their heights.
-    pub fn reformats(&self, other: &Self) -> bool {
-        (
-            self.maths,
-            self.fractions,
-            self.math_fonts,
-            self.matrix_row_spacing_percent,
-            self.output_rows,
-        ) != (
-            other.maths,
-            other.fractions,
-            other.math_fonts,
-            other.matrix_row_spacing_percent,
-            other.output_rows,
-        )
-    }
-}
-
-cyclic! {
-    /// Placement of the editor status line.
-    #[discriminated_str(label)]
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    pub enum StatusLinePosition {
-        #[default]
-        BelowInput = "below input",
-        AboveInput = "above input",
-        Off = "off",
-    }
-}
-
-cyclic! {
-    /// The side of the status line an idle segment sits on, if any.
-    #[discriminated_str(label)]
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    pub enum SegmentPlacement {
-        Left = "left",
-        Center = "centre",
-        Right = "right",
-        Hidden = "off",
-    }
-}
-
-/// Where each segment sits while the session has nothing else to say. Segments
-/// sharing a side keep the order of these fields.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct IdleStatusLine {
-    pub scheme: SegmentPlacement,
-    pub directory: SegmentPlacement,
-    pub hints: SegmentPlacement,
-}
-
-impl Default for IdleStatusLine {
-    fn default() -> Self {
-        Self {
-            scheme: SegmentPlacement::Left,
-            directory: SegmentPlacement::Left,
-            hints: SegmentPlacement::Right,
-        }
-    }
+/// The section reading its own fields out of an older file's values.
+fn section_of<Section: DeserializeOwned + Default>(older: &Map<String, Value>) -> Section {
+    serde_json::from_value(Value::Object(older.clone())).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -256,44 +159,11 @@ mod tests {
     use crossterm::event::KeyCode::Char;
 
     use super::keymap::Keymaps;
+    use super::statusline::{SegmentPlacement, StatusLinePosition};
     use super::*;
     use crate::ui::action::Action;
     use crate::ui::key::KeyMod::Alt;
-
-    #[test]
-    fn the_examples_timeout_steps_by_seconds_and_stops_at_off() {
-        let mut settings = Settings::default();
-        settings.adjust_example_seconds(1);
-        let on = settings.example_timeout();
-        assert!(!on.is_zero());
-        settings.adjust_example_seconds(1);
-        assert!(settings.example_timeout() > on);
-
-        settings.adjust_example_seconds(-2);
-        settings.adjust_example_seconds(-1);
-        assert!(
-            settings.example_timeout().is_zero(),
-            "off is as low as it goes"
-        );
-    }
-
-    #[test]
-    fn the_matrix_row_spacing_stays_within_its_range() {
-        let mut settings = Settings::default();
-        settings.adjust_matrix_row_spacing(i8::MIN);
-        settings.adjust_matrix_row_spacing(i8::MIN);
-        settings.adjust_matrix_row_spacing(-1);
-        assert_eq!(
-            settings.matrix_row_spacing_percent,
-            UI.min_matrix_row_spacing_percent
-        );
-        settings.matrix_row_spacing_percent = UI.max_matrix_row_spacing_percent;
-        settings.adjust_matrix_row_spacing(1);
-        assert_eq!(
-            settings.matrix_row_spacing_percent,
-            UI.max_matrix_row_spacing_percent
-        );
-    }
+    use crate::ui::render::maths::FractionStyle;
 
     /// A record written by one session reads back whole in the next, and the
     /// rebinds it replays restore the swap a taken key caused.
@@ -314,19 +184,19 @@ mod tests {
             rebinds: keymaps.rebinds().to_vec(),
             ..SavedSettings::default()
         };
-        saved.editor.fractions = FractionStyle::Inline;
-        saved.editor.statusline = StatusLinePosition::Off;
-        saved.editor.output_rows = 7;
-        saved.input.scrolloff = 5;
+        saved.rendering.fractions = FractionStyle::Inline;
+        saved.statusline.position = StatusLinePosition::Off;
+        saved.layout.output_rows = 7;
+        saved.layout.scrolloff = 5;
 
         write(&path, &saved).expect("write settings");
         let loaded: SavedSettings = read(&path).expect("read settings");
         let _ = fs::remove_file(&path);
 
-        assert_eq!(loaded.editor.fractions, FractionStyle::Inline);
-        assert_eq!(loaded.editor.statusline, StatusLinePosition::Off);
-        assert_eq!(loaded.editor.output_rows, 7);
-        assert_eq!(loaded.input.scrolloff, 5);
+        assert_eq!(loaded.rendering.fractions, FractionStyle::Inline);
+        assert_eq!(loaded.statusline.position, StatusLinePosition::Off);
+        assert_eq!(loaded.layout.output_rows, 7);
+        assert_eq!(loaded.layout.scrolloff, 5);
         let replayed = Keymaps::replaying(&loaded.rebinds);
         for action in [Action::ClearFeed, Action::OpenOutput] {
             assert_eq!(replayed.key_for(action), keymaps.key_for(action));
@@ -337,34 +207,52 @@ mod tests {
     #[test]
     fn a_partial_record_fills_in_defaults() {
         let saved: SavedSettings =
-            serde_json::from_str(r#"{"editor":{"fractions":"underlined"}}"#).expect("parses");
+            serde_json::from_str(r#"{"rendering":{"fractions":"underlined"}}"#).expect("parses");
 
-        assert_eq!(saved.editor.fractions, FractionStyle::Underlined);
-        assert_eq!(saved.editor.output_rows, Settings::default().output_rows);
+        assert_eq!(saved.rendering.fractions, FractionStyle::Underlined);
+        assert_eq!(saved.layout, LayoutSettings::default());
         assert!(saved.rebinds.is_empty());
     }
+
+    /// A file from before the values were sorted into sections keeps every one.
     #[test]
-    fn semantic_highlighting_defaults_on_for_old_settings_and_saves_explicit_off() {
-        let old: SavedSettings = serde_json::from_str(r#"{"editor":{"math_fonts":true}}"#).unwrap();
-        assert!(old.editor.semantic_highlighting);
-        assert!(old.editor.math_fonts);
-        let mut disabled = old;
-        disabled.editor.semantic_highlighting = false;
-        let roundtrip: SavedSettings =
-            serde_json::from_str(&serde_json::to_string(&disabled).unwrap()).unwrap();
-        assert!(!roundtrip.editor.semantic_highlighting);
-        assert!(roundtrip.editor.math_fonts);
+    fn a_record_keeping_values_under_editor_and_input_reads_into_the_sections() {
+        let saved: SavedSettings = serde_json::from_str(
+            r#"{
+                "editor": {
+                    "language_server": false,
+                    "statusline": "above_input",
+                    "idle_statusline": {"scheme": "right"},
+                    "fractions": "inline",
+                    "output_rows": 50,
+                    "example_seconds": 2
+                },
+                "input": {"max_height_percent": 60, "complete_after": 3, "hintCompletionBelow": 4},
+                "rebinds": [["CopySelection", {"code": {"Char": "y"}, "modifiers": 2}]]
+            }"#,
+        )
+        .expect("parses");
+
+        assert!(!saved.rendering.language_server);
+        assert_eq!(saved.rendering.fractions, FractionStyle::Inline);
+        assert_eq!(saved.rendering.example_seconds, 2);
+        assert_eq!(saved.statusline.position, StatusLinePosition::AboveInput);
+        assert_eq!(saved.statusline.idle.scheme, SegmentPlacement::Right);
+        assert_eq!(saved.layout.output_rows, 50);
+        assert_eq!(saved.layout.max_input_height_percent, 60);
+        assert_eq!(saved.layout.complete_after, 3);
+        assert_eq!(saved.layout.hint_completion_below, 4);
+        assert_eq!(saved.rebinds.len(), 1);
     }
 
     #[test]
-    fn semantic_colors_need_the_language_server_but_keep_their_choice() {
-        let old: SavedSettings = serde_json::from_str(r#"{"editor":{}}"#).unwrap();
-        assert!(old.editor.language_server);
-        let mut settings = old.editor;
-        settings.semantic_highlighting = true;
-        settings.language_server = false;
-        assert!(!settings.semantic_colors());
-        settings.language_server = true;
-        assert!(settings.semantic_colors());
+    fn a_saved_record_reads_back_as_written() {
+        let mut saved = SavedSettings::default();
+        saved.rendering.semantic_highlighting = false;
+        saved.statusline.idle.hints = SegmentPlacement::Hidden;
+        let roundtrip: SavedSettings =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert!(!roundtrip.rendering.semantic_highlighting);
+        assert_eq!(roundtrip.statusline.idle.hints, SegmentPlacement::Hidden);
     }
 }
