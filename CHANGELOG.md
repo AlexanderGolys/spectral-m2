@@ -4,6 +4,8 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-11-04
+
 ### Changed
 
 - A bare symbol, such as an option's name, is drawn as a name in code rather than as italic maths. A ring's variables are still maths.
@@ -223,7 +225,8 @@ First crates.io release.
 - Reorganized the shell around workspace sessions, typed feed blocks, responsive panes, and independently rendered previews.
 - Made installation Cargo-managed and removed manual binary copying and local-bin symlinks.
 
-[Unreleased]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.1.0...v1.2.0
