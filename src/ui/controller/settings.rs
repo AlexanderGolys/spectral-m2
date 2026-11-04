@@ -6,7 +6,10 @@
 //! its own under the user's configuration directory.
 
 pub mod keymap;
+use self::keymap::Shortcut;
 pub mod theme;
+
+use these_macros_should_be_illegal::discriminated_str;
 
 #[cfg(not(test))]
 use std::env;
@@ -17,11 +20,9 @@ use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use these_macros_should_be_illegal::discriminated_str;
 
 use self::theme::Appearance;
 use crate::input::InputSettings;
-use crate::ui::action::Action;
 use crate::ui::config::UI;
 use crate::ui::cycle::cyclic;
 use crate::ui::key::KeyEvent;
@@ -82,7 +83,7 @@ pub struct SavedSettings {
     pub input: InputSettings,
     /// Every rebind made, in order. Replaying them over the default keymaps restores
     /// the swaps they caused as well as the keys they set.
-    pub rebinds: Vec<(Action, KeyEvent)>,
+    pub rebinds: Vec<(Shortcut, KeyEvent)>,
 }
 
 impl Persisted for SavedSettings {
@@ -203,6 +204,7 @@ mod tests {
 
     use super::keymap::Keymaps;
     use super::*;
+    use crate::ui::action::Action;
     use crate::ui::key::KeyMod::Alt;
 
     #[test]

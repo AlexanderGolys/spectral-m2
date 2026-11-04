@@ -425,12 +425,6 @@ impl Picker {
         });
     }
 
-    /// Replace the current tab's items while retaining the selection where possible.
-    pub fn set_items(&mut self, items: Vec<Box<dyn PickerItem>>) {
-        self.tabs[self.tab].items = items;
-        self.measure();
-    }
-
     /// Replace every tab while retaining the tab and selection shown where possible.
     pub fn set_tabs(&mut self, tabs: Vec<PickerTab>) {
         assert!(!tabs.is_empty(), "a picker shows at least one tab");
@@ -825,9 +819,9 @@ mod tests {
 
     #[test]
     fn keymap_capture_precedes_navigation_and_escape_cancels_only_capture() {
-        use crate::ui::controller::settings::keymap::KeymapRow;
+        use crate::ui::controller::settings::keymap::{KeymapRow, Shortcut};
 
-        let row = KeymapRow::new(Action::ClearFeed, KeyCode::F(2).into());
+        let row = KeymapRow::new(Action::ClearFeed.into(), KeyCode::F(2).into());
         let mut controller = PickerController {
             mode: PickerMode::Keymaps,
             picker: Picker::new("keymaps", vec![Box::new(row)]),
@@ -835,7 +829,7 @@ mod tests {
         controller.handle_action(Action::Submit);
         assert!(controller.picker.selected_item().unwrap().capturing());
         assert!(matches!(controller.handle_key(KeyCode::Up.into()),
-            Some(EditorEvent::Rebind(Action::ClearFeed, key)) if key.code == KeyCode::Up));
+            Some(EditorEvent::Rebind(Shortcut::Command(Action::ClearFeed), key)) if key.code == KeyCode::Up));
         assert!(controller.handle_key(KeyCode::Esc.into()).is_none());
         assert!(!controller.picker.selected_item().unwrap().capturing());
         assert!(matches!(

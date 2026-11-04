@@ -3,121 +3,228 @@
 //! An action binding consumes its terminal key and emits an [`Action`]. Keys
 //! without a binding continue to the focused component as ordinary input.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 use crossterm::event::KeyCode;
 use KeyCode::*;
 
 use ratatui::text::{Line, Span};
+use serde::{Deserialize, Serialize};
 
+use crate::input::InputAction;
 use crate::ui::action::Action;
-use crate::ui::controller::picker::{PickerInput, PickerItem, Row};
+use crate::ui::controller::picker::{PickerInput, PickerItem, PickerTab, Row};
 use crate::ui::controller::settings::theme::groups::{scheme, HLGroup};
 use crate::ui::controller::EditorEvent;
 use crate::ui::key::{KeyEvent, KeyMod};
 use KeyMod::{Alt, Ctrl, Shift};
 
-/// One action attached to a normalized key, and whether the user may move it.
+/// The part of the editor a shortcut works in; each context is a tab of the keymaps
+/// picker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum KeyContext {
+    Global,
+    Movement,
+    Selection,
+    Editing,
+    Recall,
+}
+
+impl KeyContext {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Movement => "movement",
+            Self::Selection => "selection",
+            Self::Editing => "editing",
+            Self::Recall => "completion & history",
+        }
+    }
+}
+
+/// Something a key can be bound to: an editor-wide command or a text edit.
+///
+/// Serialized as the bare action name, so shortcuts saved before edits were
+/// bindable still load.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Shortcut {
+    Command(Action),
+    Edit(InputAction),
+}
+
+impl Shortcut {
+    pub fn context(self) -> KeyContext {
+        use InputAction::*;
+        match self {
+            Self::Command(_) => KeyContext::Global,
+            Self::Edit(edit) => match edit {
+                MoveLeft | MoveRight | MoveUp | MoveDown | MoveWordLeft | MoveWordRight
+                | MoveLineStart | MoveLineEnd | MoveTextStart | MoveTextEnd => KeyContext::Movement,
+                SelectLeft | SelectRight | SelectWordLeft | SelectWordRight | SelectLineStart
+                | SelectLineEnd | SelectTextStart | SelectTextEnd | SelectAll => {
+                    KeyContext::Selection
+                }
+                InsertNewline | InsertTab | DeleteBack | DeleteForward | DeleteWordBack
+                | DeleteWordForward | Undo | Redo | Clear => KeyContext::Editing,
+                NextCompletion | PreviousCompletion | HistoryPrevious | HistoryNext => {
+                    KeyContext::Recall
+                }
+            },
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Command(action) => action.description(),
+            Self::Edit(edit) => edit.description(),
+        }
+    }
+}
+
+impl From<Action> for Shortcut {
+    fn from(action: Action) -> Self {
+        Self::Command(action)
+    }
+}
+
+impl From<InputAction> for Shortcut {
+    fn from(edit: InputAction) -> Self {
+        Self::Edit(edit)
+    }
+}
+
+/// One shortcut attached to a normalized key, and whether the user may move it.
+///
+/// An `alias` is another key for a shortcut that already has a primary one, such
+/// as the control character a terminal sends when it cannot report a modifier.
 #[derive(Clone, Copy)]
 struct Keymap {
-    action: Action,
+    shortcut: Shortcut,
     remappable: bool,
+    alias: bool,
 }
 
 /// The editor's exact normalized-key bindings.
 #[derive(Clone)]
 pub struct Keymaps {
     bindings: HashMap<KeyEvent, Keymap>,
-    reserved: HashSet<KeyEvent>,
-    rebinds: Vec<(Action, KeyEvent)>,
+    rebinds: Vec<(Shortcut, KeyEvent)>,
 }
 
 impl Keymaps {
-    /// Resolve a terminal key to an action, after which the key is discarded.
+    /// Resolve a terminal key to a command, after which the key is discarded.
     pub fn action(&self, key: KeyEvent, remapping: bool) -> Option<Action> {
-        self.bindings
-            .get(&key.binding())
-            .filter(|binding| {
-                !remapping || !binding.remappable || binding.action == Action::OpenKeymaps
-            })
-            .map(|binding| binding.action)
+        let binding = self.bindings.get(&key.binding())?;
+        match binding.shortcut {
+            Shortcut::Command(action)
+                if !remapping || !binding.remappable || action == Action::OpenKeymaps =>
+            {
+                Some(action)
+            }
+            _ => None,
+        }
     }
 
-    /// The key that triggers `action`.
-    pub fn key(&self, action: Action) -> Option<KeyEvent> {
-        self.bindings
-            .iter()
-            .find_map(|(key, binding)| (binding.action == action).then_some(*key))
+    /// Resolve a terminal key to the text edit it performs in the input.
+    pub fn edit(&self, key: KeyEvent) -> Option<InputAction> {
+        match self.bindings.get(&key.binding())?.shortcut {
+            Shortcut::Edit(edit) => Some(edit),
+            Shortcut::Command(_) => None,
+        }
     }
 
-    /// The key that triggers `action`, labelled for hints and help.
-    pub fn key_for(&self, action: Action) -> Option<String> {
-        self.key(action).map(|key| key.to_string())
+    /// The key that triggers `shortcut`.
+    pub fn key(&self, shortcut: impl Into<Shortcut>) -> Option<KeyEvent> {
+        let shortcut = shortcut.into();
+        self.bindings.iter().find_map(|(key, binding)| {
+            (binding.shortcut == shortcut && !binding.alias).then_some(*key)
+        })
+    }
+
+    /// The key that triggers `shortcut`, labelled for hints and help.
+    pub fn key_for(&self, shortcut: impl Into<Shortcut>) -> Option<String> {
+        self.key(shortcut).map(|key| key.to_string())
     }
 
     /// The default keymaps with `rebinds` made over them, in order.
-    pub fn replaying(rebinds: &[(Action, KeyEvent)]) -> Self {
+    pub fn replaying(rebinds: &[(Shortcut, KeyEvent)]) -> Self {
         let mut keymaps = Self::default();
-        for &(action, key) in rebinds {
-            keymaps.rebind(action, key);
+        for &(shortcut, key) in rebinds {
+            keymaps.rebind(shortcut, key);
         }
         keymaps
     }
 
     /// Every rebind that took effect, in the order made.
-    pub fn rebinds(&self) -> &[(Action, KeyEvent)] {
+    pub fn rebinds(&self) -> &[(Shortcut, KeyEvent)] {
         &self.rebinds
     }
 
-    /// The bindings the user may move, with their current keys, in action order.
-    pub fn remappable(&self) -> Vec<(Action, KeyEvent)> {
+    /// The bindings the user may move, with their current keys, in shortcut order.
+    pub fn remappable(&self) -> Vec<(Shortcut, KeyEvent)> {
         let mut remappable: Vec<_> = self
             .bindings
             .iter()
             .filter(|(_, binding)| binding.remappable)
-            .map(|(key, binding)| (binding.action, *key))
+            .map(|(key, binding)| (binding.shortcut, *key))
             .collect();
-        remappable.sort_by_key(|(action, _)| *action);
+        remappable.sort_by_key(|(shortcut, _)| *shortcut);
         remappable
     }
 
-    /// Whether a shortcut leaves text entry and terminal control keys available.
-    fn valid_shortcut(key: KeyEvent) -> bool {
-        if matches!(key.code, F(2..=24)) {
-            return true;
-        }
-        if matches!(key.code, F(_) | Esc | Tab | BackTab | Null | Modifier(_)) {
-            return false;
-        }
-        if let Char(character) = key.code {
-            if character.is_control() || key.is_text() {
-                return false;
-            }
-            // The terminal sends these as Tab, Enter and Esc.
-            if key.ctrl() && !key.alt() && !key.shift() && matches!(character, 'i' | 'm' | '[') {
-                return false;
-            }
-        }
-        key.ctrl() || key.alt() || key.shift()
+    /// The contexts that have a binding the user may move.
+    pub fn contexts(&self) -> BTreeSet<KeyContext> {
+        self.remappable()
+            .into_iter()
+            .map(|(shortcut, _)| shortcut.context())
+            .collect()
     }
 
-    /// Move `action`'s remappable binding onto `key`, swapping with a remappable
-    /// binding already there. Fixed bindings and reserved keys never move.
-    pub fn rebind(&mut self, action: Action, key: KeyEvent) -> bool {
+    /// Whether a key can be assigned to a shortcut working in `context`, leaving
+    /// text entry and terminal control keys available.
+    fn valid_shortcut(context: KeyContext, key: KeyEvent) -> bool {
+        match key.code {
+            F(2..=24) => return true,
+            F(_) | Esc | Null | Modifier(_) => return false,
+            Char(character) => {
+                if character.is_control() || key.is_text() {
+                    return false;
+                }
+                // The terminal sends these as Tab, Enter and Esc.
+                if key.ctrl() && !key.alt() && !key.shift() && matches!(character, 'i' | 'm' | '[')
+                {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+        match context {
+            KeyContext::Global => {
+                !matches!(key.code, Tab | BackTab) && (key.ctrl() || key.alt() || key.shift())
+            }
+            _ => true,
+        }
+    }
+
+    /// Move `shortcut`'s remappable binding onto `key`, swapping with a remappable
+    /// binding already there. Fixed bindings never move, and neither shortcut may
+    /// land on a key invalid in its context.
+    pub fn rebind(&mut self, shortcut: impl Into<Shortcut>, key: KeyEvent) -> bool {
+        let shortcut = shortcut.into();
         let key = key.binding();
         let Some(target) = self.bindings.iter().find_map(|(bound, binding)| {
-            (binding.action == action && binding.remappable).then_some(*bound)
+            (binding.shortcut == shortcut && binding.remappable && !binding.alias).then_some(*bound)
         }) else {
             return false;
         };
-        if !Self::valid_shortcut(key)
-            || self.reserved.contains(&key)
-            || self
-                .bindings
-                .get(&key)
-                .is_some_and(|binding| !binding.remappable)
-        {
+        if !Self::valid_shortcut(shortcut.context(), key) {
             return false;
+        }
+        if let Some(conflict) = self.bindings.get(&key) {
+            if !conflict.remappable || !Self::valid_shortcut(conflict.shortcut.context(), target) {
+                return false;
+            }
         }
         if key == target {
             return true;
@@ -127,9 +234,28 @@ impl Keymaps {
             self.bindings.insert(target, conflict);
         }
         self.bindings.insert(key, binding);
-        self.rebinds.push((action, key));
+        self.rebinds.push((shortcut, key));
         true
     }
+}
+
+/// The picker tabs listing the remappable shortcuts, one per context.
+pub fn tabs(keymaps: &Keymaps) -> Vec<PickerTab> {
+    let remappable = keymaps.remappable();
+    keymaps
+        .contexts()
+        .into_iter()
+        .map(|context| PickerTab {
+            label: context.label(),
+            items: remappable
+                .iter()
+                .filter(|(shortcut, _)| shortcut.context() == context)
+                .map(|&(shortcut, key)| {
+                    Box::new(KeymapRow::new(shortcut, key)) as Box<dyn PickerItem>
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 /// The button putting every shortcut back on its default key.
@@ -142,16 +268,16 @@ pub fn restore_defaults() -> Box<dyn PickerItem> {
 
 /// A shortcut row that captures a replacement only after Enter.
 pub struct KeymapRow {
-    action: Action,
+    shortcut: Shortcut,
     key: KeyEvent,
     capturing: bool,
 }
 
 impl KeymapRow {
-    /// Show an action and its current shortcut.
-    pub fn new(action: Action, key: KeyEvent) -> Self {
+    /// Show a shortcut and its current key.
+    pub fn new(shortcut: Shortcut, key: KeyEvent) -> Self {
         Self {
-            action,
+            shortcut,
             key,
             capturing: false,
         }
@@ -167,7 +293,7 @@ impl PickerItem for KeymapRow {
             self.key.to_string()
         };
         vec![
-            Span::styled(self.action.description(), groups.keymap_action_label()).into(),
+            Span::styled(self.shortcut.description(), groups.keymap_action_label()).into(),
             Span::styled(shortcut, groups.style(HLGroup::KeymapHint)).into(),
         ]
     }
@@ -183,7 +309,7 @@ impl PickerItem for KeymapRow {
                     self.capturing = false;
                     None
                 } else {
-                    Some(EditorEvent::Rebind(self.action, key))
+                    Some(EditorEvent::Rebind(self.shortcut, key))
                 }
             }
             PickerInput::Action(Action::Submit) => {
@@ -195,20 +321,25 @@ impl PickerItem for KeymapRow {
     }
 }
 
-/// A default binding: `fixed` ones hold their key, the rest may be remapped.
+/// A default binding: `fixed` ones hold their key, `alias` ones are further fixed
+/// keys for a shortcut, the rest may be remapped.
 macro_rules! keymap {
-    (fixed $action:ident <- $key:expr) => {
-        keymap!(@ $action, $key, false)
+    (fixed $shortcut:path => $key:expr) => {
+        keymap!(@ $shortcut, $key, false, false)
     };
-    ($action:ident <- $key:expr) => {
-        keymap!(@ $action, $key, true)
+    (alias $shortcut:path => $key:expr) => {
+        keymap!(@ $shortcut, $key, false, true)
     };
-    (@ $action:ident, $key:expr, $remappable:expr) => {
+    ($shortcut:path => $key:expr) => {
+        keymap!(@ $shortcut, $key, true, false)
+    };
+    (@ $shortcut:path, $key:expr, $remappable:expr, $alias:expr) => {
         (
             key!($key),
             Keymap {
-                action: Action::$action,
+                shortcut: Shortcut::from($shortcut),
                 remappable: $remappable,
+                alias: $alias,
             },
         )
     };
@@ -222,66 +353,71 @@ macro_rules! key {
 
 impl Default for Keymaps {
     fn default() -> Self {
+        use Action as A;
+        use InputAction as I;
         Self {
             bindings: HashMap::from([
-                keymap!(CancelExecution <- Char('c') + Ctrl),
-                keymap!(OpenCommands <- Char('/') + Ctrl),
-                keymap!(OpenSettings <- Char('o') + Ctrl),
-                keymap!(OpenKeymaps <- Char('k') + Ctrl),
-                keymap!(ClearFeed <- Char('l') + Alt),
-                keymap!(OpenCode <- F(2)),
-                keymap!(OpenValues <- F(3)),
-                keymap!(OpenStdOut <- F(4)),
-                keymap!(OpenOutput <- F(5)),
-                keymap!(OpenSyntaxTree <- F(6)),
-                keymap!(Restart <- Char('n') + Ctrl),
-                keymap!(ResumeSession <- Char('r') + Ctrl),
-                keymap!(ClosePane <- Char('q') + Ctrl),
-                keymap!(fixed ToggleHighlightDebug <- Char('d') + Ctrl + Shift),
-                keymap!(CopySelection <- Char('y') + Ctrl),
-                keymap!(fixed Submit <- Enter),
-                keymap!(fixed ScrollFeedUp <- PageUp),
-                keymap!(fixed ScrollFeedDown <- PageDown),
-            ]),
-            reserved: HashSet::from([
-                key!(Char('l') + Ctrl),
-                key!(Char('a') + Ctrl),
-                key!(Char(' ') + Shift),
-                key!(Enter + Shift),
-                key!(Enter + Alt),
-                key!(Char('j') + Ctrl),
-                key!(Char('z') + Ctrl),
-                key!(Char('z') + Ctrl + Shift),
-                key!(Char('h') + Ctrl),
-                key!(Backspace + Ctrl),
-                key!(Backspace + Alt),
-                key!(Delete + Ctrl),
-                key!(Delete + Alt),
-                key!(Left + Ctrl),
-                key!(Right + Ctrl),
-                key!(Left + Ctrl + Shift),
-                key!(Right + Ctrl + Shift),
-                key!(Home + Ctrl),
-                key!(End + Ctrl),
-                key!(Home + Ctrl + Shift),
-                key!(End + Ctrl + Shift),
-                key!(Left + Shift),
-                key!(Right + Shift),
-                key!(Home + Shift),
-                key!(End + Shift),
-                key!(Left),
-                key!(Right),
-                key!(Up),
-                key!(Down),
-                key!(Up + Ctrl),
-                key!(Down + Ctrl),
-                key!(Home),
-                key!(End),
-                key!(Backspace),
-                key!(Delete),
-                key!(Tab),
-                key!(Tab + Ctrl),
-                key!(BackTab),
+                keymap!(A::CancelExecution => Char('c') + Ctrl),
+                keymap!(A::OpenCommands => Char('/') + Ctrl),
+                keymap!(A::OpenSettings => Char('o') + Ctrl),
+                keymap!(A::OpenKeymaps => Char('k') + Ctrl),
+                keymap!(A::ClearFeed => Char('l') + Alt),
+                keymap!(A::OpenCode => F(2)),
+                keymap!(A::OpenValues => F(3)),
+                keymap!(A::OpenStdOut => F(4)),
+                keymap!(A::OpenOutput => F(5)),
+                keymap!(A::OpenSyntaxTree => F(6)),
+                keymap!(A::Restart => Char('n') + Ctrl),
+                keymap!(A::ResumeSession => Char('r') + Ctrl),
+                keymap!(A::ClosePane => Char('q') + Ctrl),
+                keymap!(fixed A::ToggleHighlightDebug => Char('d') + Ctrl + Shift),
+                keymap!(A::CopySelection => Char('y') + Ctrl),
+                keymap!(fixed A::Submit => Enter),
+                keymap!(fixed A::ScrollFeedUp => PageUp),
+                keymap!(fixed A::ScrollFeedDown => PageDown),
+                keymap!(I::MoveLeft => Left),
+                keymap!(I::MoveRight => Right),
+                keymap!(I::MoveUp => Up),
+                keymap!(I::MoveDown => Down),
+                keymap!(I::MoveWordLeft => Left + Ctrl),
+                keymap!(I::MoveWordRight => Right + Ctrl),
+                keymap!(I::MoveLineStart => Home),
+                keymap!(I::MoveLineEnd => End),
+                keymap!(I::MoveTextStart => Home + Ctrl),
+                keymap!(I::MoveTextEnd => End + Ctrl),
+                keymap!(I::SelectLeft => Left + Shift),
+                keymap!(I::SelectRight => Right + Shift),
+                keymap!(I::SelectWordLeft => Left + Ctrl + Shift),
+                keymap!(I::SelectWordRight => Right + Ctrl + Shift),
+                keymap!(I::SelectLineStart => Home + Shift),
+                keymap!(I::SelectLineEnd => End + Shift),
+                keymap!(I::SelectTextStart => Home + Ctrl + Shift),
+                keymap!(I::SelectTextEnd => End + Ctrl + Shift),
+                keymap!(I::SelectAll => Char('a') + Ctrl),
+                keymap!(I::InsertNewline => Enter + Shift),
+                // Enter that a terminal cannot report with Shift arrives as the
+                // newline control character or as a Shifted space.
+                keymap!(alias I::InsertNewline => Enter + Alt),
+                keymap!(alias I::InsertNewline => Char(' ') + Shift),
+                keymap!(alias I::InsertNewline => Char('j') + Ctrl),
+                keymap!(I::InsertTab => Tab + Alt),
+                keymap!(I::DeleteBack => Backspace),
+                keymap!(I::DeleteForward => Delete),
+                keymap!(I::DeleteWordBack => Backspace + Ctrl),
+                keymap!(alias I::DeleteWordBack => Backspace + Alt),
+                // The backspace control character, which is what a terminal sends
+                // for Ctrl+Backspace when it cannot report the modifier.
+                keymap!(alias I::DeleteWordBack => Char('h') + Ctrl),
+                keymap!(I::DeleteWordForward => Delete + Ctrl),
+                keymap!(alias I::DeleteWordForward => Delete + Alt),
+                keymap!(I::Undo => Char('z') + Ctrl),
+                keymap!(I::Redo => Char('z') + Ctrl + Shift),
+                keymap!(I::Clear => Char('l') + Ctrl),
+                keymap!(I::NextCompletion => Tab),
+                keymap!(I::PreviousCompletion => BackTab),
+                keymap!(alias I::PreviousCompletion => Tab + Ctrl),
+                keymap!(I::HistoryPrevious => Up + Ctrl),
+                keymap!(I::HistoryNext => Down + Ctrl),
             ]),
             rebinds: Vec::new(),
         }
@@ -354,7 +490,7 @@ mod tests {
         assert!(keymaps
             .remappable()
             .iter()
-            .all(|(action, _)| *action != Action::ToggleHighlightDebug));
+            .all(|(action, _)| *action != Shortcut::Command(Action::ToggleHighlightDebug)));
     }
 
     #[test]
@@ -369,13 +505,13 @@ mod tests {
     #[test]
     fn keys_are_labelled_for_display() {
         let ctrl = if cfg!(target_os = "macos") {
-            "⌘"
+            "cmd"
         } else {
             "ctrl"
         };
         assert_eq!(key!(Char('o') + Ctrl).to_string(), format!("{ctrl}+o"));
         assert_eq!(key!(Char('/') + Ctrl).to_string(), format!("{ctrl}+/"));
-        assert_eq!(key!(Left + Ctrl + Shift).to_string(), format!("{ctrl}+⇧+←"));
+        assert_eq!(key!(Left + Ctrl + Shift).to_string(), format!("{ctrl}+shift+left"));
 
         let keymaps = Keymaps::default();
         for (command, _) in keymaps.remappable() {
@@ -413,7 +549,7 @@ mod tests {
         assert!(keymaps
             .remappable()
             .iter()
-            .all(|(remappable, _)| *remappable != Action::Submit));
+            .all(|(remappable, _)| *remappable != Shortcut::Command(Action::Submit)));
     }
 
     #[test]
@@ -435,7 +571,7 @@ mod tests {
             let mut keymaps = Keymaps::default();
             let original = keymaps.key(Action::ClearFeed);
             assert!(!keymaps.rebind(Action::ClearFeed, key), "accepted {key}");
-            let loaded = Keymaps::replaying(&[(Action::ClearFeed, key)]);
+            let loaded = Keymaps::replaying(&[(Shortcut::Command(Action::ClearFeed), key)]);
             assert_eq!(loaded.key(Action::ClearFeed), original);
         }
     }
@@ -472,21 +608,21 @@ mod tests {
         assert!(keymaps
             .remappable()
             .iter()
-            .any(|(action, _)| *action == Action::CancelExecution));
+            .any(|(action, _)| *action == Shortcut::Command(Action::CancelExecution)));
         assert!(keymaps.rebind(Action::CancelExecution, key!(F(24))));
         assert!(keymaps.action(key!(F(24)), false) == Some(Action::CancelExecution));
     }
 
     #[test]
     fn shortcut_capture_requires_enter_and_escape_restores_the_label() {
-        let mut row = KeymapRow::new(Action::ClearFeed, key!(Char('l') + Alt));
+        let mut row = KeymapRow::new(Action::ClearFeed.into(), key!(Char('l') + Alt));
         assert!(row.handle(PickerInput::Key(key!(F(24)))).is_none());
         assert!(!row.capturing());
         row.handle(PickerInput::Action(Action::Submit));
         assert!(row.capturing());
         assert!(row.cells()[1].to_string().contains("Type keybind"));
         assert!(matches!(row.handle(PickerInput::Key(key!(F(24)))),
-            Some(EditorEvent::Rebind(Action::ClearFeed, key)) if key == key!(F(24))));
+            Some(EditorEvent::Rebind(Shortcut::Command(Action::ClearFeed), key)) if key == key!(F(24))));
         row.handle(PickerInput::Key(key!(Esc)));
         assert!(!row.capturing());
         assert_eq!(
@@ -502,5 +638,83 @@ mod tests {
 
         assert!(!keymaps.rebind(Action::ClearFeed, letter));
         assert!(action(&keymaps, letter).is_none());
+    }
+
+    #[test]
+    fn every_edit_has_a_binding_and_a_context_tab() {
+        let keymaps = Keymaps::default();
+        for edit in [
+            InputAction::MoveLeft,
+            InputAction::SelectAll,
+            InputAction::Undo,
+            InputAction::HistoryNext,
+        ] {
+            let key = keymaps.key(edit).expect("edits are bound");
+            assert_eq!(keymaps.edit(key), Some(edit));
+            assert!(keymaps.action(key, false).is_none());
+        }
+        let labels: Vec<_> = tabs(&keymaps).iter().map(|tab| tab.label).collect();
+        assert_eq!(
+            labels,
+            [
+                "global",
+                "movement",
+                "selection",
+                "editing",
+                "completion & history"
+            ]
+        );
+    }
+
+    #[test]
+    fn aliases_trigger_their_shortcut_without_being_its_key() {
+        let keymaps = Keymaps::default();
+        for alias in [
+            key!(Char('j') + Ctrl),
+            key!(Char(' ') + Shift),
+            key!(Enter + Alt),
+        ] {
+            assert_eq!(keymaps.edit(alias), Some(InputAction::InsertNewline));
+            assert_ne!(keymaps.key(InputAction::InsertNewline), Some(alias));
+        }
+        assert_eq!(
+            keymaps.edit(key!(BackTab + Shift)),
+            Some(InputAction::PreviousCompletion)
+        );
+    }
+
+    #[test]
+    fn an_edit_can_move_but_not_onto_an_alias_or_a_key_its_swap_partner_cannot_hold() {
+        let mut keymaps = Keymaps::default();
+        assert!(keymaps.rebind(InputAction::Undo, key!(Char('u') + Ctrl)));
+        assert_eq!(
+            keymaps.edit(key!(Char('u') + Ctrl)),
+            Some(InputAction::Undo)
+        );
+        assert!(keymaps.edit(key!(Char('z') + Ctrl)).is_none());
+
+        assert!(!keymaps.rebind(InputAction::Undo, key!(Char('j') + Ctrl)));
+        // A plain arrow is fine for editing, but a global command could not hold it.
+        assert!(!keymaps.rebind(Action::ClearFeed, key!(Left)));
+        // Swapping with a command would strand it on a key it cannot hold.
+        assert!(
+            !keymaps.rebind(InputAction::MoveLeft, key!(Char('l') + Alt)) || {
+                keymaps.key(Action::ClearFeed) == Some(key!(Left))
+            }
+        );
+    }
+
+    #[test]
+    fn edit_rebinds_survive_saving_next_to_command_rebinds() {
+        let mut keymaps = Keymaps::default();
+        assert!(keymaps.rebind(InputAction::Redo, key!(Char('y') + Alt)));
+        assert!(keymaps.rebind(Action::ClearFeed, key!(F(7))));
+        let saved = serde_json::to_string(keymaps.rebinds()).unwrap();
+        let loaded: Vec<(Shortcut, KeyEvent)> = serde_json::from_str(&saved).unwrap();
+
+        assert_eq!(
+            Keymaps::replaying(&loaded).key(InputAction::Redo),
+            Some(key!(Char('y') + Alt))
+        );
     }
 }

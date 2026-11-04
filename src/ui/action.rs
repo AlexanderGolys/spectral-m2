@@ -6,7 +6,7 @@ use these_macros_should_be_illegal::discriminated_str;
 /// A small by-value operation routed through the focused UI hierarchy.
 #[discriminated_str(description)]
 #[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Action {
     Quit = "quit spectral-m2",
     CancelExecution = "cancel execution",

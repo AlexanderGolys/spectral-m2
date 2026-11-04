@@ -104,6 +104,10 @@ impl KeyEvent {
 
     /// Normalize terminal encodings that should address the same binding.
     pub fn binding(mut self) -> Self {
+        if self.code == KeyCode::BackTab {
+            // The key is the shifted Tab; terminals differ on whether they say so.
+            self.modifiers &= !(KeyMod::Shift as u8);
+        }
         if self.code == KeyCode::Char('7') && self.ctrl() {
             self.code = KeyCode::Char('/');
         }
@@ -169,39 +173,38 @@ literally_literal_string! {
             let mut parts = Vec::new();
             if self.ctrl() {
                 parts.push(if cfg!(target_os = "macos") {
-                    @@"⌘"
+                    @@"cmd"
                 } else {
                     @@"ctrl"
                 });
             }
             if self.alt() {
                 parts.push(if cfg!(target_os = "macos") {
-                    @@"⌥"
+                    @@"option"
                 } else {
                     @@"alt"
                 });
             }
             if self.shift() {
-                parts.push(@@"⇧");
+                parts.push(@@"shift");
             }
             parts.push(match self.code {
                 Char(character) => character.into(),
-                Enter => @@"↵",
-                Tab => @@"⇥",
-                BackTab => @@"⇤",
-                Backspace => @@"⌫",
+                Enter => @@"enter",
+                Tab => @@"tab",
+                Backspace => @@"backspace",
                 Delete => @@"delete",
                 Insert => @@"insert",
-                Left => @@"←",
-                Right => @@"→",
-                Up => @@"↑",
-                Down => @@"↓",
+                Left => @@"left",
+                Right => @@"right",
+                Up => @@"up",
+                Down => @@"down",
                 Home => @@"home",
                 End => @@"end",
-                PageUp => @@"page up",
-                PageDown => @@"page down",
+                PageUp => @@"pg up",
+                PageDown => @@"pg down",
                 Esc => @@"esc",
-                F(number) => format!("F{number}"),
+                F(number) => format!("f{number}"),
                 other => format!("{other:?}").to_lowercase(),
             });
             formatter.write_str(&parts.join("+"))

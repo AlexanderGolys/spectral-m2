@@ -20,9 +20,9 @@ use ratatui::Frame;
 
 use self::commands::Command;
 use self::completion::{Names, Request};
-use self::picker::{Picker, PickerController, PickerItem, PickerMode, PickerTab};
+use self::picker::{Picker, PickerController, PickerMode};
 use self::screen::{ScreenCapture, ScreenSelection};
-use self::settings::keymap::{self, KeymapRow, Keymaps};
+use self::settings::keymap::{self, Keymaps, Shortcut};
 use self::settings::theme::groups::{publish, scheme, HLGroup};
 use self::settings::theme::Appearance;
 use self::settings::{Persisted, Preferences, SavedSettings, Settings, StatusLinePosition};
@@ -40,6 +40,7 @@ use super::render::RenderContext;
 use super::statusline::{StatusLine, StatusLineContext, StatusLineEvent, StatusLocation};
 use crate::code::file::abbreviate_home;
 use crate::code::highlight::Highlighter;
+use crate::input::InputAction;
 use crate::input::{InputCode, InputContext};
 
 /// An outward effect produced while handling input or an [`Action`].
@@ -136,7 +137,7 @@ pub enum EditorEvent {
     /// Put every shortcut back on its default key, leaving other settings be.
     RestoreKeymaps,
     SetPreferences(Preferences),
-    Rebind(Action, KeyEvent),
+    Rebind(Shortcut, KeyEvent),
 }
 
 /// The editor child that receives an otherwise unclaimed input event.
@@ -570,8 +571,8 @@ impl Editor {
         if let Some(action) = self.handle_debug_key(key) {
             return action;
         }
-        if key.code == KeyCode::Up
-            && key.ctrl()
+        let edit = self.keymaps.edit(key);
+        if edit == Some(InputAction::HistoryPrevious)
             && self.input.text().is_empty()
             && self.continuation.is_some()
         {
@@ -579,7 +580,7 @@ impl Editor {
         }
         self.screen_selection = None;
         self.refresh_completion();
-        self.input.handle_key(key);
+        self.input.handle_edit_key(key, edit);
         if self.input.text().is_empty() {
             self.continuation = None;
         }
@@ -873,20 +874,9 @@ impl Editor {
 
     fn keymaps_picker(&self) -> Picker {
         Picker::tabbed(
-            vec![PickerTab {
-                label: "keymaps",
-                items: self.keymap_items(),
-            }],
+            keymap::tabs(&self.keymaps),
             Some(keymap::restore_defaults()),
         )
-    }
-
-    fn keymap_items(&self) -> Vec<Box<dyn PickerItem>> {
-        self.keymaps
-            .remappable()
-            .into_iter()
-            .map(|(action, key)| Box::new(KeymapRow::new(action, key)) as Box<dyn PickerItem>)
-            .collect()
     }
 
     fn handle_picker_key(&mut self, key: KeyEvent) -> Reaction {
@@ -1027,15 +1017,15 @@ impl Editor {
             EditorEvent::RestoreKeymaps => {
                 self.keymaps = Keymaps::default();
                 self.save_settings();
-                let items = self.keymap_items();
-                self.pickers.last_mut().unwrap().picker.set_items(items);
+                let tabs = keymap::tabs(&self.keymaps);
+                self.pickers.last_mut().unwrap().picker.set_tabs(tabs);
             }
             EditorEvent::SetPreferences(preferences) => self.set_preferences(preferences),
-            EditorEvent::Rebind(action, key) => {
-                if self.keymaps.rebind(action, key) {
+            EditorEvent::Rebind(shortcut, key) => {
+                if self.keymaps.rebind(shortcut, key) {
                     self.save_settings();
-                    let items = self.keymap_items();
-                    self.pickers.last_mut().unwrap().picker.set_items(items);
+                    let tabs = keymap::tabs(&self.keymaps);
+                    self.pickers.last_mut().unwrap().picker.set_tabs(tabs);
                 }
             }
         }

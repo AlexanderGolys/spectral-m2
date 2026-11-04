@@ -31,6 +31,8 @@ use self::undo::{EditKind, Snapshot, Undo};
 use crate::code::highlight::Highlighter;
 use crate::ui::block::{HLSpan, Text};
 use crate::ui::config::UI;
+#[cfg(test)]
+use crate::ui::controller::settings::keymap::Keymaps;
 use crate::ui::graphics::kitty::PLACEHOLDER;
 use crate::ui::key::KeyEvent;
 use crate::ui::render::{Highlights, Prompt, RenderContext};
@@ -40,7 +42,7 @@ use crate::ui::wrap::{offset_at_column, HardWrap, TextLayout, WrapPolicy};
 /// A text-editing operation owned and interpreted by the input field.
 #[discriminated_str(description)]
 #[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum InputAction {
     InsertNewline = "insert a line break",
     InsertTab = "insert a tab",
@@ -959,72 +961,39 @@ impl InputCode {
         settled
     }
 
-    /// Interpret one unbound terminal key as editor input.
-    pub fn handle_key(&mut self, key: KeyEvent) -> Option<char> {
+    /// Interpret one terminal key as editor input: the edit it is bound to, if any,
+    /// otherwise the text it types.
+    pub fn handle_edit_key(&mut self, key: KeyEvent, edit: Option<InputAction>) -> Option<char> {
         let revision = self.revision();
-        let typed = self.interpret_key(key);
+        let typed = self.interpret_key(key, edit);
         self.note_keystroke_since(revision);
         typed
     }
 
-    fn interpret_key(&mut self, key: KeyEvent) -> Option<char> {
-        use InputAction::*;
+    /// Interpret a key through the default keymaps.
+    #[cfg(test)]
+    pub fn handle_key(&mut self, key: KeyEvent) -> Option<char> {
+        let edit = Keymaps::default().edit(key);
+        self.handle_edit_key(key, edit)
+    }
+
+    fn interpret_key(&mut self, key: KeyEvent, edit: Option<InputAction>) -> Option<char> {
         if key.code == KeyCode::Esc {
             self.completion = None;
             return None;
         }
-        let action = match key.code {
-            KeyCode::Char('l') if key.ctrl() => Some(Clear),
-            KeyCode::Char('a') if key.ctrl() => Some(SelectAll),
-            KeyCode::Char('z' | 'Z') if key.ctrl() && key.shift() => Some(Redo),
-            KeyCode::Char('z') if key.ctrl() => Some(Undo),
-            // The backspace control character, which is what a terminal sends
-            // for Ctrl+Backspace when it cannot report the modifier.
-            KeyCode::Char('h') if key.ctrl() => Some(DeleteWordBack),
-            KeyCode::Backspace if key.ctrl() || key.alt() => Some(DeleteWordBack),
-            KeyCode::Delete if key.ctrl() || key.alt() => Some(DeleteWordForward),
-            KeyCode::Char(' ') if key.shift() => Some(InsertNewline),
-            KeyCode::Enter if key.shift() || key.alt() => Some(InsertNewline),
-            // The newline control character itself, which is what a terminal
-            // sends for Shift+Enter when it cannot report the modifier.
-            KeyCode::Char('j') if key.ctrl() => Some(InsertNewline),
-            KeyCode::Tab if key.alt() => Some(InsertTab),
-            KeyCode::Tab if key.ctrl() => Some(PreviousCompletion),
-            KeyCode::Tab => Some(NextCompletion),
-            KeyCode::BackTab => Some(PreviousCompletion),
-            KeyCode::Backspace => Some(DeleteBack),
-            KeyCode::Delete => Some(DeleteForward),
-            KeyCode::Left if key.ctrl() && key.shift() => Some(SelectWordLeft),
-            KeyCode::Right if key.ctrl() && key.shift() => Some(SelectWordRight),
-            KeyCode::Home if key.ctrl() && key.shift() => Some(SelectTextStart),
-            KeyCode::End if key.ctrl() && key.shift() => Some(SelectTextEnd),
-            KeyCode::Left if key.ctrl() => Some(MoveWordLeft),
-            KeyCode::Right if key.ctrl() => Some(MoveWordRight),
-            KeyCode::Home if key.ctrl() => Some(MoveTextStart),
-            KeyCode::End if key.ctrl() => Some(MoveTextEnd),
-            KeyCode::Left if key.shift() => Some(SelectLeft),
-            KeyCode::Right if key.shift() => Some(SelectRight),
-            KeyCode::Home if key.shift() => Some(SelectLineStart),
-            KeyCode::End if key.shift() => Some(SelectLineEnd),
-            KeyCode::Left => Some(MoveLeft),
-            KeyCode::Right => Some(MoveRight),
-            KeyCode::Up if key.ctrl() => Some(HistoryPrevious),
-            KeyCode::Down if key.ctrl() => Some(HistoryNext),
-            KeyCode::Up => Some(MoveUp),
-            KeyCode::Down => Some(MoveDown),
-            KeyCode::Home => Some(MoveLineStart),
-            KeyCode::End => Some(MoveLineEnd),
+        if let Some(action) = edit {
+            self.edit(action);
+            return None;
+        }
+        match key.code {
             KeyCode::Char(character) if key.is_text() => {
                 self.clear_diagnostic();
                 self.field.insert_char(character);
-                return Some(character);
+                Some(character)
             }
             _ => None,
-        };
-        if let Some(action) = action {
-            self.edit(action);
         }
-        None
     }
 
     /// Insert pasted source as one input-owned edit. Terminals send a pasted line
