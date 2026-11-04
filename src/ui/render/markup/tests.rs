@@ -555,6 +555,139 @@ fn tex_in_a_table_cell_is_set_as_text() {
     assert!(text.contains("DegreeLimit"), "{text}");
 }
 
+/// The text and group of each coloured piece of `html`, in order.
+fn groups_of(html: &str, width: usize) -> Vec<(String, HLGroup)> {
+    spans(html, width)
+        .expect("reads")
+        .iter()
+        .flatten()
+        .map(|span| (span.content.clone(), span.kind))
+        .collect()
+}
+
+fn group_of(pieces: &[(String, HLGroup)], text: &str) -> HLGroup {
+    pieces
+        .iter()
+        .find(|(content, _)| content == text)
+        .unwrap_or_else(|| panic!("{text} in {pieces:?}"))
+        .1
+}
+
+#[test]
+fn tex_keeps_the_colours_of_what_it_names() {
+    let pieces = groups_of(
+        r"<table><tr><td>$\mathit{opts}$</td><td>$\texttt{OptionTable}\left\{\mathit{Algorithm}\ \Rightarrow \ \texttt{false}\right\}$</td></tr></table>",
+        200,
+    );
+    assert_eq!(group_of(&pieces, "opts"), HLGroup::Variable);
+    assert_eq!(group_of(&pieces, "OptionTable"), HLGroup::Type);
+    assert_eq!(group_of(&pieces, "false"), HLGroup::Boolean);
+}
+
+#[test]
+fn tex_reads_the_same_with_or_without_colours() {
+    assert_eq!(
+        text_of(
+            r"<p>so $\mathit{a}\ \Rightarrow \ \mathit{b}$ holds</p>",
+            60
+        )
+        .trim(),
+        format!(
+            "so {} holds",
+            inline(r"\mathit{a}\ \Rightarrow \ \mathit{b}", false)
+                .expect("reads")
+                .iter()
+                .map(|span| span.content.as_str())
+                .collect::<String>()
+        )
+    );
+}
+
+#[test]
+fn tokens_m2_names_are_painted_as_it_names_them() {
+    let pieces = groups_of(
+        r#"<table><tr><td><samp class="token class-name">OptionTable</samp></td><td><samp class="token function">gb</samp></td><td><samp class="token constant">true</samp></td></tr></table>"#,
+        80,
+    );
+    assert_eq!(group_of(&pieces, "OptionTable"), HLGroup::Type);
+    assert_eq!(group_of(&pieces, "gb"), HLGroup::Function);
+    assert_eq!(group_of(&pieces, "true"), HLGroup::Boolean);
+}
+
+#[test]
+fn a_token_built_of_others_leaves_colours_to_them_and_keeps_its_links() {
+    let lines = spans(
+        r#"<p><samp class="token function"><span><samp class="token class-name">FunctionClosure</samp></span>[<span><samp><a href="file:///a/b.m2#L1:C2-L3:C4">b.m2:1:2-3:4</a></samp></span>]</samp></p>"#,
+        80,
+    )
+    .expect("reads");
+    let spans: Vec<_> = lines.iter().flatten().collect();
+    let piece = |text: &str| {
+        spans
+            .iter()
+            .find(|span| span.content.contains(text))
+            .unwrap_or_else(|| panic!("{text} in {spans:?}"))
+    };
+    assert_eq!(piece("FunctionClosure").kind, HLGroup::Type);
+    assert_eq!(piece("b.m2").mark, Some(HLGroup::MarkupLink));
+}
+
+#[test]
+fn tex_inside_a_link_stays_part_of_that_link() {
+    let lines = spans(
+        r#"<p><a href='&quot;ZZ&quot;'>the $\mathit{opts}$ page</a></p>"#,
+        60,
+    )
+    .expect("reads");
+    assert_eq!(text(&lines), "the opts page");
+    assert!(lines
+        .iter()
+        .flatten()
+        .all(|span| span.target.as_deref() == Some("\"ZZ\"")));
+}
+
+#[test]
+fn a_heading_keeps_its_colour_over_tex() {
+    let lines = spans(r"<h2>On $\mathit{opts}$</h2>", 60).expect("reads");
+    let kinds: Vec<_> = lines
+        .iter()
+        .flatten()
+        .filter(|span| span.content.contains("opts"))
+        .map(|span| span.kind)
+        .collect();
+    assert_eq!(kinds, [heading(2)]);
+}
+
+#[test]
+fn a_short_table_column_stays_whole_beside_a_long_one() {
+    let long = "word ".repeat(100);
+    let html = format!(
+        "<table><tr><th>symbol</th><th>class</th><th>value</th></tr><tr><td>opts</td><td>OptionTable</td><td>{long}</td></tr></table>"
+    );
+    let flat = text(&spans(&html, 120).expect("reads"));
+    for name in ["symbol", "class", "OptionTable"] {
+        assert!(flat.contains(name), "{name} was cut: {flat}");
+    }
+}
+
+#[test]
+fn stacked_table_cells_fit_and_are_ruled_apart() {
+    let html = "<table><tr><td>first cell here</td><td>second cell here</td><td>third cell here</td></tr></table>";
+    let width = 20;
+    let flat = text(&spans(html, width).expect("reads"));
+    assert!(!flat.contains(STACKED_CELL_BORDER), "{flat}");
+    assert!(flat.contains(STACKED_CELL_RULE), "{flat}");
+    for line in flat.lines() {
+        assert!(line.width() <= width, "{line:?}");
+    }
+}
+
+#[test]
+fn a_line_of_slashes_in_prose_is_left_alone() {
+    let text = text_of("<p>/// a raw string ///</p>", 40);
+    assert!(text.contains("///"), "{text}");
+}
+
 #[test]
 fn dollar_signs_in_code_are_left_alone() {
     let text = text_of("<pre><code>f = \"$a$ and $b$\"</code></pre>", 40);

@@ -42,6 +42,30 @@ const SYNOPSIS_LEVEL: usize = 5;
 const DESCRIPTION_MARK: &str = " -- ";
 /// How the URL of a link to a source position begins.
 const FILE_LINK_SCHEME: &str = "file://";
+/// How the URL of a link that only carries a highlight group through layout
+/// begins: it is painted in that group and is no link to the reader.
+const GROUP_LINK_SCHEME: &str = "group:";
+/// The attribute typeset maths names each piece's highlight group by, until
+/// the document is parsed and the piece can be told to sit inside a link.
+const GROUP_ATTRIBUTE: &str = "data-group";
+/// The groups of the `token` classes M2 sets a value's text in.
+const TOKEN_GROUPS: [(&str, HLGroup); 4] = [
+    ("class-name", HLGroup::Type),
+    ("function", HLGroup::Function),
+    ("constant", HLGroup::Boolean),
+    ("string", HLGroup::String),
+];
+/// Elements whose text cannot carry a highlight group: a link's text reads as
+/// that link, preformatted text is coloured as code, and a subscript is read
+/// back as plain text.
+const UNCOLOURED_WITHIN: [&str; 3] = ["a", "pre", "sub"];
+/// The narrowest a table column may be drawn before its text has to wrap, so a
+/// type's name stays whole beside a long value. Text longer than this may wrap.
+const TABLE_COLUMN_MIN_WIDTH: usize = 24;
+/// What a table too wide to fit draws between the cells it stacks in a row,
+/// and what is drawn in its place.
+const STACKED_CELL_BORDER: char = '/';
+const STACKED_CELL_RULE: &str = "┄";
 
 /// Where a documentation node was written, `Package/file.m2:line:column`: a
 /// location to read, not code.
@@ -481,6 +505,9 @@ fn preformatted(line: &HtmlLine) -> Option<bool> {
 /// Laid-out line `index` fitted to `width`. The title's rule spans the full
 /// documentation body, alongside the output blocks below it.
 fn prose(tagged: &[HtmlLine], index: usize, width: usize) -> Vec<SpanLine> {
+    if let Some(rule) = stacked_cell_rule(&tagged[index], width) {
+        return vec![vec![TextSpan::new(rule, HLGroup::Value)]];
+    }
     let mut rows = fitted_row(&tagged[index], width);
     let is_title = |line: &HtmlLine| heading_level(line) == 1;
     let title_ends = is_title(&tagged[index]) && !tagged.get(index + 1).is_some_and(is_title);
@@ -491,6 +518,17 @@ fn prose(tagged: &[HtmlLine], index: usize, width: usize) -> Vec<SpanLine> {
         )]);
     }
     rows
+}
+
+/// The rule to draw for `line` when it is the border between stacked table cells,
+/// which runs the whole `width` where a line of prose would not.
+fn stacked_cell_rule(line: &HtmlLine, width: usize) -> Option<String> {
+    let text: String = line.tagged_strings().map(|run| run.s.as_str()).collect();
+    let border = text.trim_start();
+    (text.width() == width
+        && !border.is_empty()
+        && border.chars().all(|ch| ch == STACKED_CELL_BORDER))
+    .then(|| text.replace(STACKED_CELL_BORDER, STACKED_CELL_RULE))
 }
 
 fn fitted_row(line: &HtmlLine, width: usize) -> Vec<SpanLine> {
@@ -523,8 +561,18 @@ fn typeset_maths(html: &str, blackboard: bool) -> Cow<'_, str> {
         captures
             .name("tex")
             .and_then(|tex| inline(&unescape_text(tex.as_str()), blackboard))
-            .map_or_else(|| captures[0].to_string(), |text| escape_text(&text))
+            .map_or_else(
+                || captures[0].to_string(),
+                |spans| spans.iter().map(grouped_html).collect(),
+            )
     })
+}
+
+/// `span` as an element naming its highlight group.
+fn grouped_html(span: &TextSpan) -> String {
+    let group = span.kind.description();
+    let text = escape_text(&span.content);
+    format!(r#"<span {GROUP_ATTRIBUTE}="{group}">{text}</span>"#)
 }
 
 fn escape_text(text: &str) -> String {
@@ -544,7 +592,7 @@ fn layout(html: &str, width: usize, blackboard: bool) -> Option<Vec<HtmlLine>> {
     let config = html2text::config::with_decorator(Decorator(RichDecorator::new()))
         .link_footnotes(false)
         .unicode_strikeout(false)
-        .min_wrap_width(1)
+        .min_wrap_width(TABLE_COLUMN_MIN_WIDTH)
         .allow_width_overflow();
     let html = typeset_maths(html, blackboard);
     let dom = config.parse_html(html.as_bytes()).ok()?;
@@ -556,7 +604,7 @@ fn layout(html: &str, width: usize, blackboard: bool) -> Option<Vec<HtmlLine>> {
 /// Normalize M2's presentation wrappers before layout. Example tables describe
 /// consecutive code blocks; data tables keep their rows, columns and borders.
 fn normalize(node: &Handle, in_examples: bool) -> Vec<Handle> {
-    let (replacement, subscript, in_examples, flatten) = match &node.data {
+    let (replacement, subscript, in_examples, flatten, group) = match &node.data {
         Element { name, attrs, .. } => {
             let attrs = attrs.borrow();
             let class = |class: &str| {
@@ -588,9 +636,20 @@ fn normalize(node: &Handle, in_examples: bool) -> Vec<Handle> {
                         tag,
                         "table" | "tbody" | "thead" | "tfoot" | "tr" | "td" | "th"
                     ),
+                match tag {
+                    "samp" if class("token") => TOKEN_GROUPS
+                        .iter()
+                        .find(|(token, _)| class(token))
+                        .map(|(_, group)| *group),
+                    "span" => attrs
+                        .iter()
+                        .find(|attr| &*attr.name.local == GROUP_ATTRIBUTE)
+                        .and_then(|attr| HLGroup::named(&attr.value).ok()),
+                    _ => None,
+                },
             )
         }
-        _ => (None, false, in_examples, false),
+        _ => (None, false, in_examples, false, None),
     };
     let children = node.children.take();
     for (previous, list) in element_siblings(&children) {
@@ -618,6 +677,8 @@ fn normalize(node: &Handle, in_examples: bool) -> Vec<Handle> {
             .form(label)
             .unwrap_or_else(|| format!("_{{{label}}}"));
         vec![element("span", &escape_text(&label))]
+    } else if let Some(group) = group.filter(|_| can_carry_group(node)) {
+        vec![group_link(group, node.children.take())]
     } else if let Some(tag) = replacement {
         // Use the same HTML parser to construct a code element, preserving the
         // original children (including links) instead of matching serialized HTML.
@@ -625,6 +686,16 @@ fn normalize(node: &Handle, in_examples: bool) -> Vec<Handle> {
     } else {
         vec![Rc::clone(node)]
     }
+}
+
+/// Whether `node` is text alone, set where a highlight group would be seen. A
+/// value M2 builds of other values leaves their colours to them.
+fn can_carry_group(node: &Handle) -> bool {
+    node.children
+        .borrow()
+        .iter()
+        .all(|child| tag_of(child).is_none())
+        && !UNCOLOURED_WITHIN.iter().any(|tag| within(tag, node))
 }
 
 /// What `node` reads as, without markup.
@@ -696,7 +767,7 @@ fn within(tag: &str, node: &Handle) -> bool {
     let enclosed = parent
         .as_ref()
         .and_then(|parent| parent.upgrade())
-        .is_some_and(|parent| tag_of(&parent).as_deref() == Some(tag));
+        .is_some_and(|parent| tag_of(&parent).as_deref() == Some(tag) || within(tag, &parent));
     node.parent.set(parent);
     enclosed
 }
@@ -788,7 +859,18 @@ fn is_block(tag: &str) -> bool {
 
 /// A new `tag` element holding `children`.
 fn adopt(tag: &str, children: Vec<Handle>) -> Handle {
-    let wrapper = element(tag, "");
+    adopted_by(element(tag, ""), children)
+}
+
+/// A link holding `children` that only carries `group` through layout.
+fn group_link(group: HLGroup, children: Vec<Handle>) -> Handle {
+    let scheme = GROUP_LINK_SCHEME;
+    let group = group.description();
+    let wrapper = parsed_element(&format!(r#"<a href="{scheme}{group}"></a>"#), "a");
+    adopted_by(wrapper, children)
+}
+
+fn adopted_by(wrapper: Handle, children: Vec<Handle>) -> Handle {
     for child in &children {
         child.parent.set(Some(Rc::downgrade(&wrapper)));
     }
@@ -797,7 +879,11 @@ fn adopt(tag: &str, children: Vec<Handle>) -> Handle {
 }
 
 fn element(tag: &str, body: &str) -> Handle {
-    let html = format!("<{tag}>{body}</{tag}>");
+    parsed_element(&format!("<{tag}>{body}</{tag}>"), tag)
+}
+
+/// The `tag` element `html` spells.
+fn parsed_element(html: &str, tag: &str) -> Handle {
     let dom = html2text::config::rich()
         .parse_html(html.as_bytes())
         .expect("normalized element parses");
@@ -862,10 +948,17 @@ fn row(line: &TaggedLine<Vec<RichAnnotation>>) -> SpanLine {
         if text.is_empty() {
             continue;
         }
-        let linked = run
-            .tag
-            .iter()
-            .any(|tag| matches!(tag, RichAnnotation::Link(_)));
+        let group = run.tag.iter().find_map(|tag| match tag {
+            RichAnnotation::Link(url) => url
+                .strip_prefix(GROUP_LINK_SCHEME)
+                .and_then(|name| HLGroup::named(name).ok()),
+            _ => None,
+        });
+        let linked = group.is_none()
+            && run
+                .tag
+                .iter()
+                .any(|tag| matches!(tag, RichAnnotation::Link(_)));
         // A link to another documentation node carries its key as an M2 string,
         // as the shell's startup rewrites it; any other link only reads as one.
         let target = run.tag.iter().find_map(|tag| match tag {
@@ -879,7 +972,10 @@ fn row(line: &TaggedLine<Vec<RichAnnotation>>) -> SpanLine {
         let file_link = run.tag.iter().any(
             |tag| matches!(tag, RichAnnotation::Link(url) if url.starts_with(FILE_LINK_SCHEME)),
         );
-        let mut painted = if is_code && !file_link {
+        // Headings and muted descriptions keep their own colour throughout.
+        let mut painted = if let Some(group) = group.filter(|_| heading.is_none() && !described) {
+            vec![TextSpan::new(text, group)]
+        } else if is_code && !file_link {
             example(text, preformatted)
         } else {
             let group = heading.unwrap_or(if described {

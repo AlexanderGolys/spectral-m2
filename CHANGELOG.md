@@ -4,6 +4,11 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Documentation tables keep short columns such as a symbol's name or class whole instead of slicing them mid-word; when a table cannot fit, its cells stack, ruled apart.
+- Maths in documentation, and values M2 marks as classes, functions, booleans or strings, keep their colours instead of reading as plain text.
+
 ## [1.2.0] - 2026-11-04
 
 ### Added

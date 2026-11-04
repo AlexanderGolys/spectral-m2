@@ -187,7 +187,7 @@ macro_rules! highlight_groups {
         )+}
 
         impl HLGroup {
-            fn named(name: &str) -> Result<Self, String> {
+            pub fn named(name: &str) -> Result<Self, String> {
                 match name {
                     $(stringify!($group) => Ok(Self::$group),)+
                     _ => Err(format!("unknown highlight group `{name}`")),

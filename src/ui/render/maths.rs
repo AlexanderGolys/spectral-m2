@@ -223,15 +223,13 @@ pub fn annotation(parts: &[M2Value], width: usize, style: impl Into<MathStyle>) 
 /// The TeX between a pair of `$` set on a single row, as running text sets maths:
 /// fractions along the row. `None` when this renderer does not read it, or it needs
 /// more rows than one -- a matrix cannot sit inside a line of prose.
-pub fn inline(tex: &str, blackboard: bool) -> Option<String> {
+pub fn inline(tex: &str, blackboard: bool) -> Option<SpanLine> {
     let rows = Math::parse_with(tex, blackboard)
         .ok()?
         .layout(FractionStyle::Inline)
         .into_rows();
-    let [row] = rows.as_slice() else {
-        return None;
-    };
-    Some(row.iter().map(|span| span.content.as_str()).collect())
+    let [row] = <[SpanLine; 1]>::try_from(rows).ok()?;
+    Some(row)
 }
 
 /// `text` as TeX set in a typewriter font, escaped so it reads back as written.
