@@ -4,7 +4,18 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-04
+
+### Changed
+
+- A collection whose items all have a TeX form is drawn as one picture, with even gaps around its commas and fences that grow with what they hold. `AngleBarList` is set with stretching angle brackets and bars.
+- A formula with a glyph outside the maths fonts, such as an emoji, is left to the terminal instead of being set from a system font.
+- Documentation examples take the same semantic colours as cells, and code and result blocks share their columns and fill the documentation width.
+- Type annotations are wholly in the type colour, and a page title's separator takes its heading colour.
+
 ### Fixed
+
+- What a library prints to stderr can no longer land at the cursor and stay on screen.
 
 - Documentation tables keep short columns such as a symbol's name or class whole instead of slicing them mid-word; when a table cannot fit, its cells stack, ruled apart.
 - Maths in documentation, and values M2 marks as classes, functions, booleans or strings, keep their colours instead of reading as plain text.
@@ -186,7 +197,8 @@ First crates.io release.
 - Reorganized the shell around workspace sessions, typed feed blocks, responsive panes, and independently rendered previews.
 - Made installation Cargo-managed and removed manual binary copying and local-bin symlinks.
 
-[Unreleased]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v0.4.0...v1.0.0
