@@ -4,6 +4,12 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-11-04
+
+### Changed
+
+- `settings.json` keeps its values in a section for each settings tab, `layout`, `statusline` and `rendering`. Files saved by earlier versions still load, and are rewritten in the new form the next time a setting changes; earlier versions do not read the new form.
+
 ## [1.2.1] - 2026-11-04
 
 ### Changed
@@ -197,7 +203,8 @@ First crates.io release.
 - Reorganized the shell around workspace sessions, typed feed blocks, responsive panes, and independently rendered previews.
 - Made installation Cargo-managed and removed manual binary copying and local-bin symlinks.
 
-[Unreleased]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.0.0...v1.1.0
