@@ -65,12 +65,16 @@ Commands and their files complete too; see [Commands and pickers](commands.md).
 
 Hold `Shift` with `Left`, `Right`, `Home`, or `End` to extend an input selection, or press `Ctrl+A` to select all of it. `Ctrl+Y` copies it. Typing or deleting replaces the selected range.
 
-Drag over the input, the feed, or a preview to select with the mouse. Releasing the button copies the text through OSC 52; outside the input the selection then lets go. Drag against the top or bottom edge to scroll on, so a selection can reach past what fits on screen. UI markers, borders, type annotations, and picker rows are left out, so copied text stays useful.
+Drag over the input, the feed, or a preview to select with the mouse. Releasing the button copies the text through OSC 52, and the selection stays marked until the next click or keystroke; new output in the feed lets it go as well. `Ctrl+Y` copies it again. Drag against the top or bottom edge to scroll on, so a selection can reach past what fits on screen. Only text is read: UI markers, gutters, borders, and picker rows are left out, so copied text stays useful, and code inside a documentation page copies with its own indentation and no more.
 
-Double-click to copy a piece at once:
+A value and its type select apart: a drag that starts on a type annotation reads only types, and one that starts anywhere else reads no types.
+
+Double-click to select and copy a piece at once:
 
 - a word, such as a variable name;
 - a bracket, to take everything up to its partner -- `(x_1, x_2)` or a whole `{...}` list, across lines too;
 - a typeset formula, which copies as the Macaulay2 code it shows.
 
-Typeset maths always copies as code you can paste back: a matrix shown as a picture copies as `matrix {{x_1, 1/2}}`, not as its TeX. Rows held together by a tall formula read back as one line, its tall brackets as single ones. Double-clicking works on type annotations too, though a drag leaves them out.
+Typeset maths always copies as code you can paste back: a matrix shown as a picture copies as `matrix {{x_1, 1/2}}`, not as its TeX. Rows held together by a tall formula read back as one line, its tall brackets as single ones.
+
+To copy by hand instead, or to take any character exactly as it is drawn, see the [selection settings](settings.md).

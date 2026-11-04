@@ -9,6 +9,7 @@ use ratatui::widgets::{Paragraph, Widget};
 use super::block::Block;
 use super::cell::{Cell, CodeBlock};
 use super::config::UI;
+use super::render::selection::Inclusions;
 use super::render::RenderContext;
 use crate::ui::controller::settings::theme::groups::HLGroup;
 
@@ -412,5 +413,15 @@ impl Block for SyntaxTreeBlock {
             ),
             buf,
         );
+    }
+
+    fn local_selection_inclusions(&self, context: &RenderContext, inclusions: &mut Inclusions) {
+        let (source, tree) = self.lines(context);
+        let rows = |lines: &[Line<'static>]| u16::try_from(lines.len()).unwrap_or(u16::MAX);
+        let margin = UI.feed_margin.min(context.width());
+        let width = context.width() - margin;
+        let tree_top = SOURCE_LEAD.saturating_add(rows(&source)).saturating_add(1);
+        inclusions.push(Rect::new(margin, SOURCE_LEAD, width, rows(&source)));
+        inclusions.push(Rect::new(margin, tree_top, width, rows(&tree)));
     }
 }

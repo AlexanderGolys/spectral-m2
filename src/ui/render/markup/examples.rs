@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 
 use m2_syn::native::parse_native;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Offset, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use regex::Regex;
@@ -23,6 +23,7 @@ use crate::code::semantic::{merge, PageColors};
 use crate::ui::block::{Block, HLSpan};
 use crate::ui::cell::{response_blocks, CellState, EvaluationBlock, OutputBlock, TextBlock};
 use crate::ui::config::UI;
+use crate::ui::render::selection::Inclusions;
 use crate::ui::render::{RenderContext, RECENT_OUTPUTS};
 
 use super::CODE;
@@ -386,6 +387,12 @@ impl Slice {
     }
 }
 
+/// Blocks painted into lines, and where among those lines their text lies.
+pub(super) struct Painted {
+    pub lines: Vec<Line<'static>>,
+    pub inclusions: Inclusions,
+}
+
 /// Render a stored example of `page` through the same input, printed, error
 /// and result blocks as a live submission. Its code carries no number or separator: an example's input
 /// numbers are its own, not the session's, while its outputs keep the `oN` the
@@ -396,25 +403,33 @@ pub fn render(
     example_width: usize,
     page: u64,
     context: &RenderContext,
-) -> Option<Vec<Line<'static>>> {
+) -> Option<Painted> {
     let gutter = UI.cell_margin + UI.min_number_digits + UI.cell_gap;
     if context.width() < gutter + UI.min_box_width {
         return None;
     }
-    let mut rendered = Vec::new();
+    let mut rendered = Painted {
+        lines: Vec::new(),
+        inclusions: Inclusions::default(),
+    };
     for example in transcript(source, example_width)? {
         let block = match computed(page, example.number) {
             Some(response) => example.computed(page, &response),
             None => example.block(page),
         };
-        rendered.extend(painted(&block, context));
+        let next = painted(&block, context);
+        let top = i32::try_from(rendered.lines.len()).unwrap_or(i32::MAX);
+        rendered
+            .inclusions
+            .merge(next.inclusions + Offset::new(0, top));
+        rendered.lines.extend(next.lines);
     }
     Some(rendered)
 }
 
 /// M2 code shown as typed, such as a usage, drawn as an example's input is
 /// with nothing following it; `None` for text that is not M2 code.
-pub fn render_code(source: &str, page: u64, context: &RenderContext) -> Option<Vec<Line<'static>>> {
+pub fn render_code(source: &str, page: u64, context: &RenderContext) -> Option<Painted> {
     let source = source.trim_matches('\n');
     if context.width() < UI.min_number_digits + UI.cell_gap + UI.min_box_width {
         return None;
@@ -427,7 +442,7 @@ pub fn render_code(source: &str, page: u64, context: &RenderContext) -> Option<V
 
 /// `block` painted with its code's gutter left empty and its code's surface
 /// kept to the columns its results' frame takes.
-fn painted(block: &EvaluationBlock, context: &RenderContext) -> Vec<Line<'static>> {
+fn painted(block: &EvaluationBlock, context: &RenderContext) -> Painted {
     let context = context
         .full_output()
         .with_recent_outputs([None; RECENT_OUTPUTS]);
@@ -444,7 +459,12 @@ fn painted(block: &EvaluationBlock, context: &RenderContext) -> Vec<Line<'static
             buffer[(x, y)].reset();
         }
     }
-    buffer_lines(&buffer)
+    let mut inclusions = Inclusions::default();
+    block.local_selection_inclusions(&context, &mut inclusions);
+    Painted {
+        lines: buffer_lines(&buffer),
+        inclusions,
+    }
 }
 
 /// The rows of `buffer` as lines. A colour no block painted is left unset, so
@@ -500,6 +520,7 @@ mod tests {
         let drawn = |page| {
             render(source, EXAMPLE_WIDTH, page, &context)
                 .unwrap()
+                .lines
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
@@ -606,7 +627,8 @@ mod tests {
             UNCOMPUTED,
             &context,
         )
-        .unwrap();
+        .unwrap()
+        .lines;
         let output = lines
             .iter()
             .find(|line| line.to_string().contains('4') && !line.to_string().contains('+'))
@@ -671,7 +693,8 @@ mod tests {
             UNCOMPUTED,
             &context,
         )
-        .unwrap();
+        .unwrap()
+        .lines;
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -713,7 +736,9 @@ mod tests {
     #[test]
     fn code_examples_fill_the_documentation_and_wrap_in_narrow_panes() {
         let wide_pane = EXAMPLE_WIDTH as u16 * 2;
-        let wide = render_code("f + g", UNCOMPUTED, &RenderContext::new(wide_pane, 0)).unwrap();
+        let wide = render_code("f + g", UNCOMPUTED, &RenderContext::new(wide_pane, 0))
+            .unwrap()
+            .lines;
         let surface = drawn_columns(&wide[0]);
         assert!(*surface.last().unwrap() > EXAMPLE_WIDTH);
 
@@ -722,7 +747,8 @@ mod tests {
             UNCOMPUTED,
             &RenderContext::new(24, 0),
         )
-        .unwrap();
+        .unwrap()
+        .lines;
         assert!(narrow.iter().all(|line| line.width() <= 24));
         let text = narrow.iter().map(ToString::to_string).collect::<String>();
         let joined: String = text.chars().filter(|ch| !ch.is_whitespace()).collect();
@@ -739,7 +765,8 @@ mod tests {
             UNCOMPUTED,
             &context,
         )
-        .unwrap();
+        .unwrap()
+        .lines;
         let columns = |line: &Line<'_>| {
             let drawn = drawn_columns(line);
             *drawn.first().unwrap()..=*drawn.last().unwrap()
@@ -758,7 +785,9 @@ mod tests {
     #[test]
     fn a_long_line_of_code_wraps_inside_the_frame_with_nothing_lost() {
         let source = "first + second + third + fourth + fifth + sixth + seventh";
-        let lines = render_code(source, UNCOMPUTED, &RenderContext::new(30, 0)).unwrap();
+        let lines = render_code(source, UNCOMPUTED, &RenderContext::new(30, 0))
+            .unwrap()
+            .lines;
         let text: String = lines.iter().map(ToString::to_string).collect();
         let squeezed = |text: &str| text.split_whitespace().collect::<String>();
         assert!(squeezed(&text).contains(&squeezed(source)), "{text}");

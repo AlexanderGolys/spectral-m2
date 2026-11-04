@@ -6,6 +6,7 @@ use ratatui::text::Span;
 use super::appearance::AppearanceSetting;
 use super::layout::LayoutSetting;
 use super::rendering::RenderingSetting;
+use super::selection::SelectionSetting;
 use super::statusline::StatusLineSetting;
 use super::theme::groups::scheme;
 use super::Settings;
@@ -51,6 +52,7 @@ pub fn tabs(settings: Settings) -> Vec<PickerTab> {
         tab("layout", LayoutSetting::CHOICES, settings),
         tab("statusline", StatusLineSetting::CHOICES, settings),
         tab("rendering", RenderingSetting::CHOICES, settings),
+        tab("selection", SelectionSetting::CHOICES, settings),
     ]
 }
 
@@ -93,5 +95,6 @@ mod tests {
         assert_steps_back(LayoutSetting::CHOICES);
         assert_steps_back(StatusLineSetting::CHOICES);
         assert_steps_back(RenderingSetting::CHOICES);
+        assert_steps_back(SelectionSetting::CHOICES);
     }
 }

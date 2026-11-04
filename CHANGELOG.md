@@ -11,9 +11,17 @@ All notable changes to Spectral M2 are documented here.
 - Arrows in typeset formulas keep their normal length.
 - The input breaks long lines between words rather than mid-word.
 - Everforest's headings, pickers, punctuation, warnings and install messages take new colours.
+- A mouse selection in the feed or a preview stays marked after it is copied, as one in the input does.
+- Type annotations can be selected with a drag. A selection reads only types or only everything else, depending on where it starts.
+
+### Added
+
+- A *selection* settings tab: *copy on select* turns off copying when a mouse selection finishes, and *raw selection* selects any character as it is drawn.
 
 ### Fixed
 
+- A double click in the feed or a preview marks what it selects, as it does in the input.
+- Code and examples embedded in documentation pages copy without the gutter's indentation, and without their frames and output labels.
 - Copying code, printed text or a value that only wrapped on screen gives back one line instead of a line per row. Documentation pages and table cells still copy row by row.
 
 ## [1.2.2] - 2026-11-04

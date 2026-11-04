@@ -97,7 +97,7 @@ cyclic! {
 }
 
 /// An off/on value at `chosen`, its on option named `on`.
-fn switch(chosen: bool, on: &str) -> PickerValue {
+pub(super) fn switch(chosen: bool, on: &str) -> PickerValue {
     PickerValue::among(&[false, true], &chosen, |&chosen| match chosen {
         true => on.into(),
         false => "off".into(),

@@ -10,6 +10,7 @@ pub mod appearance;
 pub mod keymap;
 pub mod layout;
 pub mod rendering;
+pub mod selection;
 pub mod statusline;
 pub mod tabs;
 pub mod theme;
@@ -27,6 +28,7 @@ use serde_json::{Map, Value};
 use self::keymap::Shortcut;
 use self::layout::LayoutSettings;
 use self::rendering::RenderingSettings;
+use self::selection::SelectionSettings;
 use self::statusline::StatusLineSettings;
 use self::theme::Appearance;
 use crate::ui::key::KeyEvent;
@@ -85,6 +87,7 @@ pub struct Settings {
     pub layout: LayoutSettings,
     pub statusline: StatusLineSettings,
     pub rendering: RenderingSettings,
+    pub selection: SelectionSettings,
 }
 
 impl Settings {
@@ -103,6 +106,7 @@ pub struct SavedSettings {
     pub layout: LayoutSettings,
     pub statusline: StatusLineSettings,
     pub rendering: RenderingSettings,
+    pub selection: SelectionSettings,
     /// Every rebind made, in order. Replaying them over the default keymaps restores
     /// the swaps they caused as well as the keys they set.
     pub rebinds: Vec<(Shortcut, KeyEvent)>,
@@ -120,6 +124,7 @@ struct StoredSettings {
     layout: LayoutSettings,
     statusline: StatusLineSettings,
     rendering: RenderingSettings,
+    selection: SelectionSettings,
     rebinds: Vec<(Shortcut, KeyEvent)>,
     editor: Map<String, Value>,
     input: Map<String, Value>,
@@ -133,6 +138,7 @@ impl From<StoredSettings> for SavedSettings {
                 layout: stored.layout,
                 statusline: stored.statusline,
                 rendering: stored.rendering,
+                selection: stored.selection,
                 rebinds,
             };
         }
@@ -141,6 +147,7 @@ impl From<StoredSettings> for SavedSettings {
             layout: section_of(&older),
             statusline: section_of(&older),
             rendering: section_of(&older),
+            selection: stored.selection,
             rebinds,
         }
     }
@@ -188,6 +195,8 @@ mod tests {
         saved.statusline.position = StatusLinePosition::Off;
         saved.layout.output_rows = 7;
         saved.layout.scrolloff = 5;
+        saved.selection.copy_on_select = false;
+        saved.selection.raw = true;
 
         write(&path, &saved).expect("write settings");
         let loaded: SavedSettings = read(&path).expect("read settings");
@@ -197,6 +206,7 @@ mod tests {
         assert_eq!(loaded.statusline.position, StatusLinePosition::Off);
         assert_eq!(loaded.layout.output_rows, 7);
         assert_eq!(loaded.layout.scrolloff, 5);
+        assert_eq!(loaded.selection, saved.selection);
         let replayed = Keymaps::replaying(&loaded.rebinds);
         for action in [Action::ClearFeed, Action::OpenOutput] {
             assert_eq!(replayed.key_for(action), keymaps.key_for(action));
@@ -212,6 +222,7 @@ mod tests {
         assert_eq!(saved.rendering.fractions, FractionStyle::Underlined);
         assert_eq!(saved.layout, LayoutSettings::default());
         assert!(saved.rebinds.is_empty());
+        assert_eq!(saved.selection, SelectionSettings::default());
     }
 
     /// A file from before the values were sorted into sections keeps every one.

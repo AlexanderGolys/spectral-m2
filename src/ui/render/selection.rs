@@ -1,14 +1,22 @@
-//! Regions withheld from copied screen selections.
+//! The cells of a rendered frame a selection reads.
 //!
 //! Rendered frames mix content with decoration: borders, gutters, markers, and
-//! padding all occupy cells that a reader never meant to copy. Elements report those
-//! cells here in their own local coordinates; each containing surface translates them
-//! once as it places the element, so a selection carries only the text.
+//! padding all occupy cells that a reader never meant to copy. Elements report the
+//! cells holding their text here in their own local coordinates; each containing
+//! surface translates them once as it places the element. Whatever nothing reports
+//! is decoration, so a selection carries only the text.
 
-use std::iter::FromIterator;
 use std::ops::{Add, AddAssign, Range};
 
 use ratatui::layout::{Offset, Position, Rect};
+
+/// What kind of text a cell holds. A selection reads the layer it starts on and
+/// passes over the others, so a value and the type set beside it never mix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layer {
+    Text,
+    Type,
+}
 
 /// How a wrapped row joins the row it continues when copied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,17 +43,26 @@ fn clipped(area: Rect, rows: &Range<u16>) -> Option<Rect> {
     (top < bottom).then(|| Rect::new(area.x, top - rows.start, area.width, bottom - top))
 }
 
-/// Rectangular regions omitted from copied UI selections, and the rows a copy
-/// reads as carrying on the row above them.
+/// Rectangular regions a selection reads, and the rows a copy reads as carrying on
+/// the row above them. Where regions overlap, the one reported last decides.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Exclusions {
-    areas: Vec<Rect>,
+pub struct Inclusions {
+    areas: Vec<(Rect, Option<Layer>)>,
     seams: Vec<(Rect, Seam)>,
 }
 
-impl Exclusions {
-    pub fn push(&mut self, exclusion: Rect) {
-        self.areas.push(exclusion);
+impl Inclusions {
+    pub fn push(&mut self, text: Rect) {
+        self.areas.push((text, Some(Layer::Text)));
+    }
+
+    pub fn push_type(&mut self, annotation: Rect) {
+        self.areas.push((annotation, Some(Layer::Type)));
+    }
+
+    /// Withdraw whatever was reported under an overlay drawn over `area`.
+    pub fn cover(&mut self, area: Rect) {
+        self.areas.push((area, None));
     }
 
     pub fn clear(&mut self) {
@@ -53,8 +70,12 @@ impl Exclusions {
         self.seams.clear();
     }
 
-    pub fn contains(&self, position: Position) -> bool {
-        self.areas.iter().any(|area| area.contains(position))
+    pub fn layer_at(&self, position: Position) -> Option<Layer> {
+        self.areas
+            .iter()
+            .rev()
+            .find(|(area, _)| area.contains(position))
+            .and_then(|(_, layer)| *layer)
     }
 
     /// How the row at `position` joins the one above it, when it only wraps it.
@@ -109,7 +130,7 @@ impl Exclusions {
             areas: self
                 .areas
                 .iter()
-                .filter_map(|area| clipped(*area, &rows))
+                .filter_map(|(area, layer)| Some((clipped(*area, &rows)?, *layer)))
                 .collect(),
             seams: self
                 .seams
@@ -126,7 +147,7 @@ impl Exclusions {
     }
 }
 
-impl Add<Offset> for Exclusions {
+impl Add<Offset> for Inclusions {
     type Output = Self;
 
     fn add(mut self, offset: Offset) -> Self {
@@ -135,41 +156,29 @@ impl Add<Offset> for Exclusions {
     }
 }
 
-impl Add<Offset> for &Exclusions {
-    type Output = Exclusions;
+impl Add<Offset> for &Inclusions {
+    type Output = Inclusions;
 
-    fn add(self, offset: Offset) -> Exclusions {
+    fn add(self, offset: Offset) -> Inclusions {
         let mut moved = self.clone();
         moved += offset;
         moved
     }
 }
 
-impl AddAssign<Offset> for Exclusions {
+impl AddAssign<Offset> for Inclusions {
     fn add_assign(&mut self, offset: Offset) {
-        self.areas.iter_mut().for_each(|area| *area += offset);
+        self.areas.iter_mut().for_each(|(area, _)| *area += offset);
         self.seams.iter_mut().for_each(|(area, _)| *area += offset);
     }
 }
 
-impl Extend<Rect> for Exclusions {
-    fn extend<T: IntoIterator<Item = Rect>>(&mut self, iter: T) {
-        self.areas.extend(iter);
-    }
-}
-
-impl FromIterator<Rect> for Exclusions {
-    fn from_iter<T: IntoIterator<Item = Rect>>(iter: T) -> Self {
+impl<const N: usize> From<[Rect; N]> for Inclusions {
+    fn from(areas: [Rect; N]) -> Self {
         Self {
-            areas: iter.into_iter().collect(),
+            areas: areas.map(|area| (area, Some(Layer::Text))).into(),
             seams: Vec::new(),
         }
-    }
-}
-
-impl<const N: usize> From<[Rect; N]> for Exclusions {
-    fn from(areas: [Rect; N]) -> Self {
-        areas.into_iter().collect()
     }
 }
 
@@ -178,21 +187,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exclusions_project_shift_and_test_points() {
-        let exclusions =
-            Exclusions::from([Rect::new(2, 3, 2, 3)]).project(4..6) + Offset::new(5, 7);
+    fn inclusions_project_shift_and_test_points() {
+        let inclusions =
+            Inclusions::from([Rect::new(2, 3, 2, 3)]).project(4..6) + Offset::new(5, 7);
 
-        assert!(exclusions.contains(Position::new(8, 8)));
-        assert!(!exclusions.contains(Position::new(6, 8)));
-        assert_eq!(exclusions, [Rect::new(7, 7, 2, 2)].into());
+        assert_eq!(inclusions.layer_at(Position::new(8, 8)), Some(Layer::Text));
+        assert_eq!(inclusions.layer_at(Position::new(6, 8)), None);
+        assert_eq!(inclusions, [Rect::new(7, 7, 2, 2)].into());
+    }
+
+    #[test]
+    fn the_region_reported_last_decides_a_cell() {
+        let mut inclusions = Inclusions::from([Rect::new(0, 0, 6, 1)]);
+        inclusions.push_type(Rect::new(4, 0, 2, 1));
+        assert_eq!(inclusions.layer_at(Position::new(3, 0)), Some(Layer::Text));
+        assert_eq!(inclusions.layer_at(Position::new(4, 0)), Some(Layer::Type));
+
+        inclusions.cover(Rect::new(3, 0, 2, 1));
+        assert_eq!(inclusions.layer_at(Position::new(3, 0)), None);
+        assert_eq!(inclusions.layer_at(Position::new(5, 0)), Some(Layer::Type));
     }
 
     /// The seam of each row of `rows` read against `source`.
     fn seams(rows: &[&str], source: &str) -> Vec<Option<Seam>> {
-        let mut exclusions = Exclusions::default();
-        exclusions.mark_wrapped_rows(0, 10, rows.iter().copied(), source);
+        let mut inclusions = Inclusions::default();
+        inclusions.mark_wrapped_rows(0, 10, rows.iter().copied(), source);
         (0..rows.len() as u16)
-            .map(|row| exclusions.seam_at(Position::new(0, row)))
+            .map(|row| inclusions.seam_at(Position::new(0, row)))
             .collect()
     }
 
@@ -214,9 +235,9 @@ mod tests {
 
     #[test]
     fn seams_move_and_clip_with_their_block() {
-        let mut exclusions = Exclusions::default();
-        exclusions.mark_wrapped_rows(2, 10, ["ab", "cd"], "ab cd");
-        let placed = exclusions.project(1..5) + Offset::new(3, 4);
+        let mut inclusions = Inclusions::default();
+        inclusions.mark_wrapped_rows(2, 10, ["ab", "cd"], "ab cd");
+        let placed = inclusions.project(1..5) + Offset::new(3, 4);
         assert_eq!(placed.seam_at(Position::new(3, 6)), Some(Seam::Space));
         assert_eq!(placed.seam_at(Position::new(3, 5)), None);
     }

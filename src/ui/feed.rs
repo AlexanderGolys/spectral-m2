@@ -14,7 +14,7 @@ use super::block::{Block, Link, Reformatted, Resized, Rethemed, Ticked};
 use super::cell::{EvaluationBlock, IncompleteBlock};
 use super::config::UI;
 use super::element::{paste, EventListener};
-use super::render::selection::Exclusions;
+use super::render::selection::Inclusions;
 use super::render::{RenderContext, RECENT_OUTPUTS};
 
 /// Retained position metadata for one feed viewport.
@@ -60,7 +60,7 @@ struct RetainedBlock {
     content: FeedContent,
     layout: Option<Layout>,
     cells: Option<Buffer>,
-    exclusions: Option<Exclusions>,
+    inclusions: Option<Inclusions>,
 }
 
 /// A block's measured height, kept as an estimate once it goes stale so a block off
@@ -78,7 +78,7 @@ impl RetainedBlock {
             content,
             layout: None,
             cells: None,
-            exclusions: None,
+            inclusions: None,
         }
     }
 
@@ -112,31 +112,31 @@ impl RetainedBlock {
         }
     }
 
-    fn render(&mut self, context: &RenderContext, canvas: Style) -> (&Buffer, &Exclusions) {
+    fn render(&mut self, context: &RenderContext, canvas: Style) -> (&Buffer, &Inclusions) {
         let height = self.height(context);
         if self.cells.is_none() {
             let mut cells = Feed::buffer(Rect::new(0, 0, context.width(), height), canvas);
             self.content.block().render_local(context, &mut cells);
             self.cells = Some(cells);
         }
-        if self.exclusions.is_none() {
-            let mut exclusions = Exclusions::default();
+        if self.inclusions.is_none() {
+            let mut inclusions = Inclusions::default();
             self.content
                 .block()
-                .local_selection_exclusions(context, &mut exclusions);
-            self.exclusions = Some(exclusions);
+                .local_selection_inclusions(context, &mut inclusions);
+            self.inclusions = Some(inclusions);
         }
         (
             self.cells.as_ref().expect("cells were just settled"),
-            self.exclusions
+            self.inclusions
                 .as_ref()
-                .expect("exclusions were just settled"),
+                .expect("inclusions were just settled"),
         )
     }
 
     fn invalidate(&mut self) {
         self.cells = None;
-        self.exclusions = None;
+        self.inclusions = None;
     }
 
     fn invalidate_layout(&mut self) {
@@ -208,16 +208,16 @@ impl<'a> BlockView<'a> {
         target: &mut Buffer,
         scroll: &mut usize,
         canvas: Style,
-    ) -> Exclusions {
+    ) -> Inclusions {
         if area.is_empty() {
-            return Exclusions::default();
+            return Inclusions::default();
         }
         if self.blocks.is_empty() {
             Paragraph::new(self.empty)
                 .style(context.groups().muted())
                 .alignment(Alignment::Center)
                 .render(area, target);
-            return Exclusions::default();
+            return Inclusions::default();
         }
         let heights = self
             .blocks
@@ -231,7 +231,7 @@ impl<'a> BlockView<'a> {
         *scroll = (*scroll).min(total.saturating_sub(area.height.into()));
         let mut skip = *scroll;
         let mut y = 0;
-        let mut exclusions = Exclusions::default();
+        let mut inclusions = Inclusions::default();
         for (block, height) in self.blocks.iter().zip(heights) {
             if skip >= height.into() {
                 skip -= usize::from(height);
@@ -248,9 +248,9 @@ impl<'a> BlockView<'a> {
                 Rect::new(area.x, area.y + y, area.width, rows),
                 target,
             );
-            let mut source = Exclusions::default();
-            block.local_selection_exclusions(context, &mut source);
-            exclusions.merge(
+            let mut source = Inclusions::default();
+            block.local_selection_inclusions(context, &mut source);
+            inclusions.merge(
                 source.project(start..start + rows)
                     + Offset::new(i32::from(area.x), i32::from(area.y + y)),
             );
@@ -259,7 +259,7 @@ impl<'a> BlockView<'a> {
                 break;
             }
         }
-        exclusions
+        inclusions
     }
 }
 
@@ -553,7 +553,7 @@ impl Feed {
         area: Rect,
         target: &mut Buffer,
         canvas: Style,
-    ) -> (bool, Exclusions) {
+    ) -> (bool, Inclusions) {
         TuiBlock::default().style(canvas).render(
             Rect::new(area.x, area.y, UI.feed_margin.min(area.width), area.height),
             target,
@@ -566,7 +566,7 @@ impl Feed {
         );
         if area.is_empty() {
             self.surface = None;
-            return (true, Exclusions::default());
+            return (true, Inclusions::default());
         }
         let context = context.with_width(area.width);
         // A new output relabels the ones before it, which moves no row but repaints.
@@ -586,7 +586,7 @@ impl Feed {
         if let Some(anchor) = anchor {
             self.scroll = Self::anchored_scroll(&mut self.blocks, &context, area.height, anchor);
         }
-        let (surface, underfilled, exclusions) = Self::surface(
+        let (surface, underfilled, inclusions) = Self::surface(
             &mut self.blocks,
             &context,
             area,
@@ -604,7 +604,7 @@ impl Feed {
         }
         self.scroll = surface.scroll;
         self.surface = Some(surface);
-        (underfilled, exclusions)
+        (underfilled, inclusions)
     }
 
     fn scrolled_anchor(&self) -> Option<(usize, u16)> {
@@ -625,7 +625,7 @@ impl Feed {
         target: &mut Buffer,
         scroll: usize,
         canvas: Style,
-    ) -> (ViewportState, bool, Exclusions) {
+    ) -> (ViewportState, bool, Inclusions) {
         let (mut visible, total) = Self::visible(blocks, context, area.height, scroll);
         let scroll = if visible.rows < area.height && total > area.height.into() {
             total - usize::from(area.height)
@@ -642,10 +642,10 @@ impl Feed {
         let mut y = area.y + area.height.saturating_sub(visible.rows);
         let mut crop = visible.rows.saturating_sub(area.height);
         let mut anchor = None;
-        let mut exclusions = Exclusions::default();
+        let mut inclusions = Inclusions::default();
         let mut placements = Vec::new();
         for (index, height, bottom) in visible.blocks.into_iter().rev() {
-            let (cells, block_exclusions) = blocks[index].render(context, canvas);
+            let (cells, block_inclusions) = blocks[index].render(context, canvas);
             let start = crop.min(height - bottom);
             crop -= start;
             let rows = height - bottom - start;
@@ -655,8 +655,8 @@ impl Feed {
                 Rect::new(area.x, y, area.width, rows),
                 target,
             );
-            exclusions.merge(
-                block_exclusions.project(start..start + rows)
+            inclusions.merge(
+                block_inclusions.project(start..start + rows)
                     + Offset::new(i32::from(area.x), i32::from(y)),
             );
             anchor = anchor.or((rows > 0).then_some((index, start)));
@@ -672,7 +672,7 @@ impl Feed {
                 placements,
             },
             underfilled,
-            exclusions,
+            inclusions,
         )
     }
 
@@ -1027,25 +1027,25 @@ mod tests {
     }
 
     /// A block whose selection geometry counts how often it is derived.
-    struct Excluding(Arc<AtomicUsize>);
+    struct Including(Arc<AtomicUsize>);
 
-    impl Block for Excluding {
+    impl Block for Including {
         fn height(&self, _: &RenderContext) -> u16 {
             1
         }
 
         fn render_local(&self, _: &RenderContext, _: &mut Buffer) {}
 
-        fn local_selection_exclusions(&self, _: &RenderContext, exclusions: &mut Exclusions) {
+        fn local_selection_inclusions(&self, _: &RenderContext, inclusions: &mut Inclusions) {
             self.0.fetch_add(1, Ordering::Relaxed);
-            exclusions.push(Rect::new(0, 0, 1, 1));
+            inclusions.push(Rect::new(0, 0, 1, 1));
         }
     }
 
     #[test]
     fn a_retheme_repaints_without_rederiving_selection_geometry() {
         let derivations = Arc::new(AtomicUsize::new(0));
-        let mut feed = Feed::new(Box::new(Excluding(derivations.clone())));
+        let mut feed = Feed::new(Box::new(Including(derivations.clone())));
         let context = RenderContext::new(10, 0);
         let area = Rect::new(0, 0, 10, 1);
         let mut target = Buffer::empty(area);

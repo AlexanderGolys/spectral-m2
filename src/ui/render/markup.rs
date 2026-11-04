@@ -12,7 +12,7 @@ use std::sync::LazyLock;
 use html2text::render::{RichAnnotation, RichDecorator, TaggedLine, TextDecorator};
 use html2text::{Element, Handle, RcDom};
 use m2_syn::native::parse_native;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::{Offset, Position, Rect};
 use ratatui::text::{Line, Span};
 use regex::{Captures, Regex};
 use unicode_width::UnicodeWidthStr;
@@ -23,6 +23,7 @@ use crate::code::semantic::PageColors;
 use crate::ui::block::{Link, Text, TextSpan};
 use crate::ui::controller::settings::theme::groups::HLGroup;
 use crate::ui::present::{wrap, SpanLine};
+use crate::ui::render::selection::Inclusions;
 use crate::ui::render::RenderContext;
 use crate::ui::wrap::WordWrap;
 
@@ -167,6 +168,12 @@ pub fn lines(
     Some(document(html, example_width, context)?.lines.clone())
 }
 
+/// The text among [`lines`]: all of prose, of an example only its code and values,
+/// without the gutter and frames it was composed with.
+pub fn inclusions(html: &str, example_width: usize, context: &RenderContext) -> Option<Inclusions> {
+    Some(document(html, example_width, context)?.inclusions.clone())
+}
+
 /// Retain a page's layout for measurement, painting, folding and pointer checks.
 /// Entries are bounded because the transcript itself can grow without limit.
 struct Document {
@@ -178,6 +185,7 @@ struct Document {
     numbers_printed: bool,
     links: Vec<Vec<(Rect, Rc<Link>)>>,
     lines: Rc<Vec<Line<'static>>>,
+    inclusions: Inclusions,
 }
 
 thread_local! {
@@ -203,7 +211,7 @@ fn document(html: &str, example_width: usize, context: &RenderContext) -> Option
     }
     // Rendering examples can recursively render markup. Do not borrow the cache
     // while constructing the page.
-    let rows = rows(html, example_width, context)?;
+    let (rows, inclusions) = rows(html, example_width, context)?;
     let lines = Rc::new(
         rows.iter()
             .map(|row| match row {
@@ -221,6 +229,7 @@ fn document(html: &str, example_width: usize, context: &RenderContext) -> Option
         numbers_printed: context.numbers_printed(),
         links: placed_links(&rows),
         lines,
+        inclusions,
     });
     DOCUMENTS.with_borrow_mut(|documents| {
         documents.push_front(entry.clone());
@@ -429,11 +438,29 @@ impl Preformatted {
     }
 }
 
-fn rows(html: &str, example_width: usize, context: &RenderContext) -> Option<Vec<Row>> {
+fn rows(
+    html: &str,
+    example_width: usize,
+    context: &RenderContext,
+) -> Option<(Vec<Row>, Inclusions)> {
     let width = usize::from(context.width().max(1));
     let tagged = layout(html, width, context.math().blackboard)?;
     let page = page(html);
     let mut result = Vec::new();
+    let mut inclusions = Inclusions::default();
+    let push_prose =
+        |result: &mut Vec<Row>, inclusions: &mut Inclusions, rows: Vec<SpanLine>, indent: u16| {
+            for row in rows {
+                let y = u16::try_from(result.len()).unwrap_or(u16::MAX);
+                inclusions.push(Rect::new(
+                    indent,
+                    y,
+                    context.width().saturating_sub(indent),
+                    1,
+                ));
+                result.push(Row::Prose(row));
+            }
+        };
     let mut index = 0;
     while index < tagged.len() {
         if preformatted(&tagged[index]).is_some() {
@@ -449,7 +476,8 @@ fn rows(html: &str, example_width: usize, context: &RenderContext) -> Option<Vec
             let can_embed = prefix.chars().all(|ch| {
                 ch.is_whitespace() || ch.is_ascii_digit() || matches!(ch, '*' | '>' | '.')
             });
-            let inner = context.with_width(context.width().saturating_sub(prefix.width() as u16));
+            let indent = prefix.width() as u16;
+            let inner = context.with_width(context.width().saturating_sub(indent));
             if let Some(example) = can_embed
                 .then(|| {
                     examples::render(&source, example_width, page, &inner)
@@ -457,7 +485,9 @@ fn rows(html: &str, example_width: usize, context: &RenderContext) -> Option<Vec
                 })
                 .flatten()
             {
-                for (row, mut line) in example.into_iter().enumerate() {
+                let top = i32::try_from(result.len()).unwrap_or(i32::MAX);
+                inclusions.merge(example.inclusions + Offset::new(i32::from(indent), top));
+                for (row, mut line) in example.lines.into_iter().enumerate() {
                     if !prefix.is_empty() {
                         line.spans.insert(
                             0,
@@ -475,15 +505,19 @@ fn rows(html: &str, example_width: usize, context: &RenderContext) -> Option<Vec
                 }
                 continue;
             }
+            // The prefix only places the block, unless it is a table's own column.
+            let indent = if can_embed { indent } else { 0 };
             for line in start..index {
-                result.extend(prose(&tagged, line, width).into_iter().map(Row::Prose));
+                let rows = prose(&tagged, line, width);
+                push_prose(&mut result, &mut inclusions, rows, indent);
             }
         } else {
-            result.extend(prose(&tagged, index, width).into_iter().map(Row::Prose));
+            let rows = prose(&tagged, index, width);
+            push_prose(&mut result, &mut inclusions, rows, 0);
             index += 1;
         }
     }
-    Some(result)
+    Some((result, inclusions))
 }
 
 fn is_blank(line: &HtmlLine) -> bool {

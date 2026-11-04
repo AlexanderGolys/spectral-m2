@@ -1,6 +1,6 @@
 # Settings
 
-Open settings with `Ctrl+O` or `/settings`. They are grouped into four tabs, named along the top of the picker: `Tab` and `Shift+Tab`, or `Ctrl+Right` and `Ctrl+Left`, switch between them. `Up` and `Down` choose a row and `Left` or `Right` adjust it. Each row shows its current value between arrows. Beneath the rows, the *restore defaults* button resets settings, keymaps, and appearance, and under it the selected row describes itself. While the picker is open, the status line names the keys it answers.
+Open settings with `Ctrl+O` or `/settings`. They are grouped into five tabs, named along the top of the picker: `Tab` and `Shift+Tab`, or `Ctrl+Right` and `Ctrl+Left`, switch between them. `Up` and `Down` choose a row and `Left` or `Right` adjust it. Each row shows its current value between arrows. Beneath the rows, the *restore defaults* button resets settings, keymaps, and appearance, and under it the selected row describes itself. While the picker is open, the status line names the keys it answers.
 
 Changes are kept between sessions. The appearance is saved to `appearance.json` and the other settings, along with keymap changes, to `settings.json`, both in `$XDG_CONFIG_HOME/spectral-m2`, falling back to `~/.config/spectral-m2`.
 
@@ -45,6 +45,13 @@ These choices compose the idle line. Segments sharing a side keep this order. Wh
 | Math fonts | Off by default, which draws a ring by the name it has in code, `ZZ`; on draws its blackboard glyph, `ℤ`, and sets `\mathcal` and `\mathfrak` capitals as script and fraktur glyphs. How they look is up to the terminal's fonts; see [Troubleshooting](troubleshooting.md#blackboard). Greyed out while maths is typeset, since pictures draw their own glyphs. |
 | Matrix row spacing | `125%` by default: how far apart the rows of a typeset matrix stand, relative to TeX's own distance, from `100%` to `300%`. At `100%` stacked fractions in neighbouring rows almost touch. Greyed out unless maths is typeset. |
 | Compute examples | How long each documentation example may run when it is computed again, so its value is drawn from its structure as a live value is; `off` keeps the output the documentation recorded. Each page runs in a fresh Macaulay2 with its package loaded, and stops at the first example that runs out of time or answers differently from the record. |
+
+**Selection**
+
+| Setting | Choices |
+| --- | --- |
+| Copy on select | On by default: finishing a mouse selection copies it. Off leaves it marked for `Ctrl+Y` to copy. |
+| Raw selection | Off by default. On lets a selection in the feed or a preview take any character as it is drawn: cell numbers, frames, type annotations beside values, and each wrapped row as a row of its own. Typeset pictures still copy as code. |
 
 ## Semantic highlighting
 

@@ -9,7 +9,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use super::controller::settings::theme::groups::{Groups, HLGroup};
-use super::render::selection::Exclusions;
+use super::render::selection::Inclusions;
 use super::render::RenderContext;
 
 /// The available width changed, moving every wrap boundary.
@@ -50,28 +50,28 @@ pub trait Block {
     }
 
     /// Add zero-based regions that copied selections must omit.
-    fn local_selection_exclusions(&self, _: &RenderContext, _: &mut Exclusions) {}
+    fn local_selection_inclusions(&self, _: &RenderContext, _: &mut Inclusions) {}
 
     /// The link drawn at local `position`, if any, with every cell it covers.
     fn link_at(&self, _: &RenderContext, _: Position) -> Option<Link> {
         None
     }
 
-    /// Restate this block's local exclusions in the coordinates of a placed `area`.
+    /// Restate this block's local inclusions in the coordinates of a placed `area`.
     ///
     /// The one shift applied to selection geometry, mirroring the one [`paste`] applies
     /// to cells, so both leave a child's local frame at the same boundary.
     ///
     /// [`paste`]: super::element::paste
-    fn selection_exclusions(
+    fn selection_inclusions(
         &self,
         context: &RenderContext,
         area: Rect,
-        exclusions: &mut Exclusions,
+        inclusions: &mut Inclusions,
     ) {
-        let mut local = Exclusions::default();
-        self.local_selection_exclusions(&context.with_width(area.width), &mut local);
-        exclusions.merge(local + Offset::new(i32::from(area.x), i32::from(area.y)));
+        let mut local = Inclusions::default();
+        self.local_selection_inclusions(&context.with_width(area.width), &mut local);
+        inclusions.merge(local + Offset::new(i32::from(area.x), i32::from(area.y)));
     }
 }
 
@@ -182,8 +182,8 @@ mod tests {
             buf[(context.width() - 1, 0)].set_symbol("x");
         }
 
-        fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
-            exclusions.push(Rect::new(context.width() - 1, 0, 1, 1));
+        fn local_selection_inclusions(&self, context: &RenderContext, inclusions: &mut Inclusions) {
+            inclusions.push(Rect::new(context.width() - 1, 0, 1, 1));
         }
     }
 
@@ -196,10 +196,10 @@ mod tests {
             area,
             ratatui::style::Style::new().bg(ratatui::style::Color::Blue),
         );
-        let mut exclusions = Exclusions::default();
+        let mut inclusions = Inclusions::default();
 
-        Block::selection_exclusions(&Local, &context, area, &mut exclusions);
+        Block::selection_inclusions(&Local, &context, area, &mut inclusions);
 
-        assert_eq!(exclusions, [Rect::new(4, 2, 1, 1)].into());
+        assert_eq!(inclusions, [Rect::new(4, 2, 1, 1)].into());
     }
 }

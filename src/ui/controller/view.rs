@@ -245,7 +245,7 @@ impl Editor {
         if self.pane_focused {
             self.frame_stats.tick();
         }
-        self.selection_exclusions.clear();
+        self.selection_inclusions.clear();
         self.input.hide();
         let theme = *scheme();
         frame.render_widget(Clear, area);
@@ -281,7 +281,7 @@ impl Editor {
                     ViewKind::Code => "no committed code",
                     _ => "no committed syntax trees",
                 };
-                self.selection_exclusions
+                self.selection_inclusions
                     .merge(BlockView::new(&blocks, empty).render(
                         &context,
                         sections[0],
@@ -297,7 +297,7 @@ impl Editor {
                     ViewKind::StdOut => self.feed.printed(),
                     _ => self.feed.outputs(),
                 };
-                self.selection_exclusions.merge(
+                self.selection_inclusions.merge(
                     BlockView::new(&blocks, "no matching output").render(
                         &context,
                         sections[0],
@@ -315,7 +315,6 @@ impl Editor {
             frame.buffer_mut()[position].set_bg(background);
         }
         self.feed_top = viewport.scroll as i64;
-        self.selection_exclusions.extend([sections[1], sections[2]]);
         if let Some(controller) = self.pickers.last() {
             controller
                 .picker

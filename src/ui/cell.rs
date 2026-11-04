@@ -20,7 +20,7 @@ use unicode_width::UnicodeWidthStr;
 use super::block::{Block, Element, HLSpan, Link, Text};
 use super::element::paste;
 use super::render::maths::MathDisplay;
-use super::render::selection::Exclusions;
+use super::render::selection::Inclusions;
 use super::render::spin::busy_frame;
 use super::render::{markup, maths};
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
@@ -390,8 +390,8 @@ impl Block for IncompleteBlock {
         self.code.render_local(context, buf);
     }
 
-    fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
-        self.code.local_selection_exclusions(context, exclusions);
+    fn local_selection_inclusions(&self, context: &RenderContext, inclusions: &mut Inclusions) {
+        self.code.local_selection_inclusions(context, inclusions);
     }
 }
 
@@ -418,19 +418,18 @@ impl Block for CodeBlock {
             );
         }
     }
-    fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
-        exclusions.push(Rect::new(
-            0,
-            0,
-            self.layout().prefix(),
+    fn local_selection_inclusions(&self, context: &RenderContext, inclusions: &mut Inclusions) {
+        let layout = self.layout();
+        inclusions.push(beside_gutter(
+            layout.prefix(),
+            context,
             self.height(context),
         ));
-        let layout = self.layout();
         let mut row = 1;
         for cell in &self.cells {
             let width = context.width().saturating_sub(cell.marker().width(layout));
             let wrapped = cell.wrapped(width);
-            exclusions.mark_wrapped_rows(
+            inclusions.mark_wrapped_rows(
                 row,
                 context.width(),
                 wrapped.text().split('\n'),
@@ -439,6 +438,12 @@ impl Block for CodeBlock {
             row = row.saturating_add(wrapped.height());
         }
     }
+}
+
+/// The columns right of a `prefix`-wide gutter down a block `height` rows tall, which
+/// hold its text.
+fn beside_gutter(prefix: u16, context: &RenderContext, height: u16) -> Rect {
+    Rect::new(prefix, 0, context.width().saturating_sub(prefix), height)
 }
 
 fn cell_lines(
@@ -498,6 +503,9 @@ impl EvaluationState {
         }
     }
 }
+
+/// Rows a fold takes in a value: a rule, its label and a rule.
+const FOLD_ROWS: u16 = 3;
 
 /// One rendered result retained by a submission.
 enum EvaluationOutput {
@@ -909,16 +917,16 @@ impl Block for EvaluationBlock {
         None
     }
 
-    fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
+    fn local_selection_inclusions(&self, context: &RenderContext, inclusions: &mut Inclusions) {
         let code_height = self.code_height(context);
         let code_area_height = code_height + self.output_margin();
-        exclusions.push(Rect::new(0, 0, self.layout().prefix(), code_area_height));
         let layout = self.layout();
+        inclusions.push(beside_gutter(layout.prefix(), context, code_area_height));
         let code_width = self.code_width(context);
         let mut row = 1;
         for (cell, state) in &self.cells {
             let wrapped = cell.wrapped(code_width.saturating_sub(state.marker().width(layout)));
-            exclusions.mark_wrapped_rows(
+            inclusions.mark_wrapped_rows(
                 row,
                 context.width(),
                 wrapped.text().split('\n'),
@@ -929,11 +937,11 @@ impl Block for EvaluationBlock {
         let mut y = code_area_height;
         for block in self.outputs() {
             let height = block.height(context);
-            Block::selection_exclusions(
+            Block::selection_inclusions(
                 block,
                 context,
                 Rect::new(0, y, context.width(), height),
-                exclusions,
+                inclusions,
             );
             y = y.saturating_add(height);
         }
@@ -1069,10 +1077,10 @@ impl Block for TextBlock {
             }
         }
     }
-    fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
+    fn local_selection_inclusions(&self, context: &RenderContext, inclusions: &mut Inclusions) {
         if matches!(self.kind, TextKind::Printed { .. }) {
             let body = self.body(context);
-            exclusions.mark_wrapped_rows(
+            inclusions.mark_wrapped_rows(
                 UI.printed_margin,
                 context.width(),
                 body.iter().map(String::as_str),
@@ -1080,15 +1088,13 @@ impl Block for TextBlock {
             );
         }
         match self.kind {
-            TextKind::System => Bordered::exclude_frame(
+            TextKind::System => inclusions.push(Bordered::inner(
                 Rect::new(0, 0, context.width(), self.height(context)),
                 self.frame(),
-                exclusions,
-            ),
-            TextKind::Printed { number } => exclusions.push(Rect::new(
-                0,
-                0,
+            )),
+            TextKind::Printed { number } => inclusions.push(beside_gutter(
                 Self::printed_layout(number).prefix(),
+                context,
                 self.height(context),
             )),
         }
@@ -1342,6 +1348,31 @@ impl OutputBlock {
         self.fold(self.unfolded_lines(cell, context).len(), context)
     }
 
+    /// The text among `cell`'s value rows before any fold: a page says where in it
+    /// the text lies, any other value is text across `width`.
+    fn value_inclusions(
+        &self,
+        cell: &OutputCell,
+        width: u16,
+        context: &RenderContext,
+    ) -> Inclusions {
+        let page = match &cell.value {
+            Some(M2Value::Markup {
+                html,
+                example_width,
+                ..
+            }) => {
+                let width = self.value_width(cell, context);
+                markup::inclusions(html, *example_width, &context.with_width(width))
+            }
+            _ => None,
+        };
+        page.unwrap_or_else(|| {
+            let rows = row_count!(self.unfolded_lines(cell, context).len());
+            [Rect::new(0, 0, width, rows)].into()
+        })
+    }
+
     /// What `cell`'s value reads as on one row, before any wrapping.
     fn unwrapped_text(cell: &OutputCell, context: &RenderContext) -> String {
         let spans = match &cell.value {
@@ -1364,7 +1395,7 @@ impl OutputBlock {
             lines[..head]
                 .iter()
                 .cloned()
-                .chain(std::iter::repeat_n(Line::default(), 3))
+                .chain(std::iter::repeat_n(Line::default(), usize::from(FOLD_ROWS)))
                 .chain(lines[head + hidden..].iter().cloned())
                 .collect()
         } else {
@@ -1585,28 +1616,31 @@ impl Block for OutputBlock {
         None
     }
 
-    fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
+    fn local_selection_inclusions(&self, context: &RenderContext, inclusions: &mut Inclusions) {
         let area = Rect::new(0, 0, context.width(), self.height(context));
         let layout = self.border_layout();
-        Bordered::exclude_frame(area, layout, exclusions);
         let inner = Bordered::inner(area, layout);
         let right = inner.right();
         let mut row = inner.y;
         for (index, cell) in self.cells.iter().enumerate() {
-            row = row.saturating_add(Self::gap(index));
+            let gap = Self::gap(index);
+            inclusions.push(Rect::new(inner.x, row, inner.width, gap));
+            row = row.saturating_add(gap);
             let lines = self.lines(cell, context);
-            exclusions.push(Rect::new(
-                area.x,
-                row,
-                layout.prefix(),
-                row_count!(lines.len()),
-            ));
-            if let Some((head, _)) = self.cell_fold(cell, context) {
-                exclusions.push(Rect::new(area.x, row + row_count!(head), area.width, 3));
+            let unfolded = self.value_inclusions(cell, inner.width, context);
+            let at = |row: u16| Offset::new(i32::from(inner.x), i32::from(row));
+            match self.cell_fold(cell, context) {
+                Some((head, hidden)) => {
+                    let (head, tail) = (row_count!(head), row_count!(head + hidden));
+                    let total = row_count!(self.unfolded_lines(cell, context).len());
+                    inclusions.merge(unfolded.project(0..head) + at(row));
+                    inclusions.merge(unfolded.project(tail..total) + at(row + head + FOLD_ROWS));
+                }
+                None => inclusions.merge(unfolded + at(row)),
             }
             let values = self.value_lines(cell, context);
             let drawn: Vec<String> = values.iter().map(ToString::to_string).collect();
-            exclusions.mark_wrapped_rows(
+            inclusions.mark_wrapped_rows(
                 row,
                 area.width,
                 drawn.iter().map(String::as_str),
@@ -1617,7 +1651,7 @@ impl Block for OutputBlock {
             let start =
                 Self::type_start(&values, types.len(), width.into(), inner.width.into()) as u16;
             for offset in 0..row_count!(types.len()) {
-                exclusions.push(Rect::new(
+                inclusions.push_type(Rect::new(
                     right.saturating_sub(width),
                     row + start + offset,
                     width,
@@ -1665,12 +1699,11 @@ impl Block for WarningBlock {
         .render(&(), area, buf);
     }
 
-    fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
-        Bordered::exclude_frame(
+    fn local_selection_inclusions(&self, context: &RenderContext, inclusions: &mut Inclusions) {
+        inclusions.push(Bordered::inner(
             Rect::new(0, 0, context.width(), self.height(context)),
             CellLayout::plain().frame(),
-            exclusions,
-        );
+        ));
     }
 }
 
@@ -1751,12 +1784,11 @@ impl Block for ErrorMessageBlock {
         render_error_box(&self.message, context, area, buf);
     }
 
-    fn local_selection_exclusions(&self, context: &RenderContext, exclusions: &mut Exclusions) {
-        Bordered::exclude_frame(
+    fn local_selection_inclusions(&self, context: &RenderContext, inclusions: &mut Inclusions) {
+        inclusions.push(Bordered::inner(
             Rect::new(0, 0, context.width(), self.height(context)),
             CellLayout::plain().frame(),
-            exclusions,
-        );
+        ));
     }
 }
 
@@ -1807,7 +1839,7 @@ mod tests {
         let mut buffer = Buffer::empty(Rect::new(0, 0, 120, height));
         for _ in 0..100 {
             block.render_local(&context, &mut buffer);
-            block.local_selection_exclusions(&context, &mut Exclusions::default());
+            block.local_selection_inclusions(&context, &mut Inclusions::default());
             assert!(block.link_at(&context, Position::new(10, 2)).is_none());
             assert!(Rc::ptr_eq(
                 &first,
@@ -1843,7 +1875,7 @@ mod tests {
         assert_eq!(block.height(&context), 12);
         let mut buffer = Buffer::empty(Rect::new(0, 0, 80, block.height(&context)));
         block.render_local(&context, &mut buffer);
-        block.local_selection_exclusions(&context, &mut Exclusions::default());
+        block.local_selection_inclusions(&context, &mut Inclusions::default());
         let _ = block.link_at(&context, Position::new(10, 2));
         assert!(Rc::ptr_eq(
             &first,
@@ -2860,11 +2892,11 @@ mod tests {
             None,
         );
         let context = RenderContext::new(30, 0);
-        let mut exclusions = Exclusions::default();
-        block.local_selection_exclusions(&context, &mut exclusions);
+        let mut inclusions = Inclusions::default();
+        block.local_selection_inclusions(&context, &mut inclusions);
         let seams = (0..block.height(&context))
-            .filter(|&row| exclusions.seam_at(Position::new(0, row)).is_some())
+            .filter(|&row| inclusions.seam_at(Position::new(0, row)).is_some())
             .count();
-        assert!(seams > 0, "{exclusions:?}");
+        assert!(seams > 0, "{inclusions:?}");
     }
 }

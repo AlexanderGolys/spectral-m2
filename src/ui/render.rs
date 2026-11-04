@@ -8,7 +8,6 @@ use crate::ui::block::{Element, HLSpan, Text};
 use crate::ui::config::UI;
 use crate::ui::controller::settings::theme::groups::{scheme, Groups};
 use crate::ui::render::maths::{FractionStyle, MathDisplay, MathStyle};
-use crate::ui::render::selection::Exclusions;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
@@ -355,26 +354,6 @@ impl Bordered {
                 || position.x == frame.right() - 1
                 || position.y == frame.y
                 || position.y == frame.bottom() - 1)
-    }
-
-    /// Exclude the frame and its padding while retaining rendered body glyphs.
-    pub fn exclude_frame(area: Rect, layout: FrameLayout, exclusions: &mut Exclusions) {
-        let frame = Self::area(area, layout);
-        let inner = Self::inner(area, layout);
-        match (frame.width, frame.height) {
-            (0, _) | (_, 0) => {}
-            _ => exclusions.extend([
-                Rect::new(frame.x, frame.y, frame.width, 1),
-                Rect::new(frame.x, frame.bottom() - 1, frame.width, 1),
-                Rect::new(frame.x, frame.y, inner.x - frame.x, frame.height),
-                Rect::new(
-                    inner.right(),
-                    frame.y,
-                    frame.right() - inner.right(),
-                    frame.height,
-                ),
-            ]),
-        }
     }
 }
 

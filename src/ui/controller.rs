@@ -38,7 +38,7 @@ use super::debug::FrameStats;
 use super::element::EventListener;
 use super::feed::Feed;
 use super::key::{KeyEvent, KeyMod};
-use super::render::selection::Exclusions;
+use super::render::selection::Inclusions;
 use super::render::RenderContext;
 use super::statusline::{StatusLine, StatusLineContext, StatusLocation};
 use super::{
@@ -157,6 +157,25 @@ enum ElementFocus {
     Picker(PickerMode),
 }
 
+impl EditorUpdate {
+    /// Whether applying this adds to the transcript or changes the height of what
+    /// it holds.
+    fn moves_feed_rows(&self) -> bool {
+        matches!(
+            self,
+            Self::Incomplete { .. }
+                | Self::SyntaxFailed { .. }
+                | Self::Message(_)
+                | Self::Welcome(_)
+                | Self::ExamplesComputed
+                | Self::Pending { .. }
+                | Self::Queued { .. }
+                | Self::CellSucceeded { .. }
+                | Self::CellFailed { .. }
+        )
+    }
+}
+
 /// The transcript feed, live input, and viewport state.
 pub struct Editor {
     feed: Feed,
@@ -177,7 +196,7 @@ pub struct Editor {
     screen_selection: Option<ScreenSelection>,
     /// What each pane drew last, to select and copy from.
     captures: Vec<ScreenCapture>,
-    selection_exclusions: Exclusions,
+    selection_inclusions: Inclusions,
     split: bool,
     previewing: bool,
     pane_focused: bool,
@@ -207,6 +226,7 @@ impl Editor {
                 layout: saved.layout,
                 statusline: saved.statusline,
                 rendering: saved.rendering,
+                selection: saved.selection,
             },
             keymaps: Keymaps::replaying(&saved.rebinds),
             status_line: StatusLine::default(),
@@ -221,7 +241,7 @@ impl Editor {
             screen_selecting: false,
             screen_selection: None,
             captures: Vec::new(),
-            selection_exclusions: Exclusions::default(),
+            selection_inclusions: Inclusions::default(),
             split: false,
             previewing: false,
             pane_focused: true,
@@ -343,6 +363,7 @@ impl Editor {
 
     /// Apply a session result. Returns whether the shell should keep running.
     pub fn apply(&mut self, update: EditorUpdate) -> bool {
+        self.release_selection_for(&update);
         match update {
             EditorUpdate::Exit => return false,
             EditorUpdate::Ignore => {}
@@ -442,6 +463,7 @@ impl Editor {
     }
 
     pub fn post(&mut self, update: EditorUpdate) -> bool {
+        self.release_selection_for(&update);
         match update {
             EditorUpdate::Batch(updates) => updates.into_iter().all(|update| self.post(update)),
             EditorUpdate::Pending { id, cells } => {
@@ -455,6 +477,14 @@ impl Editor {
                 true
             }
             update => self.apply(update),
+        }
+    }
+
+    /// A selection names rows, which `update` is about to move if it changes the
+    /// transcript, so one no longer held lets go rather than land on other text.
+    fn release_selection_for(&mut self, update: &EditorUpdate) {
+        if update.moves_feed_rows() && !self.screen_selecting {
+            self.screen_selection = None;
         }
     }
 
@@ -483,10 +513,23 @@ impl Editor {
     /// Longest pause between two clicks on one cell that still reads as a double click.
     const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
+    pub fn handle_mouse(&mut self, event: MouseEvent) -> Reaction {
+        let reaction = self.route_mouse(event);
+        self.copied_on_select(reaction)
+    }
+
+    /// What finishing a mouse selection does: copy it, or leave it to the copy key.
+    fn copied_on_select(&self, reaction: Reaction) -> Reaction {
+        match reaction {
+            Reaction::Copy(_) if !self.settings.selection.copy_on_select => Reaction::Continue,
+            reaction => reaction,
+        }
+    }
+
     /// Route the wheel by what it is pointing at: over the input pane it moves
     /// through the input's lines, everywhere else it scrolls the feed. A double click on a folded
     /// value expands it, and on an expanded one folds it back.
-    pub fn handle_mouse(&mut self, event: MouseEvent) -> Reaction {
+    fn route_mouse(&mut self, event: MouseEvent) -> Reaction {
         let pointer = Position::new(event.column, event.row);
         self.pointer = Some(pointer);
         self.control_held = event.modifiers.contains(KeyModifiers::CONTROL);
@@ -562,11 +605,12 @@ impl Editor {
 
     pub fn handle_preview_mouse(&mut self, event: MouseEvent) -> Reaction {
         let double = self.double_clicked(event);
-        double
+        let reaction = double
             .then(|| self.pick_screen_text(event))
             .flatten()
             .or_else(|| self.handle_screen_mouse(event))
-            .unwrap_or(Reaction::Continue)
+            .unwrap_or(Reaction::Continue);
+        self.copied_on_select(reaction)
     }
 
     /// Move the feed by signed rows, positive toward older content.
@@ -1051,6 +1095,7 @@ impl Editor {
             layout: self.settings.layout,
             statusline: self.settings.statusline,
             rendering: self.settings.rendering,
+            selection: self.settings.selection,
             rebinds: self.keymaps.rebinds().to_vec(),
         }
         .save();
@@ -1263,7 +1308,7 @@ impl Editor {
         };
         frame.render_widget(Clear, area);
         frame.render_widget(Paragraph::new(lines).style(base).block(block), area);
-        self.selection_exclusions.push(area);
+        self.selection_inclusions.cover(area);
     }
 
     /// Hand the status line the keys the session's state puts on its right, if
@@ -1349,7 +1394,7 @@ impl Editor {
         if self.pane_focused {
             self.frame_stats.tick();
         }
-        self.selection_exclusions.clear();
+        self.selection_inclusions.clear();
         let theme = *scheme();
         let input_prefix = UI.prompt_width();
         frame.render_widget(Clear, area);
@@ -1420,16 +1465,13 @@ impl Editor {
             controller
                 .picker
                 .render(&(), sections[1], frame.buffer_mut());
-            self.selection_exclusions.push(sections[1]);
         } else if let Some(completion) = self
             .input
             .offered()
             .filter(|completion| completion.list_height() > 0)
         {
             completion.render_list(sections[1], frame.buffer_mut(), &theme);
-            self.selection_exclusions.push(sections[1]);
         }
-        self.selection_exclusions.push(input_area);
         self.refresh_completion();
         let pending = self.feed.incomplete_source();
         let command = pending.is_none() && commands::typed(self.input.text());
@@ -1452,9 +1494,6 @@ impl Editor {
             .render(status_area, frame.buffer_mut());
         self.status_line
             .render(&self.status_context(), status_area, frame.buffer_mut());
-        if status_height > 0 {
-            self.selection_exclusions.push(status_area);
-        }
         self.draw_highlight_debug(frame);
         self.capture_screen(frame);
         self.paint_screen_selection(frame);
@@ -1492,7 +1531,7 @@ impl Editor {
             self.feed_top = 0;
             return false;
         }
-        let (underfilled, exclusions) = self.feed.render(
+        let (underfilled, inclusions) = self.feed.render(
             context,
             area,
             frame.buffer_mut(),
@@ -1501,7 +1540,7 @@ impl Editor {
                 .canvas(context.groups().transcript()),
         );
         self.feed_top = -(self.feed.offset() as i64);
-        self.selection_exclusions.merge(exclusions);
+        self.selection_inclusions.merge(inclusions);
         if let Some(link) = self.pointer.and_then(|pointer| self.feed.link_at(pointer)) {
             let hovered = context.groups().style(match self.control_held {
                 true => HLGroup::MarkupLinkOpen,
