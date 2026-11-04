@@ -80,6 +80,10 @@ pub struct TypesetConfig {
     /// A formula's em as a share of one cell's height, so its letters stand as tall
     /// as the text around them.
     pub em_per_cell_height: f32,
+    /// How far down its row the text baseline runs, as a share of the cell's height.
+    /// A one-row formula is set on it, so neighbouring formulas share a baseline
+    /// with the terminal text beside them rather than each centring its own ink.
+    pub baseline_per_cell_height: f32,
     /// The smallest share of its natural size a formula may shrink to fit a width;
     /// below it the formula is drawn as text instead.
     pub min_scale: f32,
@@ -222,6 +226,7 @@ pub const UI: UiConfig = UiConfig {
     max_type_share: 0.3,
     typeset: TypesetConfig {
         em_per_cell_height: 0.65,
+        baseline_per_cell_height: 0.77,
         min_scale: 0.6,
     },
 };

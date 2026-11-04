@@ -200,14 +200,48 @@ pub struct Typesetting<'a> {
     pub code: &'a str,
 }
 
-/// Typeset `formula` in `colour`, retaining its code for copying. Returns
-/// placeholder lines no wider than `width`, or none when pictures are unavailable
-/// or the formula cannot be set legibly in that width.
-pub fn typeset(formula: Typesetting, colour: Rgb, width: u16) -> Option<Vec<Line<'static>>> {
+/// A formula's placeholder lines and the one its baseline runs through.
+#[derive(Clone, Debug)]
+pub struct Pictured {
+    pub lines: Vec<Line<'static>>,
+    pub baseline: usize,
+}
+
+/// How a picture taller than a row takes up the rows it stands in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Placement {
+    /// With nothing beside it: as few rows as hold it, its ink centred down them.
+    Alone,
+    /// Beside text: its baseline on the text baseline of a row, so that row lines
+    /// up with what is beside it, at the cost of the rows that takes.
+    AmongText,
+}
+
+/// Typeset `formula` in `colour` to stand beside text, retaining its code for
+/// copying. Returns placeholder lines no wider than `width`, or none when pictures
+/// are unavailable or the formula cannot be set legibly in that width.
+pub fn typeset(formula: Typesetting, colour: Rgb, width: u16) -> Option<Pictured> {
+    pictured(formula, colour, width, Placement::AmongText)
+}
+
+/// [`typeset`] for a formula with nothing beside it.
+pub fn typeset_alone(formula: Typesetting, colour: Rgb, width: u16) -> Option<Pictured> {
+    pictured(formula, colour, width, Placement::Alone)
+}
+
+fn pictured(
+    formula: Typesetting,
+    colour: Rgb,
+    width: u16,
+    placement: Placement,
+) -> Option<Pictured> {
     let canvas = *CANVAS.get()?.lock().ok()?;
     gallery()
-        .formula(formula, colour, canvas, width)
-        .map(|image| image.lines())
+        .formula(formula, colour, canvas, width, placement)
+        .map(|(image, baseline)| Pictured {
+            lines: image.lines(),
+            baseline,
+        })
 }
 
 /// The M2 code the picture `id` shows.
@@ -260,12 +294,14 @@ fn gallery() -> MutexGuard<'static, Gallery> {
 type FormulaKey = (String, Rgb);
 /// A formula's picture at a column count and cell pixel size, for its copied code.
 /// Values sharing TeX but not code each get their own picture to copy from.
-type ImageKey = (FormulaKey, u16, Size, String);
+type ImageKey = (FormulaKey, u16, Size, String, Placement);
 
 /// A formula's vector picture and the places it may be cut into rows.
 struct Formula {
     tree: Tree,
     breaks: Vec<Break>,
+    /// Where the text baseline runs down the picture, as a share of its height.
+    baseline: f32,
 }
 
 /// Every picture made, kept so a layout at another width or a resend reuses it.
@@ -287,7 +323,8 @@ impl Gallery {
         colour: Rgb,
         canvas: Canvas,
         width: u16,
-    ) -> Option<Arc<KittyImage>> {
+        placement: Placement,
+    ) -> Option<(Arc<KittyImage>, usize)> {
         let key = (painted.to_string(), colour);
         let formula = self
             .formulas
@@ -298,13 +335,21 @@ impl Gallery {
                 Some(Arc::new(Formula {
                     tree,
                     breaks: typeset.breaks,
+                    baseline: typeset.baseline,
                 }))
             })
             .clone()?;
-        let raster = Raster::fitted(&formula, canvas, width)?;
-        let image_key = (key, raster.cells.width, canvas.cell, code.to_string());
+        let raster = Raster::fitted(&formula, canvas, width, placement)?;
+        let baseline = raster.baseline_row();
+        let image_key = (
+            key,
+            raster.cells.width,
+            canvas.cell,
+            code.to_string(),
+            placement,
+        );
         if let Some(image) = self.images.get(&image_key) {
-            return image.clone();
+            return image.clone().map(|image| (image, baseline));
         }
         self.last_id = self.last_id.next();
         let image = raster
@@ -316,7 +361,7 @@ impl Gallery {
             self.sources.insert(self.last_id, code.to_string());
         }
         self.images.insert(image_key, image.clone());
-        image
+        image.map(|image| (image, baseline))
     }
 }
 
@@ -325,11 +370,14 @@ impl Gallery {
 struct Raster {
     scale: f32,
     top: f32,
-    height: f32,
+    /// Where the picture's top edge lands within a row, in pixels.
+    offset: f32,
     /// The picture's slices, left to right, each drawn below the one before.
     rows: Vec<Range<f32>>,
     /// Terminal rows each slice stands in.
     row_cells: u16,
+    /// Which of a slice's rows its baseline runs through.
+    slice_baseline: u16,
     cells: Size,
     cell: Size,
 }
@@ -338,7 +386,7 @@ impl Raster {
     /// The picture at the terminal's text size, broken into rows of at most
     /// `width` columns where it may break, and shrunk to `width` when a row it
     /// cannot break is wider; none when shrinking would make it too small to read.
-    fn fitted(formula: &Formula, canvas: Canvas, width: u16) -> Option<Self> {
+    fn fitted(formula: &Formula, canvas: Canvas, width: u16, placement: Placement) -> Option<Self> {
         let tree = &formula.tree;
         // Font ascender/descender metrics can reserve more space than the ink,
         // particularly for delimiters. Only visible bounds determine occupied rows.
@@ -366,34 +414,72 @@ impl Raster {
         }
         let scale = natural * shrink;
         let cover = |extent: f32, cell: f32| ((extent * scale / cell).ceil() as u16).max(1);
-        let row_cells = cover(height, cell_height);
+        let above = (formula.baseline * tree.size().height() - top) * scale;
+        let below = (height * scale - above).max(0.0);
+        let padding = PADDING * scale;
+        let text_baseline = UI.typeset.baseline_per_cell_height * cell_height;
+        // The rows ink needs past its own, the padding being there to spend.
+        let rows_past = |reach: f32, room: f32| {
+            ((reach - 2.0 * padding - room) / cell_height)
+                .ceil()
+                .max(0.0) as u16
+        };
+        let covered = cover(height, cell_height);
+        let (row_cells, slice_baseline) = match placement {
+            _ if covered == 1 => (1, 0),
+            Placement::Alone => (covered, (covered - 1) / 2),
+            Placement::AmongText => {
+                let rows_above = rows_past(above, text_baseline);
+                let rows_below = rows_past(below, cell_height - text_baseline);
+                (rows_above + 1 + rows_below, rows_above)
+            }
+        };
+        let row_height = f32::from(row_cells) * cell_height;
+        let offset = if placement == Placement::Alone && covered > 1 {
+            (row_height - height * scale) / 2.0
+        } else {
+            // On the text baseline where the ink leaves room for it, else as close
+            // as it can sit without its ink being cut off.
+            (f32::from(slice_baseline) * cell_height + text_baseline)
+                .min(row_height - below)
+                .max(above - padding)
+                - above
+        };
         Some(Self {
             scale,
             top,
-            height,
+            offset,
             cells: Size::new(
                 cover(widest, cell_width).min(width),
                 row_cells * rows.len() as u16,
             ),
             rows,
             row_cells,
+            slice_baseline,
             cell: canvas.cell,
         })
     }
 
-    /// The picture's rows drawn across exactly its cells, each centred down its
-    /// own, as PNG.
+    /// The row a neighbour lines up with: the baseline's in a picture of one slice,
+    /// the middle one of several.
+    fn baseline_row(&self) -> usize {
+        match self.rows.len() {
+            1 => usize::from(self.slice_baseline),
+            _ => usize::from(self.cells.height.saturating_sub(1) / 2),
+        }
+    }
+
+    /// The picture's rows drawn across exactly its cells, as PNG.
     fn png(&self, tree: &Tree) -> Option<Vec<u8>> {
         let width = u32::from(self.cells.width) * u32::from(self.cell.width);
         let row_height = u32::from(self.row_cells) * u32::from(self.cell.height);
         let mut pixmap = Pixmap::new(width, row_height * self.rows.len() as u32)?;
-        let slack = row_height as f32 - self.height * self.scale;
         for (index, row) in self.rows.iter().enumerate() {
             // A slice as wide as its row, so what follows its end is cut away.
             let slice = (((row.end - row.start) * self.scale).ceil() as u32).clamp(1, width);
             let mut strip = Pixmap::new(slice, row_height)?;
             let transform = Transform::from_scale(self.scale, self.scale)
-                .post_translate(-row.start * self.scale, slack / 2.0 - self.top * self.scale);
+                .post_translate(-row.start * self.scale, self.offset - self.top * self.scale);
             resvg::render(tree, transform, &mut strip.as_mut());
             pixmap.draw_pixmap(
                 0,
@@ -432,6 +518,8 @@ fn wrapped(width: f32, breaks: &[Break], room: f32) -> Vec<Range<f32>> {
 
 #[cfg(test)]
 mod tests {
+    use resvg::tiny_skia::PremultipliedColorU8;
+
     use super::*;
 
     const CANVAS: Canvas = Canvas {
@@ -460,6 +548,7 @@ mod tests {
         Formula {
             tree: Tree::from_str(&typeset.svg, &Options::default()).unwrap(),
             breaks: typeset.breaks,
+            baseline: typeset.baseline,
         }
     }
 
@@ -474,23 +563,69 @@ mod tests {
             r"\left\{1\right\}",
         ] {
             let formula = formula(tex);
-            let raster = Raster::fitted(&formula, CANVAS, 80).unwrap();
+            let raster = Raster::fitted(&formula, CANVAS, 80, Placement::AmongText).unwrap();
             assert_eq!(
                 raster.cells.height,
                 1,
-                "{tex}: SVG height {}, ink height {}, scale {}",
+                "{tex}: SVG height {}, scale {}",
                 formula.tree.size().height(),
-                raster.height,
                 raster.scale
             );
         }
     }
 
     #[test]
+    fn one_row_formulas_rest_their_ink_on_the_text_baseline() {
+        let cell = Size::new(20, 44);
+        let canvas = Canvas { cell, ..CANVAS };
+        let baseline = UI.typeset.baseline_per_cell_height * f32::from(cell.height);
+        for tex in ["a", "c", "ab", "ac", "1", "x", r"a^{2}", r"a^{2}b"] {
+            let formula = formula(tex);
+            let raster = Raster::fitted(&formula, canvas, 80, Placement::AmongText).unwrap();
+            assert_eq!(raster.cells.height, 1, "{tex}");
+            let pixmap = Pixmap::decode_png(&raster.png(&formula.tree).unwrap()).unwrap();
+            let last_inked_row = pixmap
+                .pixels()
+                .chunks(pixmap.width() as usize)
+                .rposition(|row| row.iter().any(|pixel| pixel.alpha() > u8::MAX / 2))
+                .unwrap();
+            let below_baseline = last_inked_row as f32 + 1.0 - baseline;
+            assert!(below_baseline.abs() <= 1.5, "{tex}: {below_baseline}");
+        }
+    }
+
+    #[test]
+    fn a_tall_formula_beside_text_stands_around_the_row_of_its_baseline() {
+        let cell = Size::new(20, 44);
+        let canvas = Canvas { cell, ..CANVAS };
+        let formula = formula(r"\frac{1}{2}");
+        let raster = Raster::fitted(&formula, canvas, 80, Placement::AmongText).unwrap();
+        let pixmap = Pixmap::decode_png(&raster.png(&formula.tree).unwrap()).unwrap();
+        let inked = |row: &[PremultipliedColorU8]| row.iter().any(|pixel| pixel.alpha() > 0);
+        let row_of = |pixel_row: usize| pixel_row / usize::from(cell.height);
+        let mut rows = pixmap.pixels().chunks(pixmap.width() as usize);
+        let first = rows.clone().position(inked).unwrap();
+        let last = rows.rposition(inked).unwrap();
+        let baseline = raster.baseline_row();
+        assert!(
+            row_of(first) < baseline,
+            "numerator above: {first}, {baseline}"
+        );
+        assert!(
+            row_of(last) > baseline,
+            "denominator below: {last}, {baseline}"
+        );
+        assert_eq!(usize::from(raster.cells.height), baseline * 2 + 1);
+
+        let alone = Raster::fitted(&formula, canvas, 80, Placement::Alone).unwrap();
+        assert!(alone.cells.height < raster.cells.height);
+    }
+
+    #[test]
     fn a_picture_covers_whole_cells_and_fills_them_exactly() {
         let formula = formula(r"\frac{x+y}{x-z}");
 
-        let raster = Raster::fitted(&formula, CANVAS, 80).unwrap();
+        let raster = Raster::fitted(&formula, CANVAS, 80, Placement::AmongText).unwrap();
         let png = raster.png(&formula.tree).unwrap();
 
         let pixmap = Pixmap::decode_png(&png).unwrap();
@@ -505,7 +640,7 @@ mod tests {
             cell: Size::new(CANVAS.cell.width * 2, CANVAS.cell.height * 2),
             ..CANVAS
         };
-        let zoomed = Raster::fitted(&formula, enlarged, 80).unwrap();
+        let zoomed = Raster::fitted(&formula, enlarged, 80, Placement::AmongText).unwrap();
         let zoomed = Pixmap::decode_png(&zoomed.png(&formula.tree).unwrap()).unwrap();
         assert_eq!(zoomed.width(), pixmap.width() * 2);
         assert_eq!(zoomed.height(), pixmap.height() * 2);
@@ -514,13 +649,13 @@ mod tests {
     #[test]
     fn a_wide_formula_shrinks_to_the_width_until_it_would_be_unreadable() {
         let formula = formula(r"1\,267\,650\,600\,228\,229\,401\,496\,703\,205\,376");
-        let natural = Raster::fitted(&formula, CANVAS, u16::MAX)
+        let natural = Raster::fitted(&formula, CANVAS, u16::MAX, Placement::AmongText)
             .unwrap()
             .cells
             .width;
 
-        let shrunk = Raster::fitted(&formula, CANVAS, natural - 1).unwrap();
-        let refused = Raster::fitted(&formula, CANVAS, 1);
+        let shrunk = Raster::fitted(&formula, CANVAS, natural - 1, Placement::AmongText).unwrap();
+        let refused = Raster::fitted(&formula, CANVAS, 1, Placement::AmongText);
 
         assert!(shrunk.cells.width < natural);
         assert!(refused.is_none());
@@ -530,10 +665,10 @@ mod tests {
     fn a_long_list_wraps_after_its_commas_at_full_size() {
         let entries = (1..=60).map(|n| n.to_string()).collect::<Vec<_>>();
         let formula = formula(&format!(r"\left\{{{}\right\}}", entries.join(r",\,")));
-        let unbroken = Raster::fitted(&formula, CANVAS, u16::MAX).unwrap();
+        let unbroken = Raster::fitted(&formula, CANVAS, u16::MAX, Placement::AmongText).unwrap();
         let width = unbroken.cells.width / 3;
 
-        let wrapped = Raster::fitted(&formula, CANVAS, width).unwrap();
+        let wrapped = Raster::fitted(&formula, CANVAS, width, Placement::AmongText).unwrap();
 
         assert_eq!(unbroken.rows.len(), 1);
         assert!(wrapped.rows.len() >= 3, "{} rows", wrapped.rows.len());
@@ -563,10 +698,11 @@ mod tests {
             code: "x^2",
         };
 
-        let first = gallery.formula(square, ink, CANVAS, 80);
-        let again = gallery.formula(square, ink, CANVAS, 120);
+        let placement = Placement::AmongText;
+        let first = gallery.formula(square, ink, CANVAS, 80, placement);
+        let again = gallery.formula(square, ink, CANVAS, 120, placement);
 
-        assert!(Arc::ptr_eq(&first.unwrap(), &again.unwrap()));
+        assert!(Arc::ptr_eq(&first.unwrap().0, &again.unwrap().0));
         assert_eq!(gallery.unsent.len(), 1);
         assert_eq!(
             gallery.sources.get(&gallery.last_id).map(String::as_str),
@@ -577,14 +713,16 @@ mod tests {
             cell: Size::new(CANVAS.cell.width * 2, CANVAS.cell.height * 2),
             ..CANVAS
         };
-        let original = gallery.formula(square, ink, CANVAS, 80).unwrap();
-        let zoomed = gallery.formula(square, ink, enlarged, 80).unwrap();
+        let (original, _) = gallery.formula(square, ink, CANVAS, 80, placement).unwrap();
+        let (zoomed, _) = gallery
+            .formula(square, ink, enlarged, 80, placement)
+            .unwrap();
         assert!(!Arc::ptr_eq(&original, &zoomed));
         assert_eq!(original.lines().len(), zoomed.lines().len());
         assert_eq!(original.lines()[0].width(), zoomed.lines()[0].width());
         assert_eq!(gallery.unsent.len(), 2);
 
-        let restored = gallery.formula(square, ink, CANVAS, 80).unwrap();
+        let (restored, _) = gallery.formula(square, ink, CANVAS, 80, placement).unwrap();
         assert!(Arc::ptr_eq(&original, &restored));
         assert_eq!(gallery.unsent.len(), 2);
     }

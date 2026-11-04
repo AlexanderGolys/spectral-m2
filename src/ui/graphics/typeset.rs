@@ -30,6 +30,8 @@ pub struct Typeset {
     pub svg: String,
     /// Places the picture may be cut into rows, left to right.
     pub breaks: Vec<Break>,
+    /// How far down the picture the text baseline runs, as a share of its height.
+    pub baseline: f32,
 }
 
 /// A place between a separator and what follows it where one row of a formula
@@ -97,13 +99,19 @@ pub fn svg_colored(tex: &str, painted: &str, colour: Rgb) -> Result<Typeset, Uns
         font_dir: String::new(),
     };
     let breaks = breaks(&original);
+    let baseline = (original.height as f32 * EM + PADDING)
+        / ((original.height + original.depth) as f32 * EM + 2.0 * PADDING);
     let typewriter = TerminalFont::get().map(|font| typewriter_paths(&mut original, font));
     let mut svg = render_to_svg(&original, &svg);
     if let Some(paths) = typewriter.filter(|paths| !paths.is_empty()) {
         let end = svg.rfind(SVG_END).unwrap_or(svg.len());
         svg.insert_str(end, &paths);
     }
-    Ok(Typeset { svg, breaks })
+    Ok(Typeset {
+        svg,
+        breaks,
+        baseline,
+    })
 }
 
 /// Where the formula may be cut into rows: after each separator set in the

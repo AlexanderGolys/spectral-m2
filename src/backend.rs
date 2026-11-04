@@ -29,6 +29,10 @@ const STARTUP_FILE: &str = "backend.m2";
 /// separator: no diagnostic, prompt or ordinary value begins with it, and the
 /// M2 side writes it immediately before the frame's JSON.
 const FRAME_MARK: u8 = 0x1D;
+/// The arrow of `key => value`, an equals sign drawn on to `⇒` for its length.
+pub const OPTION_ARROW: &str = "=⇒";
+/// [`OPTION_ARROW`] standing apart from what it joins.
+pub const SPACED_OPTION_ARROW: &str = " =⇒ ";
 
 /// Appended to every submission. The statement that closes an input -- see the
 /// M2 side for why the hooks cannot do it alone for a statement that errored. It
@@ -146,7 +150,7 @@ enum Spelling {
 impl Spelling {
     const fn arrow(self) -> &'static str {
         match self {
-            Self::Unicode => " ⇒ ",
+            Self::Unicode => SPACED_OPTION_ARROW,
             Self::Ascii => " => ",
         }
     }
@@ -186,6 +190,7 @@ impl M2Value {
             .replace(r"\texttt", r"\text")
             .replace(r"\left\{", r"\left{")
             .replace(r"\right\}", r"\right}")
+            .replace(r"\Rightarrow", &format!(r"\text{{{OPTION_ARROW}}}"))
     }
 
     fn text_block(text: &str) -> RenderedBlock {
@@ -951,7 +956,7 @@ mod tests {
             (r"$\texttt{print}$", "print"),
             (
                 r"$\texttt{HashTable}\left\{\texttt{a}\ \Rightarrow \ 1,\:\texttt{b}\ \Rightarrow \ 2\right\}$",
-                "HashTable{a ⇒ 1, b ⇒ 2}",
+                "HashTable{a =⇒ 1, b =⇒ 2}",
             ),
         ] {
             let value = M2Value::Tex {
@@ -1206,7 +1211,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             .expect("evaluate hash table");
         assert_eq!(
             table.rendered_value().as_deref(),
-            Some("⎰ a ⇒ 1 ⎱\n⎱ b ⇒ 2 ⎰")
+            Some("⎰ a =⇒ 1 ⎱\n⎱ b =⇒ 2 ⎰")
         );
 
         let vertical = backend

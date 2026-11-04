@@ -20,7 +20,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use these_macros_should_be_illegal::discriminated_str;
 
-use crate::backend::{CollectionKind, M2Value, Role};
+use crate::backend::{CollectionKind, M2Value, Role, OPTION_ARROW, SPACED_OPTION_ARROW};
 use crate::ui::block::TextSpan;
 use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
 use crate::ui::cycle::cyclic;
@@ -155,10 +155,10 @@ impl From<FractionStyle> for MathStyle {
 
 impl Role {
     /// The group code paints the same thing with, so a value reads as it would
-    /// typed: `null` as a constant, `true` as a Boolean, a name as a function.
+    /// typed: `null` as a builtin, `true` as a Boolean, a name as a function.
     pub(super) const fn group(self) -> HLGroup {
         match self {
-            Self::Null => HLGroup::Constant,
+            Self::Null => HLGroup::Builtin,
             Self::Boolean => HLGroup::Boolean,
             Self::String => HLGroup::String,
             Self::Function => HLGroup::Function,
@@ -260,6 +260,13 @@ pub fn typewriter(text: &str) -> String {
     }
     tex.push('}');
     tex
+}
+
+/// `tex` as a picture sets it.
+pub fn pictured_tex(tex: &str) -> String {
+    PICTURED_FORMS
+        .iter()
+        .fold(tex.to_string(), |tex, (set, drawn)| tex.replace(set, drawn))
 }
 
 /// Add theme colours to complete TeX atoms, preserving the original typesetting commands.
@@ -594,7 +601,12 @@ impl<'a> Input<'a> {
             // A font wrapper renames the role of what it wraps but adds no shape.
             font if FONTS.contains(&font) => {
                 let body = self.atom()?;
+                let constant = matches!(
+                    &body,
+                    Math::Atom { text, .. } if CONSTANT_LETTERS.contains(&(font, text.as_str()))
+                );
                 Ok(match font {
+                    _ if constant => body.retag(HLGroup::Builtin),
                     "mathbb" => Math::retag(
                         body.lettered(&DOUBLE_STRUCK, self.blackboard),
                         HLGroup::Type,
@@ -609,8 +621,11 @@ impl<'a> Input<'a> {
                     _ => body,
                 })
             }
-            other => self
-                .operator(other)
+            other => CONSTANT_COMMANDS
+                .iter()
+                .find(|(command, _)| *command == other)
+                .map(|(_, glyph)| Math::atom(*glyph, HLGroup::Builtin))
+                .or_else(|| self.operator(other))
                 .ok_or_else(|| Unsupported(format!("\\{other}"))),
         }
     }
@@ -748,8 +763,27 @@ const SPACING: [&str; 8] = [
     "\\mathclose{}",
 ];
 const OPERATORS: &str = "+-=<>/*@:~?!%";
+/// M2's constants TeX spells as a command, with the glyph a terminal draws for each.
+const CONSTANT_COMMANDS: [(&str, &str); 3] = [
+    ("pi", "\u{03C0}"),
+    ("gamma", "\u{03B3}"),
+    ("infty", "\u{221E}"),
+];
+/// M2's constants TeX spells as one letter in a font: `ii`, as M2 sets it and as it
+/// is drawn, and `CatalanConstant`.
+const CONSTANT_LETTERS: [(&str, &str); 3] = [("mathbf", "i"), ("mathrm", "i"), ("mathrm", "G")];
+/// How a picture redraws what M2 sets: the bold imaginary unit stands out among italic
+/// letters, so it is upright; `=>` is as long as the terminal's [`OPTION_ARROW`].
+const PICTURED_FORMS: [(&str, &str); 2] = [
+    (r"\mathbf{i}", r"\mathrm{i}"),
+    (r"\Rightarrow", r"\Longrightarrow"),
+];
+/// The words code paints as Booleans.
+const BOOLEAN_WORDS: [&str; 2] = ["true", "false"];
+/// The word code paints as a builtin among those M2 sets in typewriter face.
+const NULL_WORD: &str = "null";
 /// Operators TeX spells as a command, with the glyph a terminal draws for each.
-const OPERATOR_COMMANDS: [(&str, &str); 20] = [
+const OPERATOR_COMMANDS: [(&str, &str); 19] = [
     ("wedge", "\u{2227}"),
     ("vee", "\u{2228}"),
     ("otimes", "\u{2297}"),
@@ -760,14 +794,13 @@ const OPERATOR_COMMANDS: [(&str, &str); 20] = [
     ("times", "\u{00D7}"),
     ("ast", "\u{2217}"),
     ("mid", "|"),
-    ("Rightarrow", "\u{21D2}"),
+    ("Rightarrow", OPTION_ARROW),
     ("Leftarrow", "\u{21D0}"),
     ("Leftrightarrow", "\u{21D4}"),
     ("Longrightarrow", "\u{27F9}"),
     ("Longleftarrow", "\u{27F8}"),
     ("leq", "\u{2264}"),
     ("geq", "\u{2265}"),
-    ("infty", "\u{221E}"),
     ("cdots", "\u{22EF}"),
     // U+2026 is East Asian Ambiguous, so the low ellipsis is three full stops.
     ("ldots", "..."),
@@ -909,10 +942,12 @@ impl Math {
         }
     }
 
-    /// A name M2 sets in typewriter face is one from code: a type when capitalised, as
-    /// M2 names its types, else a function.
+    /// A name M2 sets in typewriter face is one from code: a Boolean or `null` as code
+    /// paints them, a type when capitalised, as M2 names its types, else a function.
     fn named_in_code(self) -> Self {
         let kind = match &self {
+            Self::Atom { text, .. } if BOOLEAN_WORDS.contains(&text.as_str()) => HLGroup::Boolean,
+            Self::Atom { text, .. } if text == NULL_WORD => HLGroup::Builtin,
             Self::Atom { text, .. } if text.starts_with(char::is_uppercase) => HLGroup::Type,
             _ => HLGroup::Function,
         };
@@ -1347,7 +1382,7 @@ impl MathBlock {
                     .map(|[key, value]| {
                         Self::row([
                             Self::value(key, style),
-                            Self::atom(" \u{21D2} ", HLGroup::Operator),
+                            Self::atom(SPACED_OPTION_ARROW, HLGroup::Operator),
                             Self::value(value, style),
                         ])
                     })
@@ -1840,6 +1875,33 @@ mod tests {
     }
 
     #[test]
+    fn constants_and_code_words_are_painted_as_code_paints_them() {
+        assert_eq!(rendered(r"$x\ \Rightarrow \ \infty$", false), "x=⇒∞");
+        for (source, group) in [
+            (r"\pi", HLGroup::Builtin),
+            (r"\gamma", HLGroup::Builtin),
+            (r"\infty", HLGroup::Builtin),
+            (r"\mathbf{i}", HLGroup::Builtin),
+            (r"\mathrm{i}", HLGroup::Builtin),
+            (r"\mathrm{G}", HLGroup::Builtin),
+            (r"{2}\,\mathbf{i}", HLGroup::Builtin),
+            (r"x_{\texttt{true}}", HLGroup::Boolean),
+            (r"x_{\texttt{false}}", HLGroup::Boolean),
+            (r"x_{\texttt{null}}", HLGroup::Builtin),
+            (r"x_{\texttt{print}}", HLGroup::Function),
+            (r"x_{\pi}", HLGroup::Builtin),
+        ] {
+            let mut input = Input::new(source, true);
+            input.expression(&[]).expect("parses");
+            assert!(
+                input.highlights.iter().any(|(_, kind)| *kind == group),
+                "{source} should hold {group:?}: {:?}",
+                input.highlights
+            );
+        }
+    }
+
+    #[test]
     fn an_unknown_command_is_refused_by_name() {
         assert_eq!(
             Math::parse(r"\sqrt{2}").err(),
@@ -2028,8 +2090,8 @@ mod tests {
         assert_eq!(
             text(&spans(&table, 80, FractionStyle::Stacked).expect("renders")),
             [
-                "\u{23B0} 1 \u{21D2} 2    \u{23B1}",
-                "\u{23B1} 3 \u{21D2} text \u{23B0}"
+                "\u{23B0} 1 =\u{21D2} 2    \u{23B1}",
+                "\u{23B1} 3 =\u{21D2} text \u{23B0}"
             ]
         );
     }
@@ -2133,7 +2195,7 @@ mod tests {
         let roles = roles(&spans(&list, 80, FractionStyle::Stacked).expect("renders"));
 
         for (text, group) in [
-            ("null", HLGroup::Constant),
+            ("null", HLGroup::Builtin),
             ("true", HLGroup::Boolean),
             ("hi", HLGroup::String),
             ("print", HLGroup::Function),
@@ -2456,9 +2518,8 @@ mod tests {
             (r"$x@@x$", "x@@x"),
             (r"$x\midx$", "x|x"),
             (r"$x\mid\midx$", "x||x"),
-            (r"$x\ \Rightarrow \ x$", "x⇒x"),
+            (r"$x\ \Rightarrow \ x$", "x=⇒x"),
             (r"$x\Longrightarrow x$", "x⟹x"),
-            (r"$x\ \Rightarrow \ \infty$", "x⇒∞"),
         ] {
             assert_eq!(rendered(source, false), drawn);
             let kinds = Math::from_tex(source, false)

@@ -3,16 +3,16 @@
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
-use crate::backend::{CollectionKind, M2Value};
+use crate::backend::{CollectionKind, M2Value, SPACED_OPTION_ARROW};
 use crate::ui::block::Text;
 use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
-use crate::ui::graphics::{self, typeset::Rgb, Typesetting};
+use crate::ui::graphics::{self, typeset::Rgb, Pictured, Typesetting};
 use crate::ui::wrap::WrappedText;
 
 use super::maths::{self, MathBlock, MathStyle};
 
 /// The image backend, returning terminal-cell rows for one formula.
-type Picture = fn(Typesetting, Rgb, u16) -> Option<Vec<Line<'static>>>;
+type Picture = fn(Typesetting, Rgb, u16) -> Option<Pictured>;
 
 /// Render each value in its own representation, without converting text into TeX.
 pub fn lines(
@@ -21,7 +21,11 @@ pub fn lines(
     groups: &Groups,
     style: MathStyle,
 ) -> Vec<Line<'static>> {
-    Block::value(value, width.max(1), groups, style, None, graphics::typeset).lines
+    let picture: Picture = match value {
+        M2Value::Tex { .. } => graphics::typeset_alone,
+        _ => graphics::typeset,
+    };
+    Block::value(value, width.max(1), groups, style, None, picture).lines
 }
 
 /// The pieces of a type annotation, which carry their own spacing, set together:
@@ -189,27 +193,25 @@ impl Block {
                 if let Some(tex) = source
                     .strip_prefix('$')
                     .and_then(|tex| tex.strip_suffix('$'))
+                    .map(maths::pictured_tex)
                 {
                     let fg = text_ink(HLGroup::Value).fg;
                     if let Some(Color::Rgb(r, g, b)) = fg {
                         let painted = match ink {
-                            Some(_) => tex.to_string(),
-                            None => maths::colored_tex(tex, groups),
+                            Some(_) => tex.clone(),
+                            None => maths::colored_tex(&tex, groups),
                         };
                         let formula = Typesetting {
-                            tex,
+                            tex: &tex,
                             painted: &painted,
                             code,
                         };
-                        if let Some(lines) = picture(
+                        if let Some(Pictured { lines, baseline }) = picture(
                             formula,
                             Rgb([r, g, b]),
                             u16::try_from(width).unwrap_or(u16::MAX),
                         ) {
-                            return Self {
-                                baseline: lines.len().saturating_sub(1) / 2,
-                                lines,
-                            };
+                            return Self { lines, baseline };
                         }
                     }
                 }
@@ -252,6 +254,7 @@ impl Block {
                 let rows = Self::pack(entries, budget);
                 let count = rows.len();
                 let mut lines = Vec::new();
+                let mut baseline = None;
                 for (index, row) in rows.into_iter().enumerate() {
                     let left = if index == 0 {
                         row.fence(open, groups, ink)
@@ -263,10 +266,11 @@ impl Block {
                     if let Some(right) = right {
                         row = row.beside(right);
                     }
+                    baseline = (count == 1).then_some(row.baseline);
                     lines.extend(row.lines);
                 }
                 Self {
-                    baseline: lines.len().saturating_sub(1) / 2,
+                    baseline: baseline.unwrap_or(lines.len().saturating_sub(1) / 2),
                     lines,
                 }
             }
@@ -299,7 +303,7 @@ impl Block {
                             ink,
                             picture,
                         )
-                        .beside(Self::text(" ⇒ ", text_ink(HLGroup::Operator)))
+                        .beside(Self::text(SPACED_OPTION_ARROW, text_ink(HLGroup::Operator)))
                         .beside(Self::value(
                             value,
                             width.saturating_sub(4).max(1),
@@ -358,7 +362,10 @@ mod tests {
             assert_eq!(formula.tex, "R");
             assert_eq!(formula.painted, "R");
             assert_eq!(formula.code, "R");
-            Some(vec![Line::raw("R")])
+            Some(Pictured {
+                lines: vec![Line::raw("R")],
+                baseline: 0,
+            })
         };
         let block = Block::value(&value, 80, &groups, style, None, picture);
         assert_eq!(text(&block.lines), ["R"]);
@@ -371,9 +378,68 @@ mod tests {
             .all(|span| span.style == groups.style(HLGroup::Type)));
     }
 
-    fn picture(formula: Typesetting, _: Rgb, _: u16) -> Option<Vec<Line<'static>>> {
+    #[test]
+    fn an_option_arrow_is_pictured_long() {
+        let groups = Groups::default();
+        let value = M2Value::Tex {
+            source: r"$a\ \Rightarrow \ 1$".into(),
+            fallback: "a => 1".into(),
+            code: "a => 1".into(),
+        };
+        let picture: Picture = |formula, _, _| {
+            Some(Pictured {
+                lines: vec![Line::raw(formula.tex.to_string())],
+                baseline: 0,
+            })
+        };
+        let block = Block::value(&value, 80, &groups, MathStyle::default(), None, picture);
+        assert_eq!(text(&block.lines), [r"a\ \Longrightarrow \ 1"]);
+    }
+
+    #[test]
+    fn the_imaginary_unit_is_pictured_upright() {
+        let groups = Groups::default();
+        let value = M2Value::Tex {
+            source: r"${2}\,\mathbf{i}$".into(),
+            fallback: "2*ii".into(),
+            code: "2*ii".into(),
+        };
+        let picture: Picture = |formula, _, _| {
+            Some(Pictured {
+                lines: vec![Line::raw(formula.tex.to_string())],
+                baseline: 0,
+            })
+        };
+        let block = Block::value(&value, 80, &groups, MathStyle::default(), None, picture);
+        assert_eq!(text(&block.lines), [r"{2}\,\mathrm{i}"]);
+    }
+
+    fn picture(formula: Typesetting, _: Rgb, _: u16) -> Option<Pictured> {
         assert_eq!(formula.tex, r"\frac{2}{3}");
-        Some(vec![Line::raw("2"), Line::raw("─"), Line::raw("3")])
+        Some(Pictured {
+            lines: vec![Line::raw("2"), Line::raw("─"), Line::raw("3")],
+            baseline: 1,
+        })
+    }
+
+    #[test]
+    fn a_table_key_lines_up_with_the_baseline_of_a_tall_value() {
+        let groups = Groups::default();
+        let value = M2Value::HashTable(vec![[
+            M2Value::Net("key".into()),
+            M2Value::Tex {
+                source: r"$\frac{2}{3}$".into(),
+                fallback: "2/3".into(),
+                code: "2/3".into(),
+            },
+        ]]);
+        let block = Block::value(&value, 80, &groups, MathStyle::default(), None, picture);
+        let drawn = text(&block.lines);
+        assert_eq!(drawn.len(), 3);
+        assert!(
+            drawn[1].contains("key") && drawn[1].contains("─"),
+            "{drawn:?}"
+        );
     }
 
     fn text(lines: &[Line<'_>]) -> Vec<String> {
@@ -437,9 +503,13 @@ mod tests {
                 .spans
                 .iter()
                 .any(|span| span.content == "2/3" && span.style == groups.style(HLGroup::String)));
-            assert!(block.lines[1].spans.iter().any(
-                |span| span.content == "null" && span.style == groups.style(HLGroup::Constant)
-            ));
+            assert!(
+                block.lines[1]
+                    .spans
+                    .iter()
+                    .any(|span| span.content == "null"
+                        && span.style == groups.style(HLGroup::Builtin))
+            );
         }
     }
 
