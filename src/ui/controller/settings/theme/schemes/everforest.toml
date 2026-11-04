@@ -125,7 +125,7 @@ Bg0 = { bg = "bg0" }
 Bg1 = { bg = "bg_dim" }
 Bg2 = { bg = "bg1" }
 Bg3 = { bg = "bg_visual" }
-Bg4 = { bg = "bg1" }
+Bg4 = { bg = "bg2" }
 Boolean = { fg = "purple" }
 Builtin = { fg = "purple" }
 Comment = { fg = "grey1", italic = true }
@@ -149,7 +149,7 @@ Installation = { fg = "green" }
 KeymapActionLabel = { fg = "fg" }
 Keyword = { fg = "red" }
 Macro = { fg = "green" }
-MarkupBrief = { fg = "orange", italic = true }
+MarkupBrief = { fg = "yellow", italic = true }
 MarkupHeading1 = { bold = true, fg = "yellow" }
 MarkupHeading2 = { bold = true, fg = "red" }
 MarkupHeading3 = { bold = true, fg = "orange" }
@@ -161,17 +161,17 @@ Package = { fg = "yellow", italic = true }
 Parameter = { fg = "fg" }
 Picker = { bg = "bg3", fg = "fg" }
 # Preserve the picker's independently styled text and key hints on selection.
-PickerSelected = { bg = "bg_visual" }
+PickerSelected = { bg = "bg_green" }
 PickerSelectedLabel = { fg = "fg", bold = true }
 PickerSelectedMarker = { fg = "aqua" }
 Property = { fg = "blue" }
-Punctuation = { fg = "grey1" }
+Punctuation = { fg = "grey2" }
 Quote = { fg = "yellow" }
 Regex = { fg = "green" }
 Repeat = { fg = "red" }
 SettingsItemDescription = { fg = "fg", italic = true }
 SettingsItemLabel = { fg = "fg" }
-SettingsItemValue = { fg = "grey1" }
+SettingsItemValue = { fg = "grey2" }
 SettingsItemValueSelected = { fg = "aqua", bold = true }
 Statement = { fg = "red" }
 Statusline1 = { fg = "statusline1" }
