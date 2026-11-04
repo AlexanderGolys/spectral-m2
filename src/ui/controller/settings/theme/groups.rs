@@ -8,7 +8,7 @@
 //! channel references, applies colour adjustments, and yields one ratatui [`Style`]
 //! per [`HLGroup`]. Rendering only ever sees the resolved [`Groups`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Index;
 use std::sync::LazyLock;
 #[cfg(not(test))]
@@ -86,10 +86,19 @@ impl GroupDeclarations {
         Self(toml::from_str(DEFAULTS).expect("embedded group declarations must parse"))
     }
 
-    /// Merge a user's declarations over the built-in defaults.
+    /// Merge a user's declarations over the built-in defaults. A capture the user's
+    /// file assigns leaves whichever default group held it, so a copy written before
+    /// a capture moved between defaults keeps loading.
     pub fn parse(source: &str) -> Result<Self, String> {
         let custom: StyleTable = toml::from_str(source).map_err(|e| e.to_string())?;
+        let assigned: HashSet<String> = custom
+            .values()
+            .flat_map(|declaration| declaration.captures.iter().flatten().cloned())
+            .collect();
         let mut declarations = Self::embedded();
+        for captures in declarations.0.values_mut().flat_map(|d| &mut d.captures) {
+            captures.retain(|capture| !assigned.contains(capture));
+        }
         for (name, mut declaration) in custom {
             let original = declarations
                 .0
@@ -604,6 +613,24 @@ mod tests {
         assert_eq!(groups.Picker, Style::new().bold());
         assert!(!groups.RecentOutput.add_modifier.contains(Modifier::BOLD));
         assert!(groups.RecentOutput.sub_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn a_capture_assigned_by_the_user_leaves_its_default_group() {
+        let (capture, _) = GroupDeclarations::embedded().captures().unwrap().remove(0);
+        let moved =
+            GroupDeclarations::parse(&format!("Separator = {{ captures = ['{capture}'] }}"))
+                .unwrap();
+        assert!(moved
+            .captures()
+            .unwrap()
+            .contains(&(capture.clone(), HLGroup::Separator)));
+        assert!(GroupDeclarations::parse(&format!(
+            "Separator = {{ captures = ['{capture}'] }}\nPending = {{ captures = ['{capture}'] }}"
+        ))
+        .err()
+        .unwrap()
+        .contains(&capture));
     }
 
     #[test]

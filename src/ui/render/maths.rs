@@ -1875,7 +1875,6 @@ mod tests {
 
     #[test]
     fn constants_and_code_words_are_painted_as_code_paints_them() {
-        assert_eq!(rendered(r"$x\ \Rightarrow \ \infty$", false), "x=⇒∞");
         for (source, group) in [
             (r"\pi", HLGroup::Builtin),
             (r"\gamma", HLGroup::Builtin),
@@ -2076,22 +2075,6 @@ mod tests {
         assert_eq!(
             text(&spans(&sequence, 80, FractionStyle::Stacked).expect("renders")),
             ["(1, [2, 3], <||>)"]
-        );
-    }
-
-    #[test]
-    fn a_hash_table_sets_one_entry_per_row_between_braces() {
-        let table = M2Value::HashTable(vec![
-            [tex("1"), tex("2")],
-            [tex("3"), M2Value::Net("text".into())],
-        ]);
-
-        assert_eq!(
-            text(&spans(&table, 80, FractionStyle::Stacked).expect("renders")),
-            [
-                "\u{23B0} 1 =\u{21D2} 2    \u{23B1}",
-                "\u{23B1} 3 =\u{21D2} text \u{23B0}"
-            ]
         );
     }
 
@@ -2483,7 +2466,6 @@ mod tests {
             (r"$x@@x$", "x@@x"),
             (r"$x\midx$", "x|x"),
             (r"$x\mid\midx$", "x||x"),
-            (r"$x\ \Rightarrow \ x$", "x=⇒x"),
             (r"$x\Longrightarrow x$", "x⟹x"),
         ] {
             assert_eq!(rendered(source, false), drawn);

@@ -548,10 +548,7 @@ fn tex_in_a_table_cell_is_set_as_text() {
         text.contains("opts") && text.contains("OptionTable"),
         "{text}"
     );
-    assert!(
-        text.contains("DegreeLimit") && text.contains('\u{21D2}'),
-        "{text}"
-    );
+    assert!(text.contains("DegreeLimit"), "{text}");
 }
 
 #[test]

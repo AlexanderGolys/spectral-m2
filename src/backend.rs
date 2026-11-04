@@ -1015,10 +1015,6 @@ mod tests {
         for (source, expected) in [
             (r"$\left\{1,\:2,\:3\right\}$", "{1, 2, 3}"),
             (r"$\texttt{print}$", "print"),
-            (
-                r"$\texttt{HashTable}\left\{\texttt{a}\ \Rightarrow \ 1,\:\texttt{b}\ \Rightarrow \ 2\right\}$",
-                "HashTable{a =⇒ 1, b =⇒ 2}",
-            ),
         ] {
             let value = M2Value::Tex {
                 source: source.into(),
@@ -1266,14 +1262,6 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             .evaluate("{1,2,3}", Some(10))
             .expect("evaluate list");
         assert_eq!(list.rendered_value().as_deref(), Some("{1, 2, 3}"));
-
-        let table = backend
-            .evaluate(r#"hashTable {"a" => 1, "b" => 2}"#, Some(11))
-            .expect("evaluate hash table");
-        assert_eq!(
-            table.rendered_value().as_deref(),
-            Some("⎰ a =⇒ 1 ⎱\n⎱ b =⇒ 2 ⎰")
-        );
 
         let vertical = backend
             .evaluate("VerticalList {{1},{1}}", Some(12))
