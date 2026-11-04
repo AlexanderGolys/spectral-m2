@@ -205,7 +205,7 @@ pub const UI: UiConfig = UiConfig {
         frame_ms: 80,
     },
 
-    typing_prompt_ms: 50,
+    typing_prompt_ms: 200,
     prompt_margin: 2,
     cell_margin: 0,
     cell_gap: 3,

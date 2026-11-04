@@ -511,6 +511,8 @@ pub struct EvaluationBlock {
     id: u64,
     cells: Vec<(Cell, EvaluationState)>,
     outputs: Vec<EvaluationOutput>,
+    /// Whether the code wraps within its results' frame rather than the full width.
+    framed_code: bool,
 }
 
 impl EvaluationBlock {
@@ -547,6 +549,7 @@ impl EvaluationBlock {
                 .map(|(text, spans)| (Cell::rejected(text, spans), EvaluationState::Shown))
                 .collect(),
             outputs: Vec::new(),
+            framed_code: false,
         }
     }
 
@@ -563,6 +566,7 @@ impl EvaluationBlock {
             outputs: vec![EvaluationOutput::Evaluation(Box::new(ErrorMessageBlock {
                 message,
             }))],
+            framed_code: false,
         }
     }
 
@@ -587,7 +591,14 @@ impl EvaluationBlock {
                 })
                 .collect(),
             outputs: Vec::new(),
+            framed_code: false,
         }
+    }
+
+    /// Set the code as wide as its results, as documentation sets its examples.
+    pub fn with_framed_code(mut self) -> Self {
+        self.framed_code = true;
+        self
     }
 
     /// Promote the first unresolved cell when this submission reaches the queue front.
@@ -716,12 +727,27 @@ impl EvaluationBlock {
         )
     }
 
+    /// The columns an output's frame takes.
+    pub fn frame_columns(&self, context: &RenderContext) -> Range<u16> {
+        let width = Rect::new(0, 0, context.width(), 1);
+        let frame = Bordered::area(width, self.layout().frame());
+        frame.left()..frame.right().min(context.width())
+    }
+
+    fn code_width(&self, context: &RenderContext) -> u16 {
+        match self.framed_code {
+            true => self.frame_columns(context).end,
+            false => context.width(),
+        }
+    }
+
     fn code_height(&self, context: &RenderContext) -> u16 {
         let layout = self.layout();
+        let width = self.code_width(context);
         self.cells.iter().fold(1, |height, (cell, state)| {
             let marker = state.marker();
             height.saturating_add(
-                cell.wrapped(context.width().saturating_sub(marker.width(layout)))
+                cell.wrapped(width.saturating_sub(marker.width(layout)))
                     .height(),
             )
         })
@@ -729,6 +755,7 @@ impl EvaluationBlock {
 
     fn code_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
         let layout = self.layout();
+        let code_context = context.with_width(self.code_width(context));
         let mut lines = vec![Line::default()];
         let mut after_error = false;
         for (cell, state) in &self.cells {
@@ -738,7 +765,7 @@ impl EvaluationBlock {
                 cell,
                 state.marker(),
                 layout,
-                context,
+                &code_context,
                 style,
                 !after_error,
             ));
@@ -797,6 +824,7 @@ impl Block for EvaluationBlock {
             .render(Rect::new(area.x, area.y, area.width, code_area_height), buf);
         let layout = self.layout();
         layout.render_separator(code_area_height, context.groups().separator(), buf);
+        let code_width = self.code_width(context);
         let mut row = area.y.saturating_add(1);
         let mut after_error = false;
         for (index, (cell, state)) in self.cells.iter().enumerate() {
@@ -805,7 +833,7 @@ impl Block for EvaluationBlock {
             let style = Self::code_style(state, after_error, context);
             after_error |= failed;
             let next = row.saturating_add(
-                cell.wrapped(context.width().saturating_sub(marker.width(layout)))
+                cell.wrapped(code_width.saturating_sub(marker.width(layout)))
                     .height(),
             );
             if after_error {

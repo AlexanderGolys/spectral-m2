@@ -213,14 +213,11 @@ fn prose(text: &str, group: HLGroup, width: usize) -> Vec<SpanLine> {
 }
 
 /// A value's type annotation as rows no wider than `width`, its pieces set side by
-/// side with each mathematical component retaining its semantic colour.
+/// side in the type colour.
 pub fn annotation(parts: &[M2Value], width: usize, style: impl Into<MathStyle>) -> Vec<SpanLine> {
     let style = style.into();
-    let line = MathBlock::row(parts.iter().map(|part| match part {
-        M2Value::Token { .. } => MathBlock::value(part, style).retag(HLGroup::Type),
-        _ => MathBlock::value(part, style),
-    }));
-    MathBlock::fitted(vec![line], width)
+    let line = MathBlock::row(parts.iter().map(|part| MathBlock::value(part, style)));
+    MathBlock::fitted(vec![line.retag(HLGroup::Type)], width)
 }
 
 /// The TeX between a pair of `$` set on a single row, as running text sets maths:
@@ -729,6 +726,11 @@ impl<'a> Input<'a> {
 
     fn fence(&mut self) -> Result<char, UnsupportedTeX> {
         self.skip_trivia();
+        for (command, fence) in FENCE_COMMANDS {
+            if self.eat(command) {
+                return Ok(fence);
+            }
+        }
         // A brace is escaped in TeX, since a bare one groups.
         self.eat("\\");
         match self.rest().chars().next() {
@@ -805,6 +807,8 @@ const OPERATOR_COMMANDS: [(&str, &str); 19] = [
     ("ldots", "..."),
 ];
 const DELIMITERS: &str = "()[]{}|.";
+/// Fences TeX spells as a command, with the glyph a terminal draws for each.
+const FENCE_COMMANDS: [(&str, char); 2] = [("\\langle", '\u{27E8}'), ("\\rangle", '\u{27E9}')];
 /// The pieces a fence grows from when taller than a row: top, extension, bottom,
 /// and the tip a brace points at its baseline with. These families measure one
 /// column under every terminal convention, unlike the box-drawing set.
@@ -1401,7 +1405,7 @@ impl MathBlock {
         width: usize,
         style: MathStyle,
     ) -> Vec<Self> {
-        let (open, close) = kind.delimiters();
+        let (open, close) = kind.drawn_delimiters();
         let last = items.len().saturating_sub(1);
         let entries = items
             .iter()
@@ -2074,7 +2078,7 @@ mod tests {
 
         assert_eq!(
             text(&spans(&sequence, 80, FractionStyle::Stacked).expect("renders")),
-            ["(1, [2, 3], <||>)"]
+            ["(1, [2, 3], \u{27E8}||\u{27E9})"]
         );
     }
 

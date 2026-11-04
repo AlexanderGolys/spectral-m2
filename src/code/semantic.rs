@@ -70,6 +70,13 @@ pub enum SourceId {
     Pending(u64),
     /// The editable input in an interpreter generation.
     Draft(u64),
+    /// One code block on a documentation page.
+    Page {
+        /// The page.
+        page: u64,
+        /// Position among the page's code blocks.
+        index: usize,
+    },
 }
 
 /// One segment's byte range in the analysis document.
@@ -124,6 +131,8 @@ pub struct SemanticHighlighter {
     spans: HashMap<SourceId, (String, Vec<HLSpan>)>,
     revision: u64,
     client: Option<Client>,
+    /// Every documentation page shown, to analyse again if the server restarts.
+    pages: Vec<Arc<Document>>,
     /// Whether the language server should be running.
     server: bool,
     /// Whether its semantic tokens color source.
@@ -140,6 +149,17 @@ pub struct Polled {
     pub started: Option<ServerInfo>,
     /// Why the language server stopped.
     pub failure: Option<String>,
+    /// Documentation pages whose analysis finished.
+    pub pages: Vec<PageColors>,
+}
+
+/// The semantic colours of a documentation page's code blocks.
+#[derive(Debug, PartialEq)]
+pub struct PageColors {
+    /// The page.
+    pub page: u64,
+    /// Each code block's source with the spans laid over its syntax colours.
+    pub sources: Vec<(String, Vec<HLSpan>)>,
 }
 
 impl SemanticHighlighter {
@@ -151,6 +171,7 @@ impl SemanticHighlighter {
             spans: HashMap::new(),
             revision: 0,
             client: None,
+            pages: Vec::new(),
             server: false,
             semantic: false,
             version: 0,
@@ -170,9 +191,13 @@ impl SemanticHighlighter {
             return false;
         }
         self.semantic = semantic;
-        match (&self.client, &self.document) {
-            (Some(client), Some(document)) if semantic => client.update(document.clone()),
-            _ => {}
+        if let Some(client) = self.client.as_ref().filter(|_| semantic) {
+            if let Some(document) = &self.document {
+                client.update(document.clone());
+            }
+            for page in &self.pages {
+                client.analyse_page(page.clone());
+            }
         }
         if !semantic {
             self.clear_current();
@@ -208,6 +233,20 @@ impl SemanticHighlighter {
         }
     }
 
+    /// Analyse the code blocks of a documentation page as one document, apart from
+    /// the session: a page's definitions are not the session's, nor the reverse.
+    pub fn analyse_page(&mut self, page: u64, sources: Vec<String>) {
+        let mut document = Document::new(page);
+        for (index, source) in sources.iter().enumerate() {
+            document.push(SourceId::Page { page, index }, source);
+        }
+        let document = Arc::new(document);
+        if let Some(client) = self.client.as_ref().filter(|_| self.semantic) {
+            client.analyse_page(document.clone());
+        }
+        self.pages.push(document);
+    }
+
     fn clear_current(&mut self) {
         if let Some(document) = &self.document {
             for segment in &document.segments {
@@ -240,6 +279,28 @@ impl SemanticHighlighter {
                         polled.recolored = true;
                     }
                 }
+                Event::PageTokens {
+                    document,
+                    legend,
+                    tokens,
+                } => {
+                    if self.semantic {
+                        let spans = decode(&document.text, &legend, &tokens);
+                        polled.pages.push(PageColors {
+                            page: document.generation,
+                            sources: document
+                                .segments
+                                .iter()
+                                .map(|segment| {
+                                    (
+                                        document.text[segment.range.clone()].to_string(),
+                                        projected(&spans, &segment.range),
+                                    )
+                                })
+                                .collect(),
+                        });
+                    }
+                }
                 Event::Failed(message) => {
                     self.client = None;
                     self.clear_current();
@@ -259,21 +320,12 @@ impl SemanticHighlighter {
     ) {
         let spans = decode(&document.text, legend, tokens);
         for segment in &document.segments {
-            let first = spans.partition_point(|span| span.content.end <= segment.range.start);
-            let projected = spans[first..]
-                .iter()
-                .take_while(|span| span.content.start < segment.range.end)
-                .filter_map(|span| {
-                    let start = span.content.start.max(segment.range.start);
-                    let end = span.content.end.min(segment.range.end);
-                    (start < end).then(|| {
-                        span.with_content(start - segment.range.start..end - segment.range.start)
-                    })
-                })
-                .collect();
             self.spans.insert(
                 segment.id,
-                (document.text[segment.range.clone()].to_string(), projected),
+                (
+                    document.text[segment.range.clone()].to_string(),
+                    projected(&spans, &segment.range),
+                ),
             );
         }
         self.revision = self.revision.wrapping_add(1);
@@ -318,6 +370,20 @@ impl Highlighter for SemanticHighlighter {
             None => lexical,
         }
     }
+}
+
+/// The parts of a document's `spans` within `segment`, relative to its start.
+fn projected(spans: &[HLSpan], segment: &Range<usize>) -> Vec<HLSpan> {
+    let first = spans.partition_point(|span| span.content.end <= segment.start);
+    spans[first..]
+        .iter()
+        .take_while(|span| span.content.start < segment.end)
+        .filter_map(|span| {
+            let start = span.content.start.max(segment.start);
+            let end = span.content.end.min(segment.end);
+            (start < end).then(|| span.with_content(start - segment.start..end - segment.start))
+        })
+        .collect()
 }
 
 /// `spans` of `old` carried onto `new`, read as one edit of the range between
@@ -509,7 +575,7 @@ fn classify(legend: &SemanticTokensLegend, token: &SemanticToken) -> Option<HLGr
 /// language-server highlights over Tree-sitter ones: a semantic group overrides
 /// what it styles, and an empty one leaves the syntax colour. Semantic spans over
 /// text with no syntax group are drawn as they are.
-fn merge(lexical: Vec<HLSpan>, semantic: &[HLSpan]) -> Vec<HLSpan> {
+pub fn merge(lexical: Vec<HLSpan>, semantic: &[HLSpan]) -> Vec<HLSpan> {
     let overlapping = |range: Range<usize>| {
         let first = semantic.partition_point(|overlay| overlay.content.end <= range.start);
         semantic[first..]
@@ -585,6 +651,35 @@ mod tests {
             token_type: kind,
             token_modifiers_bitset: modifiers,
         }
+    }
+
+    #[test]
+    fn a_pages_tokens_are_projected_onto_its_own_blocks() {
+        let (client, sender) = Client::test_channel();
+        let mut highlighter = SemanticHighlighter::new();
+        highlighter.client = Some(client);
+        highlighter.semantic = true;
+        highlighter.analyse_page(7, vec!["a".to_string(), "bc".to_string()]);
+        let document = highlighter.pages[0].clone();
+        sender
+            .send(Event::PageTokens {
+                document,
+                legend: legend(),
+                tokens: vec![token(1, 0, 2, 1, 0)],
+            })
+            .unwrap();
+        let polled = highlighter.poll();
+        assert_eq!(
+            polled.pages,
+            [PageColors {
+                page: 7,
+                sources: vec![
+                    ("a".to_string(), Vec::new()),
+                    ("bc".to_string(), vec![HLSpan::new(0..2, HLGroup::Type)]),
+                ],
+            }]
+        );
+        assert!(!polled.recolored, "the session's own cells did not change");
     }
 
     fn cell(generation: u64, submission: u64, index: usize) -> SourceId {

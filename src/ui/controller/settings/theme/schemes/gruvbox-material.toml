@@ -171,7 +171,7 @@ Info = { fg = "blue" }
 Installation = { fg = "orange" }
 Keyword = { fg = "red" }
 Macro = { fg = "purple" }
-MarkupBrief = { fg = "yellow", italic = true }
+MarkupBrief = { fg = "orange", italic = true }
 MarkupHeading1 = { bold = true, fg = "orange" }
 MarkupHeading2 = { bold = true, fg = "yellow" }
 MarkupHeading3 = { bold = true, fg = "blue" }

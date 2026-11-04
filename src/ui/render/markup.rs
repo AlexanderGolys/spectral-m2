@@ -19,6 +19,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::maths::{inline, MathStyle, Shift};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
+use crate::code::semantic::PageColors;
 use crate::ui::block::{Link, Text, TextSpan};
 use crate::ui::controller::settings::theme::groups::HLGroup;
 use crate::ui::present::{wrap, SpanLine};
@@ -210,6 +211,19 @@ pub fn remember_example(page_id: u64, number: u32, response: M2Response) {
     DOCUMENTS.with_borrow_mut(|documents| documents.retain(|entry| page(&entry.html) != page_id));
 }
 
+/// Colour a page's code by what its analysis found.
+pub fn remember_colors(colors: PageColors) {
+    let page_id = colors.page;
+    examples::remember_colors(colors);
+    DOCUMENTS.with_borrow_mut(|documents| documents.retain(|entry| page(&entry.html) != page_id));
+}
+
+/// Return every page's code to its syntax colours.
+pub fn forget_colors() {
+    examples::forget_colors();
+    DOCUMENTS.with_borrow_mut(VecDeque::clear);
+}
+
 /// The documentation link drawn at `position` among [`lines`], with every cell
 /// it covers.
 pub fn link_at(
@@ -293,6 +307,21 @@ pub fn page(html: &str) -> u64 {
 
 /// Every example the page records, in the order M2 ran them.
 pub fn examples(html: &str, example_width: usize) -> Vec<ArchivedExample> {
+    preformatted_sources(html)
+        .iter()
+        .flat_map(|source| examples::archived(source, example_width))
+        .collect()
+}
+
+/// The M2 code of every block the page draws as code, in reading order.
+pub fn code_sources(html: &str, example_width: usize) -> Vec<String> {
+    preformatted_sources(html)
+        .iter()
+        .flat_map(|source| examples::code_sources(source, example_width))
+        .collect()
+}
+
+fn preformatted_sources(html: &str) -> Vec<String> {
     let Some(tagged) = layout(html, usize::from(u16::MAX), MathStyle::default().blackboard) else {
         return Vec::new();
     };
@@ -302,7 +331,7 @@ pub fn examples(html: &str, example_width: usize) -> Vec<ArchivedExample> {
         match preformatted(&tagged[index]) {
             Some(_) => {
                 let block = Preformatted::starting(&tagged, index);
-                found.extend(examples::archived(&block.source, example_width));
+                found.push(block.source);
                 index = block.end;
             }
             None => index += 1,
@@ -400,7 +429,7 @@ fn rows(html: &str, example_width: usize, context: &RenderContext) -> Option<Vec
             if let Some(example) = can_embed
                 .then(|| {
                     examples::render(&source, example_width, page, &inner)
-                        .or_else(|| examples::render_code(&source, example_width, &inner))
+                        .or_else(|| examples::render_code(&source, page, &inner))
                 })
                 .flatten()
             {
@@ -858,8 +887,8 @@ fn row(line: &TaggedLine<Vec<RichAnnotation>>) -> SpanLine {
             } else {
                 HLGroup::Value
             });
-            // The title sets its name apart from its brief as prose sets a
-            // name apart from its description.
+            // The title sets its name apart from its brief by weight and slant
+            // alone, where prose mutes a name's description.
             let described_here = !described && (heading.is_none() || level == 1);
             match text.split_once(DESCRIPTION_MARK).filter(|_| described_here) {
                 Some((name, description)) => {
@@ -867,7 +896,7 @@ fn row(line: &TaggedLine<Vec<RichAnnotation>>) -> SpanLine {
                     match heading {
                         Some(_) => vec![
                             TextSpan::new(name, group),
-                            TextSpan::new(DESCRIPTION_MARK, HLGroup::Muted),
+                            TextSpan::new(DESCRIPTION_MARK, group),
                             TextSpan::new(description, HLGroup::MarkupBrief),
                         ],
                         None => vec![

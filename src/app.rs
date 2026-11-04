@@ -28,6 +28,7 @@ use crate::ui::config::UI;
 use crate::ui::controller::{CommittedCells, Editor, EditorUpdate, Reaction, ViewKind};
 use crate::ui::graphics;
 use crate::ui::key::{KeyEvent, Keyboard};
+use crate::ui::render::markup;
 use crate::ui::terminal::ReplTerminal;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(80);
@@ -465,6 +466,15 @@ impl App {
             workspace.editor.language_server(),
             workspace.editor.semantic_highlighting(),
         );
+        let semantic =
+            workspace.editor.language_server() && workspace.editor.semantic_highlighting();
+        if recolored && !semantic {
+            markup::forget_colors();
+            running &= workspace.editor.apply(EditorUpdate::ExamplesComputed);
+        }
+        for (page, sources) in workspace.session.take_pages_to_analyse() {
+            workspace.highlighter.analyse_page(page, sources);
+        }
         let (draft, pending, revision) = workspace.editor.analysis_input();
         let state = (
             workspace.session.source_revision(),
@@ -479,6 +489,11 @@ impl App {
         }
         let polled = workspace.highlighter.poll();
         recolored |= polled.recolored;
+        if !polled.pages.is_empty() {
+            polled.pages.into_iter().for_each(markup::remember_colors);
+            running &= workspace.editor.apply(EditorUpdate::ExamplesComputed);
+            dirty = true;
+        }
         if recolored {
             workspace.editor.rehighlight(&mut workspace.highlighter);
             dirty = true;

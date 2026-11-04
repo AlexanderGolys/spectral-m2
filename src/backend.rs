@@ -208,6 +208,25 @@ impl CollectionKind {
             Self::AngleBarList => ("<|", "|>"),
         }
     }
+
+    /// The delimiters drawn in a terminal, where a font may join M2's `<|` into a
+    /// triangle.
+    pub const fn drawn_delimiters(self) -> (&'static str, &'static str) {
+        match self {
+            Self::AngleBarList => ("\u{27E8}|", "|\u{27E9}"),
+            _ => self.delimiters(),
+        }
+    }
+
+    /// The delimiters that grow around the TeX of this kind's items.
+    pub const fn tex_delimiters(self) -> (&'static str, &'static str) {
+        match self {
+            Self::List | Self::VerticalList => (r"\left\{", r"\right\}"),
+            Self::Array => (r"\left[", r"\right]"),
+            Self::Sequence => (r"\left(", r"\right)"),
+            Self::AngleBarList => (r"\left\langle\!\left|", r"\right|\!\right\rangle"),
+        }
+    }
 }
 
 impl M2Value {
@@ -1669,6 +1688,8 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     /// along their baselines, and as pieces it sets as `Matrix QQ² ⟵ QQ²`.
     #[test]
     fn matrix_types_keep_their_shape() {
+        use crate::ui::controller::settings::theme::groups::HLGroup;
+
         let mut backend = M2Backend::spawn().expect("spawn M2");
         let result = backend
             .evaluate("matrix{{1,2},{3,4/5}}", Some(1))
@@ -1688,6 +1709,10 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             .map(|row| row.iter().map(|span| span.content.as_str()).collect())
             .collect();
         assert_eq!(text, ["Matrix QQ\u{00B2} \u{27F5} QQ\u{00B2}"]);
+        assert!(rows
+            .iter()
+            .flatten()
+            .all(|span| span.content.trim().is_empty() || span.kind == HLGroup::Type));
     }
 
     #[test]

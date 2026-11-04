@@ -124,14 +124,14 @@ Attribute = { fg = "purple" }
 Bg0 = { bg = "bg0" }
 Bg1 = { bg = "bg_dim" }
 Bg2 = { bg = "bg1" }
-Bg3 = { bg = "bg2" }
-Bg4 = { bg = "bg3" }
+Bg3 = { bg = "bg_visual" }
+Bg4 = { bg = "bg1" }
 Boolean = { fg = "purple" }
 Builtin = { fg = "purple" }
 Comment = { fg = "grey1", italic = true }
 CompiledFunction = { fg = "green" }
 Conditional = { fg = "red" }
-Constant = { fg = "orange" }
+Constant = { fg = "fg" }
 Debug = { fg = "orange" }
 Delimiter = { fg = "grey1" }
 Documentation = { fg = "fg" }
@@ -145,29 +145,29 @@ Float = { fg = "purple" }
 Function = { fg = "green" }
 Hint = { fg = "green" }
 Info = { fg = "blue" }
-Installation = { fg = "green" }
+Installation = { fg = "orange" }
 KeymapActionLabel = { fg = "fg" }
 Keyword = { fg = "red" }
-Macro = { fg = "purple" }
+Macro = { fg = "green" }
 MarkupBrief = { fg = "orange", italic = true }
 MarkupHeading1 = { bold = true, fg = "red" }
 MarkupHeading2 = { bold = true, fg = "orange" }
 MarkupHeading3 = { bold = true, fg = "yellow" }
-Muted = { fg = "grey2" }
-Namespace = { fg = "yellow", italic=true }
+Muted = { fg = "grey1" }
+Namespace = { fg = "yellow", italic = true }
 Number = { fg = "purple" }
 Operator = { fg = "orange" }
-Package = { fg = "yellow", italic=true}
+Package = { fg = "yellow", italic = true }
 Parameter = { fg = "fg" }
-Picker = { bg = "bg3", fg = "fg" }
+Picker = { bg = "bg2", fg = "fg" }
 # Preserve the picker's independently styled text and key hints on selection.
 PickerSelected = { bg = "bg_blue" }
 PickerSelectedLabel = { fg = "bright_fg", bold = true }
 PickerSelectedMarker = { fg = "orange" }
 Property = { fg = "blue" }
-Punctuation = { fg = "grey1" }
-Quote = { fg = "red" }
-Regex = { fg = "yellow" }
+Punctuation = { fg = "fg" }
+Quote = { fg = "yellow" }
+Regex = { fg = "green" }
 Repeat = { fg = "red" }
 SettingsItemDescription = { fg = "fg", italic = true }
 SettingsItemLabel = { fg = "fg" }
@@ -184,4 +184,4 @@ Text = { fg = "fg" }
 Type = { fg = "yellow" }
 Variable = { fg = "fg" }
 ViewLabelActive = { fg = "fg" }
-Warning = { fg = "orange" }
+Warning = { fg = "yellow" }

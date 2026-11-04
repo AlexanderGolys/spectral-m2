@@ -1,7 +1,9 @@
 //! Crossterm terminal lifecycle and event input.
 
 use std::fmt;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Stdout, Write};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -13,11 +15,37 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::{execute, Command};
+use nix::unistd::dup2;
 use ratatui::backend::CrosstermBackend;
 use ratatui::{Frame, Terminal};
 
 use crate::errors::Result;
 use crate::ui::graphics;
+
+/// Where stderr goes while the screen is drawn.
+const STDERR_SINK: &str = "/dev/null";
+
+/// Stderr pointed away from the terminal, where whatever a library prints would land
+/// at the cursor and stay on the screen; pointed back on drop.
+struct SilencedStderr {
+    original: OwnedFd,
+}
+
+impl SilencedStderr {
+    fn new() -> io::Result<Self> {
+        let stderr = io::stderr();
+        let original = stderr.as_fd().try_clone_to_owned()?;
+        let sink: File = OpenOptions::new().write(true).open(STDERR_SINK)?;
+        dup2(sink.as_raw_fd(), stderr.as_raw_fd())?;
+        Ok(Self { original })
+    }
+}
+
+impl Drop for SilencedStderr {
+    fn drop(&mut self) {
+        let _ = dup2(self.original.as_raw_fd(), io::stderr().as_raw_fd());
+    }
+}
 
 /// xterm's modifyOtherKeys at the given level. tmux forwards modified keys only to a
 /// pane that asks this way; it ignores the kitty keyboard flags, so without this
@@ -45,6 +73,8 @@ impl Command for ModifyOtherKeys {
 pub struct ReplTerminal {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     active: bool,
+    /// Held while the screen is drawn; none when stderr could not be redirected.
+    silenced_stderr: Option<SilencedStderr>,
 }
 
 impl ReplTerminal {
@@ -76,6 +106,7 @@ impl ReplTerminal {
         Ok(Self {
             terminal,
             active: true,
+            silenced_stderr: SilencedStderr::new().ok(),
         })
     }
 
@@ -123,6 +154,7 @@ impl ReplTerminal {
         if !self.active {
             return Ok(());
         }
+        self.silenced_stderr = None;
         disable_raw_mode()?;
         execute!(
             self.terminal.backend_mut(),
@@ -142,5 +174,30 @@ impl ReplTerminal {
 impl Drop for ReplTerminal {
     fn drop(&mut self) {
         let _ = self.restore();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::MetadataExt;
+
+    use super::*;
+
+    fn stderr_device() -> u64 {
+        let stderr = io::stderr().as_fd().try_clone_to_owned().unwrap();
+        File::from(stderr).metadata().unwrap().rdev()
+    }
+
+    #[test]
+    fn stderr_goes_to_the_sink_until_it_is_restored() {
+        let sink = File::open(STDERR_SINK).unwrap().metadata().unwrap().rdev();
+        let silenced = SilencedStderr::new().unwrap();
+        let during = stderr_device();
+        drop(silenced);
+        assert_eq!(during, sink);
+        let original = stderr_device();
+        let silenced = SilencedStderr::new().unwrap();
+        drop(silenced);
+        assert_eq!(stderr_device(), original);
     }
 }

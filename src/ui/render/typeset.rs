@@ -2,6 +2,7 @@
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthStr;
 
 use crate::backend::{CollectionKind, M2Value, SPACED_OPTION_ARROW};
 use crate::ui::block::Text;
@@ -10,6 +11,11 @@ use crate::ui::graphics::{self, typeset::Rgb, Pictured, Typesetting};
 use crate::ui::wrap::WrappedText;
 
 use super::maths::{self, MathBlock, MathStyle};
+
+/// What M2 sets between the items of a collection.
+const COLLECTION_TEX_SEPARATOR: &str = r",\,";
+/// What M2 prints between the items of a collection.
+const COLLECTION_SEPARATOR: &str = ", ";
 
 /// The image backend, returning terminal-cell rows for one formula.
 type Picture = fn(Typesetting, Rgb, u16) -> Option<Pictured>;
@@ -29,8 +35,7 @@ pub fn lines(
 }
 
 /// The pieces of a type annotation, which carry their own spacing, set together in
-/// the type colour wherever they name words rather than maths:
-/// as one formula with its words in a typewriter font when every piece has a TeX
+/// the type colour: as one formula with its words in a typewriter font when every piece has a TeX
 /// form, so cell boundaries never widen the gaps between them; else side by side.
 pub fn annotation(
     parts: &[M2Value],
@@ -38,17 +43,12 @@ pub fn annotation(
     groups: &Groups,
     style: MathStyle,
 ) -> Vec<Line<'static>> {
-    let is_word = |part: &M2Value| matches!(part, M2Value::Token { .. });
-    let block = |part: &M2Value, ink| {
-        Block::value(part, width.max(1), groups, style, ink, graphics::typeset)
-    };
-    let label = groups.style(HLGroup::Type);
+    let ink = Some(groups.style(HLGroup::Type));
+    let block =
+        |part: &M2Value| Block::value(part, width.max(1), groups, style, ink, graphics::typeset);
     let blocks = match formula(parts) {
-        Some(formula) => vec![block(&formula, parts.iter().any(is_word).then_some(label))],
-        None => parts
-            .iter()
-            .map(|part| block(part, is_word(part).then_some(label)))
-            .collect(),
+        Some(formula) => vec![block(&formula)],
+        None => parts.iter().map(block).collect(),
     };
     Block::pack(blocks, width.max(1))
         .into_iter()
@@ -83,6 +83,42 @@ fn formula(parts: &[M2Value]) -> Option<M2Value> {
         source: format!("${tex}$"),
         fallback,
         code,
+    })
+}
+
+/// A collection of TeX values as one formula, so cell boundaries never widen the gaps
+/// between its items and its fences grow around them; none when an item has no TeX form.
+fn collection_formula(kind: CollectionKind, items: &[M2Value]) -> Option<M2Value> {
+    if kind == CollectionKind::VerticalList || items.is_empty() {
+        return None;
+    }
+    let (tex_open, tex_close) = kind.tex_delimiters();
+    let (open, close) = kind.delimiters();
+    let (mut tex, mut fallback, mut code) = (Vec::new(), Vec::new(), Vec::new());
+    for item in items {
+        let nested = match item {
+            M2Value::Collection { kind, items } => Some(collection_formula(*kind, items)?),
+            _ => None,
+        };
+        let M2Value::Tex {
+            source,
+            fallback: net,
+            code: spelling,
+        } = nested.as_ref().unwrap_or(item)
+        else {
+            return None;
+        };
+        tex.push(source.strip_prefix('$')?.strip_suffix('$')?.to_string());
+        fallback.push(net.clone());
+        code.push(spelling.clone());
+    }
+    Some(M2Value::Tex {
+        source: format!(
+            "${tex_open}{}{tex_close}$",
+            tex.join(COLLECTION_TEX_SEPARATOR)
+        ),
+        fallback: format!("{open}{}{close}", fallback.join(COLLECTION_SEPARATOR)),
+        code: format!("{open}{}{close}", code.join(COLLECTION_SEPARATOR)),
     })
 }
 
@@ -174,6 +210,39 @@ impl Block {
         left.beside(self).beside(right)
     }
 
+    /// The `$`-delimited TeX `source` as a picture, when it can be set in `width`.
+    fn pictured(
+        source: &str,
+        code: &str,
+        width: usize,
+        groups: &Groups,
+        style: MathStyle,
+        ink: Option<Style>,
+        picture: Picture,
+    ) -> Option<Self> {
+        let tex = maths::pictured_tex(source.strip_prefix('$')?.strip_suffix('$')?);
+        let Some(Color::Rgb(r, g, b)) = ink.unwrap_or_else(|| groups.style(HLGroup::Value)).fg
+        else {
+            return None;
+        };
+        let painted = match ink {
+            Some(_) => tex.clone(),
+            None => maths::colored_tex(&tex, groups),
+        };
+        let formula = Typesetting {
+            tex: &tex,
+            painted: &painted,
+            code,
+            matrix_row_spacing_percent: style.matrix_row_spacing_percent,
+        };
+        let Pictured { lines, baseline } = picture(
+            formula,
+            Rgb([r, g, b]),
+            u16::try_from(width).unwrap_or(u16::MAX),
+        )?;
+        Some(Self { lines, baseline })
+    }
+
     fn value(
         value: &M2Value,
         width: usize,
@@ -197,31 +266,10 @@ impl Block {
                 fallback,
                 code,
             } => {
-                if let Some(tex) = source
-                    .strip_prefix('$')
-                    .and_then(|tex| tex.strip_suffix('$'))
-                    .map(maths::pictured_tex)
+                if let Some(block) =
+                    Self::pictured(source, code, width, groups, style, ink, picture)
                 {
-                    let fg = text_ink(HLGroup::Value).fg;
-                    if let Some(Color::Rgb(r, g, b)) = fg {
-                        let painted = match ink {
-                            Some(_) => tex.clone(),
-                            None => maths::colored_tex(&tex, groups),
-                        };
-                        let formula = Typesetting {
-                            tex: &tex,
-                            painted: &painted,
-                            code,
-                            matrix_row_spacing_percent: style.matrix_row_spacing_percent,
-                        };
-                        if let Some(Pictured { lines, baseline }) = picture(
-                            formula,
-                            Rgb([r, g, b]),
-                            u16::try_from(width).unwrap_or(u16::MAX),
-                        ) {
-                            return Self { lines, baseline };
-                        }
-                    }
+                    return block;
                 }
                 let lines = maths::spans(value, width, style).ok().map(|rows| {
                     rows.into_iter()
@@ -250,8 +298,17 @@ impl Block {
                 Self::wrapped(fallback, text_ink(HLGroup::Value), width)
             }
             M2Value::Collection { kind, items } if *kind != CollectionKind::VerticalList => {
-                let (open, close) = kind.delimiters();
-                let budget = width.saturating_sub(open.len() + close.len()).max(1);
+                let whole = collection_formula(*kind, items).and_then(|formula| match &formula {
+                    M2Value::Tex { source, code, .. } => {
+                        Self::pictured(source, code, width, groups, style, ink, picture)
+                    }
+                    _ => None,
+                });
+                if let Some(block) = whole {
+                    return block;
+                }
+                let (open, close) = kind.drawn_delimiters();
+                let budget = width.saturating_sub(open.width() + close.width()).max(1);
                 let entries = items.iter().enumerate().map(|(index, item)| {
                     let entry = Self::value(item, budget, groups, style, ink, picture);
                     if index + 1 < items.len() {
@@ -268,7 +325,7 @@ impl Block {
                     let left = if index == 0 {
                         row.fence(open, groups, ink)
                     } else {
-                        Self::text(&" ".repeat(open.len()), Style::default())
+                        Self::text(&" ".repeat(open.width()), Style::default())
                     };
                     let right = (index + 1 == count).then(|| row.fence(close, groups, ink));
                     let mut row = left.beside(row);
@@ -388,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn the_words_of_an_annotation_are_in_the_type_colour() {
+    fn an_annotation_is_wholly_in_the_type_colour() {
         let groups = Groups::default();
         let word = |text: &str, role| M2Value::Token {
             text: text.into(),
@@ -401,6 +458,15 @@ mod tests {
                 word("Holder", Role::Type),
             ],
             vec![word("free module", Role::String)],
+            // No pictures in this test's terminal, so the maths falls back to rows.
+            vec![
+                word("Matrix", Role::Type),
+                M2Value::Tex {
+                    source: "$R^{2}$".into(),
+                    fallback: "R^2".into(),
+                    code: "R^2".into(),
+                },
+            ],
         ] {
             let lines = annotation(&parts, 80, &groups, MathStyle::default());
             for span in lines.iter().flat_map(|line| &line.spans) {
@@ -506,20 +572,134 @@ mod tests {
             .collect()
     }
 
+    fn tex(source: &str, code: &str) -> M2Value {
+        M2Value::Tex {
+            source: source.into(),
+            fallback: code.into(),
+            code: code.into(),
+        }
+    }
+
+    /// A picture of one row spelling out the formula and the code it copies.
+    fn spelled(formula: Typesetting, _: Rgb, _: u16) -> Option<Pictured> {
+        Some(Pictured {
+            lines: vec![Line::raw(format!("{} = {}", formula.tex, formula.code))],
+            baseline: 0,
+        })
+    }
+
     #[test]
-    fn angle_bar_delimiters_align_with_a_tall_formula_baseline() {
+    fn a_collection_of_formulas_is_one_picture() {
+        let groups = Groups::default();
+        let value = M2Value::Collection {
+            kind: CollectionKind::Array,
+            items: vec![
+                M2Value::Collection {
+                    kind: CollectionKind::AngleBarList,
+                    items: vec![tex("$1$", "1"), tex("$2$", "2")],
+                },
+                M2Value::Collection {
+                    kind: CollectionKind::Sequence,
+                    items: vec![tex("$3$", "3")],
+                },
+            ],
+        };
+        let block = Block::value(&value, 80, &groups, MathStyle::default(), None, spelled);
+        assert_eq!(
+            text(&block.lines),
+            [concat!(
+                r"\left[\left\langle\!\left|1,\,2\right|\!\right\rangle,\,\left(3\right)\right]",
+                " = [<|1, 2|>, (3)]"
+            )]
+        );
+    }
+
+    #[test]
+    fn the_fences_of_a_collection_formula_are_coloured_with_its_items() {
+        let groups = Groups::default();
+        for kind in [
+            CollectionKind::List,
+            CollectionKind::Array,
+            CollectionKind::Sequence,
+            CollectionKind::AngleBarList,
+        ] {
+            let Some(M2Value::Tex { source, .. }) =
+                collection_formula(kind, &[tex("$1$", "1"), tex("$2$", "2")])
+            else {
+                panic!("a formula for {kind:?}");
+            };
+            let tex = source.trim_matches('$');
+            assert_ne!(maths::colored_tex(tex, &groups), tex, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_collection_with_text_is_drawn_item_by_item() {
         let groups = Groups::default();
         let value = M2Value::Collection {
             kind: CollectionKind::AngleBarList,
-            items: vec![M2Value::Tex {
-                source: r"$\frac{2}{3}$".into(),
-                fallback: "2/3".into(),
-                code: "2/3".into(),
-            }],
+            items: vec![
+                tex(r"$\frac{2}{3}$", "2/3"),
+                M2Value::Token {
+                    text: "null".into(),
+                    role: Role::Null,
+                },
+            ],
         };
         let block = Block::value(&value, 80, &groups, MathStyle::default(), None, picture);
-        assert_eq!(text(&block.lines), ["  2  ", "<|─|>", "  3  "]);
+        let drawn = text(&block.lines);
         assert_eq!(block.baseline, 1);
+        assert!(
+            drawn[1].starts_with("\u{27E8}|─, null|\u{27E9}"),
+            "{drawn:?}"
+        );
+    }
+
+    #[test]
+    fn a_collection_too_wide_to_picture_is_drawn_item_by_item() {
+        let groups = Groups::default();
+        let value = M2Value::Collection {
+            kind: CollectionKind::Sequence,
+            items: vec![tex("$1$", "1"), tex("$2$", "2")],
+        };
+        let wholes_refused: Picture = |formula, _, _| {
+            (!formula.tex.contains(r"\left")).then(|| Pictured {
+                lines: vec![Line::raw(formula.tex.to_string())],
+                baseline: 0,
+            })
+        };
+        let block = Block::value(
+            &value,
+            80,
+            &groups,
+            MathStyle::default(),
+            None,
+            wholes_refused,
+        );
+        assert_eq!(text(&block.lines), ["(1, 2)"]);
+    }
+
+    #[test]
+    fn a_line_of_angle_bar_items_wraps_under_its_first_item() {
+        let groups = Groups::default();
+        let value = M2Value::Collection {
+            kind: CollectionKind::AngleBarList,
+            items: ["aaaa", "bbbb"]
+                .map(|text| M2Value::Token {
+                    text: text.into(),
+                    role: Role::String,
+                })
+                .to_vec(),
+        };
+        let block = Block::value(&value, 10, &groups, MathStyle::default(), None, picture);
+        let drawn = text(&block.lines);
+        assert_eq!(drawn.len(), 2, "{drawn:?}");
+        let (open, _) = CollectionKind::AngleBarList.drawn_delimiters();
+        assert!(drawn[1].starts_with(&" ".repeat(open.width())), "{drawn:?}");
+        assert!(
+            block.lines.iter().all(|line| line.width() <= 10),
+            "{drawn:?}"
+        );
     }
 
     #[test]
@@ -566,7 +746,7 @@ mod tests {
     }
 
     #[test]
-    fn annotation_formulas_keep_component_colours() {
+    fn annotation_formulas_are_wholly_in_the_type_colour() {
         let groups = Groups::default();
         let parts = [M2Value::Tex {
             source: r"$\texttt{Proj}\left({\mathbb R}_{53}\left[x_1\right]\right)$".into(),
@@ -574,30 +754,16 @@ mod tests {
             code: "Proj(RR_53[x_1])".into(),
         }];
         let rows = maths::annotation(&parts, 80, MathStyle::default());
+        assert!(rows
+            .iter()
+            .flatten()
+            .all(|span| span.content.trim().is_empty() || span.kind == HLGroup::Type));
         let drawn = annotation(&parts, 80, &groups, MathStyle::default());
-        for kind in [
-            HLGroup::Type,
-            HLGroup::Variable,
-            HLGroup::Number,
-            HLGroup::Delimiter,
-        ] {
-            assert!(rows.iter().flatten().any(|span| span.kind == kind));
-            assert!(drawn
-                .iter()
-                .flat_map(|line| &line.spans)
-                .any(|span| span.style == groups.style(kind)));
-        }
-        let joined = formula(&parts).expect("a combined annotation formula");
-        let M2Value::Tex { source, .. } = joined else {
-            panic!("an annotation formula has TeX");
-        };
-        let painted = maths::colored_tex(source.trim_matches('$'), &groups);
-        for kind in [HLGroup::Variable, HLGroup::Number, HLGroup::Delimiter] {
-            let Some(Color::Rgb(r, g, b)) = groups.style(kind).fg else {
-                panic!("an RGB component colour");
-            };
-            assert!(painted.contains(&format!(r"\color{{#{r:02x}{g:02x}{b:02x}}}")));
-        }
+        assert!(drawn.iter().flat_map(|line| &line.spans).all(|span| span
+            .content
+            .trim()
+            .is_empty()
+            || span.style == groups.style(HLGroup::Type)));
     }
 
     #[test]

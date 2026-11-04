@@ -19,7 +19,8 @@ use unicode_width::UnicodeWidthStr;
 use crate::backend::transcript::{captured_error, strip_m2_location};
 use crate::backend::{M2Response, M2Value};
 use crate::code::highlight::Highlighter;
-use crate::ui::block::Block;
+use crate::code::semantic::{merge, PageColors};
+use crate::ui::block::{Block, HLSpan};
 use crate::ui::cell::{response_blocks, CellState, EvaluationBlock, OutputBlock, TextBlock};
 use crate::ui::config::UI;
 use crate::ui::render::{RenderContext, RECENT_OUTPUTS};
@@ -35,6 +36,29 @@ static OUTPUT: LazyLock<Regex> = LazyLock::new(|| {
 thread_local! {
     /// What examples answered when computed again, by page and input number.
     static COMPUTED: RefCell<HashMap<(u64, u32), Rc<M2Response>>> = RefCell::default();
+    /// What a page's analysis found in its code, by page and source.
+    static COLORS: RefCell<HashMap<u64, HashMap<String, Vec<HLSpan>>>> = RefCell::default();
+}
+
+pub fn remember_colors(colors: PageColors) {
+    COLORS.with_borrow_mut(|known| {
+        known.insert(colors.page, colors.sources.into_iter().collect());
+    });
+}
+
+pub fn forget_colors() {
+    COLORS.with_borrow_mut(HashMap::clear);
+}
+
+/// `source` of `page` in its syntax colours, under what analysis found in it.
+fn highlighted(page: u64, source: &str) -> Vec<HLSpan> {
+    let lexical = CODE.with_borrow_mut(|highlighter| highlighter.highlight(source));
+    COLORS.with_borrow(
+        |known| match known.get(&page).and_then(|code| code.get(source)) {
+            Some(semantic) => merge(lexical, semantic),
+            None => lexical,
+        },
+    )
 }
 
 /// Keep what example `number` of `page` answered when computed again, to draw
@@ -67,6 +91,21 @@ pub fn archived(source: &str, example_width: usize) -> Vec<ArchivedExample> {
             source: example.source,
         })
         .collect()
+}
+
+/// The M2 code a preformatted block draws: an example transcript's inputs, or
+/// the block itself when it is code shown as typed.
+pub fn code_sources(source: &str, example_width: usize) -> Vec<String> {
+    match transcript(source, example_width) {
+        Some(examples) => examples.into_iter().map(|example| example.source).collect(),
+        None => {
+            let source = source.trim_matches('\n');
+            parse_native(source)
+                .map(|_| source.to_string())
+                .into_iter()
+                .collect()
+        }
+    }
 }
 
 /// Every entry of a stored transcript, which must open with an input.
@@ -200,14 +239,14 @@ impl Example {
     }
 
     /// The example's input, waiting for what it answers.
-    fn input(&self) -> EvaluationBlock {
-        let marked = CODE.with_borrow_mut(|highlighter| highlighter.highlight(&self.source));
-        EvaluationBlock::new(0, [(self.source.clone(), marked)])
+    fn input(&self, page: u64) -> EvaluationBlock {
+        let marked = highlighted(page, &self.source);
+        EvaluationBlock::new(0, [(self.source.clone(), marked)]).with_framed_code()
     }
 
     /// The example answered as `response` says, the way a live cell is.
-    fn computed(&self, response: &M2Response) -> EvaluationBlock {
-        let mut block = self.input();
+    fn computed(&self, page: u64, response: &M2Response) -> EvaluationBlock {
+        let mut block = self.input(page);
         if response.is_error {
             let error = captured_error(&response.transcript, &self.source);
             let printed = (!error.printed.is_empty()).then(|| TextBlock::printed(error.printed));
@@ -228,8 +267,8 @@ impl Example {
     }
 
     /// The example answered as its documentation recorded.
-    fn block(self) -> EvaluationBlock {
-        let mut block = self.input();
+    fn block(self, page: u64) -> EvaluationBlock {
+        let mut block = self.input(page);
         let printed = (!self.printed.is_empty()).then(|| TextBlock::printed(self.printed));
         if let Some(error) = self.error {
             block.fail(0, self.number, printed, error);
@@ -348,8 +387,7 @@ impl Slice {
 }
 
 /// Render a stored example of `page` through the same input, printed, error
-/// and result blocks as a live submission, no wider than the transcript M2
-/// recorded it in. Its code carries no number or separator: an example's input
+/// and result blocks as a live submission. Its code carries no number or separator: an example's input
 /// numbers are its own, not the session's, while its outputs keep the `oN` the
 /// example itself may refer back to. An example computed again is drawn from
 /// what it answered, the rest from what was recorded.
@@ -366,62 +404,47 @@ pub fn render(
     let mut rendered = Vec::new();
     for example in transcript(source, example_width)? {
         let block = match computed(page, example.number) {
-            Some(response) => example.computed(&response),
-            None => example.block(),
+            Some(response) => example.computed(page, &response),
+            None => example.block(page),
         };
-        rendered.extend(painted(&block, example_width, context));
+        rendered.extend(painted(&block, context));
     }
     Some(rendered)
 }
 
 /// M2 code shown as typed, such as a usage, drawn as an example's input is
 /// with nothing following it; `None` for text that is not M2 code.
-pub fn render_code(
-    source: &str,
-    example_width: usize,
-    context: &RenderContext,
-) -> Option<Vec<Line<'static>>> {
+pub fn render_code(source: &str, page: u64, context: &RenderContext) -> Option<Vec<Line<'static>>> {
     let source = source.trim_matches('\n');
     if context.width() < UI.min_number_digits + UI.cell_gap + UI.min_box_width {
         return None;
     }
     parse_native(source).ok()?;
-    let marked = CODE.with_borrow_mut(|highlighter| highlighter.highlight(source));
-    let block = EvaluationBlock::shown([(source.to_string(), marked)]);
-    Some(painted(&block, example_width, context))
+    let marked = highlighted(page, source);
+    let block = EvaluationBlock::shown([(source.to_string(), marked)]).with_framed_code();
+    Some(painted(&block, context))
 }
 
-/// `block` painted no wider than an example transcript, its code's gutter left
-/// empty.
-fn painted(
-    block: &EvaluationBlock,
-    example_width: usize,
-    context: &RenderContext,
-) -> Vec<Line<'static>> {
-    const INSET: u16 = 2;
-    let gutter = block.code_gutter(context);
-    let width = u16::try_from(example_width)
-        .unwrap_or(u16::MAX)
-        .saturating_add(gutter.width)
-        .min(context.width())
-        .saturating_sub(INSET * 2);
+/// `block` painted with its code's gutter left empty and its code's surface
+/// kept to the columns its results' frame takes.
+fn painted(block: &EvaluationBlock, context: &RenderContext) -> Vec<Line<'static>> {
     let context = context
-        .with_width(width)
         .full_output()
         .with_recent_outputs([None; RECENT_OUTPUTS]);
     let area = Rect::new(0, 0, context.width(), block.height(&context));
     let mut buffer = Buffer::empty(area);
     block.render_local(&context, &mut buffer);
-    for position in block.code_gutter(&context).positions() {
+    let gutter = block.code_gutter(&context);
+    for position in gutter.positions() {
         buffer[position].set_symbol(" ");
     }
+    let frame = block.frame_columns(&context);
+    for y in 0..gutter.height {
+        for x in (0..area.width).filter(|x| !frame.contains(x)) {
+            buffer[(x, y)].reset();
+        }
+    }
     buffer_lines(&buffer)
-        .into_iter()
-        .map(|mut line| {
-            line.spans.insert(0, Span::raw(" ".repeat(INSET.into())));
-            line
-        })
-        .collect()
 }
 
 /// The rows of `buffer` as lines. A colour no block painted is left unset, so
@@ -457,6 +480,7 @@ fn buffer_lines(buffer: &Buffer) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::controller::settings::theme::groups::HLGroup;
 
     /// The print width M2 runs documentation examples at.
     const EXAMPLE_WIDTH: usize = 77;
@@ -671,16 +695,31 @@ mod tests {
             .any(|span| span.style.bg == groups.code().bg && span.content.contains("2")));
     }
 
+    /// The columns of `line` that have a background or a visible character.
+    fn drawn_columns(line: &Line<'_>) -> Vec<usize> {
+        let mut x = 0;
+        let mut columns = Vec::new();
+        for span in &line.spans {
+            for ch in span.content.chars() {
+                if span.style.bg.is_some() || !ch.is_whitespace() {
+                    columns.push(x);
+                }
+                x += 1;
+            }
+        }
+        columns
+    }
+
     #[test]
-    fn code_examples_share_the_transcript_width_and_wrap_in_narrow_panes() {
-        let wide = render_code("f + g", EXAMPLE_WIDTH, &RenderContext::new(100, 0)).unwrap();
-        let other = render_code("a * f", EXAMPLE_WIDTH, &RenderContext::new(100, 0)).unwrap();
-        assert!(wide.iter().all(|line| line.width() == other[0].width()));
-        assert!(wide[0].width() > 30);
+    fn code_examples_fill_the_documentation_and_wrap_in_narrow_panes() {
+        let wide_pane = EXAMPLE_WIDTH as u16 * 2;
+        let wide = render_code("f + g", UNCOMPUTED, &RenderContext::new(wide_pane, 0)).unwrap();
+        let surface = drawn_columns(&wide[0]);
+        assert!(*surface.last().unwrap() > EXAMPLE_WIDTH);
 
         let narrow = render_code(
             "result = veryLongIdentifier + anotherLongIdentifier",
-            EXAMPLE_WIDTH,
+            UNCOMPUTED,
             &RenderContext::new(24, 0),
         )
         .unwrap();
@@ -689,11 +728,74 @@ mod tests {
         let joined: String = text.chars().filter(|ch| !ch.is_whitespace()).collect();
         assert!(joined.contains("veryLongIdentifier"), "{text}");
         assert!(joined.contains("anotherLongIdentifier"), "{text}");
-        for line in &narrow {
-            assert_eq!(line.spans[0].content.as_ref(), "  ");
-            assert_eq!(line.spans[0].style.bg, None);
-            assert_eq!(line.width(), 22);
-        }
+    }
+
+    #[test]
+    fn code_and_its_result_take_the_same_columns() {
+        let context = RenderContext::new(100, 0);
+        let lines = render(
+            "i1 : 2+2\n\no1 = 4\n\no1 : ZZ",
+            EXAMPLE_WIDTH,
+            UNCOMPUTED,
+            &context,
+        )
+        .unwrap();
+        let columns = |line: &Line<'_>| {
+            let drawn = drawn_columns(line);
+            *drawn.first().unwrap()..=*drawn.last().unwrap()
+        };
+        let code = lines
+            .iter()
+            .find(|line| line.to_string().contains("2+2"))
+            .expect("the code is drawn");
+        let top_border = lines
+            .iter()
+            .find(|line| line.to_string().contains('╭'))
+            .expect("the result is framed");
+        assert_eq!(columns(code), columns(top_border));
+    }
+
+    #[test]
+    fn a_long_line_of_code_wraps_inside_the_frame_with_nothing_lost() {
+        let source = "first + second + third + fourth + fifth + sixth + seventh";
+        let lines = render_code(source, UNCOMPUTED, &RenderContext::new(30, 0)).unwrap();
+        let text: String = lines.iter().map(ToString::to_string).collect();
+        let squeezed = |text: &str| text.split_whitespace().collect::<String>();
+        assert!(squeezed(&text).contains(&squeezed(source)), "{text}");
+    }
+
+    #[test]
+    fn analysis_colours_a_pages_code_over_its_syntax_colours() {
+        let page = 11;
+        let source = "R = QQ[x]";
+        let shown = |page| {
+            highlighted(page, source)
+                .iter()
+                .find(|span| span.content.contains(&source.find("QQ").unwrap()))
+                .and_then(|span| span.mark)
+        };
+        remember_colors(PageColors {
+            page,
+            sources: vec![(source.to_string(), vec![HLSpan::new(4..6, HLGroup::Type)])],
+        });
+        assert_eq!(shown(page), Some(HLGroup::Type));
+        assert_eq!(
+            shown(UNCOMPUTED),
+            None,
+            "other pages keep their own colours"
+        );
+        forget_colors();
+        assert_eq!(shown(page), None);
+    }
+
+    #[test]
+    fn a_pages_code_is_its_inputs_or_the_code_it_shows() {
+        assert_eq!(
+            code_sources("i1 : 2+2\n\no1 = 4\n\ni2 : 3+3\n", EXAMPLE_WIDTH),
+            ["2+2", "3+3"]
+        );
+        assert_eq!(code_sources("\nf x\n", EXAMPLE_WIDTH), ["f x"]);
+        assert!(code_sources("not ( code", EXAMPLE_WIDTH).is_empty());
     }
 
     #[test]

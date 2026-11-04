@@ -1,6 +1,8 @@
 //! Optional stdio language-server process, isolated from the terminal thread.
 
+use std::collections::VecDeque;
 use std::io::BufReader;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -40,12 +42,19 @@ pub(super) enum Event {
         legend: SemanticTokensLegend,
         tokens: Vec<lsp_types::SemanticToken>,
     },
+    /// The tokens of a documentation page, analysed apart from the session.
+    PageTokens {
+        document: Arc<Document>,
+        legend: SemanticTokensLegend,
+        tokens: Vec<lsp_types::SemanticToken>,
+    },
     Failed(String),
 }
 
 #[derive(Default)]
 struct Mailbox {
     latest: Option<(Arc<Document>, Instant)>,
+    pages: VecDeque<Arc<Document>>,
     stop: bool,
 }
 
@@ -99,6 +108,11 @@ impl Client {
 
     pub(super) fn update(&self, document: Arc<Document>) {
         self.mailbox.lock().unwrap().latest = Some((document, Instant::now()));
+    }
+
+    /// Queue a documentation page. Unlike the session's edits, none supersedes another.
+    pub(super) fn analyse_page(&self, page: Arc<Document>) {
+        self.mailbox.lock().unwrap().pages.push_back(page);
     }
 
     pub(super) fn poll(&self) -> Vec<Event> {
@@ -226,6 +240,36 @@ struct OpenDocument {
     uri: String,
 }
 
+/// A semantic-token request awaiting its response. A page's document is open only
+/// for this request, so it carries the URI to close.
+struct InFlight {
+    id: RequestId,
+    document: Arc<Document>,
+    sent: Instant,
+    page_uri: Option<String>,
+}
+
+/// A URI for source no file holds, beside the workspace so the server resolves
+/// packages as it would for the workspace's own files.
+fn scratch_uri(root: &Path, kind: &str, generation: u64) -> Result<String, String> {
+    let path = root.join(format!(
+        ".spectral-{kind}-{}-{generation}.m2",
+        std::process::id()
+    ));
+    url::Url::from_file_path(path)
+        .map(|uri| uri.to_string())
+        .map_err(|_| "cannot form source URI".to_string())
+}
+
+fn next_request_id(next_id: &mut i32) -> Result<i32, String> {
+    let id = *next_id;
+    *next_id = next_id
+        .checked_add(1)
+        .filter(|id| *id < i32::MAX)
+        .ok_or("LSP request identifiers exhausted")?;
+    Ok(id)
+}
+
 fn supports_full(full: &Option<lsp_types::SemanticTokensFullOptions>) -> bool {
     matches!(
         full,
@@ -275,7 +319,8 @@ fn serve(
     let mut latest = None;
     let mut open: Option<OpenDocument> = None;
     let mut next_id = 1i32;
-    let mut in_flight: Option<(RequestId, Arc<Document>, Instant)> = None;
+    let mut pages = VecDeque::new();
+    let mut in_flight: Option<InFlight> = None;
     loop {
         {
             let mut mailbox = mailbox.lock().unwrap();
@@ -294,17 +339,18 @@ fn serve(
                 latest = Some(document.0.clone());
                 pending = Some(document);
             }
+            pages.append(&mut mailbox.pages);
         }
         if !initialized && started.elapsed() >= timeout {
             return Err("language-server initialization timed out".to_string());
         }
         if in_flight
             .as_ref()
-            .is_some_and(|(_, _, sent)| sent.elapsed() >= timeout)
+            .is_some_and(|request| request.sent.elapsed() >= timeout)
         {
             return Err("semantic-token request timed out".to_string());
         }
-        if initialized && legend.is_none() && pending.is_some() {
+        if initialized && legend.is_none() && (pending.is_some() || !pages.is_empty()) {
             return Err("language server does not support full semantic tokens".to_string());
         }
         if initialized
@@ -326,14 +372,7 @@ fn serve(
                         json!({ "textDocument": { "uri": opened.uri } }),
                     )?;
                 }
-                let path = root.join(format!(
-                    ".spectral-session-{}-{}.m2",
-                    std::process::id(),
-                    document.generation
-                ));
-                let uri = url::Url::from_file_path(path)
-                    .map_err(|_| "cannot form session URI".to_string())?
-                    .to_string();
+                let uri = scratch_uri(&root, "session", document.generation)?;
                 process.notify(DidOpenTextDocument::METHOD, json!({ "textDocument": {
                     "uri": uri, "languageId": "macaulay2", "version": document.version, "text": document.text
                 }}))?;
@@ -349,17 +388,38 @@ fn serve(
                 }))?;
                 open.as_mut().unwrap().version = document.version;
             }
-            let id = next_id;
-            next_id = next_id
-                .checked_add(1)
-                .filter(|id| *id < i32::MAX)
-                .ok_or("LSP request identifiers exhausted")?;
+            let id = next_request_id(&mut next_id)?;
             process.request(
                 id,
                 SemanticTokensFullRequest::METHOD,
                 json!({ "textDocument": { "uri": open.as_ref().unwrap().uri } }),
             )?;
-            in_flight = Some((id.into(), document, Instant::now()));
+            in_flight = Some(InFlight {
+                id: id.into(),
+                document,
+                sent: Instant::now(),
+                page_uri: None,
+            });
+        }
+        if initialized && in_flight.is_none() {
+            if let Some(document) = pages.pop_front() {
+                let uri = scratch_uri(&root, "page", document.generation)?;
+                process.notify(DidOpenTextDocument::METHOD, json!({ "textDocument": {
+                    "uri": uri, "languageId": "macaulay2", "version": document.version, "text": document.text
+                }}))?;
+                let id = next_request_id(&mut next_id)?;
+                process.request(
+                    id,
+                    SemanticTokensFullRequest::METHOD,
+                    json!({ "textDocument": { "uri": uri } }),
+                )?;
+                in_flight = Some(InFlight {
+                    id: id.into(),
+                    document,
+                    sent: Instant::now(),
+                    page_uri: Some(uri),
+                });
+            }
         }
         match process.incoming.recv_timeout(WORKER_INTERVAL) {
             Ok(WireEvent::Message(Message::Response(response)))
@@ -405,12 +465,19 @@ fn serve(
             Ok(WireEvent::Message(Message::Response(response))) => {
                 if in_flight
                     .as_ref()
-                    .is_none_or(|(id, _, _)| *id != response.id)
+                    .is_none_or(|request| request.id != response.id)
                 {
                     continue;
                 }
-                let (_, document, _) = in_flight.take().unwrap();
-                if latest
+                let InFlight {
+                    document, page_uri, ..
+                } = in_flight.take().unwrap();
+                if let Some(uri) = &page_uri {
+                    process.notify(
+                        DidCloseTextDocument::METHOD,
+                        json!({ "textDocument": { "uri": uri } }),
+                    )?;
+                } else if latest
                     .as_ref()
                     .is_some_and(|latest| latest.version != document.version)
                 {
@@ -426,10 +493,18 @@ fn serve(
                         .map_err(|error| format!("invalid semantic tokens: {error}"))?
                         .data
                 };
-                let _ = events.send(Event::Tokens {
-                    document,
-                    legend: legend.as_ref().unwrap().clone(),
-                    tokens,
+                let legend = legend.as_ref().unwrap().clone();
+                let _ = events.send(match page_uri {
+                    Some(_) => Event::PageTokens {
+                        document,
+                        legend,
+                        tokens,
+                    },
+                    None => Event::Tokens {
+                        document,
+                        legend,
+                        tokens,
+                    },
                 });
             }
             Ok(WireEvent::Message(Message::Request(request))) => {
@@ -589,7 +664,9 @@ while True:
                     assert_eq!(tokens.len(), 1);
                 }
                 Event::Failed(error) => panic!("{error}"),
-                Event::Started(_) => panic!("the server starts once"),
+                Event::Started(_) | Event::PageTokens { .. } => {
+                    panic!("the server starts once and only the session was analysed")
+                }
             }
         }
         let before = Instant::now();
@@ -614,9 +691,30 @@ while True:
         match event(&client) {
             Event::Tokens { document, .. } => assert_eq!(document.version, 19),
             Event::Failed(error) => panic!("{error}"),
-            Event::Started(_) => panic!("the server starts once"),
+            Event::Started(_) | Event::PageTokens { .. } => {
+                panic!("the server starts once and only the session was analysed")
+            }
         }
         assert!(client.events.recv_timeout(DEBOUNCE).is_err());
+    }
+
+    #[test]
+    fn every_queued_page_is_analysed_on_its_own() {
+        let client = fixture("normal", REQUEST_TIMEOUT);
+        for page in [7, 8] {
+            client.analyse_page(document(page, 1, "f"));
+        }
+        for page in [7, 8] {
+            match event(&client) {
+                Event::PageTokens {
+                    document, tokens, ..
+                } => {
+                    assert_eq!(document.generation, page);
+                    assert_eq!(tokens.len(), 1);
+                }
+                _ => panic!("page {page} is answered in turn"),
+            }
+        }
     }
 
     #[test]
@@ -626,7 +724,9 @@ while True:
             client.update(document(0, 1, "f"));
             match event(&client) {
                 Event::Failed(error) => assert!(error.contains("timed out"), "{error}"),
-                Event::Tokens { .. } | Event::Started(_) => panic!("fixture must time out"),
+                Event::Tokens { .. } | Event::PageTokens { .. } | Event::Started(_) => {
+                    panic!("fixture must time out")
+                }
             }
         }
     }
@@ -648,6 +748,39 @@ while True:
             REQUEST_TIMEOUT,
         );
         assert!(matches!(event(&client), Event::Failed(_)));
+    }
+
+    #[test]
+    #[ignore = "requires an installed m2-ls executable"]
+    fn installed_server_classifies_a_documentation_page() {
+        let mut highlighter = SemanticHighlighter::new();
+        highlighter.configure(true, true);
+        let (ring, generators) = ("R = QQ[x,y,z];", "matrix{{x,0,2},{1,2,y}}");
+        highlighter.analyse_page(7, vec![ring.to_string(), generators.to_string()]);
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let page = loop {
+            let mut polled = highlighter.poll();
+            assert!(polled.failure.is_none(), "{:?}", polled.failure);
+            if let Some(page) = polled.pages.pop() {
+                break page;
+            }
+            assert!(Instant::now() < deadline, "no real-server tokens");
+            thread::sleep(WORKER_INTERVAL);
+        };
+        assert_eq!(page.page, 7);
+        let kind_of = |source: &str, at: usize| {
+            page.sources
+                .iter()
+                .find(|(text, _)| text == source)
+                .and_then(|(_, spans)| spans.iter().find(|span| span.content.contains(&at)))
+                .map(|span| span.kind)
+        };
+        assert_eq!(kind_of(ring, ring.find("QQ").unwrap()), Some(HLGroup::Type));
+        assert_eq!(
+            kind_of(generators, generators.find("{x").unwrap() + 1),
+            Some(HLGroup::RingGenerator),
+            "generators are known from the earlier block"
+        );
     }
 
     #[test]

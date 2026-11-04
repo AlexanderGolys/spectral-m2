@@ -101,8 +101,8 @@ pub enum EditorUpdate {
     KnownNames(Vec<String>),
     /// Names the session bound since M2 last reported.
     BoundNames(Vec<String>),
-    /// Documentation examples were computed again, so the pages showing them
-    /// draw them differently.
+    /// Documentation examples were computed again or their code analysed, so
+    /// the pages showing them draw them differently.
     ExamplesComputed,
     Pending {
         id: u64,

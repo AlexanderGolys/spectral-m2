@@ -353,6 +353,10 @@ fn the_title_is_ruled_off_with_its_name_apart_from_its_brief() {
         "the ancestors of something".to_string(),
         HLGroup::MarkupBrief
     )));
+    assert!(
+        painted.contains(&(" -- ".to_string(), HLGroup::MarkupHeading1)),
+        "the separator wears the title's colour: {painted:?}"
+    );
 }
 
 #[test]

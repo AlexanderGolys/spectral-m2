@@ -101,6 +101,9 @@ pub struct Session {
     example_timeout: Duration,
     /// The pages whose examples were asked for, so each is computed once.
     computed_pages: HashSet<u64>,
+    /// The pages whose code was handed over for analysis, so each is analysed once.
+    analysed_pages: HashSet<u64>,
+    pages_to_analyse: Vec<(u64, Vec<String>)>,
 }
 
 impl Session {
@@ -128,6 +131,31 @@ impl Session {
             examples: ExampleRunner::new(),
             example_timeout: Duration::ZERO,
             computed_pages: HashSet::new(),
+            analysed_pages: HashSet::new(),
+            pages_to_analyse: Vec::new(),
+        }
+    }
+
+    /// The code of every documentation page first shown since last asked, by page.
+    pub fn take_pages_to_analyse(&mut self) -> Vec<(u64, Vec<String>)> {
+        mem::take(&mut self.pages_to_analyse)
+    }
+
+    fn analyse_page(&mut self, value: Option<&M2Value>) {
+        let Some(M2Value::Markup {
+            html,
+            example_width,
+            ..
+        }) = value
+        else {
+            return;
+        };
+        let page = markup::page(html);
+        if self.analysed_pages.insert(page) {
+            let sources = markup::code_sources(html, *example_width);
+            if !sources.is_empty() {
+                self.pages_to_analyse.push((page, sources));
+            }
         }
     }
 
@@ -576,6 +604,7 @@ impl Session {
                 self.next_input_number = number + 1;
                 let state = CellState::of(&response);
                 self.compute_examples(response.value.as_ref());
+                self.analyse_page(response.value.as_ref());
                 self.committed.push(CommittedCell {
                     source_id: SourceId::Cell {
                         generation: self.generation,

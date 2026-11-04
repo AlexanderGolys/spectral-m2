@@ -305,7 +305,7 @@ impl FrameLayout {
 }
 
 impl Bordered {
-    fn area(area: Rect, layout: FrameLayout) -> Rect {
+    pub fn area(area: Rect, layout: FrameLayout) -> Rect {
         if let BorderPlacement::MiddleThird { content } = layout.placement {
             let left = area.width / 3;
             let third = (area.width.saturating_mul(2) / 3 - left + 1).min(area.width - left);

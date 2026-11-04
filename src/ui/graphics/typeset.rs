@@ -248,7 +248,27 @@ fn display(
         .with_color(Color::rgb(channel(r), channel(g), channel(b)));
     let laid = layout(&ast, &options);
     validate_layout(&laid).map_err(Unset)?;
-    Ok(to_display_list(&laid))
+    let list = to_display_list(&laid);
+    match list.items.iter().find_map(foreign_glyph) {
+        Some(glyph) => Err(Unset(format!("no maths glyph for {glyph:?}"))),
+        None => Ok(list),
+    }
+}
+
+/// The character `item` draws when the maths fonts lack it, as an emoji's: set as a
+/// picture it would come from whichever system font could be found, so it is left to
+/// the terminal, which draws such characters itself.
+fn foreign_glyph(item: &DisplayItem) -> Option<char> {
+    let DisplayItem::GlyphPath {
+        font, char_code, ..
+    } = item
+    else {
+        return None;
+    };
+    FontId::parse(font)
+        .and_then(|font| get_char_metrics(font, *char_code))
+        .is_none()
+        .then(|| char::from_u32(*char_code).unwrap_or(char::REPLACEMENT_CHARACTER))
 }
 
 fn compatible(original: &DisplayItem, painted: &DisplayItem) -> bool {
@@ -349,6 +369,37 @@ mod tests {
         let svg = svg("x", INK).unwrap();
 
         assert!(svg.contains("rgba(18,52,86"));
+    }
+
+    #[test]
+    fn a_collection_formula_may_break_after_its_commas() {
+        for tex in [
+            r"\left(1,\,2,\,3\right)",
+            r"\left\langle\!\left|1,\,2,\,3\right|\!\right\rangle",
+        ] {
+            let typeset = svg_colored(tex, tex, INK, PERCENT_PER_ARRAYSTRETCH).unwrap();
+            assert_eq!(typeset.breaks.len(), 2, "{tex}");
+        }
+    }
+
+    #[test]
+    fn a_glyph_outside_the_maths_fonts_is_not_set() {
+        for tex in ["\u{1F600}", "\\texttt{\u{1F600}}", "1+\\text{\u{4E2D}}"] {
+            assert!(svg(tex, INK).is_err(), "{tex}");
+        }
+    }
+
+    #[test]
+    fn the_maths_fonts_set_every_kind_of_glyph_m2_asks_for() {
+        for tex in [
+            r"\sqrt{x}+\sqrt[3]{\frac{1}{2}}",
+            r"\left\langle\!\left|\begin{pmatrix}1&2\\3&4\\5&6\end{pmatrix},\,1\right|\!\right\rangle",
+            r"\mathbb{Z}\mathfrak{g}\mathcal{O}\mathbf{i}\mathrm{G}\alpha\Gamma\infty\pi",
+            r"\texttt{abc}\textrm{ of }\Longrightarrow\leftarrow\otimes\oplus\cdot\ldots\to",
+            r"\sum_{i=0}^{n}\int_{0}^{1}\prod_{j}\bigoplus_{k}\widetilde{x}\overline{y}\hat{z}",
+        ] {
+            assert!(svg(tex, INK).is_ok(), "{tex}");
+        }
     }
 
     #[test]
