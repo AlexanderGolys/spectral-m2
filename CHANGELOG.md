@@ -4,6 +4,10 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Debugger entry from interactive input no longer gets stranded when M2 cannot display its source; exit commands return to a usable session.
+
 ## [1.2.3] - 2026-11-04
 
 ### Changed

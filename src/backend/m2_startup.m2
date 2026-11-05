@@ -25,6 +25,23 @@ needsPackage "JSON"
 announceReady := (() -> (
     mode := global SpectralTopLevelMode;
 
+    -- The stock debugger hook prints `code current`. Source submitted through
+    -- stdin has no readable file behind it; failure to display it must not
+    -- unwind debugger entry and strand its interpreter. Keep the stock hook's
+    -- inDebugger push/pop behavior, treating its display as best effort.
+    debuggerHookSymbol := Core#"private dictionary"#"debuggerHook";
+    originalDebuggerHook := value debuggerHookSymbol;
+    shield (
+        -- Replacing this hook is intentional. Suppress the function-release
+        -- warning for this symbol only, then restore the normal release hook.
+        releaseHook := Function.GlobalReleaseHook;
+        Function.GlobalReleaseHook = (name, function) -> (
+            if name =!= debuggerHookSymbol then releaseHook(name, function)
+        );
+        debuggerHookSymbol <- (entering -> try originalDebuggerHook entering);
+        Function.GlobalReleaseHook = releaseHook;
+    );
+
     -- The rendered value and type annotation of the statement in flight. The
     -- hooks below only record them; the terminator sends them, because a
     -- statement that throws or ends in `;` never reaches Print, and the frame

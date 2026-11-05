@@ -860,6 +860,31 @@ mod tests {
     }
 
     #[test]
+    fn debugger_exit_commands_finish_and_clear_the_debugger_prompt() {
+        for command in ["break", "end", "continue"] {
+            let mut session = Session::new(M2Backend::spawn().expect("spawn M2"));
+            let mut highlighter = SyntaxHighlighter::new();
+            session.submit("debuggingMode = true;", &mut highlighter);
+            updates_until_idle(&mut session);
+            session.submit("breakpoint \"pause\"", &mut highlighter);
+            updates_until_idle(&mut session);
+            assert!(session.in_debugger());
+            session.submit(command, &mut highlighter);
+            let updates = updates_until_idle(&mut session);
+            assert!(!session.in_debugger(), "{command} left the debugger active");
+            assert!(!updates
+                .iter()
+                .any(|update| matches!(update, EditorUpdate::Exit)));
+            session.submit("6 * 7", &mut highlighter);
+            updates_until_idle(&mut session);
+            assert_eq!(
+                session.committed().last().expect("recovered cell").code,
+                "6 * 7"
+            );
+        }
+    }
+
+    #[test]
     fn process_exit_closes_the_shell_without_running_later_blocks() {
         for code in [
             "quit",

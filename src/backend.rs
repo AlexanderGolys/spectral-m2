@@ -860,6 +860,75 @@ mod tests {
     use unicode_width::UnicodeWidthStr;
 
     #[test]
+    fn debugger_commands_return_to_a_usable_session() {
+        for command in ["break", "end", "continue"] {
+            let mut backend = M2Backend::spawn().expect("spawn M2");
+            let baseline = backend
+                .evaluate_within("debuggingMode = true;", Duration::from_secs(2))
+                .expect("enable debugger");
+            let paused = backend
+                .evaluate_within("breakpoint \"pause\"", Duration::from_secs(2))
+                .expect("enter debugger");
+            assert!(paused.depth > baseline.depth, "{}", paused.transcript);
+            let resumed = backend
+                .evaluate_within(command, Duration::from_secs(2))
+                .expect("leave debugger");
+            assert_eq!(
+                resumed.depth, baseline.depth,
+                "{command}: {}",
+                resumed.transcript
+            );
+            let recovered = backend
+                .evaluate_within("6 * 7", Duration::from_secs(2))
+                .expect("evaluate after debugger");
+            assert!(!recovered.is_error, "{}", recovered.transcript);
+            assert_eq!(recovered.rendered_value().as_deref(), Some("42"));
+        }
+    }
+
+    #[test]
+    fn debugger_can_step_through_a_loaded_function_and_exit() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        let path = M2Backend::config_dir()
+            .expect("test directory")
+            .join("debugger-stepping.m2");
+        fs::write(
+            &path,
+            "debuggingMode = true;\ndebuggerExample = t -> (\n breakpoint t;\n t + 1\n);\n",
+        )
+        .expect("write function source");
+        let baseline = backend
+            .evaluate_within(
+                &format!("load {}", m2_string_literal(path.display())),
+                Duration::from_secs(2),
+            )
+            .expect("load function");
+        assert!(!baseline.is_error, "{}", baseline.transcript);
+        let paused = backend
+            .evaluate_within("debuggerExample 41", Duration::from_secs(2))
+            .expect("enter debugger");
+        assert!(paused.depth > baseline.depth, "{}", paused.transcript);
+        let stepped = backend
+            .evaluate_within("step", Duration::from_secs(2))
+            .expect("step to next expression");
+        assert_eq!(stepped.depth, paused.depth, "{}", stepped.transcript);
+        let inspected = backend
+            .evaluate_within("t", Duration::from_secs(2))
+            .expect("inspect function argument");
+        assert_eq!(inspected.rendered_value().as_deref(), Some("41"));
+        let resumed = backend
+            .evaluate_within("continue", Duration::from_secs(2))
+            .expect("resume function");
+        assert_eq!(resumed.depth, baseline.depth, "{}", resumed.transcript);
+        assert_eq!(resumed.rendered_value().as_deref(), Some("42"));
+        let recovered = backend
+            .evaluate_within("6 * 7", Duration::from_secs(2))
+            .expect("evaluate after stepping");
+        assert!(!recovered.is_error, "{}", recovered.transcript);
+        assert_eq!(recovered.rendered_value().as_deref(), Some("42"));
+    }
+
+    #[test]
     fn cancellation_stops_external_commands_and_preserves_session_state() {
         let mut backend = M2Backend::spawn().expect("spawn M2");
         backend
