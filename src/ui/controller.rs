@@ -13,6 +13,7 @@ use std::env;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use lsp_types::ServerInfo;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
@@ -22,12 +23,12 @@ use ratatui::Frame;
 use self::highlight_debug::{DebugEntry, DebugSection};
 use self::picker::{Picker, PickerController, PickerMode};
 use self::screen::{ScreenCapture, ScreenSelection};
-use self::settings::keymap::{self, Keymaps, Shortcut};
+use self::settings::keymap::{Keymaps, Shortcut};
 use self::settings::statusline::StatusLinePosition;
 use self::settings::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
 use self::settings::theme::Appearance;
 use self::settings::{tabs as settings_tabs, Persisted, SavedSettings, Settings};
-pub use self::view::{CommittedCells, ViewKind, Viewport};
+pub use self::view::{CommittedCells, ReferenceEntry, ViewKind, Viewport};
 use self::{
     commands::Command,
     completion::{Names, Request},
@@ -38,26 +39,35 @@ use super::debug::FrameStats;
 use super::element::EventListener;
 use super::feed::Feed;
 use super::key::{KeyEvent, KeyMod};
+use super::render::maths::MathDisplay;
 use super::render::selection::Inclusions;
 use super::render::RenderContext;
-use super::statusline::{StatusLine, StatusLineContext, StatusLocation};
+use super::statusline::{
+    LanguageServerState, StatusLine, StatusLineContext, StatusLocation, StatusRuntime,
+};
 use super::{
     action::Action,
-    block::{Block, Element, HLSpan, Reformatted, Rethemed, TextSpan, Ticked},
+    block::{Block, Element, HLSpan, Link, Reformatted, Rethemed, TextSpan, Ticked},
 };
 use crate::code::file::abbreviate_home;
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::SEMANTIC_GROUPS;
-use crate::input::InputAction;
 use crate::input::{InputCode, InputContext};
 
 /// An outward effect produced while handling input or an [`Action`].
 pub enum Reaction {
     Continue,
     Submit,
-    ResumeIncomplete,
-    /// Run source beside the input, leaving what is typed there alone.
-    Post(String),
+    /// Show a documentation page apart from the session.
+    Documentation(String),
+    /// Show a linked documentation page in the session feed.
+    DocumentationInFeed(String),
+    /// Browse the archived sessions.
+    BrowseSessions,
+    /// Preview a source file without evaluating it.
+    ViewFile(String),
+    /// Save selected source to a file.
+    SaveSelection(String, String),
     Restart,
     Quit,
     /// Put the current selection on the system clipboard.
@@ -66,6 +76,8 @@ pub enum Reaction {
     ScrollView(i8),
     Open(ViewKind),
     ClosePane,
+    /// Return to the preceding reference without evaluating it again.
+    ReferenceBack,
     /// Write the session's code to the file typed, or where the session is kept
     /// on exit when none was.
     Save(Option<String>),
@@ -137,6 +149,7 @@ pub enum EditorUpdate {
 /// A state change requested by a picker or one of its lines.
 pub enum EditorEvent {
     EditCommand(KeyEvent),
+    ViewFile(String),
     ResumeTyping(char),
     ClosePickers,
     RunCommand(Command),
@@ -179,10 +192,13 @@ impl EditorUpdate {
 /// The transcript feed, live input, and viewport state.
 pub struct Editor {
     feed: Feed,
+    reference: Feed,
+    reference_file: Option<String>,
     input: InputCode,
     settings: Settings,
     keymaps: Keymaps,
     status_line: StatusLine,
+    status_runtime: StatusRuntime,
     continuation: Option<String>,
     processing: bool,
     processing_started: Option<Instant>,
@@ -220,6 +236,8 @@ impl Editor {
         input.set_settings(saved.layout);
         let mut editor = Self {
             feed: Feed::new(Box::new(TextBlock::system(welcome))),
+            reference: Feed::new(Box::new(TextBlock::system(String::new()))),
+            reference_file: None,
             input,
             settings: Settings {
                 appearance,
@@ -230,6 +248,7 @@ impl Editor {
             },
             keymaps: Keymaps::replaying(&saved.rebinds),
             status_line: StatusLine::default(),
+            status_runtime: StatusRuntime::default(),
             continuation: None,
             processing: false,
             processing_started: None,
@@ -254,6 +273,19 @@ impl Editor {
         };
         editor.refresh_status_line();
         editor
+    }
+
+    /// Record the version reported by the session interpreter.
+    pub fn set_m2_version(&mut self, version: String) {
+        self.status_runtime.m2_version = Some(version);
+    }
+
+    /// Record the language server's initialization response, or its failure.
+    pub fn set_language_server_info(&mut self, server: Option<ServerInfo>) {
+        self.status_runtime.language_server = server.map_or(
+            LanguageServerState::Unavailable,
+            LanguageServerState::Running,
+        );
     }
 
     /// Reflect whether this editor's backend currently owns unfinished work.
@@ -344,6 +376,13 @@ impl Editor {
 
     /// Resolve a terminal key through the active command keymaps.
     pub fn resolve_action(&self, key: KeyEvent) -> Option<Action> {
+        if self
+            .pickers
+            .last()
+            .is_some_and(|controller| controller.picker.capturing())
+        {
+            return None;
+        }
         self.keymaps.action(
             key,
             matches!(self.focus(), ElementFocus::Picker(PickerMode::Keymaps)),
@@ -412,7 +451,10 @@ impl Editor {
                 self.names.bind(names);
                 self.input.forget_completion();
             }
-            EditorUpdate::ExamplesComputed => self.feed.on_event(&Reformatted),
+            EditorUpdate::ExamplesComputed => {
+                self.feed.on_event(&Reformatted);
+                self.reference.on_event(&Reformatted);
+            }
             EditorUpdate::Pending { id, cells } => {
                 self.continuation = None;
                 self.input.accept_submission();
@@ -492,17 +534,20 @@ impl Editor {
         self.feed.push_evaluation(block);
     }
 
-    /// Move the feed's unfinished tail back into the live editor.
-    pub fn take_incomplete(&mut self) -> Option<String> {
-        let source = self.feed.take_incomplete()?.into_source();
-        self.continuation = None;
-        self.input.restore(source.clone());
-        self.refresh_status_line();
-        Some(source)
-    }
-
     fn push_block(&mut self, block: Box<dyn Block>) {
         self.feed.push(block);
+    }
+
+    /// Discard a pending continuation and the current draft.
+    pub fn cancel_input(&mut self) -> bool {
+        let pending = self.feed.take_incomplete().is_some();
+        let changed = pending || !self.input.text().is_empty();
+        if changed {
+            self.input.clear();
+            self.continuation = None;
+            self.refresh_status_line();
+        }
+        changed
     }
 
     pub fn paste(&mut self, text: &str) {
@@ -533,10 +578,10 @@ impl Editor {
         let pointer = Position::new(event.column, event.row);
         self.pointer = Some(pointer);
         self.control_held = event.modifiers.contains(KeyModifiers::CONTROL);
-        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) && self.control_held {
+        if let Some(in_feed) = Self::link_click(event) {
             if let Some(link) = self.feed.link_at(pointer) {
                 self.screen_selection = None;
-                return Reaction::Post(format!("help {}", link.target));
+                return Self::open_link(link.target.to_string(), in_feed);
             }
         }
         let double = self.double_clicked(event);
@@ -585,6 +630,27 @@ impl Editor {
         Reaction::Continue
     }
 
+    /// A middle click opens a reference; Ctrl-left opens in the transcript.
+    fn link_click(event: MouseEvent) -> Option<bool> {
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Middle) => Some(false),
+            MouseEventKind::Down(MouseButton::Left)
+                if event.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                Some(true)
+            }
+            _ => None,
+        }
+    }
+
+    fn open_link(target: String, in_feed: bool) -> Reaction {
+        if in_feed {
+            Reaction::DocumentationInFeed(target)
+        } else {
+            Reaction::Documentation(target)
+        }
+    }
+
     /// Track Ctrl pressed or released on its own, which no mouse event reports.
     pub fn hold_control(&mut self, held: bool) {
         self.control_held = held;
@@ -604,6 +670,15 @@ impl Editor {
     }
 
     pub fn handle_preview_mouse(&mut self, event: MouseEvent) -> Reaction {
+        let pointer = Position::new(event.column, event.row);
+        self.pointer = Some(pointer);
+        self.control_held = event.modifiers.contains(KeyModifiers::CONTROL);
+        if let Some(in_feed) = Self::link_click(event) {
+            if let Some(link) = self.reference.link_at(pointer) {
+                self.screen_selection = None;
+                return Self::open_link(link.target.to_string(), in_feed);
+            }
+        }
         let double = self.double_clicked(event);
         let reaction = double
             .then(|| self.pick_screen_text(event))
@@ -627,12 +702,6 @@ impl Editor {
             return action;
         }
         let edit = self.keymaps.edit(key);
-        if edit == Some(InputAction::HistoryPrevious)
-            && self.input.text().is_empty()
-            && self.continuation.is_some()
-        {
-            return Reaction::ResumeIncomplete;
-        }
         self.screen_selection = None;
         self.refresh_completion();
         self.input.handle_edit_key(key, edit);
@@ -654,7 +723,10 @@ impl Editor {
         if let Some(result) = self.handle_debug_action(action) {
             return result;
         }
-        if action != Action::CopySelection {
+        if !matches!(
+            action,
+            Action::CopySelection | Action::SaveSelection | Action::Submit | Action::OpenCommands
+        ) {
             self.screen_selection = None;
         }
         if let Some(reaction) = self.perform(action, "") {
@@ -710,8 +782,13 @@ impl Editor {
             | Action::OpenOutput
             | Action::OpenSyntaxTree
             | Action::ClosePane
+            | Action::ReferenceBack
             | Action::Restart
             | Action::Quit
+            | Action::RunViewedFile
+            | Action::BrowseSessions
+            | Action::ViewFile
+            | Action::SaveSelection
             | Action::SaveSession
             | Action::LoadCode
             | Action::ResumeSession => {
@@ -732,7 +809,7 @@ impl Editor {
                 Reaction::Continue
             }
             Action::OpenKeymaps => {
-                self.open_from_commands(PickerMode::Keymaps, Self::keymaps_picker);
+                self.open_keymaps();
                 Reaction::Continue
             }
             Action::ClearFeed => {
@@ -745,8 +822,38 @@ impl Editor {
             Action::OpenOutput => self.leave_pickers(Reaction::Open(ViewKind::Output)),
             Action::OpenSyntaxTree => self.leave_pickers(Reaction::Open(ViewKind::SyntaxTree)),
             Action::ClosePane => self.leave_pickers(Reaction::ClosePane),
+            Action::ReferenceBack => self.leave_pickers(Reaction::ReferenceBack),
             Action::Restart => self.leave_pickers(Reaction::Restart),
             Action::Quit => self.leave_pickers(Reaction::Quit),
+            Action::BrowseSessions => self.leave_pickers(Reaction::BrowseSessions),
+            Action::ViewFile if !argument.is_empty() => {
+                self.leave_pickers(Reaction::ViewFile(argument.to_string()))
+            }
+            Action::SaveSelection => {
+                let source = if self.previewing {
+                    self.selected_screen_text()
+                } else {
+                    self.input
+                        .field()
+                        .selected_text()
+                        .map(str::to_string)
+                        .or_else(|| self.selected_screen_text())
+                };
+                match source {
+                    Some(source) => {
+                        self.leave_pickers(Reaction::SaveSelection(argument.to_string(), source))
+                    }
+                    None => {
+                        self.input
+                            .set_diagnostic("select code before saving".into(), None);
+                        Reaction::Continue
+                    }
+                }
+            }
+            Action::ViewFile => {
+                self.input.set_diagnostic("name a file".into(), None);
+                Reaction::Continue
+            }
             Action::SaveSession => self.leave_pickers(Reaction::Save(
                 (!argument.is_empty()).then(|| argument.to_string()),
             )),
@@ -757,7 +864,8 @@ impl Editor {
             }
             Action::LoadCode => self.leave_pickers(Reaction::Load(argument.to_string())),
             Action::ResumeSession => self.leave_pickers(Reaction::Resume),
-            Action::CancelExecution
+            Action::RunViewedFile
+            | Action::CancelExecution
             | Action::Submit
             | Action::ScrollFeedUp
             | Action::ScrollFeedDown
@@ -907,22 +1015,34 @@ impl Editor {
 
     fn settings_picker(&self) -> Picker {
         Picker::tabbed(
-            settings_tabs::tabs(self.settings),
+            settings_tabs::tabs(self.settings, &self.keymaps),
             Some(settings_tabs::restore_defaults()),
         )
     }
 
     /// Show the current settings in the settings picker on top.
     fn refresh_settings_picker(&mut self) {
-        let tabs = settings_tabs::tabs(self.settings);
+        let tabs = settings_tabs::tabs(self.settings, &self.keymaps);
         self.pickers.last_mut().unwrap().picker.set_tabs(tabs);
     }
 
     fn keymaps_picker(&self) -> Picker {
-        Picker::tabbed(
-            keymap::tabs(&self.keymaps),
-            Some(keymap::restore_defaults()),
-        )
+        let mut picker = self.settings_picker();
+        picker.select_mode(PickerMode::Keymaps);
+        picker
+    }
+
+    fn open_keymaps(&mut self) {
+        if let Some(controller) = self
+            .pickers
+            .last_mut()
+            .filter(|controller| controller.mode == PickerMode::Settings)
+        {
+            controller.picker.select_mode(PickerMode::Keymaps);
+            self.refresh_status_line();
+        } else {
+            self.open_from_commands(PickerMode::Settings, Self::keymaps_picker);
+        }
     }
 
     fn handle_picker_key(&mut self, key: KeyEvent) -> Reaction {
@@ -946,8 +1066,10 @@ impl Editor {
         let ElementFocus::Picker(mode) = self.focus() else {
             return Reaction::Continue;
         };
-        if mode == PickerMode::Keymaps && action == Action::OpenKeymaps {
-            self.close_if_open(PickerMode::Keymaps);
+        if mode == PickerMode::Keymaps
+            && matches!(action, Action::OpenKeymaps | Action::OpenSettings)
+        {
+            self.close_if_open(PickerMode::Settings);
             return Reaction::Continue;
         }
         if action == Action::Quit {
@@ -977,7 +1099,7 @@ impl Editor {
 
     fn focus(&self) -> ElementFocus {
         self.pickers.last().map_or(ElementFocus::Input, |picker| {
-            ElementFocus::Picker(picker.mode)
+            ElementFocus::Picker(picker.active_mode())
         })
     }
 
@@ -1039,6 +1161,7 @@ impl Editor {
                 self.pickers.clear();
                 self.refresh_status_line();
             }
+            EditorEvent::ViewFile(path) => return self.leave_pickers(Reaction::ViewFile(path)),
             EditorEvent::RunCommand(command) => return self.run_command(command),
             EditorEvent::ClosePicker => {
                 self.pickers.pop();
@@ -1063,15 +1186,13 @@ impl Editor {
             EditorEvent::RestoreKeymaps => {
                 self.keymaps = Keymaps::default();
                 self.save_settings();
-                let tabs = keymap::tabs(&self.keymaps);
-                self.pickers.last_mut().unwrap().picker.set_tabs(tabs);
+                self.refresh_settings_picker();
             }
             EditorEvent::SetSettings(settings) => self.set_settings(settings),
             EditorEvent::Rebind(shortcut, key) => {
                 if self.keymaps.rebind(shortcut, key) {
                     self.save_settings();
-                    let tabs = keymap::tabs(&self.keymaps);
-                    self.pickers.last_mut().unwrap().picker.set_tabs(tabs);
+                    self.refresh_settings_picker();
                 }
             }
         }
@@ -1079,8 +1200,12 @@ impl Editor {
     }
 
     fn set_settings(&mut self, settings: Settings) {
+        if settings.rendering.language_server != self.settings.rendering.language_server {
+            self.status_runtime.language_server = LanguageServerState::Starting;
+        }
         if settings.reformats(&self.settings) {
             self.feed.on_event(&Reformatted);
+            self.reference.on_event(&Reformatted);
         }
         self.apply_appearance(settings.appearance);
         self.settings = settings;
@@ -1108,6 +1233,7 @@ impl Editor {
         self.settings.appearance = appearance;
         publish(appearance.groups());
         self.feed.on_event(&Rethemed);
+        self.reference.on_event(&Rethemed);
         appearance.save();
     }
 
@@ -1248,7 +1374,11 @@ impl Editor {
             .collect::<Vec<_>>();
         let mut lines = vec![
             Line::from(Span::styled(
-                self.frame_stats.label(),
+                format!(
+                    "{}  {}",
+                    self.frame_stats.label(),
+                    crate::ui::graphics::usage()
+                ),
                 scheme().frame_stats(),
             )),
             Line::from(
@@ -1373,12 +1503,51 @@ impl Editor {
     /// What the status line draws from in any view of the session.
     fn status_context(&self) -> StatusLineContext {
         StatusLineContext {
-            idle: self.settings.statusline.idle,
+            layout: self.settings.statusline,
             location: Some(self.location()),
             hints: self.idle_hints(),
             state: self.shell_state(),
+            math_renderer: if self.settings.rendering.maths.available() {
+                self.settings.rendering.maths.label().to_string()
+            } else {
+                format!(
+                    "{} ({} unavailable)",
+                    MathDisplay::Unicode.label(),
+                    self.settings.rendering.maths.label()
+                )
+            },
+            runtime: StatusRuntime {
+                language_server: if self.settings.rendering.language_server {
+                    self.status_runtime.language_server.clone()
+                } else {
+                    LanguageServerState::Off
+                },
+                ..self.status_runtime.clone()
+            },
             ..StatusLineContext::default()
         }
+    }
+
+    /// Shared rendering preferences for transcript and reference content.
+    fn render_context(&self, width: u16) -> RenderContext {
+        RenderContext::new(width, 0)
+            .with_fractions(self.settings.rendering.fractions)
+            .with_blackboard(self.settings.rendering.math_fonts)
+            .with_matrix_row_spacing(self.settings.rendering.matrix_row_spacing_percent)
+            .with_display(self.settings.rendering.maths)
+            .with_recent_outputs(self.feed.recent_outputs())
+            .with_output_limit(self.settings.layout.output_rows)
+    }
+
+    /// Tell the pictures how far their blocks stand from the viewport, for both feeds
+    /// whether this frame draws them or not: a picture belongs to its block still.
+    pub fn report_picture_distances(&self) {
+        crate::ui::graphics::report_distances(
+            self.feed
+                .picture_distances()
+                .into_iter()
+                .chain(self.reference.picture_distances()),
+        );
     }
 
     pub fn draw(
@@ -1390,7 +1559,9 @@ impl Editor {
     ) {
         if crate::ui::graphics::refresh_cell_size() {
             self.feed.on_event(&Reformatted);
+            self.reference.on_event(&Reformatted);
         }
+        self.report_picture_distances();
         if self.pane_focused {
             self.frame_stats.tick();
         }
@@ -1407,14 +1578,18 @@ impl Editor {
             .height(editor_area.width, input_prefix, editor_area.height);
         // A split shares one status line across both panes, drawn by the app.
         let status_height = u16::from(self.statusline_shown() && !self.split);
-        let picker_height = self.pickers.last().map_or_else(
-            || {
-                self.input
-                    .offered()
-                    .map_or(0, |completion| completion.list_height())
-            },
-            |controller| controller.picker.height(editor_area.width),
-        );
+        let picker_height = if self.pane_focused {
+            self.pickers.last().map_or_else(
+                || {
+                    self.input
+                        .offered()
+                        .map_or(0, |completion| completion.list_height())
+                },
+                |controller| controller.picker.height(editor_area.width),
+            )
+        } else {
+            0
+        };
         // A long list must never squeeze the input out of the frame: the cursor
         // would then be placed outside it.
         let picker_height = picker_height.min(
@@ -1450,25 +1625,19 @@ impl Editor {
             } else {
                 (sections[2], sections[3])
             };
-        let context = RenderContext::new(editor_area.width, 0)
-            .with_fractions(self.settings.rendering.fractions)
-            .with_blackboard(self.settings.rendering.math_fonts)
-            .with_matrix_row_spacing(self.settings.rendering.matrix_row_spacing_percent)
-            .with_display(self.settings.rendering.maths)
-            .with_recent_outputs(self.feed.recent_outputs())
-            .with_output_limit(self.settings.layout.output_rows);
+        let context = self.render_context(editor_area.width);
         let input_context = RenderContext::new(editor_area.width, input_prefix);
 
         self.feed_area = sections[0];
         self.draw_feed(frame, sections[0], &context);
-        if let Some(controller) = self.pickers.last() {
+        if let Some(controller) = self.pickers.last().filter(|_| self.pane_focused) {
             controller
                 .picker
                 .render(&(), sections[1], frame.buffer_mut());
         } else if let Some(completion) = self
             .input
             .offered()
-            .filter(|completion| completion.list_height() > 0)
+            .filter(|completion| self.pane_focused && completion.list_height() > 0)
         {
             completion.render_list(sections[1], frame.buffer_mut(), &theme);
         }
@@ -1526,6 +1695,19 @@ impl Editor {
         }
     }
 
+    fn paint_link_hover(&self, frame: &mut Frame, link: Option<Link>) {
+        if let Some(link) = link {
+            let hovered = scheme().style(if self.control_held {
+                HLGroup::MarkupLinkOpen
+            } else {
+                HLGroup::MarkupLinkHover
+            });
+            for cells in link.cells {
+                frame.buffer_mut().set_style(cells, hovered);
+            }
+        }
+    }
+
     fn draw_feed(&mut self, frame: &mut Frame, area: Rect, context: &RenderContext) -> bool {
         if area.width == 0 || area.height == 0 {
             self.feed_top = 0;
@@ -1541,15 +1723,10 @@ impl Editor {
         );
         self.feed_top = -(self.feed.offset() as i64);
         self.selection_inclusions.merge(inclusions);
-        if let Some(link) = self.pointer.and_then(|pointer| self.feed.link_at(pointer)) {
-            let hovered = context.groups().style(match self.control_held {
-                true => HLGroup::MarkupLinkOpen,
-                false => HLGroup::MarkupLinkHover,
-            });
-            for cells in link.cells {
-                frame.buffer_mut().set_style(cells, hovered);
-            }
-        }
+        self.paint_link_hover(
+            frame,
+            self.pointer.and_then(|pointer| self.feed.link_at(pointer)),
+        );
         underfilled
     }
 }
@@ -1594,7 +1771,56 @@ mod mouse_tests {
     }
 
     #[test]
-    fn only_control_click_opens_a_documentation_link() {
+    fn standalone_folded_output_expands_on_a_double_click() {
+        let mut editor = Editor::new(String::new());
+        let area = Rect::new(0, 0, 80, 16);
+        let context = RenderContext::new(area.width, 0).with_output_limit(8);
+        let source = (0..context.output_limit().unwrap() + 20)
+            .map(|row| format!("standalone row {row}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        editor.feed = Feed::new(Box::new(OutputBlock::value(source, None)));
+        let draw = |editor: &mut Editor| {
+            let mut buffer = Buffer::empty(area);
+            editor
+                .feed
+                .render(&context, area, &mut buffer, Style::default());
+            (0..area.height)
+                .map(|y| {
+                    (0..area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let folded = draw(&mut editor);
+        let row = folded
+            .iter()
+            .position(|row| row.contains("rows hidden"))
+            .expect("output starts folded");
+        let press = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: row as u16,
+            modifiers: KeyModifiers::NONE,
+        };
+        editor.handle_mouse(press);
+        editor.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            ..press
+        });
+        draw(&mut editor);
+        editor.handle_mouse(press);
+        let expanded = draw(&mut editor);
+        assert!(
+            !expanded.iter().any(|row| row.contains("rows hidden")),
+            "{expanded:?}"
+        );
+        assert!(expanded.iter().any(|row| row.contains("standalone row")));
+    }
+
+    #[test]
+    fn link_clicks_choose_the_feed_or_reference_pane() {
         let (mut editor, pointer) = editor_with_link();
         let click = |modifiers| MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -1609,7 +1835,14 @@ mod mouse_tests {
         ));
         assert!(matches!(
             editor.handle_mouse(click(KeyModifiers::CONTROL)),
-            Reaction::Post(command) if command == "help \"isPrime\""
+            Reaction::DocumentationInFeed(command) if command == "\"isPrime\""
+        ));
+        assert!(matches!(
+            editor.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Middle),
+                ..click(KeyModifiers::NONE)
+            }),
+            Reaction::Documentation(command) if command == "\"isPrime\""
         ));
     }
 }
@@ -1674,5 +1907,125 @@ mod picker_tests {
         );
         editor.handle_action(Action::Submit);
         assert!(editor.pickers.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod saved_setup_tests {
+    use super::{Action, Editor, Reaction};
+
+    #[test]
+    fn saving_selected_setup_preserves_the_live_draft() {
+        let mut editor = Editor::new(String::new());
+        editor.paste("setup = 7;\nunfinished");
+        editor.input.field_mut().start_selection(0);
+        editor
+            .input
+            .field_mut()
+            .continue_selection("setup = 7;".len());
+        let reaction = editor.handle_action(Action::SaveSelection);
+        assert!(
+            matches!(reaction, Reaction::SaveSelection(path, source) if path.is_empty() && source == "setup = 7;")
+        );
+        assert_eq!(editor.submission(), "setup = 7;\nunfinished");
+    }
+}
+
+#[cfg(test)]
+mod unified_settings_tests {
+    use super::settings::keymap::settings_tab;
+    use super::*;
+
+    #[test]
+    fn keymaps_open_within_settings_capture_shortcuts_and_keep_the_tab_after_rebinding() {
+        let mut editor = Editor::new(String::new());
+        editor.handle_action(Action::OpenSettings);
+        editor.handle_action(Action::OpenKeymaps);
+        assert_eq!(editor.pickers.len(), 1);
+        assert_eq!(editor.pickers[0].mode, PickerMode::Settings);
+        assert_eq!(editor.pickers[0].active_mode(), PickerMode::Keymaps);
+        let shortcut = Shortcut::Command(Action::ClearFeed);
+        let tab = settings_tab(&editor.keymaps);
+        let row = tab
+            .items
+            .iter()
+            .position(|item| item.cells()[0].to_string() == shortcut.description())
+            .unwrap();
+        editor.pickers[0].picker.select(row);
+        let replacement = editor.keymaps.key(Action::OpenSettings).unwrap();
+        editor.handle_action(Action::Submit);
+        assert!(editor.pickers[0].picker.capturing());
+        assert_eq!(editor.resolve_action(replacement), None);
+        editor.handle_input(replacement);
+        assert_eq!(editor.keymaps.key(shortcut), Some(replacement));
+        assert_eq!(editor.pickers[0].active_mode(), PickerMode::Keymaps);
+        assert!(!editor.pickers[0].picker.capturing());
+        editor.handle_input(KeyCode::Tab.into());
+        assert_eq!(editor.pickers[0].active_mode(), PickerMode::Settings);
+        editor.handle_action(Action::OpenKeymaps);
+        editor.settings.rendering.math_fonts = !editor.settings.rendering.math_fonts;
+        let rendering = editor.settings.rendering;
+        editor.handle_picker_event(EditorEvent::RestoreKeymaps);
+        assert_eq!(editor.settings.rendering, rendering);
+        assert_eq!(editor.pickers[0].active_mode(), PickerMode::Keymaps);
+    }
+
+    #[test]
+    fn escape_cancels_key_capture_without_closing_the_settings_tabs() {
+        let mut editor = Editor::new(String::new());
+        editor.handle_action(Action::OpenKeymaps);
+        editor.handle_action(Action::Submit);
+        assert!(editor.pickers[0].picker.capturing());
+        editor.handle_input(KeyCode::Esc.into());
+        assert_eq!(editor.pickers.len(), 1);
+        assert!(!editor.pickers[0].picker.capturing());
+        assert_eq!(editor.pickers[0].active_mode(), PickerMode::Keymaps);
+    }
+}
+
+#[cfg(test)]
+mod documentation_rendering_tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+    use ratatui::style::Style;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct CountedBlock(Rc<Cell<usize>>);
+
+    impl Block for CountedBlock {
+        fn height(&self, _: &RenderContext) -> u16 {
+            1
+        }
+        fn render_local(&self, _: &RenderContext, _: &mut Buffer) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    #[test]
+    fn completed_examples_and_semantic_tokens_repaint_both_cached_panes() {
+        let mut editor = Editor::new(String::new());
+        let transcript = Rc::new(Cell::new(0));
+        let reference = Rc::new(Cell::new(0));
+        editor.feed = Feed::new(Box::new(CountedBlock(transcript.clone())));
+        editor.set_reference(vec![Box::new(CountedBlock(reference.clone()))]);
+        let area = Rect::new(0, 0, 60, 8);
+        let context = RenderContext::new(area.width, 0);
+        let render = |editor: &mut Editor| {
+            editor
+                .feed
+                .render(&context, area, &mut Buffer::empty(area), Style::default());
+            editor
+                .reference
+                .render(&context, area, &mut Buffer::empty(area), Style::default());
+        };
+        render(&mut editor);
+        let before = (transcript.get(), reference.get());
+        render(&mut editor);
+        assert_eq!((transcript.get(), reference.get()), before);
+        editor.apply(EditorUpdate::ExamplesComputed);
+        render(&mut editor);
+        assert!(transcript.get() > before.0);
+        assert!(reference.get() > before.1);
     }
 }

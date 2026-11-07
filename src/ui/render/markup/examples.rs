@@ -20,7 +20,7 @@ use crate::backend::transcript::{captured_error, strip_m2_location};
 use crate::backend::{M2Response, M2Value};
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::{merge, PageColors};
-use crate::ui::block::{Block, HLSpan};
+use crate::ui::block::{Block, HLSpan, Link};
 use crate::ui::cell::{response_blocks, CellState, EvaluationBlock, OutputBlock, TextBlock};
 use crate::ui::config::UI;
 use crate::ui::render::selection::Inclusions;
@@ -52,7 +52,7 @@ pub fn forget_colors() {
 }
 
 /// `source` of `page` in its syntax colours, under what analysis found in it.
-fn highlighted(page: u64, source: &str) -> Vec<HLSpan> {
+pub fn highlighted(page: u64, source: &str) -> Vec<HLSpan> {
     let lexical = CODE.with_borrow_mut(|highlighter| highlighter.highlight(source));
     COLORS.with_borrow(
         |known| match known.get(&page).and_then(|code| code.get(source)) {
@@ -391,6 +391,7 @@ impl Slice {
 pub(super) struct Painted {
     pub lines: Vec<Line<'static>>,
     pub inclusions: Inclusions,
+    pub links: Vec<Link>,
 }
 
 /// Render a stored example of `page` through the same input, printed, error
@@ -411,6 +412,7 @@ pub fn render(
     let mut rendered = Painted {
         lines: Vec::new(),
         inclusions: Inclusions::default(),
+        links: Vec::new(),
     };
     for example in transcript(source, example_width)? {
         let block = match computed(page, example.number) {
@@ -423,6 +425,11 @@ pub fn render(
             .inclusions
             .merge(next.inclusions + Offset::new(0, top));
         rendered.lines.extend(next.lines);
+        rendered.links.extend(
+            next.links
+                .into_iter()
+                .map(|link| link.moved(Offset::new(0, top))),
+        );
     }
     Some(rendered)
 }
@@ -461,9 +468,11 @@ fn painted(block: &EvaluationBlock, context: &RenderContext) -> Painted {
     }
     let mut inclusions = Inclusions::default();
     block.local_selection_inclusions(&context, &mut inclusions);
+    let links = block.links(&context);
     Painted {
         lines: buffer_lines(&buffer),
         inclusions,
+        links,
     }
 }
 

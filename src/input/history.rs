@@ -36,6 +36,7 @@ pub struct History {
     path: Option<PathBuf>,
     /// How many bytes of the history file have been read into `entries`.
     synced: u64,
+    unfiltered: bool,
 }
 
 impl History {
@@ -44,6 +45,9 @@ impl History {
     }
 
     pub fn stop_browsing(&mut self) {
+        if self.unfiltered {
+            return;
+        }
         self.pos = None;
         self.draft = None;
     }
@@ -65,6 +69,7 @@ impl History {
             draft: None,
             path,
             synced: 0,
+            unfiltered: false,
         };
         history.sync();
         history
@@ -88,6 +93,7 @@ impl History {
         }
         self.pos = None;
         self.draft = None;
+        self.unfiltered = false;
     }
 
     /// Whether `entry` is worth keeping and not a repeat of the newest one.
@@ -143,8 +149,25 @@ impl History {
         !entry.trim().is_empty()
     }
 
-    /// The newest older entry that starts with the draft's text before its cursor.
+    /// Recall older input without using the current draft as a search prefix.
+    /// Editing recalled input retains the browse position.
     ///
+    pub fn previous_unfiltered(&mut self, current: &str, cursor: usize) -> Option<HistoryBuffer> {
+        if !self.unfiltered {
+            self.stop_browsing();
+        }
+        self.unfiltered = true;
+        self.prev(current, cursor)
+    }
+
+    pub fn next_unfiltered(&mut self, current: &str) -> Option<HistoryBuffer> {
+        if !self.unfiltered {
+            return None;
+        }
+        self.next(current)
+    }
+
+    /// Recall older input matching the draft prefix.
     /// As a shell's history search does: the prefix is fixed when browsing begins,
     /// so typing `R =` and stepping back visits only the entries that begin with it.
     /// An empty prefix matches everything, which is plain browsing.
@@ -188,7 +211,7 @@ impl History {
     /// Text edited after it was recalled starts a new search from what it now says,
     /// rather than stepping on with the prefix it no longer begins with.
     fn end_search_if_edited(&mut self, current: &str) {
-        if self.pos.is_some_and(|pos| self.entries[pos] != current) {
+        if !self.unfiltered && self.pos.is_some_and(|pos| self.entries[pos] != current) {
             self.pos = None;
             self.draft = None;
         }
@@ -202,7 +225,9 @@ impl History {
             return false;
         };
         let entry = &self.entries[index];
-        let prefix = if draft.text.contains('\n') {
+        let prefix = if self.unfiltered {
+            ""
+        } else if draft.text.contains('\n') {
             draft.text.as_str()
         } else {
             &draft.text[..draft.cursor]

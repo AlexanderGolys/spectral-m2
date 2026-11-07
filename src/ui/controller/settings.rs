@@ -14,7 +14,6 @@ pub mod selection;
 pub mod statusline;
 pub mod tabs;
 pub mod theme;
-
 #[cfg(not(test))]
 use std::env;
 use std::fs;
@@ -166,7 +165,7 @@ mod tests {
     use crossterm::event::KeyCode::Char;
 
     use super::keymap::Keymaps;
-    use super::statusline::{SegmentPlacement, StatusLinePosition};
+    use super::statusline::{StatusComponent, StatusLinePosition, StatusSegment};
     use super::*;
     use crate::ui::action::Action;
     use crate::ui::key::KeyMod::Alt;
@@ -248,7 +247,10 @@ mod tests {
         assert_eq!(saved.rendering.fractions, FractionStyle::Inline);
         assert_eq!(saved.rendering.example_seconds, 2);
         assert_eq!(saved.statusline.position, StatusLinePosition::AboveInput);
-        assert_eq!(saved.statusline.idle.scheme, SegmentPlacement::Right);
+        assert_eq!(
+            saved.statusline.placement(StatusComponent::Theme),
+            StatusSegment::Right
+        );
         assert_eq!(saved.layout.output_rows, 50);
         assert_eq!(saved.layout.max_input_height_percent, 60);
         assert_eq!(saved.layout.complete_after, 3);
@@ -260,10 +262,14 @@ mod tests {
     fn a_saved_record_reads_back_as_written() {
         let mut saved = SavedSettings::default();
         saved.rendering.semantic_highlighting = false;
-        saved.statusline.idle.hints = SegmentPlacement::Hidden;
+        saved.rendering.reference_code_background = true;
+        saved
+            .statusline
+            .set_placement(StatusComponent::Versions, StatusSegment::Right);
         let roundtrip: SavedSettings =
             serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
         assert!(!roundtrip.rendering.semantic_highlighting);
-        assert_eq!(roundtrip.statusline.idle.hints, SegmentPlacement::Hidden);
+        assert!(roundtrip.rendering.reference_code_background);
+        assert_eq!(roundtrip.statusline.components, saved.statusline.components);
     }
 }

@@ -23,11 +23,12 @@ use serde::Deserialize;
 use term_maths::RenderedBlock;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+
 const EVALUATION_TIMEOUT: Duration = Duration::from_secs(300);
 /// How long after a submission is written before it may be interrupted: a signal
 /// reaching M2 just as its read of the submission wakes leaves it blocked on stdin for
 /// good, answering neither later signals nor later input.
-const INTERRUPT_GRACE: Duration = Duration::from_millis(20);
+const INTERRUPT_GRACE: Duration = Duration::from_millis(100);
 const STARTUP_SCRIPT: &str = include_str!("backend/m2_startup.m2");
 const STARTUP_FILE: &str = "backend.m2";
 /// Introduces a result frame on the child's output stream. ASCII group
@@ -85,8 +86,10 @@ struct Frame {
     /// The submission this frame answers, absent on the startup frame.
     #[serde(default)]
     submission: u64,
+
     #[serde(default)]
     error: bool,
+
     value: Option<M2Value>,
     type_info: Option<String>,
     type_parts: Option<Vec<M2Value>>,
@@ -268,6 +271,8 @@ impl M2Value {
     /// A curly brace `height` rows tall. An odd one has its cusp on the middle
     /// row; an even one, having no middle row, splits the cusp across the two
     /// rows about its middle, which at height two is the whole brace.
+    // @##magic
+    // @##issue non-ascii glyphs set in random place
     fn curly(height: usize, left: bool, baseline: usize) -> RenderedBlock {
         let (single, top, cusp, bottom, upper_cusp, lower_cusp) = match left {
             true => ("{", "⎧", "⎨", "⎩", "⎰", "⎱"),
@@ -293,9 +298,11 @@ impl M2Value {
     fn brace(block: RenderedBlock, spelling: Spelling) -> RenderedBlock {
         match (block.is_empty(), spelling) {
             (true, _) => RenderedBlock::from_text("{}"),
+
             (false, Spelling::Ascii) => RenderedBlock::from_text("{")
                 .beside(&block)
                 .beside(&RenderedBlock::from_text("}")),
+
             (false, Spelling::Unicode) => {
                 let space = RenderedBlock::from_text(" ");
                 let body = space.beside(&block).beside(&space);
@@ -1432,6 +1439,25 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     }
 
     #[test]
+    fn documentation_source_locations_become_resolved_file_links() {
+        let path = std::env::temp_dir().join(format!(
+            "spectral documentation source {}.m2",
+            std::process::id()
+        ));
+        std::fs::write(&path, "sourceLocationProbe = 1\n").unwrap();
+        let location = serde_json::to_string(&format!("{}:12:3", path.display())).unwrap();
+        let mut backend = M2Backend::spawn().unwrap();
+        let response = backend.evaluate(&format!("(sourceType := value Core#\"private dictionary\"#\"TT\"; new sourceType from {{{location}}})"), None).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let Some(M2Value::Markup { html, .. }) = response.value else {
+            panic!("source location did not produce markup")
+        };
+        let mut target = url::Url::from_file_path(&path).unwrap();
+        target.set_fragment(Some("L12:C3"));
+        assert!(html.contains(&format!("href=\"{target}\"")), "{html}");
+    }
+
+    #[test]
     fn documentation_links_carry_the_key_help_is_asked_for() {
         let mut backend = M2Backend::spawn().expect("spawn M2");
         let response = backend
@@ -2055,6 +2081,32 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             bare.number, bare.transcript
         );
         assert!(!fine.is_error, "`1` reported an error");
+    }
+
+    #[test]
+    fn errors_in_user_functions_return_to_the_same_session() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        let setup = backend
+            .evaluate(
+                "savedBeforeFailure := 41; failingFunction = () -> error \"expected failure\";",
+                None,
+            )
+            .expect("define function");
+        assert!(!setup.is_error);
+        for _ in 0..2 {
+            let failed = backend
+                .evaluate("failingFunction()", None)
+                .expect("evaluate error");
+            assert!(failed.is_error, "{}", failed.transcript);
+            let recovered = backend
+                .evaluate("savedBeforeFailure + 1", None)
+                .expect("evaluate after error");
+            assert!(!recovered.is_error, "{}", recovered.transcript);
+            assert_eq!(recovered.depth, setup.depth);
+            assert!(recovered
+                .rendered_value()
+                .is_some_and(|value| value.contains("42")));
+        }
     }
 
     /// `capture`, which `installPackage` uses to run examples, evaluates through

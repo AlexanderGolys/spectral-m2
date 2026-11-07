@@ -198,8 +198,23 @@ announceReady := (() -> (
                    else text) | "</a>";
             page = substring(page, match#0#0 + match#0#1));
         shortened | page);
+    linkedSources := page -> (
+        pattern := ///<span class="tt">([^<]*\.m2):([0-9]+):([0-9]+)</span>///;
+        linked := "";
+        while (match := regex(pattern, page)) =!= null do (
+            file := replace("&amp;", "&", replace("&gt;", ">", replace("&lt;", "<", substring(match#1, page))));
+            candidates := select(join({file}, apply(path, directory -> directory | file)), fileExists);
+            original := substring(match#0, page);
+            target := if #candidates == 0 then null else
+                urlEncode("file://" | toAbsolutePath first candidates | "#L"
+                    | substring(match#2, page) | ":C" | substring(match#3, page));
+            linked = linked | substring(page, 0, match#0#0)
+                | (if target === null then original else
+                    "<a href=\"" | escapeAttribute target | "\">" | original | "</a>");
+            page = substring(page, match#0#0 + match#0#1));
+        linked | page);
     render hypertextType := HashTable => value -> hashTable {
-        symbol markup => hashTable {symbol html => shortenedPaths linkedKeys html value, symbol fallback =>
+        symbol markup => hashTable {symbol html => shortenedPaths linkedSources linkedKeys html value, symbol fallback =>
                 toString net value, symbol exampleWidth => exampleWidth}
     };
     -- Only what M2 itself draws as a plain table: a class that still uses

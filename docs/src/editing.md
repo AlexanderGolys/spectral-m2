@@ -37,15 +37,23 @@ degree I
 
 Plain-text results such as `net help "arithmetic with complex maps"` use a bounded preview: at most 256 KiB of source text and 262,144 display cells per value. Larger previews retain their beginning and end with a truncation notice. Expanding a result keeps these limits; the full value remains available in Macaulay2.
 
-`help` pages are drawn in the feed: the title over a rule, its name apart from its brief; the usage, inputs and outputs as headers over their entries; and each example as the session draws code and values, without its numbers. A link to another page is set in italics in the colour of printed output (the `MarkupLink` group), while one written as code keeps the colours of its code, and is underlined while the pointer is over it, and Ctrl+click runs `help` for that page beside what you are typing.
+`help` pages are drawn in the feed: the title over a rule, its name apart from its brief; the usage, inputs and outputs as headers over their entries; and each example as the session draws code and values, without its numbers. A link to another page is set in italics in the colour of printed output (the `MarkupLink` group), while one written as code keeps the colours of its code, and is underlined while the pointer is over it, and Ctrl+click opens that page in a separate reference pane. Links in that pane open there too. Documentation lookups use their own Macaulay2 process, leaving your draft, transcript, input numbers, and variables alone. Close the pane with `Ctrl+Q`.
 
 ## History and navigation
 
 `Up` and `Down` move inside multiline input. At the first or last line they recall older or newer submissions. As in a shell's history search, the text before the cursor when you start browsing is a prefix: typing `R =` and pressing `Up` steps only through submissions beginning with `R =`, each distinct one once. Editing a recalled entry starts a new search from what the input then begins with. Stepping past the newest match restores what you had typed. History is shared by every running session: what one submits, the others recall the next time they start browsing. Commands chosen after typing `/` are recorded in the same history, under their whole name however much of it was typed; opening the full command picker with `Ctrl+/` does not add a history entry.
 
-The usual editing keys are available for horizontal movement, `Ctrl` with the arrows for words, `Home` and `End` for line boundaries (`Ctrl` for the whole input), and deletion. `Ctrl+Backspace` and `Ctrl+Delete` delete exactly what `Ctrl+Left` and `Ctrl+Right` move over. `Ctrl+L` clears the current input without clearing the feed.
+`Ctrl+Up` and `Ctrl+Down` browse all history from any line without prefix filtering. They continue through history after edits to a recalled entry, and stepping past the newest entry restores the original draft and cursor.
+
+The usual editing keys are available for horizontal movement, `Ctrl` with the arrows for words, `Home` and `End` for line boundaries (`Ctrl` for the whole input), and deletion. `Ctrl+Backspace` and `Ctrl+Delete` delete exactly what `Ctrl+Left` and `Ctrl+Right` move over. `Ctrl+U` deletes the whole current line. `Ctrl+L` clears the whole input. Both operations undo as a single edit.
+
+If you submitted an unfinished construct by mistake, press `Ctrl+C` to discard its pending continuation and draft while keeping the session alive. During evaluation, `Ctrl+C` interrupts the computation and cancels queued work. With no computation, continuation, or draft, it quits.
 
 `Ctrl+Z` undoes the last edit to the input and `Ctrl+Shift+Z` redoes it. Typing undoes a word at a time and a run of deletions all at once; clearing, pasting, recalling history and taking a completion each undo as one step. Submitting starts a fresh input with nothing to undo.
+
+## Recovering from errors
+
+An ordinary runtime error reports its diagnostic and returns to normal input. Variables and rings created before the error remain available; code queued after the failing cell is discarded. Automatic debugger entry is disabled by default. Start with `sp2 --debugger` when you deliberately want Macaulay2 to enter its debugger on errors. `--debug N` controls warning diagnostics and does not enable the debugger.
 
 ## Completion
 

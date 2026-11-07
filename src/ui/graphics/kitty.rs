@@ -1,4 +1,4 @@
-//! Kitty graphics: pictures sent to the terminal once and drawn by Unicode
+//! Kitty graphics: pictures sent to the terminal and drawn by Unicode
 //! placeholder cells.
 //!
 //! A placeholder is an ordinary character whose foreground colour names the picture
@@ -385,6 +385,14 @@ impl Piece {
     }
 }
 
+impl ImageId {
+    /// The escape sequences telling the terminal to forget this picture and free
+    /// what it stored; the terminal is asked not to answer.
+    pub fn deletion(self, passthrough: Passthrough) -> String {
+        passthrough.wrap(&format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", self.0))
+    }
+}
+
 impl From<u32> for ImageId {
     fn from(id: u32) -> Self {
         Self(id % MAX_ID + 1)
@@ -395,29 +403,33 @@ impl From<u32> for ImageId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Oversized(pub Size);
 
-/// A PNG the terminal holds under one id, covering a grid of cells.
+/// A picture the terminal holds under one id, covering a grid of cells. Its pixels
+/// are not kept here: they are sent as PNG when the terminal needs them.
 #[derive(Debug)]
 pub struct KittyImage {
     id: ImageId,
     cells: Size,
-    png: Vec<u8>,
 }
 
 impl KittyImage {
     /// A picture drawn across `cells`, refused when they outnumber the marks that
     /// address them.
-    pub fn new(id: ImageId, cells: Size, png: Vec<u8>) -> Result<Self, Oversized> {
+    pub fn new(id: ImageId, cells: Size) -> Result<Self, Oversized> {
         let limit = DIACRITICS.len() as u16;
         match cells.width <= limit && cells.height <= limit {
-            true => Ok(Self { id, cells, png }),
+            true => Ok(Self { id, cells }),
             false => Err(Oversized(cells)),
         }
     }
 
-    /// The escape sequences that store this picture and place it virtually, so
-    /// placeholders can show it; the terminal is asked not to answer.
-    pub fn transmission(&self, passthrough: Passthrough) -> String {
-        let payload = STANDARD.encode(&self.png);
+    pub fn id(&self) -> ImageId {
+        self.id
+    }
+
+    /// The escape sequences that store `png` as this picture and place it virtually,
+    /// so placeholders can show it; the terminal is asked not to answer.
+    pub fn transmission(&self, png: &[u8], passthrough: Passthrough) -> String {
+        let payload = STANDARD.encode(png);
         let chunks = payload.as_bytes().chunks(CHUNK_BYTES).collect::<Vec<_>>();
         let mut sequences = String::new();
         for (index, chunk) in chunks.iter().enumerate() {
@@ -461,8 +473,10 @@ mod tests {
 
     use super::*;
 
+    const PAYLOAD: [u8; CHUNK_BYTES * 2] = [0; CHUNK_BYTES * 2];
+
     fn image(cells: Size) -> KittyImage {
-        KittyImage::new(ImageId::from(7), cells, vec![0; CHUNK_BYTES * 2]).unwrap()
+        KittyImage::new(ImageId::from(7), cells).unwrap()
     }
 
     #[test]
@@ -528,7 +542,7 @@ mod tests {
         let wide = Size::new(DIACRITICS.len() as u16 + 1, 1);
 
         assert_eq!(
-            KittyImage::new(ImageId::from(1), wide, Vec::new()).unwrap_err(),
+            KittyImage::new(ImageId::from(1), wide).unwrap_err(),
             Oversized(wide)
         );
     }
@@ -537,7 +551,7 @@ mod tests {
     fn a_long_payload_is_sent_in_chunks_only_the_first_of_which_places_it() {
         let image = image(Size::new(1, 1));
 
-        let transmission = image.transmission(Passthrough::Direct);
+        let transmission = image.transmission(&PAYLOAD, Passthrough::Direct);
 
         let sequences = transmission.split_terminator("\x1b\\").collect::<Vec<_>>();
         assert!(sequences.len() > 1);
@@ -552,14 +566,27 @@ mod tests {
     fn tmux_receives_every_sequence_wrapped_with_its_escapes_doubled() {
         let image = image(Size::new(1, 1));
 
-        let direct = image.transmission(Passthrough::Direct);
-        let wrapped = image.transmission(Passthrough::Tmux);
+        let direct = image.transmission(&PAYLOAD, Passthrough::Direct);
+        let wrapped = image.transmission(&PAYLOAD, Passthrough::Tmux);
 
         assert_eq!(
             wrapped.matches("\x1bPtmux;").count(),
             direct.matches("\x1b_G").count()
         );
         assert!(wrapped.contains("\x1b\x1b_G"));
+    }
+
+    #[test]
+    fn a_deletion_names_the_picture_and_frees_what_the_terminal_stored() {
+        let id = ImageId::from(7);
+
+        let direct = id.deletion(Passthrough::Direct);
+        let wrapped = id.deletion(Passthrough::Tmux);
+
+        assert!(direct.starts_with("\x1b_G") && direct.ends_with("\x1b\\"));
+        assert!(direct.contains("a=d") && direct.contains("d=I"));
+        assert!(direct.contains(&format!("i={}", id.0)));
+        assert!(wrapped.starts_with("\x1bPtmux;\x1b\x1b_G"));
     }
 
     #[test]

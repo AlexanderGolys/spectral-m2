@@ -458,7 +458,6 @@ Operator = { fg = "boatYellow2" }
 Package = { fg = "waveAqua2" }
 Parameter = { fg = "oniViolet2" }
 Picker = { bg = "waveBlue1", fg = "fujiWhite" }
-PickerBorder = { fg = "sumiInk6" }
 PickerSelected = { bg = "waveBlue2" }
 Property = { fg = "carpYellow" }
 Punctuation = { fg = "springViolet2" }
@@ -561,7 +560,6 @@ Operator = { fg = "lotusYellow2" }
 Package = { fg = "lotusAqua" }
 Parameter = { fg = "lotusBlue5" }
 Picker = { fg = "lotusInk2", bg = "lotusBlue1" }
-PickerBorder = { fg = "lotusGray2" }
 PickerSelected = { bg = "lotusBlue3" }
 Property = { fg = "lotusYellow" }
 Punctuation = { fg = "lotusTeal1" }

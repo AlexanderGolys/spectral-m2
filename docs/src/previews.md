@@ -1,6 +1,6 @@
 # Preview modes
 
-Previews contain committed cells only. They update from the workspace they reference while keeping an independent scroll position. Use `Up`, `Down`, `PageUp`, `PageDown`, or the mouse wheel to navigate, and drag to select text.
+Session previews contain committed cells only. All previews share five cyclic tabs and a separate bookmark tab, as described in [Split view](split-view.md). They update from the workspace they reference while keeping an independent scroll position. Use `Up`, `Down`, `PageUp`, `PageDown`, or the mouse wheel to navigate, and drag to select text.
 
 `Ctrl+Q` leaves a preview. The command and settings pickers remain available with `Ctrl+/` and `Ctrl+O`.
 
@@ -16,13 +16,9 @@ dim I
 
 ## Output
 
-`/output` starts with evaluation output: printed text, warnings, and errors. Use `Left` and `Right` to cycle through:
+`/output` shows printed text and returned values without input cells. `/values` shows returned values and their types, while `/stdout` shows printed text alone. Each command opens a preview tab. Use `Left` and `Right` to switch between occupied tabs.
 
-1. evaluation output;
-2. values and types;
-3. everything except input.
-
-The active projection is shown in the status line. Previewing does not change or remove the original feed.
+Previewing does not change or remove the original feed.
 
 ## Syntax tree
 

@@ -1,6 +1,9 @@
 //! Views of the session shown beside its shell: what each shows, the pane state
 //! it scrolls with, and how the editor draws it.
 
+use std::fs;
+use std::path::PathBuf;
+
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block as TuiBlock, Clear, Widget};
@@ -13,11 +16,13 @@ use crate::app::session::CommittedCell;
 use crate::code::highlight::Highlighter;
 use crate::ui::action::Action;
 use crate::ui::block::{Block, Element, TextSpan};
-use crate::ui::cell::{Cell, CodeBlock};
+use crate::ui::block::{Reformatted, Rethemed};
+use crate::ui::cell::{Cell, CodeBlock, TextBlock};
 use crate::ui::config::UI;
 use crate::ui::cycle::cycled;
+use crate::ui::element::EventListener;
 use crate::ui::feed::BlockView;
-use crate::ui::render::RenderContext;
+use crate::ui::feed::Feed;
 use crate::ui::statusline::{StatusLine, StatusLineContext};
 use crate::ui::syntax_tree::SyntaxTreeBlock;
 
@@ -35,6 +40,8 @@ pub enum ViewKind {
     /// Printed text and returned values together, without input cells.
     Output = "output",
     SyntaxTree = "syntax tree",
+    /// Documentation and source files opened for reference.
+    Reference = "reference",
 }
 
 impl ViewKind {
@@ -75,6 +82,33 @@ struct PreviewCache {
     highlight_revision: u64,
     view: ViewKind,
     blocks: Vec<Box<dyn Block>>,
+}
+
+/// A retained reference, including its viewport and source-file action.
+pub struct ReferenceEntry {
+    feed: Feed,
+    file: Option<String>,
+}
+
+impl ReferenceEntry {
+    pub fn new(blocks: Vec<Box<dyn Block>>, file: Option<String>) -> Self {
+        let mut feed = Feed::new(Box::new(TextBlock::system(String::new())));
+        for block in blocks {
+            feed.push(block);
+        }
+        feed.scroll_to_top();
+        Self { feed, file }
+    }
+}
+
+impl std::fmt::Debug for ReferenceEntry {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ReferenceEntry")
+            .field("file", &self.file)
+            .field("scroll", &self.feed.offset())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Viewport {
@@ -140,12 +174,93 @@ impl Viewport {
 }
 
 impl Editor {
+    /// Open reference content in the active view.
+    pub fn open_reference(&mut self, blocks: Vec<Box<dyn Block>>, file: Option<String>) {
+        self.reference_file = file;
+        self.set_reference(blocks);
+    }
+
+    /// Retain the active reference, including its scroll and fold state.
+    pub fn take_reference(&mut self) -> ReferenceEntry {
+        ReferenceEntry {
+            feed: std::mem::replace(
+                &mut self.reference,
+                Feed::new(Box::new(TextBlock::system(String::new()))),
+            ),
+            file: self.reference_file.take(),
+        }
+    }
+
+    /// Restore a retained reference under the current rendering settings.
+    pub fn restore_reference(&mut self, entry: ReferenceEntry) {
+        self.reference = entry.feed;
+        self.reference_file = entry.file;
+        self.reference.on_event(&Rethemed);
+        self.reference.on_event(&Reformatted);
+    }
+
+    /// Source file available to the reference pane's run action.
+    pub fn reference_file(&self) -> Option<&str> {
+        self.reference_file.as_deref()
+    }
+
+    /// Replace the reference pane's content.
+    pub fn set_reference(&mut self, blocks: Vec<Box<dyn Block>>) {
+        self.reference.clear();
+        for block in blocks {
+            self.reference.push(block);
+        }
+        self.reference.scroll_to_top();
+        self.reference.focus_target();
+    }
+
+    /// Scroll the reference pane independently of the transcript.
+    pub fn scroll_reference(&mut self, rows: i8) {
+        self.reference.scroll(rows);
+    }
+
+    /// Offer archived session files to preview.
+    pub fn browse_sessions(&mut self, paths: Vec<PathBuf>) {
+        use super::picker::{Picker, PickerController, PickerMode, Row};
+        use super::EditorEvent;
+        let items = paths
+            .into_iter()
+            .map(|path| {
+                let label = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+                let summary = fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|source| {
+                        source
+                            .lines()
+                            .find(|line| !line.trim().is_empty())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| "empty session".into());
+                let path = path.to_string_lossy().into_owned();
+                Row::enter(vec![summary.into(), label.into()], move || {
+                    EditorEvent::ViewFile(path.clone())
+                })
+                .into()
+            })
+            .collect();
+        self.pickers.push(PickerController {
+            mode: PickerMode::Commands,
+            picker: Picker::new("saved sessions", items),
+        });
+        self.refresh_status_line();
+    }
+
     /// A view's status: the views in the centre and, while it has focus, the
     /// keys it answers to on the right. While the view has focus the centre lists every view `Left` and `Right` step through, its own
     /// highlighted; otherwise it names the view alone.
     fn preview_status(&self, view: ViewKind, focused: bool) -> StatusLineContext {
         let shown: &[ViewKind] = match focused {
-            true => &ViewKind::PREVIEWS,
+            true if view != ViewKind::Reference => &ViewKind::PREVIEWS,
+            true => &[view],
             false => &[view],
         };
         let center = shown
@@ -245,10 +360,13 @@ impl Editor {
         if self.pane_focused {
             self.frame_stats.tick();
         }
+        self.report_picture_distances();
         self.selection_inclusions.clear();
         self.input.hide();
         let theme = *scheme();
         frame.render_widget(Clear, area);
+        let reference = view == ViewKind::Reference;
+        let swapped = reference && self.settings.rendering.reference_code_background;
         let canvas = self.view_canvas();
         TuiBlock::default()
             .style(canvas)
@@ -256,6 +374,7 @@ impl Editor {
         let picker_height = self
             .pickers
             .last()
+            .filter(|_| self.pane_focused)
             .map_or(0, |controller| controller.picker.height(area.width))
             .min(area.height.saturating_sub(1));
         let status_height = u16::from(!self.split).min(area.height);
@@ -265,10 +384,21 @@ impl Editor {
             Constraint::Length(status_height),
         ])
         .split(area);
-        let context = RenderContext::new(sections[0].width, 0);
+        let context = self
+            .render_context(sections[0].width)
+            .with_swapped_code_background(swapped);
         self.feed_area = sections[0];
 
         match view {
+            ViewKind::Reference => {
+                let (_, inclusions) = self.reference.render(
+                    &context.full_output(),
+                    sections[0],
+                    frame.buffer_mut(),
+                    canvas,
+                );
+                self.selection_inclusions.merge(inclusions);
+            }
             ViewKind::Shell => unreachable!("shells use Editor::draw"),
             ViewKind::Code | ViewKind::SyntaxTree => {
                 viewport.refresh_preview(committed, view, highlighter);
@@ -311,11 +441,24 @@ impl Editor {
         // Blocks such as printed text paint a band of their own; a view keeps one
         // background under all of them.
         let background = canvas.bg.unwrap_or(Color::Reset);
-        for position in sections[0].positions() {
-            frame.buffer_mut()[position].set_bg(background);
+        if !reference {
+            for position in sections[0].positions() {
+                frame.buffer_mut()[position].set_bg(background);
+            }
         }
-        self.feed_top = viewport.scroll as i64;
-        if let Some(controller) = self.pickers.last() {
+        if reference {
+            self.paint_link_hover(
+                frame,
+                self.pointer
+                    .and_then(|pointer| self.reference.link_at(pointer)),
+            );
+        }
+        self.feed_top = if view == ViewKind::Reference {
+            -(self.reference.offset() as i64)
+        } else {
+            viewport.scroll as i64
+        };
+        if let Some(controller) = self.pickers.last().filter(|_| self.pane_focused) {
             controller
                 .picker
                 .render(&(), sections[1], frame.buffer_mut());
@@ -327,14 +470,9 @@ impl Editor {
             let status = self.preview_status(view, self.pane_focused);
             match self.pickers.is_empty() {
                 true => StatusLine::default().render(&status, sections[2], frame.buffer_mut()),
-                false => self.status_line.render(
-                    &StatusLineContext {
-                        center: status.center,
-                        ..StatusLineContext::default()
-                    },
-                    sections[2],
-                    frame.buffer_mut(),
-                ),
+                false => self
+                    .status_line
+                    .render(&status, sections[2], frame.buffer_mut()),
             }
         }
         self.draw_highlight_debug(frame);
@@ -352,6 +490,116 @@ mod tests {
     use crate::code::highlight::SyntaxHighlighter;
     use crate::ui::cell::{CellState, TextBlock};
     use crate::ui::controller::EditorUpdate;
+
+    #[test]
+    fn retained_reference_restores_content_scroll_and_source_action() {
+        let mut editor = Editor::new(String::new());
+        let source = (0..80)
+            .map(|line| format!("source {line}\n"))
+            .collect::<String>();
+        editor.open_reference(
+            vec![Box::new(TextBlock::system(source))],
+            Some("first.m2".into()),
+        );
+        drawn_rows(&mut editor, ViewKind::Reference);
+        editor.scroll_reference(-5);
+        drawn_rows(&mut editor, ViewKind::Reference);
+        let offset = editor.reference.offset();
+        assert!(offset > 0);
+        let retained = editor.take_reference();
+        editor.open_reference(vec![Box::new(TextBlock::system("another reference"))], None);
+        assert!(editor.reference_file().is_none());
+        editor.restore_reference(retained);
+        assert_eq!(editor.reference.offset(), offset);
+        assert_eq!(editor.reference_file(), Some("first.m2"));
+        let rows = drawn_rows(&mut editor, ViewKind::Reference);
+        assert!(rows.iter().any(|row| row.contains("source ")));
+        assert!(!rows.iter().any(|row| row.contains("another reference")));
+    }
+
+    #[test]
+    fn reference_values_obey_the_same_selected_math_renderer_as_the_feed() {
+        use crate::backend::M2Value;
+        use crate::ui::cell::OutputBlock;
+        use crate::ui::render::maths::MathDisplay;
+        let mut editor = Editor::new(String::new());
+        editor.settings.rendering.maths = MathDisplay::Ascii;
+        editor.set_reference(vec![Box::new(
+            OutputBlock::rendered(
+                M2Value::Tex {
+                    source: "$\\frac{1}{2}$".into(),
+                    fallback: "1/2".into(),
+                    code: "1/2".into(),
+                },
+                None,
+            )
+            .without_frame(),
+        )]);
+        let rows = drawn_rows(&mut editor, ViewKind::Reference);
+        assert!(rows.iter().any(|row| row.contains("1/2")), "{rows:?}");
+    }
+
+    #[test]
+    fn reference_code_background_keeps_the_panel_canvas_and_text_colours() {
+        use crate::backend::M2Value;
+        use crate::ui::cell::OutputBlock;
+        let mut editor = Editor::new(String::new());
+        editor.set_context(true, true, true);
+        editor.set_reference(vec![Box::new(
+            OutputBlock::rendered(
+                M2Value::Markup {
+                    html: "<p>CanvasProbe</p><pre>codeProbe = 1</pre>".into(),
+                    fallback: String::new(),
+                    example_width: 60,
+                },
+                None,
+            )
+            .without_frame(),
+        )]);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        let mut colours = Vec::new();
+        for swapped in [false, true, false] {
+            editor.handle_action(Action::OpenSettings);
+            let mut settings = editor.settings;
+            settings.rendering.reference_code_background = swapped;
+            editor.set_settings(settings);
+            editor.pickers.clear();
+            terminal
+                .draw(|frame| {
+                    editor.draw_preview(
+                        frame,
+                        frame.area(),
+                        &mut SyntaxHighlighter::new(),
+                        CommittedCells {
+                            cells: &[],
+                            revision: 0,
+                        },
+                        ViewKind::Reference,
+                        &mut Viewport::default(),
+                    )
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let cell_at = |text: &str| {
+                for y in 0..buffer.area.height {
+                    let row: String = (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect();
+                    if let Some(x) = row.find(text) {
+                        return buffer[(x as u16, y)].clone();
+                    }
+                }
+                panic!("missing rendered text: {text}");
+            };
+            let canvas = cell_at("CanvasProbe");
+            let code = cell_at("codeProbe");
+            colours.push((canvas.bg, code.bg, code.fg));
+        }
+        let (canvas, _, foreground) = colours[0];
+        assert_eq!(colours[1].0, canvas);
+        assert_eq!(colours[1].2, foreground);
+        assert_eq!(colours[2], colours[0]);
+    }
 
     /// The rows `view` draws, as plain text.
     fn drawn_rows(editor: &mut Editor, view: ViewKind) -> Vec<String> {

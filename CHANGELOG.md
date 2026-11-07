@@ -4,9 +4,40 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Keymaps joins Settings as its sixth tab; `/keymaps` opens it directly. Statusline destination checklists separate off from the five segment choices.
+
+- A statusline component checklist assigns each item to one of five fixed segments or hides it. Components sharing a segment follow list order, including rendering settings and individual or combined process versions. Empty segments give neighbours more room without moving their anchors.
+
+- Middle-click documentation and source links to open them in the reference pane, or Ctrl-click to open them in the feed.
+- A rendering setting swaps the reference pane canvas and code backgrounds.
+
+- A saved-session browser (`/sessions`, `F7`) with source previews and `Ctrl+Enter` to restart and run a chosen session.
+- Save selected setup code as a reusable session with `Ctrl+Shift+S` or `/save-selection [file]`.
+- Preview files without evaluating them with `/view <file>`.
+- Delete the whole current input line with `Ctrl+U`.
+
 ### Fixed
 
+- Documentation opened through links uses the same example computation, semantic analysis, and selected math renderer as session output; enriched results refresh both panes.
+
+- Double-click expansion also works for standalone outputs opened directly into the feed.
+
+- Split views show pickers only in the focused pane; reference pages have no enclosing border and underline hovered links.
+
 - Debugger entry from interactive input no longer gets stranded when M2 cannot display its source; exit commands return to a usable session.
+- Ordinary errors return to normal input by default, preserving existing session state. `--debugger` opts into automatic debugger entry.
+- Clicked documentation opens in a separate reference pane without changing the session or its feed.
+- `Ctrl+Up` and `Ctrl+Down` browse all history from any line, including after editing recalled code.
+- `Ctrl+C` dismisses an accidental continuation or draft before quitting an idle shell.
+
+### Changed
+
+- Typeset maths pictures are encoded off the main thread, and the terminal keeps only those near the viewport: pictures no block holds are deleted at once, and past a memory budget the furthest go first. Pictures lost to tmux are sent again when its pane regains focus.
+- Picker borders take the accent colour, with the tabs on their own row beneath the top border.
+- The row of tabs is the first row of a picker: move onto it with the arrows and switch tabs with left and right.
+- A picker is as tall as its current tab needs rather than its longest tab.
 
 ## [1.2.3] - 2026-11-04
 

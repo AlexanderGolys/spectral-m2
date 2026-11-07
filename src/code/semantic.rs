@@ -18,11 +18,21 @@ use crate::ui::controller::settings::theme::groups::HLGroup;
 
 /// Characters other than letters and digits that continue a Macaulay2 name.
 const NAME_PUNCTUATION: &[char] = &['\'', '_', '$'];
-const COMMAND: SemanticTokenModifier = SemanticTokenModifier::new("command");
-const ALGEBRAIC: SemanticTokenModifier = SemanticTokenModifier::new("algebraic");
 const OPTION: SemanticTokenModifier = SemanticTokenModifier::new("option");
-const FILE: SemanticTokenModifier = SemanticTokenModifier::new("file");
-const UNRESOLVED: SemanticTokenModifier = SemanticTokenModifier::new("unresolved");
+const ALGEBRAIC: SemanticTokenModifier = SemanticTokenModifier::new("algebraic");
+const ACCESS: SemanticTokenModifier = SemanticTokenModifier::new("access");
+const STRONG: SemanticTokenModifier = SemanticTokenModifier::new("strong");
+const EMPHASIS: SemanticTokenModifier = SemanticTokenModifier::new("emphasis");
+const MONOSPACE: SemanticTokenModifier = SemanticTokenModifier::new("monospace");
+const LINK: SemanticTokenModifier = SemanticTokenModifier::new("link");
+const MATH: SemanticTokenModifier = SemanticTokenModifier::new("math");
+const EXAMPLE: SemanticTokenModifier = SemanticTokenModifier::new("example");
+const TEST: SemanticTokenModifier = SemanticTokenModifier::new("test");
+const INDEX: SemanticTokenModifier = SemanticTokenModifier::new("index");
+const NONSENSE: SemanticTokenModifier = SemanticTokenModifier::new("nonsense");
+const ESCAPE_SEQUENCE: SemanticTokenType = SemanticTokenType::new("escapeSequence");
+const DELIMITER: SemanticTokenType = SemanticTokenType::new("delimiter");
+const PUNCTUATION: SemanticTokenType = SemanticTokenType::new("punctuation");
 
 const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::TYPE,
@@ -42,16 +52,29 @@ const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::TYPE_PARAMETER,
     SemanticTokenType::MACRO,
     SemanticTokenType::DECORATOR,
+    SemanticTokenType::REGEXP,
+    ESCAPE_SEQUENCE,
+    DELIMITER,
+    PUNCTUATION,
 ];
 const TOKEN_MODIFIERS: &[SemanticTokenModifier] = &[
     SemanticTokenModifier::DECLARATION,
-    SemanticTokenModifier::new("builtin"),
     SemanticTokenModifier::DEFAULT_LIBRARY,
-    COMMAND,
-    ALGEBRAIC,
+    SemanticTokenModifier::READONLY,
+    SemanticTokenModifier::DOCUMENTATION,
+    SemanticTokenModifier::ABSTRACT,
     OPTION,
-    FILE,
-    UNRESOLVED,
+    ALGEBRAIC,
+    ACCESS,
+    STRONG,
+    EMPHASIS,
+    MONOSPACE,
+    LINK,
+    MATH,
+    EXAMPLE,
+    TEST,
+    INDEX,
+    NONSENSE,
 ];
 
 /// A source segment whose identity survives evaluation and repeated source text.
@@ -498,7 +521,7 @@ fn utf16_offset(text: &str, column: u32) -> Option<usize> {
 }
 
 /// Every highlight group a semantic token can resolve to.
-pub const SEMANTIC_GROUPS: [HLGroup; 22] = [
+pub const SEMANTIC_GROUPS: [HLGroup; 28] = [
     HLGroup::Type,
     HLGroup::Function,
     HLGroup::LspVariable,
@@ -517,10 +540,16 @@ pub const SEMANTIC_GROUPS: [HLGroup; 22] = [
     HLGroup::Macro,
     HLGroup::Attribute,
     HLGroup::RingGenerator,
-    HLGroup::SemanticCommand,
-    HLGroup::Option,
-    HLGroup::File,
-    HLGroup::Unresolved,
+        HLGroup::Option,
+    HLGroup::Installation,
+    HLGroup::CompiledFunction,
+    HLGroup::Regex,
+    HLGroup::Delimiter,
+    HLGroup::Punctuation,
+    HLGroup::MarkupStrong,
+    HLGroup::MarkupEmphasis,
+    HLGroup::MarkupStrongEmphasis,
+    HLGroup::MarkupLink,
 ];
 
 fn classify(legend: &SemanticTokensLegend, token: &SemanticToken) -> Option<HLGroup> {
@@ -555,20 +584,34 @@ fn classify(legend: &SemanticTokensLegend, token: &SemanticToken) -> Option<HLGr
         value if value == Token::TYPE_PARAMETER.as_str() => HLGroup::TypeParameter,
         value if value == Token::MACRO.as_str() => HLGroup::Macro,
         value if value == Token::DECORATOR.as_str() => HLGroup::Attribute,
+        value if value == Token::REGEXP.as_str() => HLGroup::Regex,
+        value if value == ESCAPE_SEQUENCE.as_str() => HLGroup::Regex,
+        value if value == DELIMITER.as_str() => HLGroup::Delimiter,
+        value if value == PUNCTUATION.as_str() => HLGroup::Punctuation,
         _ => return None,
     };
-    for (modifier, group) in [
-        (ALGEBRAIC.as_str(), HLGroup::RingGenerator),
-        (COMMAND.as_str(), HLGroup::SemanticCommand),
-        (OPTION.as_str(), HLGroup::Option),
-        (FILE.as_str(), HLGroup::File),
-        (UNRESOLVED.as_str(), HLGroup::Unresolved),
-    ] {
-        if has(modifier) {
-            return Some(group);
-        }
+    let callable = matches!(base, HLGroup::Function | HLGroup::Method);
+    if has(ALGEBRAIC.as_str()) {
+        return Some(HLGroup::RingGenerator);
     }
-    Some(base)
+    if has(OPTION.as_str()) {
+        return Some(HLGroup::Option);
+    }
+    if callable && has(SemanticTokenModifier::DECLARATION.as_str()) {
+        return Some(HLGroup::Installation);
+    }
+    if callable && has(SemanticTokenModifier::DEFAULT_LIBRARY.as_str()) {
+        return Some(HLGroup::CompiledFunction);
+    }
+    if has(LINK.as_str()) {
+        return Some(HLGroup::MarkupLink);
+    }
+    Some(match (has(STRONG.as_str()), has(EMPHASIS.as_str())) {
+        (true, true) => HLGroup::MarkupStrongEmphasis,
+        (true, false) => HLGroup::MarkupStrong,
+        (false, true) => HLGroup::MarkupEmphasis,
+        (false, false) => base,
+    })
 }
 
 /// Lay the semantic groups over the syntax groups they cover, as Neovim lays
@@ -632,7 +675,7 @@ mod tests {
                 SemanticTokenType::VARIABLE,
             ],
             token_modifiers: vec![
-                SemanticTokenModifier::new("unresolved"),
+                SemanticTokenModifier::new("strong"),
                 SemanticTokenModifier::new("algebraic"),
             ],
         }
@@ -726,7 +769,7 @@ mod tests {
                 token(u32::MAX, 0, 1, 0, 0),
             ],
         );
-        assert_eq!(spans, vec![HLSpan::new(6..7, HLGroup::Unresolved)]);
+        assert_eq!(spans, vec![HLSpan::new(6..7, HLGroup::MarkupStrong)]);
     }
 
     #[test]
@@ -754,10 +797,7 @@ mod tests {
     #[test]
     fn a_plain_value_leaves_its_syntax_color() {
         let groups = crate::ui::controller::settings::theme::groups::scheme();
-        for (syntax, semantic) in [
-            (HLGroup::Boolean, HLGroup::LspVariable),
-            (HLGroup::Function, HLGroup::Unresolved),
-        ] {
+        for (syntax, semantic) in [(HLGroup::Boolean, HLGroup::LspVariable)] {
             let layered: HLSpan = HLSpan::new(0..4, syntax).marked(semantic);
             let plain: HLSpan = HLSpan::new(0..4, syntax);
             assert_eq!(layered.style(groups), plain.style(groups), "{semantic:?}");

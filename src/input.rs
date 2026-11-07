@@ -51,6 +51,7 @@ pub enum InputAction {
     PreviousCompletion = "take the previous completion",
 
     DeleteBack = "delete before the cursor",
+    DeleteLine = "delete the whole current line",
     DeleteForward = "delete under the cursor",
     DeleteWordBack = "delete back to where a word-wise move left lands",
     DeleteWordForward = "delete on to where a word-wise move right lands",
@@ -62,8 +63,8 @@ pub enum InputAction {
     MoveRight = "move right",
     MoveUp = "move up, or recall older input",
     MoveDown = "move down, or recall newer input",
-    HistoryPrevious = "recall older matching input",
-    HistoryNext = "recall newer matching input",
+    HistoryPrevious = "recall older input regardless of the draft",
+    HistoryNext = "recall newer input regardless of the draft",
     MoveWordLeft = "move left by a word",
     MoveWordRight = "move right by a word",
     MoveLineStart = "move to line start",
@@ -500,6 +501,36 @@ impl InputTextField {
         (line, col)
     }
 
+    pub fn delete_line(&mut self) {
+        self.edit(EditKind::Replacing, |field| {
+            field.clear_selection();
+            let start = field.text[..field.cursor].rfind('\n').map_or(0, |i| i + 1);
+            let end = field.text[field.cursor..]
+                .find('\n')
+                .map_or(field.text.len(), |i| field.cursor + i + 1);
+            let start =
+                if end == field.text.len() && start > 0 && !field.text[start..].ends_with('\n') {
+                    start - 1
+                } else {
+                    start
+                };
+            field.delete(start..end);
+        });
+    }
+
+    pub fn history_unfiltered(&mut self, previous: bool) {
+        let buffer = if previous {
+            self.history.previous_unfiltered(&self.text, self.cursor)
+        } else {
+            self.history.next_unfiltered(&self.text)
+        };
+        if let Some(buffer) = buffer {
+            self.edit(EditKind::Recalling, |field| {
+                field.load(buffer.text, buffer.cursor)
+            });
+        }
+    }
+
     pub fn history_prev(&mut self) {
         if let Some(buffer) = self.history.prev(&self.text, self.cursor) {
             self.edit(EditKind::Recalling, |field| {
@@ -758,6 +789,7 @@ impl InputCode {
                 | InsertTab
                 | DeleteBack
                 | DeleteForward
+                | DeleteLine
                 | DeleteWordBack
                 | DeleteWordForward
                 | Undo
@@ -782,6 +814,7 @@ impl InputCode {
             InsertTab => field.insert_char('\t'),
             DeleteBack => field.backspace(),
             DeleteForward => field.delete_forward(),
+            DeleteLine => field.delete_line(),
             DeleteWordBack => field.delete_word_back(),
             DeleteWordForward => field.delete_word_forward(),
             Undo => field.undo(),
@@ -794,8 +827,8 @@ impl InputCode {
             MoveLineEnd => field.move_end(),
             MoveTextStart => field.move_text_start(),
             MoveTextEnd => field.move_text_end(),
-            HistoryPrevious => field.history_prev(),
-            HistoryNext => field.history_next(),
+            HistoryPrevious => field.history_unfiltered(true),
+            HistoryNext => field.history_unfiltered(false),
             MoveUp if browse && !field.text[..field.cursor].contains('\n') => field.history_prev(),
             MoveUp => field.move_up(),
             MoveDown if browse && !field.text[field.cursor..].contains('\n') => {
@@ -2036,5 +2069,53 @@ mod tests {
             )
         );
         assert_eq!(input.text(), "alpha");
+    }
+}
+
+#[cfg(test)]
+mod editing_workflow_tests {
+    use super::{InputAction, InputCode, InputTextField};
+
+    #[test]
+    fn forced_history_ignores_multiline_drafts_and_restores_the_cursor() {
+        let mut input = InputCode::new();
+        input.field.history.record("older = 1");
+        input.field.history.record("newer = 2");
+        input.field.insert_str("unrelated\ndraft");
+        input.field.move_home();
+        let draft = input.field.snapshot();
+        input.edit(InputAction::HistoryPrevious);
+        assert_eq!(input.field.text, "newer = 2");
+        input.edit(InputAction::HistoryPrevious);
+        assert_eq!(input.field.text, "older = 1");
+        input.field.move_home();
+        input.field.insert_str("edited ");
+        input.edit(InputAction::HistoryNext);
+        assert_eq!(input.field.text, "newer = 2");
+        input.edit(InputAction::HistoryNext);
+        assert_eq!(input.field.text, draft.text);
+        assert_eq!(input.field.cursor, draft.cursor);
+        input.field.insert_char('!');
+        input.edit(InputAction::HistoryPrevious);
+        assert_eq!(input.field.text, "newer = 2");
+    }
+
+    #[test]
+    fn deleting_a_line_handles_unicode_and_is_one_undo_step() {
+        for (source, cursor, remaining) in [
+            ("first\nαβ\nlast", "first\nα".len(), "first\nlast"),
+            ("first\nlast", "first\nla".len(), "first"),
+            ("first\n", "first\n".len(), "first"),
+            ("only", 2, ""),
+        ] {
+            let mut field = InputTextField::new();
+            field.insert_str(source);
+            field.cursor = cursor;
+            field.delete_line();
+            assert_eq!(field.text, remaining);
+            field.undo();
+            assert_eq!(field.text, source);
+            assert_eq!(field.cursor, cursor);
+        }
     }
 }

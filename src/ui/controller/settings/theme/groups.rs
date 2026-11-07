@@ -104,6 +104,7 @@ impl GroupDeclarations {
                 .0
                 .get(&name)
                 .ok_or_else(|| format!("unknown highlight group `{name}`"))?;
+
             if original.required && !declaration.required {
                 return Err(format!(
                     "required group `{name}` cannot become a default link"

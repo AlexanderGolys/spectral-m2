@@ -9,6 +9,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use super::controller::settings::theme::groups::{Groups, HLGroup};
+use super::graphics::kitty::ImageId;
 use super::render::selection::Inclusions;
 use super::render::RenderContext;
 
@@ -38,6 +39,10 @@ pub trait Element: Send {
 
 /// A self-contained element rendered locally across a measured number of feed rows.
 pub trait Block {
+    /// Preferred initial row for a source reference, before the user scrolls.
+    fn focus_row(&self, _: &RenderContext) -> Option<u16> {
+        None
+    }
     /// Number of consecutive feed rows occupied at the context width.
     fn height(&self, context: &RenderContext) -> u16;
 
@@ -49,12 +54,27 @@ pub trait Block {
         false
     }
 
+    /// The pictures this block last laid out, which the terminal may hold for it.
+    fn pictures(&self) -> Vec<ImageId> {
+        Vec::new()
+    }
+
     /// Add zero-based regions that copied selections must omit.
     fn local_selection_inclusions(&self, _: &RenderContext, _: &mut Inclusions) {}
+
+    /// Expand or fold content at a local position, returning whether its layout changed.
+    fn toggle_fold(&mut self, _: Position, _: &RenderContext) -> bool {
+        false
+    }
 
     /// The link drawn at local `position`, if any, with every cell it covers.
     fn link_at(&self, _: &RenderContext, _: Position) -> Option<Link> {
         None
+    }
+
+    /// Retained link geometry for composing this block inside another document.
+    fn links(&self, _: &RenderContext) -> Vec<Link> {
+        Vec::new()
     }
 
     /// Restate this block's local inclusions in the coordinates of a placed `area`.

@@ -124,7 +124,7 @@ cyclic! {
         Ascii = "ascii",
         /// Typeset pictures, on a terminal that shows them.
         #[serde(alias = "ratex", alias = "latex")]
-        Typeset = "typeset",
+        Typeset = "ratex",
     }
 }
 
@@ -777,6 +777,8 @@ const PICTURED_FORMS: [(&str, &str); 1] = [(r"\mathbf{i}", r"\mathrm{i}")];
 const BOOLEAN_WORDS: [&str; 2] = ["true", "false"];
 /// The word code paints as a builtin among those M2 sets in typewriter face.
 const NULL_WORD: &str = "null";
+
+// @##issue non-ascii glyphs set in random place
 /// Operators TeX spells as a command, with the glyph a terminal draws for each.
 const OPERATOR_COMMANDS: [(&str, &str); 19] = [
     ("wedge", "\u{2227}"),

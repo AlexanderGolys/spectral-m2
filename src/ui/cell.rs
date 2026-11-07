@@ -19,6 +19,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::block::{Block, Element, HLSpan, Link, Text};
 use super::element::paste;
+use super::graphics::{self, kitty::ImageId};
 use super::render::maths::MathDisplay;
 use super::render::selection::Inclusions;
 use super::render::spin::busy_frame;
@@ -27,7 +28,7 @@ use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::wrap::WrappedText;
 use crate::backend::transcript::{captured_output, strip_m2_location};
 use crate::backend::{M2Response, M2Value};
-use crate::code::highlight::Highlighter;
+use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::SourceId;
 use crate::ui::config::UI;
 
@@ -285,6 +286,86 @@ pub struct CodeBlock {
     cells: Vec<Cell>,
 }
 
+/// A source document with semantic colours and an optional referenced fragment.
+pub struct SourceBlock {
+    code: RefCell<CodeBlock>,
+    page: u64,
+    focus: Option<Range<usize>>,
+}
+
+impl SourceBlock {
+    pub fn new(source: String, page: u64, focus: Option<Range<usize>>) -> Self {
+        let cell = Cell::highlighted(
+            source,
+            None,
+            SourceId::Page { page, index: 0 },
+            &mut SyntaxHighlighter::new(),
+        );
+        Self {
+            code: RefCell::new(CodeBlock::new([cell])),
+            page,
+            focus,
+        }
+    }
+
+    fn focused_cells(&self, context: &RenderContext) -> Vec<Rect> {
+        let Some(focus) = &self.focus else {
+            return Vec::new();
+        };
+        let code = self.code.borrow();
+        let cell = &code.cells[0];
+        let gutter = cell.marker().width(code.layout());
+        cell.wrapped(context.width().saturating_sub(gutter))
+            .source_lines()
+            .enumerate()
+            .filter_map(|(row, (range, _))| {
+                let start = range.start.max(focus.start);
+                let end = range.end.min(focus.end);
+                (start < end).then(|| {
+                    Rect::new(
+                        gutter + cell.text[range.start..start].width() as u16,
+                        row as u16 + 1,
+                        cell.text[start..end].width() as u16,
+                        1,
+                    )
+                })
+            })
+            .collect()
+    }
+}
+
+impl Block for SourceBlock {
+    fn height(&self, context: &RenderContext) -> u16 {
+        self.code.borrow().height(context)
+    }
+
+    fn focus_row(&self, context: &RenderContext) -> Option<u16> {
+        self.focused_cells(context).first().map(|cells| cells.y)
+    }
+
+    fn render_local(&self, context: &RenderContext, buffer: &mut Buffer) {
+        {
+            let mut code = self.code.borrow_mut();
+            let cell = &mut code.cells[0];
+            cell.spans = markup::source_highlights(self.page, &cell.text);
+            code.render_local(context, buffer);
+        }
+        if let Some(background) = context.groups().selection().bg {
+            for cells in self.focused_cells(context) {
+                for position in cells.intersection(*buffer.area()).positions() {
+                    buffer[position].set_bg(background);
+                }
+            }
+        }
+    }
+
+    fn local_selection_inclusions(&self, context: &RenderContext, inclusions: &mut Inclusions) {
+        self.code
+            .borrow()
+            .local_selection_inclusions(context, inclusions);
+    }
+}
+
 impl CodeBlock {
     /// Create a code block from lexical cells in display order.
     pub fn new(cells: impl IntoIterator<Item = Cell>) -> Self {
@@ -338,7 +419,7 @@ impl CodeBlock {
                 CellMarker::Bare,
                 layout,
                 &context,
-                context.groups().code(),
+                context.code_style(),
                 true,
             ));
         }
@@ -366,6 +447,7 @@ impl IncompleteBlock {
     }
 
     /// Return the source when this block is moved back into the editor.
+    #[cfg(test)]
     pub fn into_source(self) -> String {
         self.code
             .cells
@@ -402,7 +484,7 @@ impl Block for CodeBlock {
 
     fn render_local(&self, context: &RenderContext, buf: &mut Buffer) {
         let area = *buf.area();
-        let style = context.groups().code();
+        let style = context.code_style();
         Paragraph::new(self.lines(context, style))
             .style(style)
             .render(area, buf);
@@ -549,7 +631,7 @@ impl EvaluationBlock {
         } else if after_error {
             groups.error_code().patch(groups.muted_code_text())
         } else {
-            groups.code()
+            context.code_style()
         }
     }
 
@@ -822,10 +904,21 @@ impl EvaluationBlock {
 }
 
 impl Block for EvaluationBlock {
+    fn pictures(&self) -> Vec<ImageId> {
+        self.outputs
+            .iter()
+            .flat_map(|output| output.block().pictures())
+            .collect()
+    }
+
     fn animated(&self) -> bool {
         self.cells
             .iter()
             .any(|(_, state)| matches!(state, EvaluationState::Pending))
+    }
+
+    fn toggle_fold(&mut self, position: Position, context: &RenderContext) -> bool {
+        Self::toggle_fold(self, position, context)
     }
 
     fn height(&self, context: &RenderContext) -> u16 {
@@ -841,7 +934,7 @@ impl Block for EvaluationBlock {
         let code_height = self.code_height(context);
         let code_area_height = code_height.saturating_add(self.output_margin());
         Paragraph::new(self.code_lines(context))
-            .style(context.groups().code())
+            .style(context.code_style())
             .render(Rect::new(area.x, area.y, area.width, code_area_height), buf);
         let layout = self.layout();
         layout.render_separator(code_area_height, context.groups().separator(), buf);
@@ -901,6 +994,21 @@ impl Block for EvaluationBlock {
             );
             y = y.saturating_add(height);
         }
+    }
+
+    fn links(&self, context: &RenderContext) -> Vec<Link> {
+        let mut top = self.code_height(context) + self.output_margin();
+        let mut links = Vec::new();
+        for block in self.outputs() {
+            links.extend(
+                block
+                    .links(context)
+                    .into_iter()
+                    .map(|link| link.moved(Offset::new(0, i32::from(top)))),
+            );
+            top = top.saturating_add(block.height(context));
+        }
+        links
     }
 
     fn link_at(&self, context: &RenderContext, position: Position) -> Option<Link> {
@@ -1104,6 +1212,8 @@ impl Block for TextBlock {
 /// One result inside a possibly shared value border.
 struct OutputCell {
     layout: RefCell<Option<ValueLayout>>,
+    /// The pictures the rows last laid out for this cell hold.
+    pictures: RefCell<Vec<ImageId>>,
     number: Option<u32>,
     text: String,
     value: Option<M2Value>,
@@ -1126,6 +1236,7 @@ pub struct OutputBlock {
     cells: Vec<OutputCell>,
     /// Whether values taller than the output limit show every row.
     expanded: bool,
+    framed: bool,
 }
 
 impl OutputBlock {
@@ -1135,6 +1246,7 @@ impl OutputBlock {
         Self {
             cells: vec![OutputCell {
                 layout: RefCell::default(),
+                pictures: RefCell::default(),
                 number: None,
                 text: text.trim_end().to_string(),
                 value: None,
@@ -1142,6 +1254,7 @@ impl OutputBlock {
                 type_parts: Vec::new(),
             }],
             expanded: false,
+            framed: true,
         }
     }
 
@@ -1150,6 +1263,7 @@ impl OutputBlock {
         Self {
             cells: vec![OutputCell {
                 layout: RefCell::default(),
+                pictures: RefCell::default(),
                 number: None,
                 text: value
                     .plain_text()
@@ -1159,7 +1273,14 @@ impl OutputBlock {
                 type_parts: Vec::new(),
             }],
             expanded: false,
+            framed: true,
         }
+    }
+
+    /// Present this value without its enclosing output border.
+    pub fn without_frame(mut self) -> Self {
+        self.framed = false;
+        self
     }
 
     /// Set the type annotation from its pieces rather than its text.
@@ -1474,6 +1595,16 @@ impl OutputBlock {
     }
 
     fn lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
+        let lines = self.composed_lines(cell, context);
+        let pictures = match context.math().display {
+            MathDisplay::Typeset => graphics::shown_in_lines(&lines).into_iter().collect(),
+            _ => Vec::new(),
+        };
+        cell.pictures.replace(pictures);
+        lines
+    }
+
+    fn composed_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
         let mut lines = self.value_lines(cell, context);
         let types = self.type_lines(cell, context);
         let type_width = types.iter().map(Line::width).max().unwrap_or_default();
@@ -1509,7 +1640,51 @@ impl OutputBlock {
     }
 }
 
+impl OutputBlock {
+    fn placed_link(
+        &self,
+        cell: &OutputCell,
+        context: &RenderContext,
+        origin: Position,
+        link: Link,
+    ) -> Link {
+        let fold = self.cell_fold(cell, context);
+        let cells = link
+            .cells
+            .iter()
+            .filter_map(|cells| {
+                let unfolded = usize::from(cells.y);
+                let shown = match fold {
+                    Some((head, hidden)) if (head..head + hidden).contains(&unfolded) => {
+                        return None
+                    }
+                    Some((head, hidden)) if unfolded >= head + hidden => unfolded + 3 - hidden,
+                    _ => unfolded,
+                };
+                Some(Rect::new(
+                    cells.x + origin.x,
+                    origin.y + shown as u16,
+                    cells.width,
+                    1,
+                ))
+            })
+            .collect();
+        Link { cells, ..link }
+    }
+}
+
 impl Block for OutputBlock {
+    fn pictures(&self) -> Vec<ImageId> {
+        self.cells
+            .iter()
+            .flat_map(|cell| cell.pictures.borrow().clone())
+            .collect()
+    }
+
+    fn toggle_fold(&mut self, position: Position, context: &RenderContext) -> bool {
+        Self::toggle_fold(self, position, context)
+    }
+
     fn height(&self, context: &RenderContext) -> u16 {
         row_count!(self.body(context).len()).saturating_add(2)
     }
@@ -1518,14 +1693,18 @@ impl Block for OutputBlock {
         let area = *buf.area();
         let theme = context.groups();
         let layout = self.border_layout();
-        Bordered::new(
-            layout,
-            Style::new(),
-            theme.border(),
-            None,
-            self.body(context),
-        )
-        .render(&(), area, buf);
+        if self.framed {
+            Bordered::new(
+                layout,
+                Style::new(),
+                theme.border(),
+                None,
+                self.body(context),
+            )
+            .render(&(), area, buf);
+        } else {
+            Paragraph::new(self.body(context)).render(Bordered::inner(area, layout), buf);
+        }
         let mut row = Bordered::inner(area, layout).y;
         for (index, cell) in self.cells.iter().enumerate() {
             row = row.saturating_add(Self::gap(index));
@@ -1563,6 +1742,35 @@ impl Block for OutputBlock {
         }
     }
 
+    fn links(&self, context: &RenderContext) -> Vec<Link> {
+        let area = Rect::new(0, 0, context.width(), self.height(context));
+        let inner = Bordered::inner(area, self.border_layout());
+        let mut row = inner.y;
+        let mut links = Vec::new();
+        for (index, cell) in self.cells.iter().enumerate() {
+            row = row.saturating_add(Self::gap(index));
+            if let Some(M2Value::Markup {
+                html,
+                example_width,
+                ..
+            }) = &cell.value
+            {
+                links.extend(
+                    markup::links(
+                        html,
+                        *example_width,
+                        &context.with_width(self.value_width(cell, context)),
+                    )
+                    .into_iter()
+                    .map(|link| self.placed_link(cell, context, Position::new(inner.x, row), link))
+                    .filter(|link| !link.cells.is_empty()),
+                );
+            }
+            row = row.saturating_add(row_count!(self.lines(cell, context).len()));
+        }
+        links
+    }
+
     fn link_at(&self, context: &RenderContext, position: Position) -> Option<Link> {
         let area = Rect::new(0, 0, context.width(), self.height(context));
         let inner = Bordered::inner(area, self.border_layout());
@@ -1589,11 +1797,6 @@ impl Block for OutputBlock {
                 Some((head, hidden)) if shown >= head + 3 => Some(shown + hidden - 3),
                 _ => Some(shown),
             };
-            let shown_at = |unfolded: usize| match fold {
-                Some((head, hidden)) if (head..head + hidden).contains(&unfolded) => None,
-                Some((head, hidden)) if unfolded >= head + hidden => Some(unfolded + 3 - hidden),
-                _ => Some(unfolded),
-            };
             let link = markup::link_at(
                 html,
                 *example_width,
@@ -1603,15 +1806,7 @@ impl Block for OutputBlock {
                     unfolded(usize::from(position.y - row))? as u16,
                 ),
             )?;
-            let cells = link
-                .cells
-                .iter()
-                .filter_map(|cells| {
-                    let y = row + shown_at(usize::from(cells.y))? as u16;
-                    Some(Rect::new(cells.x + inner.x, y, cells.width, 1))
-                })
-                .collect();
-            return Some(Link { cells, ..link });
+            return Some(self.placed_link(cell, context, Position::new(inner.x, row), link));
         }
         None
     }

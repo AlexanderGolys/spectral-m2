@@ -2,6 +2,7 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::mem;
+use std::result::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -15,7 +16,7 @@ use crate::backend::transcript::captured_error;
 use crate::backend::{M2Backend, M2Response, M2Value};
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::{Document, SourceId};
-use crate::errors::Result;
+use crate::errors::Error;
 use crate::ui::cell::{response_blocks, CellState, TextBlock};
 use crate::ui::controller::EditorUpdate;
 use crate::ui::render::markup;
@@ -42,6 +43,7 @@ struct SubmittedCell {
 }
 
 /// What divides the submissions in code kept as a file.
+// @##magic
 const BLOCK_SEPARATOR: char = '\u{c}';
 
 /// One submitted evaluation, active at the queue front and queued otherwise.
@@ -71,10 +73,10 @@ enum WorkerEvent {
         id: u64,
         index: usize,
         number: u32,
-        result: std::result::Result<M2Response, String>,
+        result: Result<M2Response, String>,
     },
     /// The fresh process's version and every name it started with.
-    Restarted(std::result::Result<(String, Vec<String>, String), String>),
+    Restarted(Result<(String, Vec<String>, String), String>),
 }
 
 /// A live M2 worker and the source state committed through it.
@@ -141,6 +143,12 @@ impl Session {
         mem::take(&mut self.pages_to_analyse)
     }
 
+    /// Prepare a page for the same example rendering and semantic analysis as session output.
+    pub fn prepare_documentation(&mut self, value: Option<&M2Value>) {
+        self.compute_examples(value);
+        self.analyse_page(value);
+    }
+
     fn analyse_page(&mut self, value: Option<&M2Value>) {
         let Some(M2Value::Markup {
             html,
@@ -166,6 +174,7 @@ impl Session {
     }
 
     /// Compute the examples of the documentation `value` shows, once per page.
+    // @##issue should take either a code block or a sequence of blocks
     fn compute_examples(&mut self, value: Option<&M2Value>) {
         let Some(M2Value::Markup {
             html,
@@ -191,7 +200,7 @@ impl Session {
         }
     }
 
-    pub fn version(&self) -> Result<String> {
+    pub fn version(&self) -> Result<String, Error> {
         Ok(self.version.clone())
     }
 
@@ -320,6 +329,7 @@ impl Session {
             return EditorUpdate::Diagnostic("workspace is still evaluating".to_string());
         }
         if self.requests.send(WorkerRequest::Restart).is_err() {
+            // @##magic hardcoded diagnostic 3 separate times
             return EditorUpdate::Diagnostic("Macaulay2 worker stopped".to_string());
         }
         self.restarting = true;
@@ -456,6 +466,7 @@ impl Session {
         }
     }
 
+    // @##wtf
     fn incomplete_reason(&self) -> String {
         self.parser.parse_error().map_or_else(
             || {
@@ -553,6 +564,7 @@ impl Session {
         let computed = self.examples.answered();
         if !computed.is_empty() {
             for example in computed {
+                self.analyse_page(example.response.value.as_ref());
                 markup::remember_example(example.page, example.number, example.response);
             }
             updates.push(EditorUpdate::ExamplesComputed);
@@ -565,7 +577,7 @@ impl Session {
         id: u64,
         index: usize,
         number: u32,
-        result: std::result::Result<M2Response, String>,
+        result: Result<M2Response, String>,
     ) -> EditorUpdate {
         let Some(cell) = self
             .evaluations
@@ -596,15 +608,14 @@ impl Session {
         index: usize,
         number: u32,
         cell: SubmittedCell,
-        result: std::result::Result<M2Response, String>,
+        result: Result<M2Response, String>,
     ) -> EditorUpdate {
         match result {
             Ok(response) if !response.is_error => {
                 self.in_debugger = response.depth > 1;
                 self.next_input_number = number + 1;
                 let state = CellState::of(&response);
-                self.compute_examples(response.value.as_ref());
-                self.analyse_page(response.value.as_ref());
+                self.prepare_documentation(response.value.as_ref());
                 self.committed.push(CommittedCell {
                     source_id: SourceId::Cell {
                         generation: self.generation,
@@ -719,7 +730,7 @@ impl Session {
 
     fn resolve_restart(
         &mut self,
-        result: std::result::Result<(String, Vec<String>, String), String>,
+        result: Result<(String, Vec<String>, String), String>,
     ) -> EditorUpdate {
         self.restarting = false;
         match result {
@@ -782,7 +793,7 @@ fn worker(mut backend: M2Backend, requests: Receiver<WorkerRequest>, events: Sen
                                 }
                                 response
                             });
-                    if matches!(result, Err(crate::errors::Error::Exited(_))) {
+                    if matches!(result, Err(Error::Exited(_))) {
                         let _ = events.send(WorkerEvent::Exited);
                         return;
                     }
@@ -857,6 +868,38 @@ mod tests {
         updates.extend(session.poll());
         assert!(!session.busy(), "evaluation timed out");
         updates
+    }
+
+    #[test]
+    fn browsed_pages_queue_the_same_example_work_and_semantic_sources_as_evaluated_pages() {
+        let mut session = Session::new(M2Backend::spawn().expect("spawn M2"));
+        session.set_example_timeout(Duration::from_secs(2));
+        let value = M2Value::Markup {
+            html: "<p>reference enrichment probe</p><pre>i1 : 1/2\n\no1 = 1/2</pre>".into(),
+            fallback: String::new(),
+            example_width: 60,
+        };
+        session.prepare_documentation(Some(&value));
+        let sources = session.take_pages_to_analyse();
+        assert!(sources
+            .iter()
+            .flat_map(|(_, sources)| sources)
+            .any(|source| source.trim() == "1/2"));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut computed = false;
+        while Instant::now() < deadline && !computed {
+            computed = session
+                .poll()
+                .iter()
+                .any(|update| matches!(update, EditorUpdate::ExamplesComputed));
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(computed, "page examples were never prepared");
+        session.prepare_documentation(Some(&value));
+        assert!(
+            session.take_pages_to_analyse().is_empty(),
+            "the same page is prepared only once"
+        );
     }
 
     #[test]

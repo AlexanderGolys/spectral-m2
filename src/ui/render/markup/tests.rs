@@ -6,6 +6,61 @@ use crate::ui::controller::settings::theme::groups::Groups;
 const EXAMPLE_WIDTH: usize = 77;
 
 #[test]
+fn inline_strings_keep_their_highlights_when_words_wrap() {
+    let source = "\"alpha beta gamma delta\"";
+    let html = format!("<p><code>{source}</code></p>");
+    let rows = spans(&html, 12).unwrap();
+    let expected = code(source)
+        .into_iter()
+        .find(|span| span.content.contains("alpha"))
+        .unwrap()
+        .kind;
+    for word in ["alpha", "beta", "gamma", "delta"] {
+        let span = rows
+            .iter()
+            .flatten()
+            .find(|span| span.content.contains(word))
+            .unwrap();
+        assert_eq!(span.kind, expected, "{word}");
+    }
+    assert!(rows.len() > 1);
+}
+
+#[test]
+fn descriptions_keep_their_semantics_across_wrapped_rows() {
+    let html = "<ul><li><a href='&quot;probe&quot;'>probe(HashTable,Function)</a> -- every key and value must satisfy the predicate condition</li></ul>";
+    let rows = spans(html, 24).unwrap();
+    let last = rows
+        .iter()
+        .flatten()
+        .find(|span| span.content.contains("condition"))
+        .unwrap();
+    assert_eq!(last.kind, HLGroup::Muted);
+    assert!(rows.len() > 2);
+}
+
+#[test]
+fn method_signatures_keep_syntax_and_link_to_their_direct_or_alias_documentation() {
+    let html = "<ul><li><a href='&quot;direct&quot;'>probe(HashTable,Function)</a> -- description</li><li><kbd>another(HashTable,Function)</kbd> -- see <a href='&quot;alias&quot;'>alias</a> -- description</li><li><span class='tt'>unknown(HashTable)</span> (missing documentation)</li></ul>";
+    for width in [18, 90] {
+        let rows = spans(html, width).unwrap();
+        for (name, target) in [
+            ("probe", "\"direct\""),
+            ("another", "\"alias\""),
+            ("unknown", "\"unknown(HashTable)\""),
+        ] {
+            let signature = rows
+                .iter()
+                .flatten()
+                .find(|span| span.content.contains(name))
+                .unwrap();
+            assert_eq!(signature.target.as_deref(), Some(target));
+            assert_ne!(signature.kind, HLGroup::Value);
+        }
+    }
+}
+
+#[test]
 fn document_layout_is_shared_by_painting_and_pointer_checks() {
     let html = "<p><a href='&quot;ZZ&quot;'>integers</a></p><pre>i1 : 2+2\n\no1 = 4</pre>";
     let context = RenderContext::new(60, 0);
@@ -698,4 +753,53 @@ fn dollar_signs_in_code_are_left_alone() {
 fn tex_that_is_not_read_stays_as_written() {
     let text = text_of(r"<p>costs $\unknowncommand{x}$ now</p>", 60);
     assert!(text.contains(r"$\unknowncommand{x}$"), "{text}");
+}
+
+#[test]
+fn source_links_keep_their_encoded_path_and_location() {
+    let target = "file:///tmp/source%20file.m2#L12:C3-L14:C8";
+    let html = format!("<p><a href='{target}'>source location</a></p>");
+    let context = RenderContext::new(60, 0);
+    let link =
+        link_at(&html, 60, &context, Position::new(1, 0)).expect("source location is clickable");
+    assert_eq!(&*link.target, target);
+}
+
+#[test]
+fn semantic_colours_of_computed_source_refresh_the_enclosing_example() {
+    let child = "<pre>nestedSemanticProbe = 1</pre>";
+    let parent = "<p>Nested source colour probe</p><pre>i1 : code nestedSemanticProbe\n\no1 = recorded source</pre>";
+    let context = RenderContext::new(80, 0);
+    remember_example(
+        page(parent),
+        1,
+        M2Response {
+            number: 1,
+            is_error: false,
+            transcript: String::new(),
+            value: Some(crate::backend::M2Value::Markup {
+                html: child.into(),
+                fallback: String::new(),
+                example_width: 60,
+            }),
+            type_info: None,
+            type_parts: Vec::new(),
+            has_value: true,
+            depth: 1,
+            names: Vec::new(),
+        },
+    );
+    let before = lines(parent, 60, &context).unwrap();
+    remember_colors(crate::code::semantic::PageColors {
+        page: page(child),
+        sources: vec![(
+            "nestedSemanticProbe = 1".into(),
+            vec![crate::ui::block::HLSpan::new(0..19, HLGroup::Function)],
+        )],
+    });
+    let after = lines(parent, 60, &context).unwrap();
+    assert!(
+        !Rc::ptr_eq(&before, &after),
+        "enclosing rows retained stale semantic colours"
+    );
 }

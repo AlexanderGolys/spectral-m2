@@ -163,7 +163,7 @@ impl PickerItem for CommandItem {
 }
 
 /// Every command, in the order the picker lists them.
-const COMMANDS: [Command; 11] = [
+const COMMANDS: [Command; 14] = [
     Command::new("settings", Action::OpenSettings),
     Command::new("keymaps", Action::OpenKeymaps),
     Command::new("clear", Action::ClearFeed),
@@ -179,6 +179,13 @@ const COMMANDS: [Command; 11] = [
     ),
     Command::taking("load", Action::LoadCode, Argument::Required(Operand::File)),
     Command::new("resume", Action::ResumeSession),
+    Command::new("sessions", Action::BrowseSessions),
+    Command::taking("view", Action::ViewFile, Argument::Required(Operand::File)),
+    Command::taking(
+        "save-selection",
+        Action::SaveSelection,
+        Argument::Optional(Operand::File),
+    ),
 ];
 
 /// The commands whose label or one of its words starts with `query`, ignoring

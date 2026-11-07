@@ -9,12 +9,18 @@ pub mod kitty;
 pub mod typeset;
 mod typewriter;
 
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{HashMap, HashSet};
 use std::env;
+use std::fmt::{self, Display, Formatter};
+use std::mem;
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
+use std::thread;
 
 use crossterm::terminal::window_size;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Size;
 use ratatui::text::Line;
 use ratatui_image::picker::{Picker, ProtocolType};
@@ -24,9 +30,10 @@ use resvg::tiny_skia::{Pixmap, PixmapPaint, Transform};
 use resvg::usvg::{Options, Tree};
 
 use crate::ui::config::UI;
-use kitty::{ImageId, KittyImage, Passthrough};
+use kitty::{ImageId, KittyImage, Passthrough, Piece};
 use typeset::{Break, Rgb, EM, PADDING};
 
+// @##magic
 const TMUX: &str = "tmux";
 /// Set in every process tmux runs.
 const TMUX_VARIABLE: &str = "TMUX";
@@ -41,6 +48,12 @@ const TERMINAL_VARIABLES: [&str; 2] = ["TERM_PROGRAM", "TERM"];
 const TERM_FAMILY_PREFIX: &str = "xterm-";
 /// Terminals drawing kitty pictures by Unicode placeholders, as they name themselves.
 const PLACEHOLDER_TERMINALS: [&str; 2] = ["kitty", "ghostty"];
+/// Bytes of decoded pixels the terminal may hold for pictures off the screen. Kitty
+/// and Ghostty each evict pictures, on screen or not, past a quota of 320 MiB, so
+/// this keeps well clear of it.
+const TERMINAL_IMAGE_BUDGET: usize = 96 * 1024 * 1024;
+/// Bytes a pixel takes once the terminal has decoded a picture.
+const DECODED_PIXEL_BYTES: usize = 4;
 
 /// A terminal that shows pictures: the pixels in one of its cells, and how escape
 /// sequences reach it.
@@ -53,18 +66,9 @@ struct Canvas {
 /// Set only when the terminal answered that it shows kitty pictures.
 static CANVAS: OnceLock<Mutex<Canvas>> = OnceLock::new();
 
-static GALLERY: LazyLock<Mutex<Gallery>> = LazyLock::new(|| {
-    Mutex::new(Gallery {
-        formulas: HashMap::new(),
-        images: HashMap::new(),
-        // Starting at random keeps two shells drawing into one terminal, as tmux
-        // panes do, from storing pictures under each other's ids.
-        last_id: ImageId::from(rand::random::<u32>()),
-        unsent: Vec::new(),
-        sources: HashMap::new(),
-    })
-});
+static GALLERY: LazyLock<Mutex<Gallery>> = LazyLock::new(|| Mutex::new(Gallery::default()));
 
+// @##issue free functions
 /// Learn what the terminal can draw. Runs on the alternate screen before any event
 /// is read, since a terminal asked directly answers as input.
 pub fn detect() {
@@ -155,6 +159,7 @@ fn printable_name(name: &str) -> Option<String> {
 }
 
 /// Whether this terminal shows pictures.
+// @##wtf
 pub fn available() -> bool {
     CANVAS.get().is_some()
 }
@@ -250,23 +255,77 @@ pub fn source(id: ImageId) -> Option<String> {
     gallery().sources.get(&id).cloned()
 }
 
-/// Escape sequences storing every picture made since the last call.
-pub fn unsent() -> String {
+/// Settle the terminal's pictures with those `frame` shows: have each it lacks
+/// encoded, send what is encoded, and drop the ones it can spare once it holds more
+/// than its budget. Returns the escape sequences to write after the frame; a picture
+/// still being encoded is drawn blank until a later call sends it.
+pub fn synchronise(frame: &Buffer) -> String {
     let Some(canvas) = CANVAS
         .get()
         .and_then(|canvas| canvas.lock().ok().map(|canvas| *canvas))
     else {
         return String::new();
     };
-    gallery()
-        .unsent
-        .drain(..)
-        .map(|image| image.transmission(canvas.passthrough))
+    gallery().synchronise(&shown_in(frame), canvas.passthrough)
+}
+
+/// The pictures whose placeholders `cells` holds.
+pub fn shown_in(cells: &Buffer) -> HashSet<ImageId> {
+    cells
+        .content()
+        .iter()
+        .filter_map(|cell| Piece::placed(cell.symbol(), cell.fg))
+        .map(|piece| piece.image)
         .collect()
 }
 
-/// Send every picture again through tmux, which drops those sent while its pane
-/// is hidden; called each time the pane regains focus.
+/// The pictures whose placeholders `lines` hold.
+pub fn shown_in_lines<'a>(lines: impl IntoIterator<Item = &'a Line<'a>>) -> HashSet<ImageId> {
+    lines
+        .into_iter()
+        .flat_map(|line| &line.spans)
+        .filter_map(|span| {
+            let from = span.content.find(kitty::PLACEHOLDER)?;
+            Piece::placed(&span.content[from..], span.style.fg?)
+        })
+        .map(|piece| piece.image)
+        .collect()
+}
+
+/// Rows between the viewport and the block holding each picture, as a frame stands:
+/// every picture a block holds is reported, those on screen at none. A picture the
+/// terminal holds that no frame reports belongs to no block, so is dropped, and when
+/// the terminal holds too much, the furthest goes first.
+pub fn report_distances(distances: impl IntoIterator<Item = (ImageId, usize)>) {
+    let mut gallery = gallery();
+    for (image, rows) in distances {
+        gallery
+            .distances
+            .entry(image)
+            .and_modify(|nearest| *nearest = (*nearest).min(rows))
+            .or_insert(rows);
+    }
+}
+
+/// The escape sequences sending each picture encoded since the last frame, which
+/// need no frame of their own to be sent.
+pub fn send_encoded() -> String {
+    let Some(canvas) = CANVAS
+        .get()
+        .and_then(|canvas| canvas.lock().ok().map(|canvas| *canvas))
+    else {
+        return String::new();
+    };
+    gallery().send_encoded(canvas.passthrough)
+}
+
+/// Whether pictures are still being encoded, so their sequences are yet to come.
+pub fn encoding() -> bool {
+    !gallery().encoding.is_empty()
+}
+
+/// Send the pictures on screen again and drop the rest, through tmux, which loses
+/// those sent while its pane is hidden; called each time the pane regains focus.
 pub fn resend_all() {
     if !CANVAS.get().is_some_and(|canvas| {
         canvas
@@ -275,14 +334,37 @@ pub fn resend_all() {
     }) {
         return;
     }
-    let mut gallery = gallery();
-    let images = gallery
-        .images
-        .values()
-        .flatten()
-        .cloned()
-        .collect::<Vec<_>>();
-    gallery.unsent = images;
+    gallery().resend = true;
+}
+
+/// What the pictures take up, here and in the terminal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Usage {
+    /// Formulas typeset and kept as vector pictures.
+    pub formulas: usize,
+    /// Pictures made, each kept as the recipe that draws it again.
+    pub images: usize,
+    /// Pictures the terminal holds now.
+    pub resident: usize,
+    /// Bytes of decoded pixels the terminal holds now.
+    pub resident_bytes: usize,
+}
+
+impl Display for Usage {
+    fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
+        write!(
+            formatter,
+            "pictures {} kept / {} in terminal ({:.1} MiB) / {} formulas",
+            self.images,
+            self.resident,
+            self.resident_bytes as f64 / (1024.0 * 1024.0),
+            self.formulas,
+        )
+    }
+}
+
+pub fn usage() -> Usage {
+    gallery().usage()
 }
 
 fn gallery() -> MutexGuard<'static, Gallery> {
@@ -305,16 +387,113 @@ struct Formula {
     baseline: f32,
 }
 
-/// Every picture made, kept so a layout at another width or a resend reuses it.
+/// Every picture made, kept so a layout at another width or a resend reuses it. Only
+/// what draws a picture again is kept, never its pixels: those are made when the
+/// terminal is sent them, and the terminal holds no more than its budget.
 struct Gallery {
     /// Each formula's vector picture, or none when RaTeX refused it.
     formulas: HashMap<FormulaKey, Option<Arc<Formula>>>,
     /// Each formula rasterised to a number of columns at a cell pixel size.
     images: HashMap<ImageKey, Option<Arc<KittyImage>>>,
     last_id: ImageId,
-    unsent: Vec<Arc<KittyImage>>,
+    recipes: HashMap<ImageId, Recipe>,
+    /// The pictures the terminal holds, as far as anything sent to it says.
+    resident: HashMap<ImageId, Resident>,
+    jobs: Sender<Encoding>,
+    encoded: Receiver<Encoded>,
+    /// Pictures on the worker's queue, which are not queued again.
+    encoding: HashSet<ImageId>,
+    /// Pictures the worker could not encode, which are not tried again.
+    unencodable: HashSet<ImageId>,
+    /// How far, in rows, the block holding each picture stands from the viewport, as
+    /// reported while the frame was drawn.
+    distances: HashMap<ImageId, usize>,
+    /// Bytes of decoded pixels the terminal may hold for pictures off the screen.
+    budget: usize,
+    /// Frames synchronised so far.
+    frame: u64,
+    /// Whether the terminal may have lost what it was sent, so the next frame sends
+    /// again what it shows.
+    resend: bool,
     /// The M2 code each picture shows, so copying it gives back what M2 reads.
     sources: HashMap<ImageId, String>,
+}
+
+/// What draws a picture again.
+struct Recipe {
+    image: Arc<KittyImage>,
+    formula: Arc<Formula>,
+    raster: Raster,
+}
+
+impl Recipe {
+    fn decoded_bytes(&self) -> usize {
+        let Raster { cells, cell, .. } = self.raster;
+        usize::from(cells.width)
+            * usize::from(cell.width)
+            * usize::from(cells.height)
+            * usize::from(cell.height)
+            * DECODED_PIXEL_BYTES
+    }
+}
+
+/// A picture to encode as PNG on the worker thread.
+struct Encoding {
+    id: ImageId,
+    formula: Arc<Formula>,
+    raster: Raster,
+}
+
+/// A picture the worker has encoded, none when it could not be.
+type Encoded = (ImageId, Option<Vec<u8>>);
+
+/// The worker encoding pictures one at a time, off the thread that draws frames:
+/// the queue to send it pictures on, and the pictures it has encoded, none when a
+/// picture could not be.
+fn encoder() -> (Sender<Encoding>, Receiver<Encoded>) {
+    let (jobs, queue) = channel::<Encoding>();
+    let (encoded, results) = channel();
+    thread::spawn(move || {
+        for Encoding {
+            id,
+            formula,
+            raster,
+        } in queue
+        {
+            if encoded.send((id, raster.png(&formula.tree))).is_err() {
+                break;
+            }
+        }
+    });
+    (jobs, results)
+}
+
+/// A picture held by the terminal.
+struct Resident {
+    bytes: usize,
+    last_shown: u64,
+}
+
+impl Default for Gallery {
+    fn default() -> Self {
+        let (jobs, encoded) = encoder();
+        Self {
+            formulas: Default::default(),
+            images: Default::default(),
+            last_id: ImageId::from(rand::random::<u32>()),
+            recipes: Default::default(),
+            resident: Default::default(),
+            jobs,
+            encoded,
+            encoding: Default::default(),
+            unencodable: Default::default(),
+            distances: Default::default(),
+            budget: TERMINAL_IMAGE_BUDGET,
+            frame: 0,
+            resend: false,
+            sources: Default::default(),
+        }
+    }
 }
 
 impl Gallery {
@@ -359,21 +538,120 @@ impl Gallery {
             return image.clone().map(|image| (image, baseline));
         }
         self.last_id = self.last_id.next();
-        let image = raster
-            .png(&formula.tree)
-            .and_then(|png| KittyImage::new(self.last_id, raster.cells, png).ok())
+        let image = KittyImage::new(self.last_id, raster.cells)
+            .ok()
             .map(Arc::new);
-        self.unsent.extend(image.clone());
-        if image.is_some() {
-            self.sources.insert(self.last_id, code.to_string());
+        if let Some(image) = &image {
+            self.sources.insert(image.id(), code.to_string());
+            self.recipes.insert(
+                image.id(),
+                Recipe {
+                    image: image.clone(),
+                    formula,
+                    raster,
+                },
+            );
         }
         self.images.insert(image_key, image.clone());
         image.map(|image| (image, baseline))
+    }
+
+    /// The sequences sending each picture the worker has finished.
+    fn send_encoded(&mut self, passthrough: Passthrough) -> String {
+        let mut sequences = String::new();
+        while let Ok((id, png)) = self.encoded.try_recv() {
+            self.encoding.remove(&id);
+            let (Some(png), Some(recipe)) = (png, self.recipes.get(&id)) else {
+                self.unencodable.insert(id);
+                continue;
+            };
+            sequences.push_str(&recipe.image.transmission(&png, passthrough));
+            self.resident.insert(
+                id,
+                Resident {
+                    bytes: recipe.decoded_bytes(),
+                    last_shown: self.frame,
+                },
+            );
+        }
+        sequences
+    }
+
+    fn synchronise(&mut self, shown: &HashSet<ImageId>, passthrough: Passthrough) -> String {
+        self.frame += 1;
+        let mut sequences = self.send_encoded(passthrough);
+        if mem::take(&mut self.resend) {
+            for (id, _) in self.resident.drain() {
+                if !shown.contains(&id) {
+                    sequences.push_str(&id.deletion(passthrough));
+                }
+            }
+        }
+        for &id in shown {
+            if let Some(resident) = self.resident.get_mut(&id) {
+                resident.last_shown = self.frame;
+                continue;
+            }
+            if self.encoding.contains(&id) || self.unencodable.contains(&id) {
+                continue;
+            }
+            let Some(recipe) = self.recipes.get(&id) else {
+                continue;
+            };
+            let job = Encoding {
+                id,
+                formula: recipe.formula.clone(),
+                raster: recipe.raster.clone(),
+            };
+            if self.jobs.send(job).is_ok() {
+                self.encoding.insert(id);
+            }
+        }
+        let unreachable = self
+            .resident
+            .keys()
+            .filter(|id| !shown.contains(id) && !self.distances.contains_key(id))
+            .copied()
+            .collect::<Vec<_>>();
+        for id in unreachable {
+            self.resident.remove(&id);
+            sequences.push_str(&id.deletion(passthrough));
+        }
+        while self.resident_bytes() > self.budget {
+            let Some(furthest) = self
+                .resident
+                .iter()
+                .filter(|(id, _)| !shown.contains(id))
+                .filter_map(|(id, resident)| Some((id, resident, *self.distances.get(id)?)))
+                .max_by_key(|(_, resident, distance)| (*distance, Reverse(resident.last_shown)))
+                .map(|(id, ..)| *id)
+            else {
+                break;
+            };
+            self.resident.remove(&furthest);
+            sequences.push_str(&furthest.deletion(passthrough));
+        }
+        self.distances.clear();
+        sequences
+    }
+
+    fn resident_bytes(&self) -> usize {
+        self.resident.values().map(|resident| resident.bytes).sum()
+    }
+
+    fn usage(&self) -> Usage {
+        Usage {
+            formulas: self.formulas.values().flatten().count(),
+            images: self.recipes.len(),
+            resident: self.resident.len(),
+            resident_bytes: self.resident_bytes(),
+        }
     }
 }
 
 /// How a vector picture lands on the cell grid: its scale, the slices of it
 /// stacked as rows, and the cells it covers.
+#[derive(Clone)]
 struct Raster {
     scale: f32,
     top: f32,
@@ -525,6 +803,8 @@ fn wrapped(width: f32, breaks: &[Break], room: f32) -> Vec<Range<f32>> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use resvg::tiny_skia::PremultipliedColorU8;
 
     use super::*;
@@ -719,9 +999,9 @@ mod tests {
     }
 
     #[test]
-    fn a_formula_is_made_once_and_sent_once_whatever_the_wider_width() {
+    fn a_formula_is_made_once_whatever_the_wider_width() {
         let mut gallery = GALLERY.lock().unwrap();
-        gallery.unsent.clear();
+        let made = gallery.recipes.len();
         let ink = Rgb([1, 2, 3]);
 
         let square = Typesetting {
@@ -736,7 +1016,7 @@ mod tests {
         let again = gallery.formula(square, ink, CANVAS, 120, placement);
 
         assert!(Arc::ptr_eq(&first.unwrap().0, &again.unwrap().0));
-        assert_eq!(gallery.unsent.len(), 1);
+        assert_eq!(gallery.recipes.len() - made, 1);
         assert_eq!(
             gallery.sources.get(&gallery.last_id).map(String::as_str),
             Some(square.code)
@@ -753,10 +1033,188 @@ mod tests {
         assert!(!Arc::ptr_eq(&original, &zoomed));
         assert_eq!(original.lines().len(), zoomed.lines().len());
         assert_eq!(original.lines()[0].width(), zoomed.lines()[0].width());
-        assert_eq!(gallery.unsent.len(), 2);
+        assert_eq!(gallery.recipes.len() - made, 2);
 
         let (restored, _) = gallery.formula(square, ink, CANVAS, 80, placement).unwrap();
         assert!(Arc::ptr_eq(&original, &restored));
-        assert_eq!(gallery.unsent.len(), 2);
+        assert_eq!(gallery.recipes.len() - made, 2);
+    }
+
+    fn picture(gallery: &mut Gallery, tex: &str) -> ImageId {
+        let formula = Typesetting {
+            tex,
+            painted: tex,
+            code: tex,
+            matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
+        };
+        let (image, _) = gallery
+            .formula(formula, Rgb([1, 2, 3]), CANVAS, 80, Placement::Alone)
+            .unwrap();
+        image.id()
+    }
+
+    fn shown(ids: &[ImageId]) -> HashSet<ImageId> {
+        ids.iter().copied().collect()
+    }
+
+    /// Frames showing `ids`, the pictures off screen standing `near` the viewport as
+    /// a feed reports them afresh each frame, until the worker has encoded all asked.
+    fn settled_near(gallery: &mut Gallery, ids: &[ImageId], near: &[(ImageId, usize)]) -> String {
+        let mut frame = |gallery: &mut Gallery| {
+            gallery.distances = near.iter().copied().collect();
+            gallery.synchronise(&shown(ids), Passthrough::Direct)
+        };
+        let mut sequences = frame(gallery);
+        while !gallery.encoding.is_empty() {
+            thread::sleep(Duration::from_millis(1));
+            sequences.push_str(&frame(gallery));
+        }
+        sequences
+    }
+
+    fn settled(gallery: &mut Gallery, ids: &[ImageId]) -> String {
+        settled_near(gallery, ids, &[])
+    }
+    #[test]
+    fn a_picture_is_queued_for_encoding_when_first_shown_and_sent_once_encoded() {
+        let mut gallery = Gallery::default();
+        let id = picture(&mut gallery, "x^2");
+
+        assert_eq!(gallery.synchronise(&shown(&[]), Passthrough::Direct), "");
+        gallery.synchronise(&shown(&[id]), Passthrough::Direct);
+        assert!(gallery.encoding.contains(&id));
+        assert!(!gallery.resident.contains_key(&id));
+        let sent = settled(&mut gallery, &[id]);
+        let again = gallery.synchronise(&shown(&[id]), Passthrough::Direct);
+
+        assert!(sent.contains("a=T"));
+        assert_eq!(again, "");
+        assert_eq!(gallery.usage().resident, 1);
+        assert!(gallery.usage().resident_bytes > 0);
+    }
+
+    #[test]
+    fn an_encoded_picture_is_sent_without_a_frame_of_its_own() {
+        let mut gallery = Gallery::default();
+        let id = picture(&mut gallery, "x^2");
+        gallery.synchronise(&shown(&[id]), Passthrough::Direct);
+
+        let mut sent = String::new();
+        while sent.is_empty() {
+            thread::sleep(Duration::from_millis(1));
+            sent = gallery.send_encoded(Passthrough::Direct);
+        }
+
+        assert!(sent.contains("a=T"));
+        assert!(gallery.encoding.is_empty());
+        assert!(gallery.resident.contains_key(&id));
+    }
+
+    #[test]
+    fn pictures_off_screen_stay_in_the_terminal_while_their_block_holds_them() {
+        let mut gallery = Gallery::default();
+        let id = picture(&mut gallery, "x^2");
+        settled(&mut gallery, &[id]);
+        gallery.distances = HashMap::from([(id, 5)]);
+
+        let sequences = gallery.synchronise(&shown(&[]), Passthrough::Direct);
+
+        assert_eq!(sequences, "");
+        assert_eq!(gallery.usage().resident, 1);
+    }
+
+    #[test]
+    fn a_picture_no_block_holds_is_deleted_at_once() {
+        let mut gallery = Gallery::default();
+        let id = picture(&mut gallery, "x^2");
+        settled(&mut gallery, &[id]);
+
+        let sequences = gallery.synchronise(&shown(&[]), Passthrough::Direct);
+
+        assert!(sequences.contains(&id.deletion(Passthrough::Direct)));
+        assert_eq!(gallery.usage().resident, 0);
+    }
+
+    #[test]
+    fn at_the_same_distance_the_longest_unseen_picture_is_deleted_first_over_budget() {
+        let mut gallery = Gallery::default();
+        let old = picture(&mut gallery, "x^2");
+        let recent = picture(&mut gallery, "y^3");
+        let current = picture(&mut gallery, "z^4");
+        let near = [(old, 5), (recent, 5)];
+        settled_near(&mut gallery, &[old], &near);
+        settled_near(&mut gallery, &[recent], &near);
+        gallery.budget = gallery.resident_bytes();
+
+        let sequences = settled_near(&mut gallery, &[current], &near);
+
+        assert!(sequences.contains(&old.deletion(Passthrough::Direct)));
+        assert!(!sequences.contains(&current.deletion(Passthrough::Direct)));
+        assert!(gallery.resident.contains_key(&current));
+        assert!(gallery.resident.contains_key(&recent));
+        assert!(!gallery.resident.contains_key(&old));
+    }
+
+    #[test]
+    fn the_picture_furthest_from_the_viewport_goes_before_one_seen_longer_ago() {
+        let mut gallery = Gallery::default();
+        let near = picture(&mut gallery, "x^2");
+        let far = picture(&mut gallery, "y^3");
+        let current = picture(&mut gallery, "z^4");
+        let distances = [(near, 3), (far, 90)];
+        settled_near(&mut gallery, &[near], &distances);
+        settled_near(&mut gallery, &[far], &distances);
+        gallery.budget = gallery.resident_bytes();
+
+        settled_near(&mut gallery, &[current], &distances);
+
+        assert!(!gallery.resident.contains_key(&far));
+        assert!(gallery.resident.contains_key(&near));
+    }
+
+    #[test]
+    fn a_picture_on_screen_is_never_deleted_for_the_budget() {
+        let mut gallery = Gallery::default();
+        let id = picture(&mut gallery, "x^2");
+        gallery.budget = 0;
+
+        let sequences = settled(&mut gallery, &[id]);
+
+        assert!(sequences.contains("a=T"));
+        assert!(!sequences.contains("a=d"));
+        assert!(gallery.resident.contains_key(&id));
+    }
+
+    #[test]
+    fn a_deleted_picture_is_sent_again_when_it_comes_back_into_view() {
+        let mut gallery = Gallery::default();
+        let id = picture(&mut gallery, "x^2");
+        let other = picture(&mut gallery, "y^3");
+        settled(&mut gallery, &[id]);
+        gallery.budget = 0;
+        settled(&mut gallery, &[other]);
+        assert!(!gallery.resident.contains_key(&id));
+
+        let sequences = settled(&mut gallery, &[id]);
+
+        assert!(sequences.contains("a=T"));
+        assert!(gallery.resident.contains_key(&id));
+    }
+
+    #[test]
+    fn resending_sends_what_is_on_screen_again_and_deletes_the_rest() {
+        let mut gallery = Gallery::default();
+        let visible = picture(&mut gallery, "x^2");
+        let hidden = picture(&mut gallery, "y^3");
+        settled(&mut gallery, &[visible, hidden]);
+        gallery.resend = true;
+
+        let sequences = settled(&mut gallery, &[visible]);
+
+        assert!(sequences.contains("a=T"));
+        assert!(sequences.contains(&hidden.deletion(Passthrough::Direct)));
+        assert!(!sequences.contains(&visible.deletion(Passthrough::Direct)));
+        assert_eq!(gallery.resident.len(), 1);
+        assert!(!gallery.resend);
     }
 }

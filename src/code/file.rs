@@ -6,6 +6,7 @@ use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use m2_syn::{lex_str_recovering, CommentTrivia, LexErrorKind, Spanned};
 
@@ -143,6 +144,59 @@ pub fn previous_session() -> Option<PathBuf> {
 #[cfg(test)]
 pub fn previous_session() -> Option<PathBuf> {
     None
+}
+
+/// A fresh archive filename, ordered by creation time.
+pub fn archived_session_path() -> Option<PathBuf> {
+    let root = previous_session()?.parent()?.join("sessions");
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(root.join(format!("{stamp:030}")).with_extension(EXTENSION))
+}
+
+/// Preserve the previously kept session when the archive is first introduced.
+pub fn archive_previous_session() -> io::Result<()> {
+    let Some(previous) = previous_session().filter(|path| path.is_file()) else {
+        return Ok(());
+    };
+    let Some(archive) = archived_session_path() else {
+        return Ok(());
+    };
+    if archive.parent().is_some_and(Path::exists) {
+        return Ok(());
+    }
+    let source = fs::read_to_string(previous)?;
+    if !source.trim().is_empty() {
+        write(&archive, &source)?;
+    }
+    Ok(())
+}
+
+/// Saved sessions, newest first.
+pub fn archived_sessions() -> io::Result<Vec<PathBuf>> {
+    let Some(directory) =
+        previous_session().and_then(|path| path.parent().map(|parent| parent.join("sessions")))
+    else {
+        return Ok(Vec::new());
+    };
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut paths = entries
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<io::Result<Vec<_>>>()?;
+    paths.retain(|path| {
+        path.is_file()
+            && path
+                .extension()
+                .is_some_and(|extension| extension == EXTENSION)
+    });
+    paths.sort_by(|left, right| right.cmp(left));
+    Ok(paths)
 }
 
 #[cfg(test)]

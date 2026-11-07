@@ -3,6 +3,7 @@
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, BorderType, Borders, Paragraph, Widget};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -63,6 +64,11 @@ pub enum PickerValue {
     },
     /// A value stepped through a range too long to list, between step arrows.
     Stepped(String),
+    /// Destinations shown together, with the current one checked.
+    Checklist {
+        options: Vec<PickerOption>,
+        chosen: usize,
+    },
 }
 
 impl PickerValue {
@@ -78,6 +84,21 @@ impl PickerValue {
                 .iter()
                 .position(|option| option == chosen)
                 .expect("the chosen option is among the options"),
+        }
+    }
+
+    /// Show the available destinations together instead of one cycling value.
+    pub fn checklist<T: PartialEq>(
+        options: &[T],
+        chosen: &T,
+        option: impl Fn(&T) -> PickerOption,
+    ) -> Self {
+        Self::Checklist {
+            options: options.iter().map(option).collect(),
+            chosen: options
+                .iter()
+                .position(|option| option == chosen)
+                .expect("checked destination exists"),
         }
     }
 
@@ -100,6 +121,40 @@ impl PickerValue {
             ),
             false => (groups.settings_step_arrow(), groups.settings_item_value()),
         };
+        if let Self::Checklist { options, chosen } = self {
+            let spans: Vec<_> = options
+                .iter()
+                .enumerate()
+                .flat_map(|(index, option)| {
+                    let gap = match index {
+                        0 => String::new(),
+                        1 => format!("   {}   ", UI.glyphs.split_divider.current()),
+                        _ => "  ".into(),
+                    };
+                    let checked = index == *chosen;
+                    [
+                        Span::styled(gap, groups.settings_step_arrow()),
+                        Span::styled(
+                            format!(
+                                "{} {:<2}",
+                                if checked { "[x]" } else { "[ ]" },
+                                option.label
+                            ),
+                            if checked { value } else { groups.muted() },
+                        ),
+                    ]
+                })
+                .collect();
+            let line = Line::from(spans);
+            return if line.width() <= room {
+                line
+            } else {
+                Line::from(Span::styled(
+                    trimmed(&format!("[x] {}", options[*chosen].label), room),
+                    value,
+                ))
+            };
+        }
         let (shown, style, note) = match self {
             Self::Choice { options, chosen } => {
                 let option = &options[*chosen];
@@ -113,6 +168,7 @@ impl PickerValue {
                 }
             }
             Self::Stepped(shown) => (shown, value, None),
+            Self::Checklist { .. } => unreachable!("checklists are rendered together above"),
         };
         let (back, forward) = Self::arrows();
         let note = note.map(|note| format!("{}{note}", " ".repeat(UI.picker_column_gap)));
@@ -290,14 +346,17 @@ pub enum PickerMode {
 
 /// A named page of picker rows.
 pub struct PickerTab {
+    /// Optional input policy used while this tab is active.
+    pub mode: Option<PickerMode>,
     pub label: &'static str,
     pub items: Vec<Box<dyn PickerItem>>,
 }
 
 /// Presentation and selection state for pages of picker items.
 ///
-/// A picker with several tabs names them along its top edge and switches them with
-/// Tab; one with a single tab is titled by it.
+/// A picker with several tabs names them on its first row, which the selection can
+/// reach to switch them with the horizontal arrows, as Tab does from anywhere; one
+/// with a single tab is titled by it.
 pub struct Picker {
     tabs: Vec<PickerTab>,
     tab: usize,
@@ -305,6 +364,8 @@ pub struct Picker {
     button: Option<Box<dyn PickerItem>>,
     /// The selected row of the current tab, or the button one past its rows.
     selected: usize,
+    /// Whether the selection is on the row of tabs rather than at `selected`.
+    on_tab_bar: bool,
     /// Widest cell seen in each column while open, so tab stops stay put as values change.
     column_widths: Vec<usize>,
 }
@@ -313,6 +374,7 @@ impl Picker {
     pub fn new(title: &'static str, items: Vec<Box<dyn PickerItem>>) -> Self {
         Self::tabbed(
             vec![PickerTab {
+                mode: None,
                 label: title,
                 items,
             }],
@@ -326,6 +388,7 @@ impl Picker {
             tab: 0,
             button,
             selected: 0,
+            on_tab_bar: false,
             column_widths: Vec::new(),
         };
         picker.set_tabs(tabs);
@@ -345,12 +408,13 @@ impl Picker {
         self.items().len() + usize::from(self.button.is_some())
     }
 
-    /// Rows needed at `width`: as many as the longest tab has, so switching tabs
-    /// never resizes the picker, an empty list keeping one; then the button and the
-    /// longest description beneath them.
+    /// Rows needed at `width`: the row of tabs, as many as the current tab has, an
+    /// empty list keeping one; then the button and the longest description of the
+    /// tab beneath them, so moving within a tab never resizes the picker.
     pub fn height(&self, width: u16) -> u16 {
-        let rows = self.tabs.iter().map(|tab| tab.items.len()).max();
-        let rows = rows.unwrap_or_default().max(1) + self.footer_height(usize::from(width));
+        let rows = usize::from(self.has_tabs())
+            + self.items().len().max(1)
+            + self.footer_height(usize::from(width));
         rows as u16 + 2
     }
 
@@ -363,9 +427,8 @@ impl Picker {
     }
 
     fn description_height(&self, width: usize) -> usize {
-        self.tabs
+        self.items()
             .iter()
-            .flat_map(|tab| &tab.items)
             .chain(&self.button)
             .filter_map(|item| item.description())
             .map(|description| Self::wrapped(description, width).len())
@@ -386,27 +449,33 @@ impl Picker {
     }
 
     /// Select an item, or the next selectable one after it; zero when the picker
-    /// has no items.
+    /// has no items. On the row of tabs, the selection stays there.
     pub fn select(&mut self, index: usize) {
         self.selected = index.min(self.positions().saturating_sub(1));
-        if !self.selectable_at(self.selected) {
+        if !self.on_tab_bar && !self.selectable_at(self.selected) {
             self.move_selection(1);
         }
     }
 
-    /// Move `delta` positions, then on past rows that cannot be selected.
+    /// Move `delta` positions, the row of tabs coming first, then on past rows that
+    /// cannot be selected.
     pub fn move_selection(&mut self, delta: isize) {
-        let positions = self.positions() as isize;
-        let mut selected = self.selected as isize + delta;
+        let tab_bar = isize::from(self.has_tabs());
+        let positions = self.positions() as isize + tab_bar;
+        let mut position = match self.on_tab_bar {
+            true => 0,
+            false => self.selected as isize + tab_bar,
+        } + delta;
         for _ in 0..positions {
-            selected = selected.rem_euclid(positions);
-            if self.selectable_at(selected as usize) {
+            position = position.rem_euclid(positions);
+            if position < tab_bar || self.selectable_at((position - tab_bar) as usize) {
                 break;
             }
-            selected += delta.signum();
+            position += delta.signum();
         }
         if positions > 0 {
-            self.selected = selected as usize;
+            self.on_tab_bar = position < tab_bar;
+            self.selected = (position - tab_bar).max(0) as usize;
         }
     }
 
@@ -420,12 +489,34 @@ impl Picker {
     /// Show a neighbouring tab, keeping the selected row, or the button, where possible.
     fn switch_tab(&mut self, delta: isize) {
         let on_button = self.selected >= self.items().len();
+        let previous_mode = self.mode();
         self.tab = (self.tab as isize + delta).rem_euclid(self.tabs.len() as isize) as usize;
+        if self.mode() != previous_mode {
+            self.column_widths.clear();
+            self.measure();
+        }
         let rows = self.items().len();
         self.select(match on_button {
             true => rows,
             false => self.selected.min(rows.saturating_sub(1)),
         });
+    }
+
+    /// Input policy supplied by the active tab, if it overrides the controller.
+    pub fn mode(&self) -> Option<PickerMode> {
+        self.tabs[self.tab].mode
+    }
+
+    /// Select the tab supplying an input policy.
+    pub fn select_mode(&mut self, mode: PickerMode) {
+        if let Some(tab) = self.tabs.iter().position(|tab| tab.mode == Some(mode)) {
+            self.switch_tab(tab as isize - self.tab as isize);
+        }
+    }
+
+    /// Whether the selected row is capturing a replacement key.
+    pub fn capturing(&self) -> bool {
+        self.selected_item().is_some_and(|item| item.capturing())
     }
 
     /// Replace every tab while retaining the tab and selection shown where possible.
@@ -438,9 +529,11 @@ impl Picker {
 
     /// Widen the columns to every tab's cells, so a value lines up across tabs.
     fn measure(&mut self) {
+        let mode = self.mode();
         for cells in self
             .tabs
             .iter()
+            .filter(|tab| tab.mode == mode)
             .flat_map(|tab| &tab.items)
             .map(|item| item.cells())
         {
@@ -459,6 +552,9 @@ impl Picker {
     }
 
     fn selected_item(&self) -> Option<&dyn PickerItem> {
+        if self.on_tab_bar {
+            return None;
+        }
         match self.items().get(self.selected) {
             Some(item) => Some(item.as_ref()),
             None => self.button.as_deref(),
@@ -466,6 +562,9 @@ impl Picker {
     }
 
     pub fn selected_item_mut(&mut self) -> Option<&mut (dyn PickerItem + '_)> {
+        if self.on_tab_bar {
+            return None;
+        }
         let tab = &mut self.tabs[self.tab];
         match tab.items.get_mut(self.selected) {
             Some(item) => Some(item.as_mut()),
@@ -509,7 +608,7 @@ impl Picker {
                     code: KeyCode::Right,
                     ..
                 },
-            ) if tabbed && key.ctrl() => {
+            ) if tabbed && (key.ctrl() || self.on_tab_bar) => {
                 self.switch_tab(1);
                 (true, None)
             }
@@ -525,7 +624,7 @@ impl Picker {
                     code: KeyCode::Left,
                     ..
                 },
-            ) if tabbed && key.ctrl() => {
+            ) if tabbed && (key.ctrl() || self.on_tab_bar) => {
                 self.switch_tab(-1);
                 (true, None)
             }
@@ -555,10 +654,19 @@ impl Picker {
         let values = self
             .tabs
             .iter()
+            .filter(|tab| tab.mode == self.mode())
             .flat_map(|tab| &tab.items)
             .any(|item| item.value().is_some());
         let value_fits = !values || starts.last().unwrap() + UI.picker_min_value_width <= room;
         (cells_fit && value_fits).then_some(starts)
+    }
+
+    fn marker(selected: bool) -> (&'static str, Style) {
+        let groups = scheme();
+        match selected {
+            true => (SELECTED_MARKER, groups.picker_selected_marker()),
+            false => (MARKER, groups.picker_marker()),
+        }
     }
 
     /// One row laid out at `starts`, or with packed cells when there is no room for them.
@@ -569,10 +677,7 @@ impl Picker {
         width: usize,
     ) -> Line<'static> {
         let groups = scheme();
-        let (marker, emphasis) = match selected {
-            true => (SELECTED_MARKER, groups.picker_selected_marker()),
-            false => (MARKER, groups.picker_marker()),
-        };
+        let (marker, emphasis) = Self::marker(selected);
         let mut spans = vec![Span::styled(marker, emphasis)];
         let mut used = 0;
         let cells = item.cells();
@@ -622,7 +727,7 @@ impl Picker {
         let groups = scheme();
         let mut lines = Vec::new();
         if let Some(button) = &self.button {
-            let selected = self.selected == self.items().len();
+            let selected = !self.on_tab_bar && self.selected == self.items().len();
             lines.push(Self::line(button.as_ref(), selected, None, width));
             let rule = UI.glyphs.picker_rule.current().repeat(width);
             lines.push(Span::styled(rule, groups.picker_border()).into());
@@ -643,8 +748,9 @@ impl Picker {
     }
 
     fn text(&self, width: usize, height: usize) -> Vec<Line<'static>> {
+        let header = self.has_tabs().then(|| self.tab_bar(width));
         let footer = self.footer(width);
-        let height = height.saturating_sub(footer.len());
+        let height = height.saturating_sub(usize::from(header.is_some()) + footer.len());
         let starts = self.column_starts(width);
         let items = self.items();
         let start = self
@@ -652,7 +758,7 @@ impl Picker {
             .min(items.len().saturating_sub(1))
             .saturating_sub(height / 2)
             .min(items.len().saturating_sub(height));
-        let mut lines = items
+        let mut rows = items
             .iter()
             .enumerate()
             .skip(start)
@@ -660,36 +766,43 @@ impl Picker {
             .map(|(index, item)| {
                 Self::line(
                     item.as_ref(),
-                    index == self.selected,
+                    !self.on_tab_bar && index == self.selected,
                     starts.as_deref(),
                     width,
                 )
             })
             .collect::<Vec<_>>();
-        lines.resize(height, Line::default());
-        lines.extend(footer);
-        lines
+        rows.resize(height, Line::default());
+        header.into_iter().chain(rows).chain(footer).collect()
     }
 
-    /// The single tab's label, or every tab named with the shown one lit.
-    fn title(&self) -> Line<'static> {
+    /// The first row: every tab named, the shown one lit.
+    fn tab_bar(&self, width: usize) -> Line<'static> {
         let groups = scheme();
-        if let [tab] = self.tabs.as_slice() {
-            return Span::styled(format!(" {} ", tab.label), groups.picker_title()).into();
+        let row = match self.on_tab_bar {
+            true => groups.picker().patch(groups.picker_selected()),
+            false => groups.picker(),
+        };
+        let (marker, emphasis) = Self::marker(self.on_tab_bar);
+        let mut spans = vec![Span::styled(marker, row.patch(emphasis))];
+        spans.extend(self.tabs.iter().enumerate().map(|(index, tab)| {
+            let style = match index == self.tab {
+                true => groups.picker_tab_selected(),
+                false => groups.picker_tab(),
+            };
+            Span::styled(format!(" {} ", tab.label), row.patch(style))
+        }));
+        let used = Line::from(spans.clone()).width();
+        spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), row));
+        Line::from(spans)
+    }
+
+    /// The label a picker with a single tab shows along its top edge.
+    fn title(&self) -> Option<Line<'static>> {
+        match self.tabs.as_slice() {
+            [tab] => Some(Span::styled(format!(" {} ", tab.label), scheme().picker_title()).into()),
+            _ => None,
         }
-        Line::from(
-            self.tabs
-                .iter()
-                .enumerate()
-                .map(|(index, tab)| {
-                    let style = match index == self.tab {
-                        true => groups.picker_tab_selected(),
-                        false => groups.picker_tab(),
-                    };
-                    Span::styled(format!(" {} ", tab.label), style)
-                })
-                .collect::<Vec<_>>(),
-        )
     }
 }
 
@@ -698,13 +811,15 @@ impl Element for Picker {
 
     fn render(&self, _: &(), area: Rect, buf: &mut Buffer) {
         let groups = scheme();
-        let block = TuiBlock::default()
+        let mut block = TuiBlock::default()
             .style(groups.picker())
             .borders(Borders::TOP | Borders::BOTTOM)
             .border_type(BorderType::Rounded)
             .border_style(groups.picker_border())
-            .title(self.title())
             .title_alignment(Alignment::Center);
+        if let Some(title) = self.title() {
+            block = block.title(title);
+        }
         let inner = block.inner(area);
         block.render(area, buf);
         Paragraph::new(self.text(usize::from(inner.width), usize::from(inner.height)))
@@ -721,6 +836,11 @@ pub struct PickerController {
 }
 
 impl PickerController {
+    /// Input policy of the selected tab or of the whole picker.
+    pub fn active_mode(&self) -> PickerMode {
+        self.picker.mode().unwrap_or(self.mode)
+    }
+
     /// The keys this picker answers, each followed by what it does.
     pub fn hints(&self) -> Vec<TextSpan> {
         let keys = |codes: &[KeyCode]| {
@@ -730,12 +850,15 @@ impl PickerController {
                 .collect::<String>()
         };
         let mut hints = vec![(keys(&[KeyCode::Up, KeyCode::Down]), "select")];
-        hints.push(match self.mode {
-            PickerMode::Settings => (keys(&[KeyCode::Left, KeyCode::Right]), "change"),
-            PickerMode::Commands | PickerMode::FilteredCommands => (keys(&[KeyCode::Enter]), "run"),
-            PickerMode::Keymaps => (keys(&[KeyCode::Enter]), "rebind"),
+        hints.push(match (self.picker.on_tab_bar, self.active_mode()) {
+            (true, _) => (keys(&[KeyCode::Left, KeyCode::Right]), "switch tabs"),
+            (_, PickerMode::Settings) => (keys(&[KeyCode::Left, KeyCode::Right]), "change"),
+            (_, PickerMode::Commands | PickerMode::FilteredCommands) => {
+                (keys(&[KeyCode::Enter]), "run")
+            }
+            (_, PickerMode::Keymaps) => (keys(&[KeyCode::Enter]), "rebind"),
         });
-        if self.picker.has_tabs() {
+        if self.picker.has_tabs() && !self.picker.on_tab_bar {
             hints.push((keys(&[KeyCode::Tab]), "switch tabs"));
         }
         hints.push((keys(&[KeyCode::Esc]), "close"));
@@ -819,7 +942,7 @@ mod tests {
     use crate::ui::controller::settings::theme::groups::{publish, Groups};
     use crate::ui::key::KeyMod;
     use crossterm::event::KeyCode;
-    use ratatui::style::{Color, Style};
+    use ratatui::style::Color;
 
     #[test]
     fn keymap_capture_precedes_navigation_and_escape_cancels_only_capture() {
@@ -983,10 +1106,12 @@ mod tests {
         Picker::tabbed(
             vec![
                 PickerTab {
+                    mode: None,
                     label: "first",
                     items: vec![setting("mode", mode(0)), setting("rows", mode(1))],
                 },
                 PickerTab {
+                    mode: None,
                     label: "second",
                     items: vec![setting(
                         "a much longer label",
@@ -1002,32 +1127,117 @@ mod tests {
         PickerInput::Key(KeyEvent::from(code))
     }
 
+    /// The row of the first list item in a tabbed picker: the border, then the tabs.
+    const FIRST_TABBED_ROW: u16 = 2;
+
     #[test]
-    fn tabs_are_named_along_the_top_and_switched_with_tab() {
+    fn tabs_are_named_beneath_the_border_and_switched_with_tab() {
         let mut picker = tabbed(false);
         let buffer = rendered(&picker, 60);
-        assert!(row(&buffer, 0).contains(" first "));
-        assert!(row(&buffer, 0).contains(" second "));
-        assert!(row(&buffer, 1).contains("> mode"));
+        assert!(!row(&buffer, 0).contains("first"));
+        assert!(row(&buffer, 1).contains(" first "));
+        assert!(row(&buffer, 1).contains(" second "));
+        assert!(row(&buffer, FIRST_TABBED_ROW).contains("> mode"));
 
         picker.handle(key(KeyCode::Tab));
-        assert!(row(&rendered(&picker, 60), 1).contains("> a much longer label"));
+        assert!(row(&rendered(&picker, 60), FIRST_TABBED_ROW).contains("> a much longer label"));
         picker.handle(key(KeyCode::BackTab));
-        assert!(row(&rendered(&picker, 60), 1).contains("> mode"));
+        assert!(row(&rendered(&picker, 60), FIRST_TABBED_ROW).contains("> mode"));
+    }
+
+    #[test]
+    fn a_single_tab_titles_the_border_and_takes_no_row() {
+        let buffer = rendered(&picker(vec![item("one", "")]), 32);
+        assert!(row(&buffer, 0).contains(" test "));
+        assert!(row(&buffer, 1).contains("> one"));
     }
 
     #[test]
     fn control_arrows_switch_tabs_rather_than_change_the_row() {
         let mut picker = tabbed(false);
-        let before = row(&rendered(&picker, 60), 1);
+        let before = row(&rendered(&picker, 60), FIRST_TABBED_ROW);
         assert!(
             picker
                 .handle(PickerInput::Key(KeyCode::Right + KeyMod::Ctrl))
                 .0
         );
-        assert!(row(&rendered(&picker, 60), 1).contains("> a much longer label"));
+        assert!(row(&rendered(&picker, 60), FIRST_TABBED_ROW).contains("> a much longer label"));
         picker.handle(PickerInput::Key(KeyCode::Left + KeyMod::Ctrl));
-        assert_eq!(row(&rendered(&picker, 60), 1), before);
+        assert_eq!(row(&rendered(&picker, 60), FIRST_TABBED_ROW), before);
+    }
+
+    #[test]
+    fn the_row_of_tabs_is_selected_above_the_first_row_and_switches_with_arrows() {
+        let mut picker = tabbed(false);
+        picker.handle(key(KeyCode::Up));
+        let buffer = rendered(&picker, 60);
+        assert!(row(&buffer, 1).contains(">"));
+        assert!(!row(&buffer, FIRST_TABBED_ROW).contains(">"));
+
+        assert!(picker.handle(key(KeyCode::Right)).0);
+        assert!(row(&rendered(&picker, 60), FIRST_TABBED_ROW).contains("a much longer label"));
+        assert!(picker.handle(key(KeyCode::Left)).0);
+        assert!(picker.handle(key(KeyCode::Left)).0);
+        assert!(row(&rendered(&picker, 60), FIRST_TABBED_ROW).contains("a much longer label"));
+
+        picker.handle(key(KeyCode::Down));
+        assert!(row(&rendered(&picker, 60), FIRST_TABBED_ROW).contains("> a much longer label"));
+    }
+
+    #[test]
+    fn selection_wraps_through_the_row_of_tabs() {
+        let mut picker = tabbed(true);
+        picker.handle(key(KeyCode::Up));
+        picker.handle(key(KeyCode::Up));
+        let buffer = rendered(&picker, 60);
+        assert!((0..buffer.area().height).any(|y| row(&buffer, y).contains("> restore")));
+
+        picker.handle(key(KeyCode::Down));
+        assert!(picker.selected_item().is_none());
+    }
+
+    #[test]
+    fn the_row_of_tabs_keeps_the_selection_over_a_locked_first_row() {
+        let locked = |label: &'static str| -> Box<dyn PickerItem> {
+            Row::new(vec![Line::from(label)], |_| None)
+                .selectable_if(false)
+                .into()
+        };
+        let tabs = || {
+            vec![
+                PickerTab {
+                    mode: None,
+                    label: "first",
+                    items: vec![item("open", "")],
+                },
+                PickerTab {
+                    mode: None,
+                    label: "second",
+                    items: vec![locked("locked"), item("open", "")],
+                },
+            ]
+        };
+        let mut picker = Picker::tabbed(tabs(), None);
+        picker.handle(key(KeyCode::Up));
+        picker.handle(key(KeyCode::Right));
+        assert!(picker.selected_item().is_none());
+
+        picker.set_tabs(tabs());
+        assert!(picker.selected_item().is_none());
+
+        picker.handle(key(KeyCode::Down));
+        assert_eq!(picker.selected(), 1);
+    }
+
+    #[test]
+    fn the_height_follows_the_rows_of_the_current_tab() {
+        let mut picker = tabbed(false);
+        let taller = picker.height(60);
+        picker.handle(key(KeyCode::Up));
+        assert_eq!(picker.height(60), taller, "moving within a tab keeps it");
+
+        picker.handle(key(KeyCode::Tab));
+        assert_eq!(picker.height(60), taller - 1);
     }
 
     #[test]
@@ -1054,14 +1264,14 @@ mod tests {
     #[test]
     fn values_share_one_column_across_tabs() {
         let mut picker = tabbed(false);
-        let first = column(&row(&rendered(&picker, 60), 1), "dark").unwrap();
+        let first = column(&row(&rendered(&picker, 60), FIRST_TABBED_ROW), "dark").unwrap();
         picker.handle(key(KeyCode::Tab));
-        let second = column(&row(&rendered(&picker, 60), 1), "3").unwrap();
+        let second = column(&row(&rendered(&picker, 60), FIRST_TABBED_ROW), "3").unwrap();
         assert_eq!(first, second);
     }
 
     #[test]
-    fn the_button_follows_the_rows_and_keeps_the_picker_one_height() {
+    fn the_button_follows_the_rows_of_whichever_tab_is_shown() {
         let mut picker = tabbed(true);
         let height = picker.height(60);
         picker.move_selection(2);
@@ -1078,8 +1288,7 @@ mod tests {
         assert!(row(&buffer, button + 2).contains("reset everything"));
 
         picker.handle(key(KeyCode::Tab));
-        assert_eq!(picker.height(60), height, "a shorter tab keeps the height");
-        assert!(row(&rendered(&picker, 60), button).contains("> restore"));
+        assert!(row(&rendered(&picker, 60), button - 1).contains("> restore"));
     }
 
     #[test]
@@ -1125,6 +1334,10 @@ mod tests {
         let tab = KeyEvent::from(KeyCode::Tab).to_string();
         assert!(hints(tabbed(true)).contains(&format!("{tab} ")));
         assert!(!hints(picker(vec![item("one", "")])).contains(&tab));
+
+        let mut on_tab_bar = tabbed(true);
+        on_tab_bar.handle(key(KeyCode::Up));
+        assert!(hints(on_tab_bar).contains("switch tabs"));
     }
 
     #[test]

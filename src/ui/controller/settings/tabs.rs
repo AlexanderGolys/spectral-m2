@@ -4,10 +4,11 @@
 use ratatui::text::Span;
 
 use super::appearance::AppearanceSetting;
+use super::keymap::{self, Keymaps};
 use super::layout::LayoutSetting;
 use super::rendering::RenderingSetting;
 use super::selection::SelectionSetting;
-use super::statusline::StatusLineSetting;
+use super::statusline;
 use super::theme::groups::scheme;
 use super::Settings;
 use crate::ui::controller::picker::{PickerItem, PickerTab, PickerValue, Row};
@@ -46,13 +47,18 @@ pub trait SettingRow: Copy + Send + 'static {
 }
 
 /// Every tab, its rows showing `settings`.
-pub fn tabs(settings: Settings) -> Vec<PickerTab> {
+pub fn tabs(settings: Settings, keymaps: &Keymaps) -> Vec<PickerTab> {
     vec![
         tab("appearance", AppearanceSetting::CHOICES, settings),
         tab("layout", LayoutSetting::CHOICES, settings),
-        tab("statusline", StatusLineSetting::CHOICES, settings),
+        PickerTab {
+            mode: None,
+            label: "statusline",
+            items: statusline::rows(settings),
+        },
         tab("rendering", RenderingSetting::CHOICES, settings),
         tab("selection", SelectionSetting::CHOICES, settings),
+        keymap::settings_tab(keymaps),
     ]
 }
 
@@ -62,6 +68,7 @@ fn tab<Setting: SettingRow>(
     settings: Settings,
 ) -> PickerTab {
     PickerTab {
+        mode: None,
         label,
         items: rows.iter().map(|row| row.row(settings)).collect(),
     }
@@ -93,7 +100,7 @@ mod tests {
     fn stepping_any_setting_forward_then_back_restores_it() {
         assert_steps_back(AppearanceSetting::CHOICES);
         assert_steps_back(LayoutSetting::CHOICES);
-        assert_steps_back(StatusLineSetting::CHOICES);
+        assert_steps_back(&statusline::StatusLineSetting::choices().collect::<Vec<_>>());
         assert_steps_back(RenderingSetting::CHOICES);
         assert_steps_back(SelectionSetting::CHOICES);
     }

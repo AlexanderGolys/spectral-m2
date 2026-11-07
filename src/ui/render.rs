@@ -45,6 +45,7 @@ pub struct RenderContext {
     math: MathStyle,
     recent_outputs: [Option<u32>; RECENT_OUTPUTS],
     numbers_printed: bool,
+    swapped_code_background: bool,
 }
 
 impl RenderContext {
@@ -56,7 +57,25 @@ impl RenderContext {
             math: MathStyle::default(),
             recent_outputs: [None; RECENT_OUTPUTS],
             numbers_printed: false,
+            swapped_code_background: false,
         }
+    }
+
+    /// Exchange the code background with the transcript background in a reference view.
+    pub fn with_swapped_code_background(self, swapped: bool) -> Self {
+        Self {
+            swapped_code_background: swapped,
+            ..self
+        }
+    }
+
+    /// Source styling for this view, preserving its syntax foregrounds.
+    pub fn code_style(&self) -> Style {
+        let mut style = self.groups().code();
+        if self.swapped_code_background {
+            style.bg = self.groups().transcript().bg;
+        }
+        style
     }
 
     /// Fold returned values taller than `rows`.

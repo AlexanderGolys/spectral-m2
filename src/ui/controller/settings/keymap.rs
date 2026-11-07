@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::input::InputAction;
 use crate::ui::action::Action;
-use crate::ui::controller::picker::{PickerInput, PickerItem, PickerTab, Row};
+use crate::ui::controller::picker::{PickerInput, PickerItem, PickerMode, PickerTab, Row};
 use crate::ui::controller::settings::theme::groups::{scheme, HLGroup};
 use crate::ui::controller::EditorEvent;
 use crate::ui::key::{KeyEvent, KeyMod};
@@ -66,7 +66,7 @@ impl Shortcut {
                     KeyContext::Selection
                 }
                 InsertNewline | InsertTab | DeleteBack | DeleteForward | DeleteWordBack
-                | DeleteWordForward | Undo | Redo | Clear => KeyContext::Editing,
+                | DeleteWordForward | DeleteLine | Undo | Redo | Clear => KeyContext::Editing,
                 NextCompletion | PreviousCompletion | HistoryPrevious | HistoryNext => {
                     KeyContext::Recall
                 }
@@ -118,7 +118,9 @@ impl Keymaps {
         let binding = self.bindings.get(&key.binding())?;
         match binding.shortcut {
             Shortcut::Command(action)
-                if !remapping || !binding.remappable || action == Action::OpenKeymaps =>
+                if !remapping
+                    || !binding.remappable
+                    || matches!(action, Action::OpenKeymaps | Action::OpenSettings) =>
             {
                 Some(action)
             }
@@ -239,28 +241,32 @@ impl Keymaps {
     }
 }
 
-/// The picker tabs listing the remappable shortcuts, one per context.
-pub fn tabs(keymaps: &Keymaps) -> Vec<PickerTab> {
+/// The keymaps page of the settings picker, grouped by shortcut context.
+pub fn settings_tab(keymaps: &Keymaps) -> PickerTab {
     let remappable = keymaps.remappable();
-    keymaps
+    let mut items = keymaps
         .contexts()
         .into_iter()
-        .map(|context| PickerTab {
-            label: context.label(),
-            items: remappable
+        .flat_map(|context| {
+            remappable
                 .iter()
-                .filter(|(shortcut, _)| shortcut.context() == context)
+                .filter(move |(shortcut, _)| shortcut.context() == context)
                 .map(|&(shortcut, key)| {
                     Box::new(KeymapRow::new(shortcut, key)) as Box<dyn PickerItem>
                 })
-                .collect(),
         })
-        .collect()
+        .collect::<Vec<_>>();
+    items.push(restore_defaults());
+    PickerTab {
+        mode: Some(PickerMode::Keymaps),
+        label: "keymaps",
+        items,
+    }
 }
 
 /// The button putting every shortcut back on its default key.
 pub fn restore_defaults() -> Box<dyn PickerItem> {
-    let label = Span::styled("restore defaults", scheme().settings_button());
+    let label = Span::styled("restore keymaps", scheme().settings_button());
     Row::enter(vec![label.into()], || EditorEvent::RestoreKeymaps)
         .described("put every shortcut back on its default key")
         .into()
@@ -296,6 +302,10 @@ impl PickerItem for KeymapRow {
             Span::styled(self.shortcut.description(), groups.keymap_action_label()).into(),
             Span::styled(shortcut, groups.style(HLGroup::KeymapHint)).into(),
         ]
+    }
+
+    fn description(&self) -> Option<&str> {
+        Some(self.shortcut.context().label())
     }
 
     fn capturing(&self) -> bool {
@@ -370,7 +380,11 @@ impl Default for Keymaps {
                 keymap!(A::Restart => Char('n') + Ctrl),
                 keymap!(A::ResumeSession => Char('r') + Ctrl),
                 keymap!(A::ClosePane => Char('q') + Ctrl),
+                keymap!(A::ReferenceBack => Char('b') + Ctrl + Shift),
                 keymap!(fixed A::ToggleHighlightDebug => Char('d') + Ctrl + Shift),
+                keymap!(A::SaveSelection => Char('s') + Ctrl + Shift),
+                keymap!(A::BrowseSessions => F(7)),
+                keymap!(A::RunViewedFile => Enter + Ctrl),
                 keymap!(A::CopySelection => Char('y') + Ctrl),
                 keymap!(fixed A::Submit => Enter),
                 keymap!(fixed A::ScrollFeedUp => PageUp),
@@ -403,6 +417,7 @@ impl Default for Keymaps {
                 keymap!(I::InsertTab => Tab + Alt),
                 keymap!(I::DeleteBack => Backspace),
                 keymap!(I::DeleteForward => Delete),
+                keymap!(I::DeleteLine => Char('u') + Ctrl),
                 keymap!(I::DeleteWordBack => Backspace + Ctrl),
                 keymap!(alias I::DeleteWordBack => Backspace + Alt),
                 // The backspace control character, which is what a terminal sends
@@ -644,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn every_edit_has_a_binding_and_a_context_tab() {
+    fn every_edit_has_a_binding_in_the_unified_keymaps_tab() {
         let keymaps = Keymaps::default();
         for edit in [
             InputAction::MoveLeft,
@@ -656,17 +671,9 @@ mod tests {
             assert_eq!(keymaps.edit(key), Some(edit));
             assert!(keymaps.action(key, false).is_none());
         }
-        let labels: Vec<_> = tabs(&keymaps).iter().map(|tab| tab.label).collect();
-        assert_eq!(
-            labels,
-            [
-                "global",
-                "movement",
-                "selection",
-                "editing",
-                "completion & history"
-            ]
-        );
+        let tab = settings_tab(&keymaps);
+        assert_eq!(tab.mode, Some(PickerMode::Keymaps));
+        assert_eq!(tab.items.len(), keymaps.remappable().len() + 1);
     }
 
     #[test]
@@ -689,12 +696,12 @@ mod tests {
     #[test]
     fn an_edit_can_move_but_not_onto_an_alias_or_a_key_its_swap_partner_cannot_hold() {
         let mut keymaps = Keymaps::default();
-        assert!(keymaps.rebind(InputAction::Undo, key!(Char('u') + Ctrl)));
-        assert_eq!(
-            keymaps.edit(key!(Char('u') + Ctrl)),
-            Some(InputAction::Undo)
-        );
-        assert!(keymaps.edit(key!(Char('z') + Ctrl)).is_none());
+        let original = keymaps.key(InputAction::Undo).expect("undo binding");
+        let replacement = key!(Char('u') + Ctrl);
+        let displaced = keymaps.edit(replacement);
+        assert!(keymaps.rebind(InputAction::Undo, replacement));
+        assert_eq!(keymaps.edit(replacement), Some(InputAction::Undo));
+        assert_eq!(keymaps.edit(original), displaced);
 
         assert!(!keymaps.rebind(InputAction::Undo, key!(Char('j') + Ctrl)));
         // A plain arrow is fine for editing, but a global command could not hold it.

@@ -1,6 +1,7 @@
 //! Retained transcript rendering and interaction limited to the viewport.
 
 use std::collections::HashMap;
+use std::ops::Range;
 
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::SourceId;
@@ -14,6 +15,7 @@ use super::block::{Block, Link, Reformatted, Resized, Rethemed, Ticked};
 use super::cell::{EvaluationBlock, IncompleteBlock};
 use super::config::UI;
 use super::element::{paste, EventListener};
+use super::graphics::{self, kitty::ImageId};
 use super::render::selection::Inclusions;
 use super::render::{RenderContext, RECENT_OUTPUTS};
 
@@ -42,6 +44,14 @@ enum FeedContent {
 }
 
 impl FeedContent {
+    fn block_mut(&mut self) -> &mut dyn Block {
+        match self {
+            Self::Block(block) => block.as_mut(),
+            Self::Evaluation(block) => block,
+            Self::Incomplete(block) => block,
+        }
+    }
+
     fn block(&self) -> &dyn Block {
         match self {
             Self::Block(block) => block.as_ref(),
@@ -188,6 +198,13 @@ impl EventListener<Reformatted> for RetainedBlock {
     }
 }
 
+/// Rows between two row ranges: none when they overlap.
+fn rows_between(block: &Range<usize>, viewport: &Range<usize>) -> usize {
+    let above = viewport.start.saturating_sub(block.end);
+    let below = block.start.saturating_sub(viewport.end);
+    above.max(below)
+}
+
 /// A borrowed block list rendered through a scrollable rectangular viewport.
 pub struct BlockView<'a> {
     blocks: &'a [&'a dyn Block],
@@ -229,6 +246,19 @@ impl<'a> BlockView<'a> {
             .map(|height| usize::from(*height))
             .sum::<usize>();
         *scroll = (*scroll).min(total.saturating_sub(area.height.into()));
+        let viewport = *scroll..*scroll + usize::from(area.height);
+        let mut top = 0;
+        graphics::report_distances(self.blocks.iter().zip(&heights).flat_map(
+            |(block, &height)| {
+                let rows = top..top + usize::from(height);
+                top = rows.end;
+                let distance = rows_between(&rows, &viewport);
+                block
+                    .pictures()
+                    .into_iter()
+                    .map(move |image| (image, distance))
+            },
+        ));
         let mut skip = *scroll;
         let mut y = 0;
         let mut inclusions = Inclusions::default();
@@ -265,6 +295,7 @@ impl<'a> BlockView<'a> {
 
 /// Transcript blocks with their scrolling and retained presentation state.
 pub struct Feed {
+    focus_pending: bool,
     blocks: Vec<RetainedBlock>,
     scroll: usize,
     anchor: Option<(usize, u16)>,
@@ -279,6 +310,7 @@ impl Feed {
     /// Create a feed containing one initial block.
     pub fn new(block: Box<dyn Block>) -> Self {
         Self {
+            focus_pending: false,
             blocks: vec![RetainedBlock::new(FeedContent::Block(block))],
             scroll: 0,
             anchor: None,
@@ -491,13 +523,10 @@ impl Feed {
         };
         let (context, anchor) = (surface.context, surface.anchor);
         let block = &mut self.blocks[index];
-        let toggled = match &mut block.content {
-            FeedContent::Evaluation(evaluation) => evaluation.toggle_fold(
-                Position::new(position.x - area.x, start + position.y - area.y),
-                &context,
-            ),
-            FeedContent::Block(_) | FeedContent::Incomplete(_) => false,
-        };
+        let toggled = block.content.block_mut().toggle_fold(
+            Position::new(position.x - area.x, start + position.y - area.y),
+            &context,
+        );
         if toggled {
             block.forget_layout();
             self.anchor = anchor;
@@ -541,6 +570,17 @@ impl Feed {
         };
     }
 
+    /// Open at the beginning of retained content.
+    pub fn scroll_to_top(&mut self) {
+        self.anchor = None;
+        self.scroll = usize::MAX;
+    }
+
+    /// Honour a source block's requested initial location on the next layout.
+    pub fn focus_target(&mut self) {
+        self.focus_pending = true;
+    }
+
     /// Return the current distance from the bottom.
     pub fn offset(&self) -> usize {
         self.scroll
@@ -569,6 +609,15 @@ impl Feed {
             return (true, Inclusions::default());
         }
         let context = context.with_width(area.width);
+        if std::mem::take(&mut self.focus_pending) {
+            self.anchor = self.blocks.iter().enumerate().find_map(|(index, block)| {
+                block
+                    .content
+                    .block()
+                    .focus_row(&context)
+                    .map(|row| (index, row))
+            });
+        }
         // A new output relabels the ones before it, which moves no row but repaints.
         if self.labelled != context.recent_outputs() {
             self.labelled = context.recent_outputs();
@@ -605,6 +654,46 @@ impl Feed {
         self.scroll = surface.scroll;
         self.surface = Some(surface);
         (underfilled, inclusions)
+    }
+
+    /// How far each picture stands from the viewport, in rows: none for a block on
+    /// screen, else the rows of the blocks between it and the nearest one that is. A
+    /// feed not drawn yet holds none.
+    pub fn picture_distances(&self) -> Vec<(ImageId, usize)> {
+        let Some(surface) = &self.surface else {
+            return Vec::new();
+        };
+        let on_screen = surface.placements.iter().map(|(index, ..)| *index);
+        let (Some(first), Some(last)) = (on_screen.clone().min(), on_screen.max()) else {
+            return Vec::new();
+        };
+        let (first, after) = (
+            first.min(self.blocks.len()),
+            (last + 1).min(self.blocks.len()),
+        );
+        let holding = |block: &RetainedBlock, rows: usize| {
+            block
+                .content
+                .block()
+                .pictures()
+                .into_iter()
+                .map(move |image| (image, rows))
+        };
+        let mut distances = Vec::new();
+        let mut between = 0;
+        for block in self.blocks[..first].iter().rev() {
+            distances.extend(holding(block, between));
+            between += block.layout.map_or(1, |layout| usize::from(layout.height));
+        }
+        for block in &self.blocks[first..after] {
+            distances.extend(holding(block, 0));
+        }
+        let mut between = 0;
+        for block in &self.blocks[after..] {
+            distances.extend(holding(block, between));
+            between += block.layout.map_or(1, |layout| usize::from(layout.height));
+        }
+        distances
     }
 
     fn scrolled_anchor(&self) -> Option<(usize, u16)> {
@@ -783,9 +872,12 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    use ratatui::layout::Size;
+
     use super::*;
     use crate::ui::cell::{CellState, EvaluationBlock, OutputBlock, TextBlock};
     use crate::ui::controller::settings::theme::groups::Groups;
+    use crate::ui::graphics::kitty::KittyImage;
 
     /// A one-row block counting actual cell rendering.
     struct Counted(Arc<AtomicUsize>);
@@ -965,6 +1057,52 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0, 1, 1]
         );
+    }
+
+    /// A block of rows tall showing one picture.
+    struct Pictured(ImageId, u16);
+
+    impl Block for Pictured {
+        fn height(&self, _: &RenderContext) -> u16 {
+            self.1
+        }
+
+        fn render_local(&self, _: &RenderContext, buffer: &mut Buffer) {
+            let image = KittyImage::new(self.0, Size::new(1, 1)).unwrap();
+            Paragraph::new(image.lines()).render(*buffer.area(), buffer);
+        }
+
+        fn pictures(&self) -> Vec<ImageId> {
+            vec![self.0]
+        }
+    }
+
+    #[test]
+    fn every_picture_reports_the_rows_between_its_block_and_the_viewport() {
+        let images = [
+            ImageId::from(910_001),
+            ImageId::from(910_002),
+            ImageId::from(910_003),
+        ];
+        let mut feed = Feed::new(Box::new(Pictured(images[0], 3)));
+        feed.push(Box::new(Pictured(images[1], 4)));
+        feed.push(Box::new(Pictured(images[2], 5)));
+        let context = RenderContext::new(10, 0);
+        let area = Rect::new(0, 0, 10, 3);
+        let mut target = Buffer::empty(area);
+
+        feed.scroll_to_top();
+        feed.render(&context, area, &mut target, Style::default());
+        feed.scroll(-i8::MAX);
+        feed.scroll(5);
+        feed.render(&context, area, &mut target, Style::default());
+        feed.scroll(-5);
+        feed.render(&context, area, &mut target, Style::default());
+
+        let distances = feed.picture_distances();
+        assert!(distances.contains(&(images[0], 4)));
+        assert!(distances.contains(&(images[1], 0)));
+        assert!(distances.contains(&(images[2], 0)));
     }
 
     /// A one-row block counting how often it is laid out.

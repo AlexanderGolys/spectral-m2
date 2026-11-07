@@ -44,7 +44,8 @@ These options are passed to M2 and kept when the session restarts, including whe
 | `--prefix DIR` | Set M2's prefix directory. |
 | `--srcdir DIR` | Add an M2 source or build tree to the initial path. |
 | `--no-backtrace` | Suppress error backtraces. |
-| `--no-debug` | Do not enter the debugger on error. |
+| `--no-debug` | Keep automatic debugger entry disabled, which is the default. |
+| `--debugger` | Opt into Macaulay2 debugger entry on errors. Conflicts with `--no-debug`. |
 | `--debug N` | Turn warning N into an error. |
 | `--notify` | Report files loaded and command-line expressions evaluated. |
 | `--print-width N` | Set M2's output width. |

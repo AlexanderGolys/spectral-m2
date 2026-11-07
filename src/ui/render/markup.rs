@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem;
@@ -13,6 +14,7 @@ use html2text::render::{RichAnnotation, RichDecorator, TaggedLine, TextDecorator
 use html2text::{Element, Handle, RcDom};
 use m2_syn::native::parse_native;
 use ratatui::layout::{Offset, Position, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use regex::{Captures, Regex};
 use unicode_width::UnicodeWidthStr;
@@ -29,6 +31,7 @@ use crate::ui::wrap::WordWrap;
 
 mod examples;
 
+pub use self::examples::highlighted as source_highlights;
 pub use self::examples::ArchivedExample;
 use crate::backend::M2Response;
 use crate::ui::controller::settings::theme::groups::Groups;
@@ -183,6 +186,7 @@ struct Document {
     math: MathStyle,
     groups: &'static Groups,
     numbers_printed: bool,
+    code_style: Style,
     links: Vec<Vec<(Rect, Rc<Link>)>>,
     lines: Rc<Vec<Line<'static>>>,
     inclusions: Inclusions,
@@ -199,6 +203,7 @@ fn document(html: &str, example_width: usize, context: &RenderContext) -> Option
                 && entry.width == context.width()
                 && entry.math == context.math()
                 && entry.numbers_printed == context.numbers_printed()
+                && entry.code_style == context.code_style()
                 && std::ptr::eq(entry.groups, context.groups())
                 && entry.html == html
         })?;
@@ -211,7 +216,16 @@ fn document(html: &str, example_width: usize, context: &RenderContext) -> Option
     }
     // Rendering examples can recursively render markup. Do not borrow the cache
     // while constructing the page.
-    let (rows, inclusions) = rows(html, example_width, context)?;
+    let (rows, inclusions, nested_links) = rows(html, example_width, context)?;
+    let mut links = placed_links(&rows);
+    for link in nested_links {
+        let link = Rc::new(link);
+        for cells in &link.cells {
+            if let Some(row) = links.get_mut(usize::from(cells.y)) {
+                row.push((*cells, link.clone()));
+            }
+        }
+    }
     let lines = Rc::new(
         rows.iter()
             .map(|row| match row {
@@ -227,7 +241,8 @@ fn document(html: &str, example_width: usize, context: &RenderContext) -> Option
         math: context.math(),
         groups: context.groups(),
         numbers_printed: context.numbers_printed(),
-        links: placed_links(&rows),
+        code_style: context.code_style(),
+        links,
         lines,
         inclusions,
     });
@@ -246,9 +261,10 @@ pub fn remember_example(page_id: u64, number: u32, response: M2Response) {
 
 /// Colour a page's code by what its analysis found.
 pub fn remember_colors(colors: PageColors) {
-    let page_id = colors.page;
     examples::remember_colors(colors);
-    DOCUMENTS.with_borrow_mut(|documents| documents.retain(|entry| page(&entry.html) != page_id));
+    // An example's computed answer can embed another page's code. Its semantic
+    // colours affect every enclosing document that retained those rendered rows.
+    DOCUMENTS.with_borrow_mut(VecDeque::clear);
 }
 
 /// Return every page's code to its syntax colours.
@@ -272,6 +288,20 @@ pub fn link_at(
         .iter()
         .find(|(cells, _)| cells.contains(position))
         .map(|(_, link)| link.as_ref().clone())
+}
+
+/// Every link in a laid-out document, including links in embedded results.
+pub fn links(html: &str, example_width: usize, context: &RenderContext) -> Vec<Link> {
+    let Some(document) = document(html, example_width, context) else {
+        return Vec::new();
+    };
+    let mut seen = HashSet::new();
+    document
+        .links
+        .iter()
+        .flatten()
+        .filter_map(|(_, link)| seen.insert(Rc::as_ptr(link)).then(|| link.as_ref().clone()))
+        .collect()
 }
 
 /// Index link geometry once during layout. Hover inspects only the pointer's row.
@@ -442,12 +472,13 @@ fn rows(
     html: &str,
     example_width: usize,
     context: &RenderContext,
-) -> Option<(Vec<Row>, Inclusions)> {
+) -> Option<(Vec<Row>, Inclusions, Vec<Link>)> {
     let width = usize::from(context.width().max(1));
     let tagged = layout(html, width, context.math().blackboard)?;
     let page = page(html);
     let mut result = Vec::new();
     let mut inclusions = Inclusions::default();
+    let mut links = Vec::new();
     let push_prose =
         |result: &mut Vec<Row>, inclusions: &mut Inclusions, rows: Vec<SpanLine>, indent: u16| {
             for row in rows {
@@ -487,6 +518,12 @@ fn rows(
             {
                 let top = i32::try_from(result.len()).unwrap_or(i32::MAX);
                 inclusions.merge(example.inclusions + Offset::new(i32::from(indent), top));
+                links.extend(
+                    example
+                        .links
+                        .into_iter()
+                        .map(|link| link.moved(Offset::new(i32::from(indent), top))),
+                );
                 for (row, mut line) in example.lines.into_iter().enumerate() {
                     if !prefix.is_empty() {
                         line.spans.insert(
@@ -517,7 +554,7 @@ fn rows(
             index += 1;
         }
     }
-    Some((result, inclusions))
+    Some((result, inclusions, links))
 }
 
 fn is_blank(line: &HtmlLine) -> bool {
@@ -631,6 +668,7 @@ fn layout(html: &str, width: usize, blackboard: bool) -> Option<Vec<HtmlLine>> {
     let html = typeset_maths(html, blackboard);
     let dom = config.parse_html(html.as_bytes()).ok()?;
     normalize(&dom.document, false);
+    decorate_inline(&dom.document, &mut false);
     let tree = config.dom_to_render_tree(&dom).ok()?;
     config.render_to_lines(tree, width).ok()
 }
@@ -638,6 +676,9 @@ fn layout(html: &str, width: usize, blackboard: bool) -> Option<Vec<HtmlLine>> {
 /// Normalize M2's presentation wrappers before layout. Example tables describe
 /// consecutive code blocks; data tables keep their rows, columns and borders.
 fn normalize(node: &Handle, in_examples: bool) -> Vec<Handle> {
+    if tag_of(node).as_deref() == Some("li") {
+        link_signature(node);
+    }
     let (replacement, subscript, in_examples, flatten, group) = match &node.data {
         Element { name, attrs, .. } => {
             let attrs = attrs.borrow();
@@ -720,6 +761,179 @@ fn normalize(node: &Handle, in_examples: bool) -> Vec<Handle> {
     } else {
         vec![Rc::clone(node)]
     }
+}
+
+/// Give an unlinked method signature its entry's documentation destination.
+fn link_signature(item: &Handle) {
+    let signature = find_signature(item);
+    let Some(signature) = signature.filter(|node| !within("a", node)) else {
+        return;
+    };
+    let Some(text) = plain_text(&signature) else {
+        return;
+    };
+    if !reads_as_code(&signature) {
+        return;
+    }
+    let alias = find_element(item, "a").and_then(|link| attribute(&link, "href"));
+    if alias.is_none() && !text.contains('(') {
+        return;
+    }
+    let target =
+        alias.unwrap_or_else(|| serde_json::to_string(text.trim()).expect("text serializes"));
+    let link = parsed_element(
+        &format!(
+            "<a href=\"{}\"></a>",
+            escape_text(&target).replace('"', "&quot;")
+        ),
+        "a",
+    );
+    let children = signature.children.take();
+    signature.children.replace(vec![adopted_by(link, children)]);
+}
+
+fn find_signature(node: &Handle) -> Option<Handle> {
+    let tag = tag_of(node);
+    if tag.as_deref() == Some("a") {
+        return None;
+    }
+    if matches!(tag.as_deref(), Some("kbd" | "code" | "tt"))
+        || (tag.as_deref() == Some("span")
+            && attribute(node, "class")
+                .is_some_and(|classes| classes.split_ascii_whitespace().any(|class| class == "tt")))
+    {
+        return Some(Rc::clone(node));
+    }
+    node.children.borrow().iter().find_map(find_signature)
+}
+
+fn attribute(node: &Handle, key: &str) -> Option<String> {
+    match &node.data {
+        Element { attrs, .. } => attrs
+            .borrow()
+            .iter()
+            .find(|attribute| &*attribute.name.local == key)
+            .map(|attribute| attribute.value.to_string()),
+        _ => None,
+    }
+}
+
+/// Attach inline semantics before width-dependent layout splits the text.
+fn decorate_inline(node: &Handle, described: &mut bool) {
+    let tag = tag_of(node);
+    if tag
+        .as_deref()
+        .is_some_and(|tag| matches!(tag, "pre" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"))
+    {
+        return;
+    }
+    if tag.as_deref() == Some("a")
+        && plain_text(node).is_some_and(|text| text.contains('('))
+        && reads_as_code(node)
+    {
+        let children = node.children.take();
+        node.children.replace(vec![adopt("code", children)]);
+    }
+    if tag.as_deref() == Some("code") {
+        let source = inline_text(node);
+        paint_inline_code(node, &code(&source), &mut 0);
+        return;
+    }
+    let mut local = false;
+    let described = if tag.as_deref().is_some_and(is_block) {
+        &mut local
+    } else {
+        described
+    };
+    let children = node.children.take();
+    let mut decorated = Vec::new();
+    for child in children {
+        if let Some(text) = text_leaf(&child) {
+            if *described {
+                decorated.push(group_link(HLGroup::Muted, vec![child]));
+            } else if !tag.as_deref().is_some_and(|tag| tag.starts_with('h')) {
+                if let Some((lead, tail)) = text.split_once(DESCRIPTION_MARK) {
+                    decorated.push(element("span", &escape_text(lead)));
+                    decorated.push(group_link(
+                        HLGroup::Muted,
+                        vec![element(
+                            "span",
+                            &escape_text(&format!("{DESCRIPTION_MARK}{tail}")),
+                        )],
+                    ));
+                    *described = true;
+                } else {
+                    decorated.push(child);
+                }
+            } else {
+                decorated.push(child);
+            }
+        } else {
+            decorate_inline(&child, described);
+            decorated.push(child);
+        }
+    }
+    adopted_by(Rc::clone(node), decorated);
+}
+
+/// Text leaves serialized without introducing layout whitespace.
+fn text_leaf(node: &Handle) -> Option<String> {
+    if !node.children.borrow().is_empty()
+        || matches!(
+            &node.data,
+            Element { .. } | html2text::Comment { .. } | html2text::Document
+        )
+    {
+        return None;
+    }
+    let mut serialized = Vec::new();
+    node.serialize(&mut serialized).ok()?;
+    let serialized = String::from_utf8(serialized).ok()?;
+    (!serialized.starts_with('<')).then(|| unescape_text(&serialized))
+}
+
+/// The original inline source, without introducing presentation whitespace.
+fn inline_text(node: &Handle) -> String {
+    if let Some(text) = text_leaf(node) {
+        return text;
+    }
+    node.children.borrow().iter().map(inline_text).collect()
+}
+
+/// Distribute whole-source highlights over text leaves while preserving links.
+fn paint_inline_code(node: &Handle, spans: &[TextSpan], offset: &mut usize) {
+    let mut children = Vec::new();
+    for child in node.children.take() {
+        if let Some(text) = text_leaf(&child) {
+            let end = *offset + text.len();
+            let mut start = 0;
+            for span in spans {
+                let next = start + span.content.len();
+                let from = start.max(*offset);
+                let to = next.min(end);
+                if from < to {
+                    children.push(group_link(
+                        span.kind,
+                        vec![element(
+                            "span",
+                            &escape_text(&text[from - *offset..to - *offset]),
+                        )],
+                    ));
+                }
+                start = next;
+            }
+            *offset = end;
+        } else {
+            if attribute(&child, "href").is_some_and(|target| target.starts_with(FILE_LINK_SCHEME))
+            {
+                *offset += inline_text(&child).len();
+            } else {
+                paint_inline_code(&child, spans, offset);
+            }
+            children.push(child);
+        }
+    }
+    adopted_by(Rc::clone(node), children);
 }
 
 /// Whether `node` is text alone, set where a highlight group would be seen. A
@@ -988,15 +1202,15 @@ fn row(line: &TaggedLine<Vec<RichAnnotation>>) -> SpanLine {
                 .and_then(|name| HLGroup::named(name).ok()),
             _ => None,
         });
-        let linked = group.is_none()
-            && run
-                .tag
-                .iter()
-                .any(|tag| matches!(tag, RichAnnotation::Link(_)));
+        let linked = run.tag.iter().any(
+            |tag| matches!(tag, RichAnnotation::Link(url) if !url.starts_with(GROUP_LINK_SCHEME)),
+        );
         // A link to another documentation node carries its key as an M2 string,
         // as the shell's startup rewrites it; any other link only reads as one.
         let target = run.tag.iter().find_map(|tag| match tag {
-            RichAnnotation::Link(url) if url.starts_with('"') => {
+            RichAnnotation::Link(url)
+                if url.starts_with('"') || url.starts_with(FILE_LINK_SCHEME) =>
+            {
                 Some(Arc::<str>::from(url.as_str()))
             }
             _ => None,

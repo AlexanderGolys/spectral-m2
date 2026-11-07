@@ -1,11 +1,15 @@
 //! The application's session, its panes, and the terminal event loop.
 
+mod documentation;
 mod examples;
 mod panes;
+mod previews;
 pub mod session;
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
+use std::iter;
 use std::path::Path;
 use std::time::Duration;
 
@@ -13,32 +17,58 @@ use crossterm::clipboard::CopyToClipboard;
 use crossterm::event::{Event, MouseButton, MouseEvent, MouseEventKind};
 use crossterm::execute;
 use lsp_types::ServerInfo;
+use ratatui::layout::{Constraint, Layout};
 use ratatui::layout::{Position, Rect};
+use ratatui::style::Modifier;
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use self::panes::{pane_layout, ratio_for_width, Panes, MIN_PANE_WIDTH};
+use self::documentation::DocumentationBrowser;
+use self::panes::{pane_layout, ratio_for_width, Pane, Panes, MIN_PANE_WIDTH};
+use self::previews::{PreviewTab, PreviewTabs, RECENT_PREVIEWS};
 use self::session::Session;
 use crate::backend::M2Backend;
 use crate::code::file as code_file;
+use crate::code::location::SourceLink;
 use crate::code::semantic::SemanticHighlighter;
 use crate::errors::Result;
 use crate::ui::action::Action;
-use crate::ui::cell::TextBlock;
+use crate::ui::block::Block;
+use crate::ui::cell::{response_blocks, SourceBlock, TextBlock};
 use crate::ui::config::UI;
-use crate::ui::controller::{CommittedCells, Editor, EditorUpdate, Reaction, ViewKind};
+use crate::ui::controller::settings::theme::groups::{scheme, HLGroup};
+use crate::ui::controller::{
+    CommittedCells, Editor, EditorUpdate, Reaction, ReferenceEntry, ViewKind,
+};
 use crate::ui::graphics;
 use crate::ui::key::{KeyEvent, Keyboard};
 use crate::ui::render::markup;
 use crate::ui::terminal::ReplTerminal;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(80);
+/// How often to look for pictures the worker has finished encoding while any remain.
+const PICTURE_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+struct PreviewSnapshot {
+    pane: Pane,
+    reference: Option<ReferenceEntry>,
+}
+
+#[derive(Clone, Copy)]
+enum PreviewControl {
+    Select(PreviewTab),
+    Back,
+    Bookmark,
+}
 /// The M2 process behind the shell, with its transcript, draft, history, and syntax state.
 struct Workspace {
     session: Session,
     editor: Editor,
     highlighter: SemanticHighlighter,
+    // @##wtf is this type?
     analysis_state: Option<(u64, u64, Option<String>)>,
     /// The Macaulay2 version the welcome message names.
+    // @##redundant
     m2_version: String,
 }
 
@@ -49,6 +79,7 @@ impl Workspace {
         let session = Session::new(backend);
         let version = session.version().unwrap_or_else(|_| "unknown".to_string());
         let mut editor = Editor::new(welcome_message(&version, None));
+        editor.set_m2_version(version.clone());
         editor.apply(EditorUpdate::KnownNames(names));
         if !startup_output.is_empty() {
             editor.apply(EditorUpdate::Message(Box::new(TextBlock::printed(
@@ -74,10 +105,16 @@ struct App {
     divider: Option<Rect>,
     dragging_divider: bool,
     keyboard: Keyboard,
+    documentation: Option<DocumentationBrowser>,
+    documentation_requests: HashMap<u64, PreviewTab>,
+    previews: PreviewTabs<PreviewSnapshot>,
+    preview_controls: Vec<(Rect, PreviewControl)>,
+    archived_code: String,
 }
 
 impl App {
     fn new(backend: M2Backend) -> Self {
+        let _ = code_file::archive_previous_session();
         Self {
             workspace: Workspace::new(backend),
             panes: Panes::new(),
@@ -86,6 +123,11 @@ impl App {
             divider: None,
             dragging_divider: false,
             keyboard: Keyboard::default(),
+            documentation: None,
+            documentation_requests: HashMap::new(),
+            previews: PreviewTabs::default(),
+            preview_controls: Vec::new(),
+            archived_code: String::new(),
         }
     }
 
@@ -119,6 +161,40 @@ impl App {
             return self.handle_action(action);
         }
         if !editor.picker_open()
+            && self.panes.split()
+            && self.previews.active.is_some()
+            && !key.alt()
+            && !key.shift()
+            && (previewing || key.ctrl())
+            && matches!(
+                key.code,
+                crossterm::event::KeyCode::Left | crossterm::event::KeyCode::Right
+            )
+        {
+            let direction = if key.code == crossterm::event::KeyCode::Left {
+                -1
+            } else {
+                1
+            };
+            if let Some(tab) = self.previews.neighbour(direction) {
+                self.select_preview(tab);
+            }
+            return true;
+        }
+        if !editor.picker_open() && self.panes.focused().view == ViewKind::Reference {
+            match key.code {
+                crossterm::event::KeyCode::Up => {
+                    editor.scroll_reference(1);
+                    return true;
+                }
+                crossterm::event::KeyCode::Down => {
+                    editor.scroll_reference(-1);
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        if !editor.picker_open()
             && (self.panes.step_split_view(key) || self.panes.focused_mut().handle_key(key))
         {
             return true;
@@ -135,17 +211,50 @@ impl App {
         match action {
             Action::CancelExecution => {
                 if !self.workspace.session.busy() {
+                    if self.workspace.editor.cancel_input() {
+                        self.workspace.session.reset_incomplete();
+                        return true;
+                    }
                     return self.handle_action(Action::Quit);
                 }
                 let update = self.workspace.session.interrupt();
                 self.workspace.editor.apply(update);
                 return true;
             }
+            Action::RunViewedFile => {
+                return match self
+                    .workspace
+                    .editor
+                    .reference_file()
+                    .map(str::to_owned)
+                    .filter(|_| {
+                        self.panes.split()
+                            && self.panes.list[Panes::SPLIT].view == ViewKind::Reference
+                    }) {
+                    Some(path) => self.handle_reaction(Reaction::Load(path)),
+                    None => true,
+                };
+            }
             Action::ClosePane => {
-                self.panes.close_view();
-                return true;
+                return self.handle_reaction(Reaction::ClosePane);
+            }
+            Action::ReferenceBack => {
+                return self.handle_reaction(Reaction::ReferenceBack);
             }
             _ => {}
+        }
+        if self.panes.focused().view == ViewKind::Reference {
+            match action {
+                Action::ScrollFeedUp => {
+                    self.workspace.editor.scroll_reference(10);
+                    return true;
+                }
+                Action::ScrollFeedDown => {
+                    self.workspace.editor.scroll_reference(-10);
+                    return true;
+                }
+                _ => {}
+            }
         }
         let Some(action) = self.panes.focused_mut().handle_action(action) else {
             return true;
@@ -156,6 +265,36 @@ impl App {
 
     fn handle_mouse(&mut self, mouse: MouseEvent) -> bool {
         let pointer = Position::new(mouse.column, mouse.row);
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            if let Some((_, control)) = self
+                .preview_controls
+                .iter()
+                .find(|(area, _)| area.contains(pointer))
+            {
+                match *control {
+                    PreviewControl::Select(tab) => self.select_preview(tab),
+                    PreviewControl::Back => {
+                        self.handle_reaction(Reaction::ReferenceBack);
+                    }
+                    PreviewControl::Bookmark => {
+                        if !matches!(self.previews.active, Some(PreviewTab::Recent(_))) {
+                            return true;
+                        }
+                        let previous = self.previews.active;
+                        self.documentation_requests
+                            .retain(|_, tab| *tab != PreviewTab::Bookmark);
+                        self.previews.pin();
+                        for tab in self.documentation_requests.values_mut() {
+                            if Some(*tab) == previous {
+                                *tab = PreviewTab::Bookmark;
+                            }
+                        }
+                    }
+                }
+                self.panes.focus(Panes::SPLIT);
+                return true;
+            }
+        }
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
             && self.divider.is_some_and(|area| area.contains(pointer))
         {
@@ -170,7 +309,7 @@ impl App {
             }
             return true;
         }
-        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+        if matches!(mouse.kind, MouseEventKind::Down(_)) {
             if let Some(index) = self
                 .pane_areas
                 .iter()
@@ -180,6 +319,19 @@ impl App {
             }
         }
         let pane = self.panes.focused_mut();
+        if pane.view == ViewKind::Reference {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.workspace.editor.scroll_reference(1);
+                    return true;
+                }
+                MouseEventKind::ScrollDown => {
+                    self.workspace.editor.scroll_reference(-1);
+                    return true;
+                }
+                _ => {}
+            }
+        }
         let reaction = if pane.view == ViewKind::Shell {
             self.workspace.editor.handle_mouse(mouse)
         } else {
@@ -199,28 +351,68 @@ impl App {
     }
 
     fn handle_reaction(&mut self, reaction: Reaction) -> bool {
+        if matches!(reaction, Reaction::BrowseSessions) {
+            self.keep_session();
+        }
         let workspace = &mut self.workspace;
         match reaction {
             Reaction::Continue => true,
+            Reaction::Documentation(target) => {
+                self.open_documentation(target);
+                true
+            }
+            Reaction::DocumentationInFeed(target) => {
+                let code = if target.starts_with("file:") {
+                    match SourceLink::parse(&target) {
+                        Some(source) => source.command(),
+                        None => return true,
+                    }
+                } else {
+                    format!("help {target}")
+                };
+                self.run_code(&code)
+            }
+            Reaction::BrowseSessions => match code_file::archived_sessions() {
+                Ok(paths) if paths.is_empty() => workspace
+                    .editor
+                    .apply(EditorUpdate::Diagnostic("no saved sessions".into())),
+                Ok(paths) => {
+                    workspace.editor.browse_sessions(paths);
+                    true
+                }
+                Err(error) => workspace
+                    .editor
+                    .apply(EditorUpdate::Diagnostic(error.to_string())),
+            },
+            Reaction::ViewFile(typed) => self.open_source_file(SourceLink {
+                path: code_file::resolve(&typed),
+                range: None,
+            }),
+            Reaction::SaveSelection(typed, source) => {
+                let path = if typed.is_empty() {
+                    code_file::archived_session_path()
+                } else {
+                    Some(code_file::resolve(&typed))
+                };
+                let update = match path {
+                    Some(path) => match code_file::write(&path, &source) {
+                        Ok(()) => EditorUpdate::Message(Box::new(TextBlock::system(format!(
+                            "saved selected code to {}",
+                            path.display()
+                        )))),
+                        Err(error) => EditorUpdate::Diagnostic(error.to_string()),
+                    },
+                    None => {
+                        EditorUpdate::Diagnostic("no session storage directory available".into())
+                    }
+                };
+                workspace.editor.apply(update)
+            }
             Reaction::Submit => {
                 let update = workspace
                     .session
                     .submit(workspace.editor.submission(), &mut workspace.highlighter);
                 let running = workspace.editor.apply(update);
-                self.follow_new_input();
-                running
-            }
-            Reaction::ResumeIncomplete => {
-                if workspace.editor.take_incomplete().is_some() {
-                    workspace.session.reset_incomplete();
-                }
-                true
-            }
-            Reaction::Post(source) => {
-                let update = workspace
-                    .session
-                    .submit(&source, &mut workspace.highlighter);
-                let running = workspace.editor.post(update);
                 self.follow_new_input();
                 running
             }
@@ -247,11 +439,19 @@ impl App {
                 true
             }
             Reaction::Open(view) => {
-                self.panes.open_view(view);
+                self.open_preview(view, view.label().to_string());
                 true
             }
             Reaction::ClosePane => {
+                let current = self.take_preview();
+                self.previews.save(current);
                 self.panes.close_view();
+                true
+            }
+            Reaction::ReferenceBack => {
+                if let Some(previous) = self.previews.previous() {
+                    self.select_preview(previous);
+                }
                 true
             }
             Reaction::Save(Some(typed)) => self.save(&code_file::resolve(&typed)),
@@ -324,11 +524,186 @@ impl App {
 
     /// Keep the session's code for the next session to resume, unless it has
     /// none, so an empty session never replaces the one before it.
-    fn keep_session(&self) {
+    fn keep_session(&mut self) {
         let code = self.workspace.session.code();
         if let Some(path) = code_file::previous_session().filter(|_| !code.is_empty()) {
             let _ = code_file::write(&path, &code);
+            if code != self.archived_code {
+                if let Some(archive) = code_file::archived_session_path() {
+                    if code_file::write(&archive, &code).is_ok() {
+                        self.archived_code = code;
+                    }
+                }
+            }
         }
+    }
+
+    fn take_preview(&mut self) -> Option<PreviewSnapshot> {
+        if !self.panes.split() {
+            return None;
+        }
+        let pane = std::mem::replace(
+            &mut self.panes.list[Panes::SPLIT],
+            Pane::new(ViewKind::Reference),
+        );
+        let reference =
+            (pane.view == ViewKind::Reference).then(|| self.workspace.editor.take_reference());
+        Some(PreviewSnapshot { pane, reference })
+    }
+
+    fn open_preview(&mut self, view: ViewKind, label: String) {
+        let current = self.take_preview();
+        self.previews.open(current, label);
+        let replaced = self.previews.active;
+        self.documentation_requests
+            .retain(|_, tab| Some(*tab) != replaced);
+        if self.panes.split() {
+            self.panes.list[Panes::SPLIT] = Pane::new(view);
+        } else {
+            self.panes.open_view(view);
+        }
+    }
+
+    fn select_preview(&mut self, tab: PreviewTab) {
+        if self.previews.label(tab).is_none()
+            || (self.panes.split() && self.previews.active == Some(tab))
+        {
+            return;
+        }
+        let current = self.take_preview();
+        if let Some(snapshot) = self.previews.select(tab, current) {
+            if self.panes.split() {
+                self.panes.list[Panes::SPLIT] = snapshot.pane;
+            } else {
+                self.panes.list.push(snapshot.pane);
+            }
+            if let Some(reference) = snapshot.reference {
+                self.workspace.editor.restore_reference(reference);
+            }
+        }
+    }
+
+    fn draw_preview_header(&mut self, frame: &mut Frame<'_>) {
+        self.preview_controls.clear();
+        let Some(area) = self
+            .pane_areas
+            .get(Panes::SPLIT)
+            .copied()
+            .filter(|area| !area.is_empty())
+        else {
+            return;
+        };
+        let header = Rect::new(area.x, area.y, area.width, 1);
+        let theme = scheme();
+        let mut controls = vec![
+            (PreviewControl::Back, " ‹ ".to_string()),
+            (PreviewControl::Bookmark, " ☆ ".to_string()),
+        ];
+        controls.extend((0..RECENT_PREVIEWS).map(|index| {
+            let tab = PreviewTab::Recent(index);
+            (
+                PreviewControl::Select(tab),
+                format!(
+                    " {}:{} ",
+                    index + 1,
+                    self.previews.label(tab).unwrap_or("—")
+                ),
+            )
+        }));
+        controls.push((
+            PreviewControl::Select(PreviewTab::Bookmark),
+            format!(
+                " ★:{} ",
+                self.previews.label(PreviewTab::Bookmark).unwrap_or("—")
+            ),
+        ));
+        let constraints = controls.iter().enumerate().map(|(index, _)| {
+            if index < 2 {
+                Constraint::Length(3)
+            } else {
+                Constraint::Ratio(1, (RECENT_PREVIEWS + 1) as u32)
+            }
+        });
+        let cells = Layout::horizontal(constraints).split(header);
+        for ((control, label), area) in controls.into_iter().zip(cells.iter().copied()) {
+            let selected =
+                matches!(control, PreviewControl::Select(tab) if self.previews.active == Some(tab));
+            let style = if selected {
+                theme
+                    .style(HLGroup::MarkupLink)
+                    .add_modifier(Modifier::REVERSED)
+            } else {
+                theme.style(HLGroup::Muted)
+            };
+            frame.render_widget(Paragraph::new(label).style(style), area);
+            self.preview_controls.push((area, control));
+        }
+    }
+
+    fn open_source_file(&mut self, source: SourceLink) -> bool {
+        let path = &source.path;
+        match read_code(&path) {
+            Ok(code) => {
+                let page = markup::page(&format!("{}\n{code}", path.display()));
+                self.workspace
+                    .highlighter
+                    .analyse_page(page, vec![code.clone()]);
+                let focus = source.range.map(|range| range.bytes(&code));
+                let block = SourceBlock::new(code, page, focus);
+                let blocks: Vec<Box<dyn Block>> = vec![
+                    Box::new(TextBlock::system(format!(
+                        "{} — Ctrl+Enter runs this file",
+                        path.display()
+                    ))),
+                    Box::new(block),
+                ];
+                self.open_preview(
+                    ViewKind::Reference,
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+                self.workspace
+                    .editor
+                    .open_reference(blocks, Some(path.to_string_lossy().into_owned()));
+                true
+            }
+            Err(update) => self.workspace.editor.apply(update),
+        }
+    }
+
+    fn open_documentation(&mut self, target: String) {
+        if target.starts_with("file:") {
+            match SourceLink::parse(&target) {
+                Some(source) => {
+                    self.open_source_file(source);
+                }
+                None => {
+                    self.workspace
+                        .editor
+                        .apply(EditorUpdate::Diagnostic(format!(
+                            "cannot open source link: {target}"
+                        )));
+                }
+            }
+            return;
+        }
+        self.open_preview(ViewKind::Reference, target.trim_matches('"').to_string());
+        self.workspace.editor.open_reference(
+            vec![Box::new(TextBlock::system("opening documentation…"))],
+            None,
+        );
+        let request = self
+            .documentation
+            .get_or_insert_with(DocumentationBrowser::new)
+            .open(target);
+        self.documentation_requests.insert(
+            request,
+            self.previews
+                .active
+                .expect("opening a preview selects a tab"),
+        );
     }
 
     fn drag_split(&mut self, column: u16) {
@@ -375,17 +750,22 @@ impl App {
             Rect::new(area.x, area.bottom(), area.width, 1)
         });
         self.layout(area);
+        self.draw_preview_header(frame);
         let workspace = &mut self.workspace;
         if let Some(divider) = self.divider {
             workspace.editor.draw_divider(frame, divider);
         }
         for pane in (0..self.panes.list.len())
             .filter(|pane| *pane != active)
-            .chain(std::iter::once(active))
+            .chain(iter::once(active))
         {
-            let area = self.pane_areas[pane];
+            let mut area = self.pane_areas[pane];
             if area == Rect::ZERO {
                 continue;
+            }
+            if pane == Panes::SPLIT {
+                area.y += 1;
+                area.height = area.height.saturating_sub(1);
             }
             let view = self.panes.list[pane].view;
             workspace
@@ -450,6 +830,40 @@ impl App {
         let mut running = true;
         let timeout = self.workspace.editor.example_timeout();
         self.workspace.session.set_example_timeout(timeout);
+        let pages = self
+            .documentation
+            .as_ref()
+            .map(|browser| browser.answered().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for page in pages {
+            let Some(tab) = self.documentation_requests.remove(&page.request) else {
+                continue;
+            };
+            let blocks = match page.response {
+                Ok(response) => {
+                    self.workspace
+                        .session
+                        .prepare_documentation(response.value.as_ref());
+                    let (mut blocks, printed, value) = response_blocks(&response, "");
+                    if let Some(printed) = printed {
+                        blocks.push(Box::new(printed));
+                    }
+                    if let Some(value) = value {
+                        blocks.push(Box::new(value.without_frame()));
+                    }
+                    blocks
+                }
+                Err(error) => {
+                    vec![Box::new(TextBlock::system(error)) as Box<dyn Block>]
+                }
+            };
+            if self.panes.split() && self.previews.active == Some(tab) {
+                self.workspace.editor.open_reference(blocks, None);
+            } else if let Some(snapshot) = self.previews.saved_mut(tab) {
+                snapshot.reference = Some(ReferenceEntry::new(blocks, None));
+            }
+            dirty = true;
+        }
         for update in self.workspace.session.poll() {
             dirty = true;
             running &= self.workspace.editor.apply(update);
@@ -499,6 +913,9 @@ impl App {
             dirty = true;
         }
         if let Some(server) = polled.started {
+            workspace
+                .editor
+                .set_language_server_info(Some(server.clone()));
             running &= workspace
                 .editor
                 .apply(EditorUpdate::Welcome(welcome_message(
@@ -508,6 +925,7 @@ impl App {
             dirty = true;
         }
         if let Some(message) = polled.failure {
+            workspace.editor.set_language_server_info(None);
             running &= workspace
                 .editor
                 .apply(EditorUpdate::Message(Box::new(TextBlock::system(format!(
@@ -563,7 +981,12 @@ pub fn run(backend: M2Backend, startup: Option<String>) -> Result<()> {
             dirty = true;
             continue;
         }
-        let events = terminal.next_events(app.event_timeout())?;
+        terminal.send_pictures()?;
+        let timeout = match graphics::encoding() {
+            true => app.event_timeout().min(PICTURE_POLL_INTERVAL),
+            false => app.event_timeout(),
+        };
+        let events = terminal.next_events(timeout)?;
         if events.is_empty() {
             dirty = app.animate();
             continue;
@@ -585,132 +1008,4 @@ pub fn run(backend: M2Backend, startup: Option<String>) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn loading_comments_does_not_display_them_or_leave_a_continuation() {
-        use ratatui::{backend::TestBackend, Terminal};
-        let mut app = super::App::new(crate::backend::M2Backend::spawn().unwrap());
-        app.run_code("-- hidden heading\n-* hidden block *-");
-        assert!(app.workspace.editor.analysis_input().1.is_none());
-        assert!(!app.workspace.session.busy());
-        app.run_code("-- hidden heading\nloadedCommentProbe = \"-- literal\" -- hidden tail\n\u{c}\n-- hidden saved block\n1 + 1;");
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal.draw(|frame| app.draw(frame)).unwrap();
-        let screen = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(screen.contains("loadedCommentProbe"), "{screen}");
-        assert!(screen.contains("-- literal"), "{screen}");
-        assert!(!screen.contains("hidden"), "{screen}");
-        assert!(app.workspace.editor.analysis_input().1.is_none());
-    }
-
-    #[test]
-    fn incomplete_file_and_live_input_keep_uniform_padding() {
-        use ratatui::{backend::TestBackend, Terminal};
-        let mut app = super::App::new(crate::backend::M2Backend::spawn().unwrap());
-        app.run_code("f(\n    x");
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal.draw(|frame| app.draw(frame)).unwrap();
-        let input_row = terminal.get_cursor_position().unwrap().y;
-        let buffer = terminal.backend().buffer();
-        let source_row = (0..24)
-            .find(|&y| {
-                (0..80)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-                    .contains("f(")
-            })
-            .expect("incomplete source is visible");
-        let code_bg = crate::ui::render::RenderContext::new(80, 0)
-            .groups()
-            .code()
-            .bg
-            .unwrap();
-        for y in [
-            source_row - 1,
-            source_row,
-            input_row - 1,
-            input_row,
-            input_row + 1,
-        ] {
-            for x in 0..80 {
-                assert_eq!(buffer[(x, y)].bg, code_bg, "background at ({x}, {y})");
-            }
-        }
-    }
-
-    #[test]
-    fn first_session_displays_initialization_output() {
-        use ratatui::{backend::TestBackend, Terminal};
-        let directory =
-            std::env::temp_dir().join(format!("spectral-startup-output-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let init = directory.join("init.m2");
-        std::fs::write(&init, "print \"startup output probe\"\n").unwrap();
-        let backend = crate::backend::M2Backend::spawn_with_init_file(Some(init)).unwrap();
-        let mut app = super::App::new(backend);
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal.draw(|frame| app.draw(frame)).unwrap();
-        let screen = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        std::fs::remove_dir_all(directory).unwrap();
-        assert!(screen.contains("startup output probe"), "{screen}");
-    }
-
-    #[test]
-    fn a_submitted_comment_is_visible_on_the_next_frame() {
-        use ratatui::{backend::TestBackend, Terminal};
-        let mut app = super::App::new(crate::backend::M2Backend::spawn().expect("spawn M2"));
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal.draw(|frame| app.draw(frame)).unwrap();
-        for character in "--a".chars() {
-            app.handle_key(crossterm::event::KeyCode::Char(character).into());
-        }
-        assert!(app.handle_key(crossterm::event::KeyCode::Enter.into()));
-        app.poll();
-        terminal.draw(|frame| app.draw(frame)).unwrap();
-        let screen = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(screen.contains("--a"), "{screen}");
-    }
-
-    use super::*;
-    use std::time::Instant;
-
-    #[test]
-    fn ctrl_c_interrupts_while_busy_and_quits_when_idle() {
-        let mut app = App::new(M2Backend::spawn().expect("spawn M2"));
-        let update = app
-            .workspace
-            .session
-            .submit("while true do null", &mut app.workspace.highlighter);
-        app.workspace.editor.apply(update);
-        std::thread::sleep(Duration::from_millis(100));
-        assert!(app.handle_key(crate::key!(ctrl + c)));
-        assert!(app.handle_key(crate::key!(ctrl + c)));
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while app.workspace.session.busy() && Instant::now() < deadline {
-            for update in app.workspace.session.poll() {
-                app.workspace.editor.apply(update);
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert!(!app.workspace.session.busy());
-        assert!(!app.handle_key(crate::key!(ctrl + c)));
-    }
-}
+mod tests;

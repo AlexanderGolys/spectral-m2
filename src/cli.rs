@@ -62,9 +62,12 @@ pub struct M2Options {
     /// Suppress error backtraces
     #[arg(long, help_heading = "Macaulay2 startup")]
     no_backtrace: bool,
-    /// Do not enter the debugger on errors
+    /// Keep automatic debugging disabled (the default)
     #[arg(long, help_heading = "Macaulay2 startup")]
     no_debug: bool,
+    /// Enter the Macaulay2 debugger on errors
+    #[arg(long, conflicts_with = "no_debug", help_heading = "Macaulay2 startup")]
+    debugger: bool,
     /// Turn M2 warning N into an error
     #[arg(long, value_name = "N", help_heading = "Macaulay2 startup")]
     debug: Option<u32>,
@@ -98,7 +101,7 @@ impl M2Options {
             (self.no_user_init, "-q"),
             (self.no_preload, "--no-preload"),
             (self.no_backtrace, "--no-backtrace"),
-            (self.no_debug, "--no-debug"),
+            (!self.debugger || self.no_debug, "--no-debug"),
             (self.notify, "--notify"),
             (self.no_randomize, "--no-randomize"),
             (self.no_threads, "--no-threads"),

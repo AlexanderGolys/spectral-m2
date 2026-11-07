@@ -110,10 +110,22 @@ impl ReplTerminal {
         })
     }
 
-    /// Draw a frame, then send the pictures its placeholders are the first to show.
+    /// Draw a frame, then send the pictures encoded so far that the terminal lacks,
+    /// and free those it no longer needs.
     pub fn draw(&mut self, render: impl FnOnce(&mut Frame)) -> Result<()> {
-        self.terminal.draw(render)?;
-        let pictures = graphics::unsent();
+        let frame = self.terminal.draw(render)?;
+        let pictures = graphics::synchronise(frame.buffer);
+        self.write_pictures(&pictures)
+    }
+
+    /// Send the pictures encoded since the last frame, which need no frame to show
+    /// them: their placeholders are already drawn.
+    pub fn send_pictures(&mut self) -> Result<()> {
+        let pictures = graphics::send_encoded();
+        self.write_pictures(&pictures)
+    }
+
+    fn write_pictures(&mut self, pictures: &str) -> Result<()> {
         if !pictures.is_empty() {
             let backend = self.terminal.backend_mut();
             backend.write_all(pictures.as_bytes())?;

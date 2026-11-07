@@ -1,6 +1,6 @@
 # Settings
 
-Open settings with `Ctrl+O` or `/settings`. They are grouped into five tabs, named along the top of the picker: `Tab` and `Shift+Tab`, or `Ctrl+Right` and `Ctrl+Left`, switch between them. `Up` and `Down` choose a row and `Left` or `Right` adjust it. Each row shows its current value between arrows. Beneath the rows, the *restore defaults* button resets settings, keymaps, and appearance, and under it the selected row describes itself. While the picker is open, the status line names the keys it answers.
+Open settings with `Ctrl+O` or `/settings`. They are grouped into six tabs, named along the top of the picker: `Tab` and `Shift+Tab`, or `Ctrl+Right` and `Ctrl+Left`, switch between them. `Up` and `Down` choose a row and `Left` or `Right` adjust it. Most rows show their value between arrows; statusline rows show their checked destination, with off separated from the five segments. Beneath the rows, the *restore defaults* button resets settings, keymaps, and appearance, and under it the selected row describes itself. While the picker is open, the status line names the keys it answers.
 
 Changes are kept between sessions. The appearance is saved to `appearance.json` and the other settings, along with keymap changes, to `settings.json`, both in `$XDG_CONFIG_HOME/spectral-m2`, falling back to `~/.config/spectral-m2`.
 
@@ -28,11 +28,17 @@ Changes are kept between sessions. The appearance is saved to `appearance.json` 
 | Setting | Choices |
 | --- | --- |
 | Position | Below input, above input, or off. |
-| Colour scheme | Where the idle line names the colour scheme: left by default, centre, right, or off. |
-| Directory | Where the idle line names the working directory, trimmed to fit: left by default, centre, right, or off. |
-| Key hints | Where the idle line names the commands and settings keys: right by default, left, centre, or off. |
+| Each component | The checked destination is `off`, `L`, `LC`, `C`, `RC`, or `R`; `Left` and `Right` move it. Press `0` to hide it or `1`–`5` to choose its segment directly. |
 
-These choices compose the idle line. Segments sharing a side keep this order. While the session has something more pressing to say, it takes over the side it needs and the rest of the line stays as chosen: `Processing` or `Waiting for …` replaces the left side, and the keys of an open picker, the cancel key once a computation has run for three seconds, or the key that continues an incomplete input replace the right side. Views use the middle of the line to name themselves; see [Split view](split-view.md).
+The five segments stay anchored at the left edge, quarter, centre, three-quarter, and right edge of the line. Every component has its own row. Several components can share a segment: they appear next to one another in checklist order, regardless of the order in which you assign them. Empty segments give their neighbours more room before clipping, without moving their anchors. Components with nothing to report also give their space back.
+
+Available rows, in display order, are **theme**, **math renderer**, **language server**, **rendering settings**, **directory**, **view**, **session state**, **key hints**, **m2-ls version**, **sp2 version**, **M2 version**, and **versions**. The default assignments place the theme on the left, directory at left centre, view in the centre, session state at right centre, and key hints on the right.
+
+For all three versions together, assign **m2-ls version**, **sp2 version**, and **M2 version** to the same segment. The combined **versions** row is a shortcut for the same group. **Rendering settings** similarly combines the theme, math renderer, and language server status. A version not reported by its process is labelled `unknown`; the language server reports its version during initialization. LSP status distinguishes starting, ready, off, and unavailable, and an unavailable typeset renderer names the Unicode fallback.
+
+**Key hints** follows the focused pane and current interaction: idle commands, picker controls, the cancel key during a long computation, or continuation controls. **Session state** shows `Processing` or `Waiting for …`. **View** names the side pane and highlights the active preview. These components stay in the segments you select as the editor state changes; see [Split view](split-view.md).
+
+Older left/centre/right preferences and five-slot layouts are migrated when loaded. Component destinations are saved by name under `statusline.components` in `settings.json`.
 
 **Rendering**
 
@@ -45,6 +51,7 @@ These choices compose the idle line. Segments sharing a side keep this order. Wh
 | Math fonts | Off by default, which draws a ring by the name it has in code, `ZZ`; on draws its blackboard glyph, `ℤ`, and sets `\mathcal` and `\mathfrak` capitals as script and fraktur glyphs. How they look is up to the terminal's fonts; see [Troubleshooting](troubleshooting.md#blackboard). Greyed out while maths is typeset, since pictures draw their own glyphs. |
 | Matrix row spacing | `125%` by default: how far apart the rows of a typeset matrix stand, relative to TeX's own distance, from `100%` to `300%`. At `100%` stacked fractions in neighbouring rows almost touch. Greyed out unless maths is typeset. |
 | Compute examples | How long each documentation example may run when it is computed again, so its value is drawn from its structure as a live value is; `off` keeps the output the documentation recorded. Each page runs in a fresh Macaulay2 with its package loaded, and stops at the first example that runs out of time or answers differently from the record. |
+| Swap reference backgrounds | Off by default. On uses the feed background for reference code while preserving the panel canvas and syntax colours. |
 
 **Selection**
 
@@ -59,7 +66,7 @@ Install the optional language server, `m2-ls` 2.0 or later, with `cargo install 
 
 Without the server, or if it stops responding, source keeps its syntax colors. Switch *language server* off and on to retry. Completion and syntax diagnostics continue to use the shell's existing providers.
 
-Semantic colors are laid over the syntax colors, as Neovim lays `@lsp` highlights over Tree-sitter ones: wherever the language server knows a role it overrides the syntax color, and while typing the previous colors stay until new ones arrive. A plain value, `LspVariable`, has no color of its own, so it keeps whatever the syntax gave it, a boolean or a function call; `Unresolved` names follow it. The theme groups `Method`, `TypeParameter`, `SemanticCommand`, `RingGenerator`, `Option`, `File`, `LspVariable`, and `Unresolved` expose semantic roles. They inherit existing theme colors by default and can be customized in `themes/groups.toml` like other linked groups.
+Semantic colors are laid over the syntax colors, as Neovim lays `@lsp` highlights over Tree-sitter ones: wherever the language server knows a role it overrides the syntax color, and while typing the previous colors stay until new ones arrive. A plain value, `LspVariable`, has no color of its own, so it keeps whatever the syntax gave it, a boolean or a function call. The theme groups `Method`, `TypeParameter`, `RingGenerator`, `Option`, `Installation`, `CompiledFunction`, `LspVariable`, `Regex`, `Delimiter`, `Punctuation`, and the `Markup` strong, emphasis and link groups expose semantic roles: `Installation` marks the head of a method installation and `CompiledFunction` a library function. They inherit existing theme colors by default and can be customized in `themes/groups.toml` like other linked groups.
 
 ## Typeset maths { #typeset-maths }
 
@@ -145,4 +152,4 @@ Press `Ctrl+Shift+D` to open the one-column inspector at the lower right. It lis
 
 ## Keymaps
 
-Run `/keymaps` to inspect and edit command shortcuts. Select a row and press `Enter`; its shortcut changes to “Type keybind…”. Press the replacement shortcut, or `Esc` to cancel. Shortcuts require Ctrl or Alt for characters, or Ctrl, Alt, or Shift for other keys; `F2` through `F24` also work without modifiers. Ordinary typing, `F1`, terminal control keys such as `Ctrl+I`, and existing editing keys cannot be assigned. Invalid keys leave capture active. The *cancel execution* action defaults to `Ctrl+C` and can be remapped. It cancels running computations and queued work, or quits when idle. After three seconds of processing, the status line shows its current shortcut. Movement, submission, and other form-editing keys remain fixed.
+Open the **keymaps** tab in Settings to inspect and edit shortcuts. `/keymaps` or `Ctrl+K` opens this tab directly. All shortcut contexts share the same list, and the selected row names its context below. **Restore keymaps** resets shortcuts alone; the shared **restore defaults** button resets all settings. Select a row and press `Enter`; its shortcut changes to “Type keybind…”. Press the replacement shortcut, or `Esc` to cancel. Shortcuts require Ctrl or Alt for characters, or Ctrl, Alt, or Shift for other keys; `F2` through `F24` also work without modifiers. Ordinary typing, `F1`, terminal control keys such as `Ctrl+I`, and existing editing keys cannot be assigned. Invalid keys leave capture active. The *cancel execution* action defaults to `Ctrl+C` and can be remapped. It cancels running computations and queued work, or quits when idle. After three seconds of processing, the status line shows its current shortcut. Only remappable bindings appear in the list; fixed controls remain reserved.

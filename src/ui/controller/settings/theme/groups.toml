@@ -54,13 +54,9 @@ Punctuation = { link = "Muted", captures = ["punctuation.bracket"] }
 Variable = { link = "Text", captures = ["variable"] }
 Method = { link = "Function", captures = ["type.parameter"] }
 TypeParameter = { link = "Type" }
-SemanticCommand = { link = "Function" }
 RingGenerator = { link = "Parameter" }
 Option = { link = "Property" }
-File = { link = "String" }
-# A plain value adds nothing to its syntax colour, as `@lsp.type.variable` in Neovim.
 LspVariable = {}
-Unresolved = { link = "LspVariable" }
 Installation = { link = "Function", captures = ["label"] }
 CompiledFunction = { link = "Function", captures = ["function.builtin"] }
 Quote = { link = "Symbol", captures = ["character.special"] }
@@ -75,7 +71,7 @@ MarkupStrong = { bold = true }
 MarkupEmphasis = { italic = true }
 MarkupStrongEmphasis = { bold = true, italic = true }
 MarkupStrike = { crossed_out = true }
-# A link is drawn in the colour of printed output, set apart by its slant.
+# A link is drawn in the color of printed output, set apart by its slant.
 MarkupLink = { fg_from = "Printed.fg", italic = true }
 MarkupLinkHover = { underline = true }
 MarkupLinkOpen = { underline = true, bold = true }
@@ -96,7 +92,7 @@ Separator = { fg_from = "Canvas.bg" }
 ValueBorder = { link = "Faint" }
 OutputNumber = { link = "Accent" }
 RecentOutput = { link = "Accent", bold = true }
-RecentCellNumber = { link = "Accent", darken = 0.25 }
+RecentCellNumber = { link = "Accent", darken = 0.15 }
 CellNumber = { link = "Muted" }
 PendingCellMarker = { link = "Muted" }
 QueuedCellMarker = { link = "Muted" }
@@ -121,7 +117,7 @@ KeymapHint = { link = "Accent" }
 PickerMarker = { link = "Muted" }
 PickerSelectedMarker = { link = "Accent" }
 PickerTitle = { link = "Accent" }
-PickerBorder = { link = "Faint" }
+PickerBorder = { link = "Accent" }
 PickerTab = { link = "Accent" }
 PickerTabSelected = { link = "Accent", reverse = true }
 SettingsItemLabel = { link = "Text" }

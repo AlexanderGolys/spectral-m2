@@ -23,6 +23,8 @@ pub struct RenderingSettings {
     /// Whether the language server enriches source colors, which it can only do
     /// while it runs.
     pub semantic_highlighting: bool,
+    /// Swap code and canvas backgrounds in the reference pane.
+    pub reference_code_background: bool,
     pub maths: MathDisplay,
     pub fractions: FractionStyle,
     /// Whether rings are drawn as blackboard glyphs (`ℤ`) rather than by name (`ZZ`).
@@ -39,6 +41,7 @@ impl Default for RenderingSettings {
         Self {
             language_server: true,
             semantic_highlighting: true,
+            reference_code_background: false,
             maths: MathDisplay::default(),
             fractions: FractionStyle::default(),
             math_fonts: false,
@@ -63,11 +66,13 @@ impl RenderingSettings {
     /// Whether returned values lay out differently, moving their heights.
     pub(super) fn reformats(&self, other: &Self) -> bool {
         (
+            self.reference_code_background,
             self.maths,
             self.fractions,
             self.math_fonts,
             self.matrix_row_spacing_percent,
         ) != (
+            other.reference_code_background,
             other.maths,
             other.fractions,
             other.math_fonts,
@@ -93,6 +98,7 @@ cyclic! {
         MathFonts = "math fonts",
         MatrixRowSpacing = "matrix row spacing",
         ExampleTimeout = "compute examples",
+        ReferenceCodeBackground = "swap reference backgrounds",
     }
 }
 
@@ -114,6 +120,7 @@ impl SettingRow for RenderingSetting {
             Self::Maths if !settings.rendering.maths.available() => {
                 "this terminal shows no pictures: kitty and Ghostty do, inside tmux too; drawn as unicode meanwhile"
             }
+            Self::ReferenceCodeBackground => "exchange the reference pane canvas and code backgrounds",
             Self::LanguageServer => "analyse the session's source with m2-ls when it is installed",
             Self::SemanticHighlighting => "enrich source colors using the language server",
             Self::Maths => "draw returned maths as Unicode text, plain ASCII, or typeset pictures",
@@ -131,6 +138,7 @@ impl SettingRow for RenderingSetting {
     fn value(self, settings: Settings) -> PickerValue {
         let rendering = settings.rendering;
         match self {
+            Self::ReferenceCodeBackground => switch(rendering.reference_code_background, "on"),
             Self::LanguageServer => switch(rendering.language_server, SERVER_EXECUTABLE),
             Self::SemanticHighlighting => switch(rendering.semantic_colors(), "on"),
             Self::Maths => PickerValue::among(MathDisplay::CHOICES, &rendering.maths, |&display| {
@@ -161,6 +169,9 @@ impl SettingRow for RenderingSetting {
     fn adjust(self, settings: &mut Settings, delta: i8) {
         let rendering = &mut settings.rendering;
         match self {
+            Self::ReferenceCodeBackground => {
+                rendering.reference_code_background = !rendering.reference_code_background
+            }
             Self::LanguageServer => rendering.language_server = !rendering.language_server,
             Self::SemanticHighlighting => {
                 rendering.semantic_highlighting = !rendering.semantic_highlighting
