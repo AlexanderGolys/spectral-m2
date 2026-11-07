@@ -6,6 +6,9 @@ All notable changes to Spectral M2 are documented here.
 
 ### Added
 
+- A crash is recorded, with its backtrace, in `$XDG_STATE_HOME/spectral-m2/crash.log` (default `~/.local/state/spectral-m2/crash.log`), and its one-line cause and the path are printed once the terminal is restored; until now the message was discarded together with stderr while the screen was drawn.
+- A `FilePosition` value in the output is a link to its source, as source locations in documentation are: click it to open the file at that position.
+- A **debug** statusline component shows the `sp2` version and memory, the M2 process's memory, the pictures held by the terminal, and the frame rate. The highlight debug view names the version as well.
 - Keymaps joins Settings as its sixth tab; `/keymaps` opens it directly. Statusline destination checklists separate off from the five segment choices.
 
 - A statusline component checklist assigns each item to one of five fixed segments or hides it. Components sharing a segment follow list order, including rendering settings and individual or combined process versions. Empty segments give neighbours more room without moving their anchors.
@@ -34,6 +37,7 @@ All notable changes to Spectral M2 are documented here.
 
 ### Changed
 
+- A typeset list, table or sequence that holds maths is set as one formula even when some items are words (symbols, strings, `null`): those are set in typewriter face in their code colours, and types such as `ZZ` stay in the formula, instead of the list falling back to pictures beside terminal text. A list of words only stays plain text.
 - Typeset maths pictures are encoded off the main thread, and the terminal keeps only those near the viewport: pictures no block holds are deleted at once, and past a memory budget the furthest go first. Pictures lost to tmux are sent again when its pane regains focus.
 - Picker borders take the accent colour, with the tabs on their own row beneath the top border.
 - The row of tabs is the first row of a picker: move onto it with the arrows and switch tabs with left and right.

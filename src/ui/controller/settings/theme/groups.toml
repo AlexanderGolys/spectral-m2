@@ -54,7 +54,7 @@ Punctuation = { link = "Muted", captures = ["punctuation.bracket"] }
 Variable = { link = "Text", captures = ["variable"] }
 Method = { link = "Function", captures = ["type.parameter"] }
 TypeParameter = { link = "Type" }
-RingGenerator = { link = "Parameter" }
+RingGenerator = { link = "Bg1" }
 Option = { link = "Property" }
 LspVariable = {}
 Installation = { link = "Function", captures = ["label"] }

@@ -62,6 +62,12 @@ sp2 -q --no-randomize --resume
 
 Expressions run inside M2 without creating transcript input cells. Files and resumed code run afterward, cell by cell. Documentation examples continue to use their separate default M2 configuration.
 
+## If the shell stops unexpectedly
+
+While the screen is drawn, messages written to stderr are discarded so they cannot disturb it. A crash is therefore also appended, with its backtrace, to `$XDG_STATE_HOME/spectral-m2/crash.log` (`~/.local/state/spectral-m2/crash.log` by default), and the shell prints the one-line cause and that path after it restores your terminal. Include that file when reporting a problem.
+
+Macaulay2 may then print a message about "mutable unexported unset symbol(s) in package User". It is Macaulay2's own check when its input closes: it lists the names you used without assigning them, and is unrelated to the cause.
+
 ## Serve this book locally
 
 Install the documentation tools through Cargo once:

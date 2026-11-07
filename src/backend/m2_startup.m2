@@ -213,6 +213,22 @@ announceReady := (() -> (
                     "<a href=\"" | escapeAttribute target | "\">" | original | "</a>");
             page = substring(page, match#0#0 + match#0#1));
         linked | page);
+    -- A source position is drawn as the link documentation gives it: its text
+    -- spelt as shortly as there, and a `file://` target carrying the position as
+    -- its fragment, which the shell opens in the reference pane.
+    render FilePosition := HashTable => value -> (
+        file := value#0;
+        position := ":" | toString value#1 | ":" | toString value#2
+            | "-" | toString value#3 | ":" | toString value#4;
+        hashTable {
+            symbol location => hashTable {
+                symbol text => foldedPath file | position,
+                symbol target => urlEncode("file://" | toAbsolutePath file
+                    | "#L" | toString value#1 | ":C" | toString value#2
+                    | "-L" | toString value#3 | ":C" | toString value#4)
+            }
+        }
+    );
     render hypertextType := HashTable => value -> hashTable {
         symbol markup => hashTable {symbol html => shortenedPaths linkedSources linkedKeys html value, symbol fallback =>
                 toString net value, symbol exampleWidth => exampleWidth}

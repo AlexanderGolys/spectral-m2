@@ -23,6 +23,7 @@ use crate::ui::cycle::cycled;
 use crate::ui::element::EventListener;
 use crate::ui::feed::BlockView;
 use crate::ui::feed::Feed;
+use crate::ui::graphics::kitty::ImageId;
 use crate::ui::statusline::{StatusLine, StatusLineContext};
 use crate::ui::syntax_tree::SyntaxTreeBlock;
 
@@ -91,6 +92,11 @@ pub struct ReferenceEntry {
 }
 
 impl ReferenceEntry {
+    /// The pictures this reference holds, though it is not showing.
+    pub fn pictures(&self) -> Vec<ImageId> {
+        self.feed.pictures()
+    }
+
     pub fn new(blocks: Vec<Box<dyn Block>>, file: Option<String>) -> Self {
         let mut feed = Feed::new(Box::new(TextBlock::system(String::new())));
         for block in blocks {

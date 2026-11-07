@@ -4,7 +4,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
-use crate::backend::{CollectionKind, M2Value, SPACED_OPTION_ARROW};
+use crate::backend::{CollectionKind, M2Value, Role, SPACED_OPTION_ARROW};
 use crate::ui::block::Text;
 use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
 use crate::ui::graphics::{self, typeset::Rgb, Pictured, Typesetting};
@@ -86,39 +86,115 @@ fn formula(parts: &[M2Value]) -> Option<M2Value> {
     })
 }
 
-/// A collection of TeX values as one formula, so cell boundaries never widen the gaps
-/// between its items and its fences grow around them; none when an item has no TeX form.
-fn collection_formula(kind: CollectionKind, items: &[M2Value]) -> Option<M2Value> {
+/// A piece of a formula: its TeX, the spelling M2 prints it with, and the one-line
+/// code M2 reads back.
+struct FormulaPart {
+    tex: String,
+    fallback: String,
+    code: String,
+    /// Whether any of it is maths, as against words only, which are better left as
+    /// the terminal's own text.
+    maths: bool,
+}
+
+/// `text` as typewriter text in the colour `group` has in code. The colour is
+/// explicit, because the formula would otherwise guess it from how the word is spelt.
+fn typewritten(text: &str, group: HLGroup, groups: &Groups) -> String {
+    let tex = maths::typewriter(text);
+    match groups.style(group).fg {
+        Some(Color::Rgb(r, g, b)) => format!(r"\textcolor{{#{r:02x}{g:02x}{b:02x}}}{{{tex}}}"),
+        _ => tex,
+    }
+}
+
+/// One item of a collection as part of a formula; none when it has no TeX form. What
+/// is not maths, such as a symbol or a string, is set in typewriter face.
+fn formula_part(item: &M2Value, groups: &Groups) -> Option<FormulaPart> {
+    let word = |text: &String, group, code: String| FormulaPart {
+        tex: typewritten(text, group, groups),
+        fallback: text.clone(),
+        code,
+        maths: false,
+    };
+    match item {
+        M2Value::Tex {
+            source,
+            fallback,
+            code,
+        } => Some(FormulaPart {
+            tex: source.strip_prefix('$')?.strip_suffix('$')?.to_string(),
+            fallback: fallback.clone(),
+            code: code.clone(),
+            maths: true,
+        }),
+        M2Value::Type(item) => formula_part(item, groups),
+        M2Value::Collection { kind, items } => collection_part(*kind, items, groups),
+        M2Value::Token {
+            text,
+            role: Role::String,
+        } => Some(word(
+            text,
+            HLGroup::String,
+            format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\"")),
+        )),
+        M2Value::Token { text, role } => Some(word(text, role.group(), text.clone())),
+        M2Value::Net(text) if !text.contains('\n') => {
+            Some(word(text, HLGroup::String, text.clone()))
+        }
+        M2Value::Location { text, .. } if !text.contains('\n') => {
+            Some(word(text, HLGroup::MarkupLink, text.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// A collection as one formula, so cell boundaries never widen the gaps between its
+/// items and its fences grow around them; none when an item has no TeX form, or when
+/// nothing in it is maths.
+fn collection_formula(
+    kind: CollectionKind,
+    items: &[M2Value],
+    groups: &Groups,
+) -> Option<FormulaPart> {
+    collection_part(kind, items, groups).filter(|part| part.maths)
+}
+
+fn collection_part(
+    kind: CollectionKind,
+    items: &[M2Value],
+    groups: &Groups,
+) -> Option<FormulaPart> {
     if kind == CollectionKind::VerticalList || items.is_empty() {
         return None;
     }
     let (tex_open, tex_close) = kind.tex_delimiters();
     let (open, close) = kind.delimiters();
-    let (mut tex, mut fallback, mut code) = (Vec::new(), Vec::new(), Vec::new());
-    for item in items {
-        let nested = match item {
-            M2Value::Collection { kind, items } => Some(collection_formula(*kind, items)?),
-            _ => None,
-        };
-        let M2Value::Tex {
-            source,
-            fallback: net,
-            code: spelling,
-        } = nested.as_ref().unwrap_or(item)
-        else {
-            return None;
-        };
-        tex.push(source.strip_prefix('$')?.strip_suffix('$')?.to_string());
-        fallback.push(net.clone());
-        code.push(spelling.clone());
-    }
-    Some(M2Value::Tex {
-        source: format!(
-            "${tex_open}{}{tex_close}$",
-            tex.join(COLLECTION_TEX_SEPARATOR)
+    let parts = items
+        .iter()
+        .map(|item| formula_part(item, groups))
+        .collect::<Option<Vec<_>>>()?;
+    let joined = |spelling: fn(&FormulaPart) -> &String, separator: &str| {
+        parts
+            .iter()
+            .map(spelling)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(separator)
+    };
+    Some(FormulaPart {
+        tex: format!(
+            "{tex_open}{}{tex_close}",
+            joined(|part| &part.tex, COLLECTION_TEX_SEPARATOR)
         ),
-        fallback: format!("{open}{}{close}", fallback.join(COLLECTION_SEPARATOR)),
-        code: format!("{open}{}{close}", code.join(COLLECTION_SEPARATOR)),
+        fallback: format!(
+            "{open}{}{close}",
+            joined(|part| &part.fallback, COLLECTION_SEPARATOR)
+        ),
+        code: format!(
+            "{open}{}{close}",
+            joined(|part| &part.code, COLLECTION_SEPARATOR)
+        ),
+        maths: parts.iter().any(|part| part.maths),
     })
 }
 
@@ -293,16 +369,17 @@ impl Block {
                 }
             }
             M2Value::Token { text, role } => Self::wrapped(text, text_ink(role.group()), width),
+            M2Value::Location { text, .. } => {
+                Self::wrapped(text, text_ink(HLGroup::MarkupLink), width)
+            }
             M2Value::Net(text) => Self::wrapped(text, text_ink(HLGroup::String), width),
             M2Value::Markup { fallback, .. } => {
                 Self::wrapped(fallback, text_ink(HLGroup::Value), width)
             }
             M2Value::Collection { kind, items } if *kind != CollectionKind::VerticalList => {
-                let whole = collection_formula(*kind, items).and_then(|formula| match &formula {
-                    M2Value::Tex { source, code, .. } => {
-                        Self::pictured(source, code, width, groups, style, ink, picture)
-                    }
-                    _ => None,
+                let whole = collection_formula(*kind, items, groups).and_then(|part| {
+                    let source = format!("${}$", part.tex);
+                    Self::pictured(&source, &part.code, width, groups, style, ink, picture)
                 });
                 if let Some(block) = whole {
                     return block;
@@ -669,36 +746,97 @@ mod tests {
             CollectionKind::Sequence,
             CollectionKind::AngleBarList,
         ] {
-            let Some(M2Value::Tex { source, .. }) =
-                collection_formula(kind, &[tex("$1$", "1"), tex("$2$", "2")])
+            let Some(part) = collection_formula(kind, &[tex("$1$", "1"), tex("$2$", "2")], &groups)
             else {
                 panic!("a formula for {kind:?}");
             };
-            let tex = source.trim_matches('$');
-            assert_ne!(maths::colored_tex(tex, &groups), tex, "{kind:?}");
+            assert_ne!(maths::colored_tex(&part.tex, &groups), part.tex, "{kind:?}");
         }
     }
 
+    fn word(text: &str, role: Role) -> M2Value {
+        M2Value::Token {
+            text: text.into(),
+            role,
+        }
+    }
+
+    fn hex(groups: &Groups, group: HLGroup) -> String {
+        let Some(Color::Rgb(r, g, b)) = groups.style(group).fg else {
+            panic!("{group:?} has an RGB foreground");
+        };
+        format!("#{r:02x}{g:02x}{b:02x}")
+    }
+
     #[test]
-    fn a_collection_with_text_is_drawn_item_by_item() {
+    fn words_in_a_collection_are_typewriter_text_in_the_colour_of_their_role() {
+        let groups = Groups::default();
+        let items = [
+            word("1", Role::String),
+            word("Z", Role::Symbol),
+            tex(r"$\frac{1}{2}$", "1/2"),
+        ];
+
+        let part = collection_formula(CollectionKind::List, &items, &groups).unwrap();
+
+        let string = format!(
+            r"\textcolor{{{}}}{{\texttt{{1}}}}",
+            hex(&groups, HLGroup::String)
+        );
+        let symbol = format!(
+            r"\textcolor{{{}}}{{\texttt{{Z}}}}",
+            hex(&groups, HLGroup::Variable)
+        );
+        assert!(part.tex.contains(&string), "{}", part.tex);
+        assert!(part.tex.contains(&symbol), "{}", part.tex);
+        assert!(part.tex.contains(r"\frac{1}{2}"), "{}", part.tex);
+        assert_eq!(part.fallback, "{1, Z, 1/2}");
+        assert_eq!(part.code, "{\"1\", Z, 1/2}");
+    }
+
+    #[test]
+    fn a_type_and_nested_lists_stay_in_one_formula() {
+        let groups = Groups::default();
+        let value = M2Value::Collection {
+            kind: CollectionKind::List,
+            items: vec![
+                M2Value::Collection {
+                    kind: CollectionKind::List,
+                    items: vec![tex(r"$\frac{x}{3}$", "x/3")],
+                },
+                M2Value::Collection {
+                    kind: CollectionKind::List,
+                    items: vec![
+                        M2Value::Type(Box::new(tex(r"$\mathbb{Z}$", "ZZ"))),
+                        word("null", Role::Null),
+                    ],
+                },
+            ],
+        };
+
+        let block = Block::value(&value, 80, &groups, MathStyle::default(), None, spelled);
+
+        let drawn = text(&block.lines);
+        assert_eq!(drawn.len(), 1, "{drawn:?}");
+        assert!(drawn[0].contains(r"\mathbb{Z}"), "{drawn:?}");
+        assert!(drawn[0].contains(r"\texttt{null}"), "{drawn:?}");
+        assert!(drawn[0].ends_with("= {{x/3}, {ZZ, null}}"), "{drawn:?}");
+    }
+
+    #[test]
+    fn a_collection_with_an_item_that_has_no_tex_form_is_drawn_item_by_item() {
         let groups = Groups::default();
         let value = M2Value::Collection {
             kind: CollectionKind::AngleBarList,
             items: vec![
                 tex(r"$\frac{2}{3}$", "2/3"),
-                M2Value::Token {
-                    text: "null".into(),
-                    role: Role::Null,
-                },
+                M2Value::Net("two\nrows".into()),
             ],
         };
-        let block = Block::value(&value, 80, &groups, MathStyle::default(), None, picture);
-        let drawn = text(&block.lines);
-        assert_eq!(block.baseline, 1);
-        assert!(
-            drawn[1].starts_with("\u{27E8}|─, null|\u{27E9}"),
-            "{drawn:?}"
-        );
+
+        assert!(collection_formula(CollectionKind::List, &[value.clone()], &groups).is_none());
+        assert!(matches!(&value, M2Value::Collection { items, .. }
+            if collection_formula(CollectionKind::AngleBarList, items, &groups).is_none()));
     }
 
     #[test]
@@ -749,23 +887,15 @@ mod tests {
     }
 
     #[test]
-    fn a_net_does_not_change_its_mathematical_siblings() {
+    fn a_net_beside_maths_joins_its_formula_in_typewriter_face() {
         let groups = Groups::default();
-        let fraction = M2Value::Tex {
-            source: r"$\frac{2}{3}$".into(),
-            fallback: "2/3".into(),
-            code: String::new(),
-        };
-        let string = M2Value::Token {
-            text: "2/3".into(),
-            role: Role::String,
-        };
-        let null = M2Value::Token {
-            text: "null".into(),
-            role: Role::Null,
-        };
+        let fraction = tex(r"$\frac{2}{3}$", "2/3");
         for net in [false, true] {
-            let mut items = vec![fraction.clone(), string.clone(), null.clone()];
+            let mut items = vec![
+                fraction.clone(),
+                word("2/3", Role::String),
+                word("null", Role::Null),
+            ];
             if net {
                 items.push(M2Value::Net("2/3".into()));
             }
@@ -773,21 +903,17 @@ mod tests {
                 kind: CollectionKind::Sequence,
                 items,
             };
-            let block = Block::value(&value, 80, &groups, MathStyle::default(), None, picture);
+
+            let block = Block::value(&value, 80, &groups, MathStyle::default(), None, spelled);
+
             let drawn = text(&block.lines);
-            assert_eq!(block.lines.len(), 3);
-            assert!(drawn[1].contains("─, 2/3, null"), "{drawn:?}");
-            assert!(block.lines[1]
-                .spans
-                .iter()
-                .any(|span| span.content == "2/3" && span.style == groups.style(HLGroup::String)));
-            assert!(
-                block.lines[1]
-                    .spans
-                    .iter()
-                    .any(|span| span.content == "null"
-                        && span.style == groups.style(HLGroup::Builtin))
+            assert_eq!(drawn.len(), 1, "{drawn:?}");
+            assert!(drawn[0].contains(r"\frac{2}{3}"), "{drawn:?}");
+            assert_eq!(
+                drawn[0].matches(r"\texttt{2/3}").count(),
+                1 + usize::from(net)
             );
+            assert!(drawn[0].contains(r"\texttt{null}"), "{drawn:?}");
         }
     }
 

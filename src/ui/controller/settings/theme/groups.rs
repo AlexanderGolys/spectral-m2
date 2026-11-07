@@ -57,9 +57,10 @@ pub struct StyleDeclaration {
     dim: Option<bool>,
     /// Foreground kept at this percentage of its saturation, hue unchanged.
     saturation: Option<f32>,
-    /// Foreground moved this percentage of the way to white.
+    /// Foreground moved this percentage of the way to the scheme's text colour.
     lightening: Option<f32>,
-    /// Foreground blended toward black by this fraction.
+    /// Foreground blended toward the background by this fraction: the group's own
+    /// when it has one, else the canvas.
     darken: Option<f32>,
     /// Background blended toward a palette colour by `bg_blend_amount`, a fraction,
     /// for schemes whose guidelines specify an overlay's opacity.
@@ -360,22 +361,27 @@ impl StyleResolver<'_> {
                 };
             }
         }
-        if declaration.saturation.is_some() || declaration.lightening.is_some() {
-            let saturation = declaration.saturation.unwrap_or(100.0);
-            let lightening = declaration.lightening.unwrap_or(0.0);
-            for amount in [saturation, lightening] {
-                if !amount.is_finite() || !(0.0..=100.0).contains(&amount) {
-                    return Err("saturation and lightening must be between 0 and 100".into());
-                }
+        if let Some(saturation) = declaration.saturation {
+            if !saturation.is_finite() || !(0.0..=100.0).contains(&saturation) {
+                return Err("saturation must be between 0 and 100".into());
             }
-            style = softened(style, saturation, lightening);
+            style = desaturated(style, saturation);
+        }
+        if let Some(lightening) = declaration.lightening {
+            if !lightening.is_finite() || !(0.0..=100.0).contains(&lightening) {
+                return Err("lightening must be between 0 and 100".into());
+            }
+            if let (Some(fg), Some(text)) = (style.fg, self.channel("Text.fg")?) {
+                style.fg = Some(super::palette::blend(fg, text, lightening / 100.0)?);
+            }
         }
         if let Some(amount) = declaration.darken {
             if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
                 return Err("darken must be between 0 and 1".into());
             }
-            if let Some(fg) = style.fg {
-                style.fg = Some(super::palette::blend(fg, Color::Rgb(0, 0, 0), amount)?);
+            let canvas = self.channel("Canvas.bg")?;
+            if let (Some(fg), Some(bg)) = (style.fg, style.bg.or(canvas)) {
+                style.fg = Some(super::palette::blend(fg, bg, amount)?);
             }
         }
         match (&declaration.bg_blend, declaration.bg_blend_amount) {
@@ -406,19 +412,17 @@ impl StyleResolver<'_> {
     }
 }
 
-/// `style` with its foreground desaturated to `saturation` percent of what it was and
-/// lightened by `lightening` percent of the way to white, its hue untouched. A colour
-/// that is not RGB has no channels to move and is left as it is.
-fn softened(style: Style, saturation: f32, lightening: f32) -> Style {
+/// `style` with its foreground desaturated to `saturation` percent of what it was, its
+/// hue untouched. A colour that is not RGB has no channels to move and is left as it is.
+fn desaturated(style: Style, saturation: f32) -> Style {
     let Some(Color::Rgb(r, g, b)) = style.fg else {
         return style;
     };
     let [r, g, b] = [r, g, b].map(|channel| f32::from(channel) / 255.0);
     let (high, low) = (r.max(g).max(b), r.min(g).min(b));
     let chroma = high - low;
-    let value = high + (1.0 - high) * lightening / 100.0;
     let kept = if high == 0.0 { 0.0 } else { chroma / high } * saturation / 100.0;
-    let floor = value * (1.0 - kept);
+    let floor = high * (1.0 - kept);
     // The same position between the darkest and brightest channel as before, which is
     // what keeps the hue where it was.
     let channel = |from: f32| {
@@ -427,7 +431,7 @@ fn softened(style: Style, saturation: f32, lightening: f32) -> Style {
         } else {
             (from - low) / chroma
         };
-        let byte = (floor + (value - floor) * along) * 255.0;
+        let byte = (floor + (high - floor) * along) * 255.0;
         byte.round().clamp(0.0, 255.0) as u8
     };
     style.fg(Color::Rgb(channel(r), channel(g), channel(b)))
@@ -681,6 +685,71 @@ mod tests {
         .err()
         .unwrap()
         .contains("missing required highlight group `Text`"));
+    }
+
+    fn resolved(source: &str) -> Result<Groups, String> {
+        let (styles, palette) = fixture();
+        let overrides = toml::from_str(source).unwrap();
+        Groups::resolve(
+            &styles,
+            &overrides,
+            &palette,
+            &GroupDeclarations::embedded(),
+        )
+    }
+
+    #[test]
+    fn darkening_blends_the_foreground_toward_its_own_background_else_the_canvas() {
+        let canvas = resolved("").unwrap();
+        let (accent, canvas_bg) = (canvas.Accent.fg.unwrap(), canvas.Canvas.bg.unwrap());
+
+        let plain = resolved("CompletionHint = { fg_from = 'Accent.fg', darken = 0.5 }").unwrap();
+        let own = resolved("CompletionHint = { fg_from = 'Accent.fg', bg = 'red', darken = 0.5 }")
+            .unwrap();
+
+        assert_eq!(
+            plain.CompletionHint.fg,
+            Some(super::super::palette::blend(accent, canvas_bg, 0.5).unwrap())
+        );
+        assert_eq!(
+            own.CompletionHint.fg,
+            Some(
+                super::super::palette::blend(accent, own.CompletionHint.bg.unwrap(), 0.5).unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn lightening_blends_the_foreground_toward_the_text_colour_by_a_percentage() {
+        let base = resolved("").unwrap();
+        let (accent, text) = (base.Accent.fg.unwrap(), base.Text.fg.unwrap());
+
+        let lightened =
+            resolved("CompletionHint = { fg_from = 'Accent.fg', lightening = 40.0 }").unwrap();
+
+        assert_eq!(
+            lightened.CompletionHint.fg,
+            Some(super::super::palette::blend(accent, text, 0.4).unwrap())
+        );
+    }
+
+    #[test]
+    fn zero_saturation_leaves_a_grey_and_the_amounts_are_checked() {
+        let grey = resolved("CompletionHint = { fg_from = 'Accent.fg', saturation = 0.0 }")
+            .unwrap()
+            .CompletionHint
+            .fg;
+        let Some(Color::Rgb(r, g, b)) = grey else {
+            panic!("an RGB foreground stays RGB");
+        };
+        assert!(r == g && g == b, "{grey:?}");
+        for source in [
+            "CompletionHint = { fg_from = 'Accent.fg', darken = 1.5 }",
+            "CompletionHint = { fg_from = 'Accent.fg', lightening = 120.0 }",
+            "CompletionHint = { fg_from = 'Accent.fg', saturation = -1.0 }",
+        ] {
+            assert!(resolved(source).is_err(), "{source}");
+        }
     }
 
     #[test]

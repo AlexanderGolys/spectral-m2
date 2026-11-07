@@ -15,6 +15,8 @@ use super::controller::settings::statusline::{
     StatusComponent, StatusLineSettings, STATUS_SLOT_COUNT,
 };
 use super::controller::settings::theme::groups::{scheme, Groups, HLGroup};
+use super::debug::mebibytes;
+use super::graphics::Usage;
 
 /// Runtime state reported by the configured language server.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -31,7 +33,17 @@ pub enum LanguageServerState {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StatusRuntime {
     pub m2_version: Option<String>,
+    pub m2_process: Option<u32>,
     pub language_server: LanguageServerState,
+}
+
+/// What the debug component shows, sampled only while it is placed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StatusDiagnostics {
+    pub sp2_memory: Option<u64>,
+    pub m2_memory: Option<u64>,
+    pub pictures: Usage,
+    pub frames_per_second: u32,
 }
 
 /// The statusline's transient key hints, retained independently of its layout.
@@ -58,6 +70,7 @@ pub struct StatusLineContext {
     pub right: Vec<TextSpan>,
     pub math_renderer: String,
     pub runtime: StatusRuntime,
+    pub diagnostics: StatusDiagnostics,
 }
 
 impl StatusLineContext {
@@ -132,6 +145,27 @@ impl StatusComponent {
                 }
                 _ => version(SERVER_EXECUTABLE, None),
             },
+            Self::Debug => {
+                let diagnostics = &context.diagnostics;
+                let memory = |bytes: Option<u64>| bytes.map_or_else(|| "n/a".into(), mebibytes);
+                let separator = TextSpan::new(" / ", HLGroup::StatuslineSeparator);
+                [
+                    format!(
+                        "sp2 {} {}",
+                        env!("CARGO_PKG_VERSION"),
+                        memory(diagnostics.sp2_memory)
+                    ),
+                    format!("M2 {}", memory(diagnostics.m2_memory)),
+                    format!(
+                        "pictures {} ({})",
+                        diagnostics.pictures.resident,
+                        mebibytes(diagnostics.pictures.resident_bytes as u64)
+                    ),
+                    format!("{} fps", diagnostics.frames_per_second),
+                ]
+                .map(|part| text(part, HLGroup::Statusline1))
+                .join(&separator)
+            }
             Self::RenderingSettings | Self::Versions => {
                 let components: &[Self] = match self {
                     Self::RenderingSettings => {
@@ -406,6 +440,32 @@ mod tests {
     }
 
     #[test]
+    fn the_debug_component_reports_version_memory_pictures_and_frame_rate() {
+        let context = StatusLineContext {
+            diagnostics: StatusDiagnostics {
+                sp2_memory: Some(48 * 1024 * 1024),
+                m2_memory: None,
+                pictures: Usage {
+                    resident: 3,
+                    resident_bytes: 2 * 1024 * 1024,
+                    ..Usage::default()
+                },
+                frames_per_second: 58,
+            },
+            ..StatusLineContext::default()
+        };
+
+        let debug = StatusComponent::Debug.content(&context, None);
+
+        let shown: String = debug.iter().map(|span| span.content.as_str()).collect();
+        assert!(shown.contains(env!("CARGO_PKG_VERSION")), "{shown}");
+        assert!(shown.contains("48.0 MiB"), "{shown}");
+        assert!(shown.contains("M2 n/a"), "{shown}");
+        assert!(shown.contains("pictures 3 (2.0 MiB)"), "{shown}");
+        assert!(shown.contains("58 fps"), "{shown}");
+    }
+
+    #[test]
     fn versions_use_the_reported_server_and_interpreter_metadata() {
         let context = StatusLineContext {
             runtime: StatusRuntime {
@@ -414,6 +474,7 @@ mod tests {
                     name: "test-server".into(),
                     version: Some("server-build".into()),
                 }),
+                ..StatusRuntime::default()
             },
             ..StatusLineContext::default()
         };

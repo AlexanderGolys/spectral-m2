@@ -1641,6 +1641,26 @@ impl OutputBlock {
 }
 
 impl OutputBlock {
+    /// The link a source location draws: every row it wraps onto, before any fold.
+    fn location_link(&self, cell: &OutputCell, context: &RenderContext) -> Option<Link> {
+        let Some(M2Value::Location { target, .. }) = &cell.value else {
+            return None;
+        };
+        let cells = self
+            .unfolded_lines(cell, context)
+            .iter()
+            .enumerate()
+            .filter_map(|(row, line)| {
+                let width = line.to_string().trim_end().width();
+                (width > 0).then(|| Rect::new(0, row as u16, width as u16, 1))
+            })
+            .collect();
+        Some(Link {
+            target: target.as_str().into(),
+            cells,
+        })
+    }
+
     fn placed_link(
         &self,
         cell: &OutputCell,
@@ -1766,6 +1786,11 @@ impl Block for OutputBlock {
                     .filter(|link| !link.cells.is_empty()),
                 );
             }
+            links.extend(
+                self.location_link(cell, context)
+                    .map(|link| self.placed_link(cell, context, Position::new(inner.x, row), link))
+                    .filter(|link| !link.cells.is_empty()),
+            );
             row = row.saturating_add(row_count!(self.lines(cell, context).len()));
         }
         links
@@ -1781,6 +1806,14 @@ impl Block for OutputBlock {
             if !(row..row.saturating_add(shown)).contains(&position.y) {
                 row = row.saturating_add(shown);
                 continue;
+            }
+            if let Some(link) = self.location_link(cell, context) {
+                let link = self.placed_link(cell, context, Position::new(inner.x, row), link);
+                return link
+                    .cells
+                    .iter()
+                    .any(|cells| cells.contains(position))
+                    .then_some(link);
             }
             let Some(M2Value::Markup {
                 html,
@@ -2111,6 +2144,39 @@ mod tests {
         assert!(text.contains("ZZ"), "{text}");
         assert!(!text.contains("i1 :"), "{text}");
         assert!(text.contains('─'), "{text}");
+    }
+
+    #[test]
+    fn a_source_location_value_is_a_link_over_every_row_it_wraps_onto() {
+        let context = RenderContext::new(40, 0);
+        let block = OutputBlock::rendered(
+            M2Value::Location {
+                text: "[...]/directory/file.m2:12:0-14:3 and more words".into(),
+                target: "file:///tmp/directory/file.m2#L12:C0-L14:C3".into(),
+            },
+            None,
+        );
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 40, block.height(&context)));
+        block.render_local(&context, &mut buffer);
+        let (x, y) = (0..buffer.area.height)
+            .find_map(|y| {
+                let row: String = (0..40).map(|x| buffer[(x, y)].symbol()).collect();
+                row.find("file.m2")
+                    .map(|at| (row[..at].chars().count() as u16, y))
+            })
+            .expect("the location is drawn");
+
+        let link = block
+            .link_at(&context, Position::new(x + 2, y))
+            .expect("a link under the pointer");
+
+        assert_eq!(&*link.target, "file:///tmp/directory/file.m2#L12:C0-L14:C3");
+        assert!(link
+            .cells
+            .iter()
+            .any(|cells| cells.contains(Position::new(x, y))));
+        assert!(block.link_at(&context, Position::new(0, 0)).is_none());
+        assert_eq!(block.links(&context), [link]);
     }
 
     #[test]

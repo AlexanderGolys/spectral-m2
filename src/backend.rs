@@ -140,6 +140,10 @@ pub enum M2Value {
     /// A value that is one word with a role in code: null, a Boolean, a string, a
     /// function's name.
     Token { text: String, role: Role },
+    /// A position in a source file, drawn as the link that opens it: `target` is
+    /// the `file://` URL, with the position as its fragment, that documentation
+    /// links to source files use.
+    Location { text: String, target: String },
 }
 
 /// What a token is in code, which decides how it is coloured.
@@ -333,9 +337,10 @@ impl M2Value {
                     false => rendered,
                 }
             }
-            Self::Net(text) | Self::Markup { fallback: text, .. } | Self::Token { text, .. } => {
-                Self::text_block(text)
-            }
+            Self::Net(text)
+            | Self::Markup { fallback: text, .. }
+            | Self::Token { text, .. }
+            | Self::Location { text, .. } => Self::text_block(text),
             Self::HashTable(rows) => Self::brace(
                 Self::stack(rows.iter().map(|row| {
                     row[0]
@@ -421,9 +426,10 @@ impl M2Value {
     pub fn plain_text(&self) -> Option<&str> {
         match self {
             Self::Type(value) => value.plain_text(),
-            Self::Net(text) | Self::Markup { fallback: text, .. } | Self::Token { text, .. } => {
-                Some(text.as_str())
-            }
+            Self::Net(text)
+            | Self::Markup { fallback: text, .. }
+            | Self::Token { text, .. }
+            | Self::Location { text, .. } => Some(text.as_str()),
             Self::Tex {
                 source, fallback, ..
             } if !(source.starts_with('$') && source.ends_with('$')) => Some(fallback.as_str()),
@@ -788,6 +794,11 @@ impl M2Backend {
     /// Text printed during initialization before the backend became ready.
     pub fn take_startup_output(&mut self) -> String {
         mem::take(&mut self.startup_output)
+    }
+
+    /// The operating-system id of the M2 process.
+    pub fn process_id(&self) -> u32 {
+        self.process.id()
     }
 
     /// Signal everything in the child's private group, not just the child.
@@ -1273,6 +1284,19 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
                 ..
             })
         ));
+        let position = backend
+            .evaluate(
+                r#"new FilePosition from ("/tmp/dir/a b.m2", 3, 4, 5, 9, 3, 4)"#,
+                Some(8),
+            )
+            .expect("evaluate a source position");
+        let Some(M2Value::Location { text, target }) = &position.value else {
+            panic!("a source position arrives as a location");
+        };
+        assert!(text.ends_with("a b.m2:3:4-5:9"), "{text}");
+        let link = crate::code::location::SourceLink::parse(target).expect("a file target");
+        assert_eq!(link.path, std::path::PathBuf::from("/tmp/dir/a b.m2"));
+        assert!(link.command().contains("3, 4, 5, 9"));
         let contained = backend
             .evaluate("{Type, WrapperType, Core}", Some(9))
             .expect("evaluate types in a list");

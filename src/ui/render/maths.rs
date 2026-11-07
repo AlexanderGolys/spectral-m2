@@ -197,6 +197,7 @@ pub fn spans(
             MathBlock::fitted(vec![MathBlock::value(value, style)], width),
         ),
         M2Value::Token { text, role } => Ok(prose(text, role.group(), width)),
+        M2Value::Location { text, .. } => Ok(prose(text, HLGroup::MarkupLink, width)),
         M2Value::Net(text) => Ok(prose(text, HLGroup::String, width)),
         M2Value::Markup { html, .. } => markup::spans(html, width)
             .ok_or_else(|| UnsupportedTeX("markup that does not read as HTML".into())),
@@ -584,6 +585,15 @@ impl<'a> Input<'a> {
             "setminus" => Ok(Math::atom("\u{2216}", HLGroup::Operator)),
             brace @ ("{" | "}") => Ok(Math::atom(brace, HLGroup::Delimiter)),
             "left" => self.fences(),
+            // A colour already chosen for what it wraps, which the colours inferred from
+            // the words inside must not replace: the typesetter paints it as written.
+            "textcolor" => {
+                self.text_group()?;
+                let inferred = self.highlights.len();
+                let body = self.atom()?;
+                self.highlights.truncate(inferred);
+                Ok(body)
+            }
             text if TEXT_COMMANDS.contains(&text) => {
                 let words = Math::atom(self.text_group()?, HLGroup::Text);
                 Ok(match text {
@@ -1366,6 +1376,7 @@ impl MathBlock {
             M2Value::Net(text) => Self::text(text, HLGroup::String),
             M2Value::Markup { fallback, .. } => Self::text(fallback, HLGroup::Value),
             M2Value::Token { text, role } => Self::text(text, role.group()),
+            M2Value::Location { text, .. } => Self::text(text, HLGroup::MarkupLink),
             M2Value::Collection {
                 kind: CollectionKind::VerticalList,
                 items,
@@ -1804,6 +1815,21 @@ mod tests {
         let parsed = Math::parse(r"\mathbb{Z}").expect("a ring parses");
 
         assert_eq!(parsed, atom("ZZ", HLGroup::Type));
+    }
+
+    #[test]
+    fn an_explicit_text_colour_keeps_its_own_colour_inside_a_coloured_formula() {
+        let groups = Groups::default();
+        let tex = r"\left\{\textcolor{#112233}{\texttt{Z}},\,1\right\}";
+
+        let painted = colored_tex(tex, &groups);
+
+        assert!(
+            painted.contains(r"\textcolor{#112233}{\texttt{Z}}"),
+            "{painted}"
+        );
+        assert_ne!(painted, tex);
+        assert!(Math::from_tex(&format!("${tex}$"), true).is_ok());
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::mem;
 use std::result::Result;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
@@ -83,6 +83,8 @@ enum WorkerEvent {
 pub struct Session {
     requests: Sender<WorkerRequest>,
     events: Receiver<WorkerEvent>,
+    /// The id of the M2 process the worker runs, replaced when it restarts.
+    m2_process: Arc<AtomicU32>,
     version: String,
     in_debugger: bool,
     next_input_number: u32,
@@ -113,10 +115,13 @@ impl Session {
         let version = backend.version().unwrap_or_else(|_| "unknown".to_string());
         let (request_tx, request_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
-        thread::spawn(move || worker(backend, request_rx, event_tx));
+        let m2_process = Arc::new(AtomicU32::new(backend.process_id()));
+        let worker_process = m2_process.clone();
+        thread::spawn(move || worker(backend, request_rx, event_tx, worker_process));
         Self {
             requests: request_tx,
             events: event_rx,
+            m2_process,
             version,
             in_debugger: false,
             next_input_number: 1,
@@ -298,6 +303,11 @@ impl Session {
     /// Revision of the immutable committed-cell sequence.
     pub const fn committed_revision(&self) -> u64 {
         self.committed_revision
+    }
+
+    /// The id of the M2 process behind this session.
+    pub fn m2_process(&self) -> u32 {
+        self.m2_process.load(Ordering::Relaxed)
     }
 
     pub fn busy(&self) -> bool {
@@ -770,7 +780,12 @@ impl Drop for Session {
     }
 }
 
-fn worker(mut backend: M2Backend, requests: Receiver<WorkerRequest>, events: Sender<WorkerEvent>) {
+fn worker(
+    mut backend: M2Backend,
+    requests: Receiver<WorkerRequest>,
+    events: Sender<WorkerEvent>,
+    process: Arc<AtomicU32>,
+) {
     while let Ok(request) = requests.recv() {
         match request {
             WorkerRequest::Evaluate {
@@ -827,6 +842,7 @@ fn worker(mut backend: M2Backend, requests: Receiver<WorkerRequest>, events: Sen
                         replacement.take_startup_output(),
                     );
                     backend = replacement;
+                    process.store(backend.process_id(), Ordering::Relaxed);
                     Ok(started)
                 });
                 if events

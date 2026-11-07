@@ -30,6 +30,7 @@ use resvg::tiny_skia::{Pixmap, PixmapPaint, Transform};
 use resvg::usvg::{Options, Tree};
 
 use crate::ui::config::UI;
+use crate::ui::debug::mebibytes;
 use kitty::{ImageId, KittyImage, Passthrough, Piece};
 use typeset::{Break, Rgb, EM, PADDING};
 
@@ -48,6 +49,8 @@ const TERMINAL_VARIABLES: [&str; 2] = ["TERM_PROGRAM", "TERM"];
 const TERM_FAMILY_PREFIX: &str = "xterm-";
 /// Terminals drawing kitty pictures by Unicode placeholders, as they name themselves.
 const PLACEHOLDER_TERMINALS: [&str; 2] = ["kitty", "ghostty"];
+/// The distance of a picture in a view that is not showing, further than any row.
+pub const HIDDEN_VIEW_DISTANCE: usize = usize::MAX;
 /// Bytes of decoded pixels the terminal may hold for pictures off the screen. Kitty
 /// and Ghostty each evict pictures, on screen or not, past a quota of 320 MiB, so
 /// this keeps well clear of it.
@@ -354,10 +357,10 @@ impl Display for Usage {
     fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
         write!(
             formatter,
-            "pictures {} kept / {} in terminal ({:.1} MiB) / {} formulas",
+            "pictures {} kept / {} in terminal ({}) / {} formulas",
             self.images,
             self.resident,
-            self.resident_bytes as f64 / (1024.0 * 1024.0),
+            mebibytes(self.resident_bytes as u64),
             self.formulas,
         )
     }
@@ -952,6 +955,26 @@ mod tests {
 
         assert!(shrunk.cells.width < natural);
         assert!(refused.is_none());
+    }
+
+    #[test]
+    fn a_list_of_maths_and_typewriter_words_in_their_own_colours_is_one_picture() {
+        let mut gallery = Gallery::default();
+        let tex = concat!(
+            r"\left\{\left\{\frac{x}{3}\right\},\,",
+            r"\left\{\textcolor{#83c092}{\texttt{Z}},\,\frac{1}{2}\right\},\,",
+            r"\left\{1,\,\textcolor{#d699b6}{\texttt{1}}\right\}\right\}"
+        );
+        let formula = Typesetting {
+            tex,
+            painted: tex,
+            code: "{{x/3}, {Z, 1/2}, {1, \"1\"}}",
+            matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
+        };
+
+        let picture = gallery.formula(formula, Rgb([1, 2, 3]), CANVAS, 80, Placement::Alone);
+
+        assert!(picture.is_some());
     }
 
     #[test]

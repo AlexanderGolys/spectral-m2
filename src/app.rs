@@ -727,11 +727,26 @@ impl App {
         );
     }
 
+    /// Views set aside keep their pictures, however far from showing.
+    fn report_hidden_pictures(&self) {
+        graphics::report_distances(
+            self.previews
+                .saved()
+                .filter_map(|snapshot| snapshot.reference.as_ref())
+                .flat_map(ReferenceEntry::pictures)
+                .map(|image| (image, graphics::HIDDEN_VIEW_DISTANCE)),
+        );
+    }
+
     fn draw(&mut self, frame: &mut Frame) {
+        self.report_hidden_pictures();
         let active = self.panes.active;
         let split = self.panes.split();
         let workspace = &mut self.workspace;
         workspace.editor.set_processing(workspace.session.busy());
+        workspace
+            .editor
+            .set_m2_process(workspace.session.m2_process());
         let screen = frame.area();
         let margin = Rect::new(
             screen.x,

@@ -372,6 +372,15 @@ mod tests {
     }
 
     #[test]
+    fn an_explicit_text_colour_is_painted_as_written() {
+        let tex = r"\textcolor{#112233}{\texttt{Z}}";
+
+        let typeset = svg_colored(tex, tex, INK, PERCENT_PER_ARRAYSTRETCH).unwrap();
+
+        assert!(typeset.svg.contains("rgba(17,34,51"), "{}", typeset.svg);
+    }
+
+    #[test]
     fn a_collection_formula_may_break_after_its_commas() {
         for tex in [
             r"\left(1,\,2,\,3\right)",

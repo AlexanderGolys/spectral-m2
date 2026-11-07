@@ -24,7 +24,7 @@ use self::highlight_debug::{DebugEntry, DebugSection};
 use self::picker::{Picker, PickerController, PickerMode};
 use self::screen::{ScreenCapture, ScreenSelection};
 use self::settings::keymap::{Keymaps, Shortcut};
-use self::settings::statusline::StatusLinePosition;
+use self::settings::statusline::{StatusComponent, StatusLinePosition, StatusSegment};
 use self::settings::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
 use self::settings::theme::Appearance;
 use self::settings::{tabs as settings_tabs, Persisted, SavedSettings, Settings};
@@ -35,7 +35,7 @@ use self::{
 };
 use super::cell::{CellState, EvaluationBlock, IncompleteBlock, OutputBlock, TextBlock};
 use super::config::UI;
-use super::debug::FrameStats;
+use super::debug::{resident_bytes, FrameStats};
 use super::element::EventListener;
 use super::feed::Feed;
 use super::key::{KeyEvent, KeyMod};
@@ -43,7 +43,8 @@ use super::render::maths::MathDisplay;
 use super::render::selection::Inclusions;
 use super::render::RenderContext;
 use super::statusline::{
-    LanguageServerState, StatusLine, StatusLineContext, StatusLocation, StatusRuntime,
+    LanguageServerState, StatusDiagnostics, StatusLine, StatusLineContext, StatusLocation,
+    StatusRuntime,
 };
 use super::{
     action::Action,
@@ -276,6 +277,11 @@ impl Editor {
     }
 
     /// Record the version reported by the session interpreter.
+    /// Name the M2 process whose memory the debug component reports.
+    pub fn set_m2_process(&mut self, process: u32) {
+        self.status_runtime.m2_process = Some(process);
+    }
+
     pub fn set_m2_version(&mut self, version: String) {
         self.status_runtime.m2_version = Some(version);
     }
@@ -1375,7 +1381,8 @@ impl Editor {
         let mut lines = vec![
             Line::from(Span::styled(
                 format!(
-                    "{}  {}",
+                    "sp2 {}  {}  {}",
+                    env!("CARGO_PKG_VERSION"),
                     self.frame_stats.label(),
                     crate::ui::graphics::usage()
                 ),
@@ -1500,6 +1507,22 @@ impl Editor {
         }
     }
 
+    /// Memory, pictures and frame rate, read only while the debug component is placed.
+    fn status_diagnostics(&self) -> StatusDiagnostics {
+        if self.settings.statusline.placement(StatusComponent::Debug) == StatusSegment::Hidden {
+            return StatusDiagnostics::default();
+        }
+        StatusDiagnostics {
+            sp2_memory: resident_bytes(None),
+            m2_memory: self
+                .status_runtime
+                .m2_process
+                .and_then(|id| resident_bytes(Some(id))),
+            pictures: crate::ui::graphics::usage(),
+            frames_per_second: self.frame_stats.average().round() as u32,
+        }
+    }
+
     /// What the status line draws from in any view of the session.
     fn status_context(&self) -> StatusLineContext {
         StatusLineContext {
@@ -1524,6 +1547,7 @@ impl Editor {
                 },
                 ..self.status_runtime.clone()
             },
+            diagnostics: self.status_diagnostics(),
             ..StatusLineContext::default()
         }
     }

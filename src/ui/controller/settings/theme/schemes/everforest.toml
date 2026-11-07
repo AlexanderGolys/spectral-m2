@@ -131,7 +131,7 @@ Builtin = { fg = "purple" }
 Comment = { fg = "grey1", italic = true }
 CompiledFunction = { fg = "green" }
 Conditional = { fg = "red" }
-Constant = { fg = "fg" }
+Constant = { fg = "purple" }
 Debug = { fg = "orange" }
 Delimiter = { fg = "grey1" }
 Documentation = { fg = "fg" }
@@ -145,7 +145,7 @@ Float = { fg = "purple" }
 Function = { fg = "green" }
 Hint = { fg = "green" }
 Info = { fg = "blue" }
-Installation = { fg = "green" }
+Installation = { fg = "green" , italic=true}
 KeymapActionLabel = { fg = "fg" }
 Keyword = { fg = "red" }
 Macro = { fg = "green" }
@@ -158,7 +158,8 @@ Namespace = { fg = "yellow", italic = true }
 Number = { fg = "purple" }
 Operator = { fg = "orange" }
 Package = { fg = "yellow", italic = true }
-Parameter = { fg = "fg" }
+Parameter = { fg = "fg", italic=true }
+TypeParameter = { fg = "yellow", italic=true }
 Picker = { bg = "bg1", fg = "fg" }
 # Preserve the picker's independently styled text and key hints on selection.
 PickerSelected = { bg = "bg3" }
@@ -179,7 +180,7 @@ Statusline2 = { fg = "statusline2" }
 Statusline3 = { fg = "statusline3" }
 StorageClass = { fg = "red" }
 String = { fg = "aqua" }
-Symbol = { fg = "fg" }
+Symbol = { fg = "orange" }
 Text = { fg = "fg" }
 Type = { fg = "yellow" }
 Variable = { fg = "fg" }

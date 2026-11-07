@@ -120,6 +120,7 @@ cyclic! {
         Sp2Version = "sp2 version",
         M2Version = "M2 version",
         Versions = "versions",
+        Debug = "debug",
     }
 }
 

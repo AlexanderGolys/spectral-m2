@@ -4,10 +4,12 @@ mod app;
 mod backend;
 mod cli;
 mod code;
+mod crash;
 mod errors;
 mod input;
 mod ui;
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::process::exit;
 
 use clap::error::ErrorKind;
@@ -17,14 +19,25 @@ use backend::M2Backend;
 use cli::Options;
 
 fn main() {
+    crash::install();
     let options = Options::parse();
     let startup = options
         .startup_code()
         .unwrap_or_else(|message| Options::command().error(ErrorKind::Io, message).exit());
     match M2Backend::spawn_with_options(&options.m2) {
         Ok(backend) => {
-            if let Err(e) = app::run(backend, startup) {
-                eprintln!("Error: {}", e);
+            // Unwinding restores the terminal, so what stopped the program can be
+            // told once stderr shows again.
+            match catch_unwind(AssertUnwindSafe(|| app::run(backend, startup))) {
+                Ok(Ok(())) => crash::report(),
+                Ok(Err(e)) => {
+                    eprintln!("Error: {}", e);
+                    crash::report();
+                }
+                Err(_) => {
+                    crash::report();
+                    exit(1);
+                }
             }
         }
         Err(e) => {

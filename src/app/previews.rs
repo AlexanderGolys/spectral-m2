@@ -52,6 +52,11 @@ impl<T> PreviewTabs<T> {
         }
     }
 
+    /// The views set aside, which are not showing.
+    pub fn saved(&self) -> impl Iterator<Item = &T> {
+        self.saved.iter().flatten().chain(self.bookmark.iter())
+    }
+
     pub fn saved_mut(&mut self, tab: PreviewTab) -> Option<&mut T> {
         match tab {
             PreviewTab::Recent(index) => self.saved.get_mut(index)?.as_mut(),
@@ -112,6 +117,21 @@ impl<T> PreviewTabs<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn views_set_aside_are_listed_with_the_bookmark_but_not_the_active_one() {
+        let mut tabs = PreviewTabs::default();
+        tabs.open(None, "first".into());
+        tabs.open(Some(1), "second".into());
+        tabs.open(Some(2), "third".into());
+        tabs.pin();
+        tabs.open(Some(3), "fourth".into());
+
+        let mut saved = tabs.saved().copied().collect::<Vec<_>>();
+        saved.sort();
+
+        assert_eq!(saved, [1, 2, 3]);
+    }
 
     #[test]
     fn replacement_is_cyclic_even_after_visiting_an_older_view() {

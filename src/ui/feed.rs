@@ -656,6 +656,14 @@ impl Feed {
         (underfilled, inclusions)
     }
 
+    /// Every picture any block holds, wherever the viewport stands.
+    pub fn pictures(&self) -> Vec<ImageId> {
+        self.blocks
+            .iter()
+            .flat_map(|block| block.content.block().pictures())
+            .collect()
+    }
+
     /// How far each picture stands from the viewport, in rows: none for a block on
     /// screen, else the rows of the blocks between it and the nearest one that is. A
     /// feed not drawn yet holds none.
@@ -1075,6 +1083,19 @@ mod tests {
         fn pictures(&self) -> Vec<ImageId> {
             vec![self.0]
         }
+    }
+
+    #[test]
+    fn a_feed_not_drawn_still_holds_every_picture_of_its_blocks() {
+        let images = [ImageId::from(920_001), ImageId::from(920_002)];
+        let mut feed = Feed::new(Box::new(Pictured(images[0], 3)));
+        feed.push(Box::new(Pictured(images[1], 4)));
+
+        let mut held = feed.pictures();
+        held.sort_by_key(|image| format!("{image:?}"));
+
+        assert_eq!(held, images);
+        assert!(feed.picture_distances().is_empty());
     }
 
     #[test]

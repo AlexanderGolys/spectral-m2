@@ -14,7 +14,7 @@ Click **☆** to move the current view into the separate **★** bookmark tab. T
 
 In the preview pane, `Left` and `Right` switch between occupied recent tabs. `Ctrl+Left` and `Ctrl+Right` do the same from either pane, while the shell's plain arrows move through its input. Click **‹**, or press `Ctrl+Shift+B`, to go to the previous recent tab. The shortcut can be changed under **Settings → keymaps**. `Alt+Left` and `Alt+Right` remain available to the terminal or tmux.
 
-Middle-click a documentation or source-file link in either pane to open it in a new preview tab. A file opened with `/view` also occupies a preview tab and displays highlighted source without running it; `Ctrl+Enter` runs a file shown there.
+Middle-click a documentation or source-file link in either pane to open it in a new preview tab. A value that is a source position (a `FilePosition`, such as the result of `locate`) is drawn as such a link in the output too: it shows the file's name and position, and clicking it opens the source at that position. A file opened with `/view` also occupies a preview tab and displays highlighted source without running it; `Ctrl+Enter` runs a file shown there.
 
 `Ctrl+Left click` submits code to the live session: `help "key"` for documentation, or `get "path"` for a source file. The command and its result become part of the feed. Opening content without submitting code uses the preview pane instead. `viewHelp` continues to open the browser.
 
