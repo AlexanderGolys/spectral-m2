@@ -1,11 +1,12 @@
 //! Typeset mathematical leaves composed with terminal text around a shared baseline.
 
+use ratatui::layout::{Offset, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 use crate::backend::{CollectionKind, M2Value, Role, SPACED_OPTION_ARROW};
-use crate::ui::block::Text;
+use crate::ui::block::{Link, Text};
 use crate::ui::graphics::{self, ratex::Rgb, Pictured, Typesetting};
 use crate::ui::theme::groups::{Groups, HLGroup};
 use crate::ui::wrap::WrappedText;
@@ -20,19 +21,21 @@ const COLLECTION_SEPARATOR: &str = ", ";
 /// The image backend, returning terminal-cell rows for one formula.
 type Picture = fn(Typesetting, Rgb, u16) -> Option<Pictured>;
 
+/// A value's rows as drawn, and the links among them.
+pub struct Drawn {
+    pub lines: Vec<Line<'static>>,
+    pub links: Vec<Link>,
+}
+
 /// Render each value in its own representation, without converting text into TeX.
-pub fn lines(
-    value: &M2Value,
-    width: usize,
-    groups: &Groups,
-    style: MathStyle,
-) -> Vec<Line<'static>> {
+pub fn drawn(value: &M2Value, width: usize, groups: &Groups, style: MathStyle) -> Drawn {
     let picture: Picture = match value {
         M2Value::Tex { .. } => graphics::typeset_alone,
         _ => graphics::typeset,
     };
     let ink = (style.ink == MathInk::Monochrome).then(|| groups.style(HLGroup::Value));
-    Block::value(value, width.max(1), groups, style, ink, picture).lines
+    let Block { lines, links, .. } = Block::value(value, width.max(1), groups, style, ink, picture);
+    Drawn { lines, links }
 }
 
 /// The pieces of a type annotation, which carry their own spacing, set together in
@@ -202,17 +205,66 @@ fn collection_part(
 struct Block {
     lines: Vec<Line<'static>>,
     baseline: usize,
+    /// The links drawn among `lines`, placed from the block's top left corner.
+    links: Vec<Link>,
 }
 
 impl Block {
-    fn text(text: &str, ink: Style) -> Self {
-        let lines: Vec<_> = text
-            .split('\n')
-            .map(|line| Line::from(Span::styled(line.to_string(), ink)))
-            .collect();
+    fn new(lines: Vec<Line<'static>>, baseline: usize) -> Self {
         Self {
-            baseline: lines.len().saturating_sub(1) / 2,
             lines,
+            baseline,
+            links: Vec::new(),
+        }
+    }
+
+    /// Lines set on their middle row, or on the upper of the two middle rows.
+    fn centred(lines: Vec<Line<'static>>) -> Self {
+        let baseline = lines.len().saturating_sub(1) / 2;
+        Self::new(lines, baseline)
+    }
+
+    fn text(text: &str, ink: Style) -> Self {
+        Self::centred(
+            text.split('\n')
+                .map(|line| Line::from(Span::styled(line.to_string(), ink)))
+                .collect(),
+        )
+    }
+
+    /// The same block, all of it a link to `target`.
+    fn linked(mut self, target: &str) -> Self {
+        let cells = self
+            .lines
+            .iter()
+            .enumerate()
+            .filter_map(|(row, line)| {
+                let width = line.to_string().trim_end().width();
+                (width > 0).then(|| Rect::new(0, row as u16, width as u16, 1))
+            })
+            .collect();
+        self.links = vec![Link {
+            target: target.into(),
+            cells,
+        }];
+        self
+    }
+
+    /// Blocks one below another, each keeping its own links.
+    fn stacked(blocks: Vec<Self>) -> Self {
+        let mut lines = Vec::new();
+        let mut links = Vec::new();
+        for block in blocks {
+            let offset = Offset {
+                x: 0,
+                y: lines.len() as i32,
+            };
+            links.extend(block.links.into_iter().map(|link| link.moved(offset)));
+            lines.extend(block.lines);
+        }
+        Self {
+            links,
+            ..Self::centred(lines)
         }
     }
 
@@ -229,10 +281,18 @@ impl Block {
         let baseline = self.baseline.max(other.baseline);
         let below = (self.lines.len() - self.baseline).max(other.lines.len() - other.baseline);
         let mut lines = vec![Line::default(); baseline + below];
+        let mut links = Vec::new();
+        let mut column = 0;
         for block in [self, other] {
             let width = block.width();
             let offset = baseline - block.baseline;
             let height = block.lines.len();
+            let placed = Offset {
+                x: column as i32,
+                y: offset as i32,
+            };
+            links.extend(block.links.into_iter().map(|link| link.moved(placed)));
+            column += width;
             for (row, mut line) in block.lines.into_iter().enumerate() {
                 let padding = width - line.width();
                 line.spans.push(Span::raw(" ".repeat(padding)));
@@ -244,7 +304,11 @@ impl Block {
                 }
             }
         }
-        Self { lines, baseline }
+        Self {
+            lines,
+            baseline,
+            links,
+        }
     }
 
     /// Wrap between complete values, retaining each value's baseline and image rows.
@@ -278,7 +342,7 @@ impl Block {
                 Line::from(spans)
             })
             .collect();
-        Self { lines, baseline }
+        Self::new(lines, baseline)
     }
 
     fn fenced(self, open: &str, close: &str, groups: &Groups, ink: Option<Style>) -> Self {
@@ -317,7 +381,7 @@ impl Block {
             Rgb([r, g, b]),
             u16::try_from(width).unwrap_or(u16::MAX),
         )?;
-        Some(Self { lines, baseline })
+        Some(Self::new(lines, baseline))
     }
 
     fn value(
@@ -362,14 +426,14 @@ impl Block {
                         .collect::<Vec<_>>()
                 });
                 match lines.filter(|lines| !lines.is_empty()) {
-                    Some(lines) => Self {
-                        baseline: lines.len().saturating_sub(1) / 2,
-                        lines,
-                    },
+                    Some(lines) => Self::centred(lines),
                     None => Self::wrapped(fallback, text_ink(HLGroup::Value), width),
                 }
             }
             M2Value::Token { text, role } => Self::wrapped(text, text_ink(role.group()), width),
+            M2Value::Linked { value, target } => {
+                Self::value(value, width, groups, style, ink, picture).linked(target)
+            }
             M2Value::Location { text, .. } => {
                 Self::wrapped(text, text_ink(HLGroup::MarkupLink), width)
             }
@@ -397,25 +461,27 @@ impl Block {
                 });
                 let rows = Self::pack(entries, budget);
                 let count = rows.len();
-                let mut lines = Vec::new();
-                let mut baseline = None;
-                for (index, row) in rows.into_iter().enumerate() {
-                    let left = if index == 0 {
-                        row.fence(open, groups, ink)
-                    } else {
-                        Self::text(&" ".repeat(open.width()), Style::default())
-                    };
-                    let right = (index + 1 == count).then(|| row.fence(close, groups, ink));
-                    let mut row = left.beside(row);
-                    if let Some(right) = right {
-                        row = row.beside(right);
-                    }
-                    baseline = (count == 1).then_some(row.baseline);
-                    lines.extend(row.lines);
-                }
-                Self {
-                    baseline: baseline.unwrap_or(lines.len().saturating_sub(1) / 2),
-                    lines,
+                let rows: Vec<_> = rows
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, row)| {
+                        let left = if index == 0 {
+                            row.fence(open, groups, ink)
+                        } else {
+                            Self::text(&" ".repeat(open.width()), Style::default())
+                        };
+                        let right = (index + 1 == count).then(|| row.fence(close, groups, ink));
+                        let row = left.beside(row);
+                        match right {
+                            Some(right) => row.beside(right),
+                            None => row,
+                        }
+                    })
+                    .collect();
+                // A single row keeps its own baseline; several are set on their middle.
+                match <[Self; 1]>::try_from(rows) {
+                    Ok([row]) => row,
+                    Err(rows) => Self::stacked(rows),
                 }
             }
             M2Value::Collection { items, .. } => Self::vertical(
@@ -478,13 +544,8 @@ impl Block {
                 ink.unwrap_or_else(|| groups.style(HLGroup::Delimiter)),
             );
         }
-        let lines: Vec<_> = rows.into_iter().flat_map(|row| row.lines).collect();
-        let body = Self {
-            baseline: lines.len().saturating_sub(1) / 2,
-            lines,
-        };
         Self::text(" ", Style::default())
-            .beside(body)
+            .beside(Self::stacked(rows))
             .beside(Self::text(" ", Style::default()))
             .fenced("{", "}", groups, ink)
     }
@@ -839,7 +900,7 @@ mod tests {
             ],
         };
 
-        assert!(collection_formula(CollectionKind::List, &[value.clone()], &groups).is_none());
+        assert!(collection_formula(CollectionKind::List, std::slice::from_ref(&value), &groups).is_none());
         assert!(matches!(&value, M2Value::Collection { items, .. }
             if collection_formula(CollectionKind::AngleBarList, items, &groups).is_none()));
     }

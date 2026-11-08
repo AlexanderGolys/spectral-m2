@@ -4,7 +4,10 @@
 //! because a scheme decides how groups map onto styles and a scheme can change. Wrapping
 //! therefore works on the spans themselves and leaves their groups untouched.
 
-use super::block::TextSpan;
+use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthStr;
+
+use super::block::{Link, TextSpan};
 use super::wrap::WrapPolicy;
 
 /// One logical line of semantic spans, before any width is known.
@@ -39,6 +42,30 @@ pub fn wrap(line: &[TextSpan], width: u16, policy: &dyn WrapPolicy) -> Vec<SpanL
                 .collect()
         })
         .collect()
+}
+
+/// The links `rows` draw, as the terminal rows they fill: one per target, over
+/// every cell a span linking to it covers.
+pub fn links(rows: &[SpanLine]) -> Vec<Link> {
+    let mut links: Vec<Link> = Vec::new();
+    for (row, line) in rows.iter().enumerate() {
+        let mut column = 0;
+        for span in line {
+            let width = span.content.width();
+            if let Some(target) = &span.target {
+                let cells = Rect::new(column as u16, row as u16, width as u16, 1);
+                match links.iter_mut().find(|link| link.target == *target) {
+                    Some(link) => link.cells.push(cells),
+                    None => links.push(Link {
+                        target: target.clone(),
+                        cells: vec![cells],
+                    }),
+                }
+            }
+            column += width;
+        }
+    }
+    links
 }
 
 #[cfg(test)]

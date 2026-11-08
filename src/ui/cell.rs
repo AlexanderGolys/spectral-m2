@@ -20,10 +20,11 @@ use unicode_width::UnicodeWidthStr;
 use super::block::{Block, Element, HLSpan, Link, Text};
 use super::element::paste;
 use super::graphics::{self, kitty::ImageId};
+use super::present;
 use super::render::maths::MathDisplay;
 use super::render::selection::Inclusions;
 use super::render::spin::busy_frame;
-use super::render::{markup, maths};
+use super::render::{markup, maths, typeset};
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::wrap::WrappedText;
 use crate::backend::transcript::{captured_output, strip_m2_location};
@@ -1259,6 +1260,8 @@ struct ValueLayout {
     math: maths::MathStyle,
     groups: &'static crate::ui::theme::groups::Groups,
     lines: Rc<Vec<Line<'static>>>,
+    /// The links drawn among `lines`, placed from their top left corner.
+    links: Rc<Vec<Link>>,
 }
 
 /// Consecutive values returned by M2 inside one border.
@@ -1387,7 +1390,7 @@ impl OutputBlock {
         // and keeps the single value colour it always had.
         let width = usize::from(self.value_width(cell, context));
         let style = context.math();
-        let remember = |renderer, lines: Rc<Vec<Line<'static>>>, pixel_cell| {
+        let remember = |renderer, lines: Rc<Vec<Line<'static>>>, links, pixel_cell| {
             cell.layout.replace(Some(ValueLayout {
                 renderer,
                 width: width as u16,
@@ -1395,6 +1398,7 @@ impl OutputBlock {
                 math: style,
                 groups: theme,
                 lines: lines.clone(),
+                links: Rc::new(links),
             }));
             lines
         };
@@ -1407,7 +1411,7 @@ impl OutputBlock {
             if let Some(lines) =
                 markup::lines(html, *example_width, &context.with_width(width as u16))
             {
-                return remember(ValueRenderer::Markup, lines, None);
+                return remember(ValueRenderer::Markup, lines, Vec::new(), None);
             }
         }
         let pixel_cell = (style.display == MathDisplay::Typeset)
@@ -1434,11 +1438,13 @@ impl OutputBlock {
             .as_ref()
             .or(cell.value.as_ref())
             .filter(|_| !style.original_text);
+        let mut links = Vec::new();
         let (renderer, mut lines): (_, Vec<Line<'static>>) = match (style.display, value) {
-            (MathDisplay::Typeset, Some(value)) => (
-                ValueRenderer::Typeset,
-                super::render::typeset::lines(value, width, theme, style),
-            ),
+            (MathDisplay::Typeset, Some(value)) => {
+                let drawn = typeset::drawn(value, width, theme, style);
+                links = drawn.links;
+                (ValueRenderer::Typeset, drawn.lines)
+            }
             (MathDisplay::Ascii, Some(M2Value::Type(value))) => (
                 ValueRenderer::Ascii,
                 value
@@ -1464,12 +1470,15 @@ impl OutputBlock {
                     .collect(),
             ),
             _ => match value.map(|value| maths::spans(value, width, style)) {
-                Some(Ok(rows)) => (
-                    ValueRenderer::Unicode,
-                    rows.into_iter()
-                        .map(|row| Line::from(row.spans(theme)))
-                        .collect(),
-                ),
+                Some(Ok(rows)) => {
+                    links = present::links(&rows);
+                    (
+                        ValueRenderer::Unicode,
+                        rows.into_iter()
+                            .map(|row| Line::from(row.spans(theme)))
+                            .collect(),
+                    )
+                }
                 _ => (
                     ValueRenderer::Plain,
                     self.layout(cell, context)
@@ -1488,8 +1497,10 @@ impl OutputBlock {
                 head..end,
                 [Line::raw("… output preview truncated (render limit) …")],
             );
+            // Only the rows above the cut stay where they were laid out.
+            links.retain(|link| link.cells.iter().all(|cells| usize::from(cells.y) < head));
         }
-        remember(renderer, Rc::new(lines), pixel_cell)
+        remember(renderer, Rc::new(lines), links, pixel_cell)
     }
 
     /// The path that laid out `cell`'s value rows.
@@ -1688,6 +1699,36 @@ impl OutputBlock {
 }
 
 impl OutputBlock {
+    /// The links among `cell`'s value rows, before any fold.
+    fn value_links(&self, cell: &OutputCell, context: &RenderContext) -> Rc<Vec<Link>> {
+        self.unfolded_lines(cell, context);
+        cell.layout
+            .borrow()
+            .as_ref()
+            .map_or_else(Rc::default, |layout| layout.links.clone())
+    }
+
+    /// The links `cell`'s value draws, as shown from `origin`: a source location
+    /// whole, or what the value links among its parts. Documentation is laid out
+    /// apart, by its own renderer.
+    fn drawn_links<'a>(
+        &'a self,
+        cell: &'a OutputCell,
+        context: &'a RenderContext,
+        origin: Position,
+    ) -> impl Iterator<Item = Link> + 'a {
+        self.location_link(cell, context)
+            .into_iter()
+            .chain(
+                self.value_links(cell, context)
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+            .map(move |link| self.placed_link(cell, context, origin, link))
+            .filter(|link| !link.cells.is_empty())
+    }
+
     /// The link a source location draws: every row it wraps onto, before any fold.
     fn location_link(&self, cell: &OutputCell, context: &RenderContext) -> Option<Link> {
         let Some(M2Value::Location { target, .. }) = &cell.value else {
@@ -1837,11 +1878,7 @@ impl Block for OutputBlock {
                     .filter(|link| !link.cells.is_empty()),
                 );
             }
-            links.extend(
-                self.location_link(cell, context)
-                    .map(|link| self.placed_link(cell, context, Position::new(inner.x, row), link))
-                    .filter(|link| !link.cells.is_empty()),
-            );
+            links.extend(self.drawn_links(cell, context, Position::new(inner.x, row)));
             row = row.saturating_add(row_count!(self.lines(cell, context).len()));
         }
         links
@@ -1858,13 +1895,11 @@ impl Block for OutputBlock {
                 row = row.saturating_add(shown);
                 continue;
             }
-            if let Some(link) = self.location_link(cell, context) {
-                let link = self.placed_link(cell, context, Position::new(inner.x, row), link);
-                return link
-                    .cells
-                    .iter()
-                    .any(|cells| cells.contains(position))
-                    .then_some(link);
+            let under = self
+                .drawn_links(cell, context, Position::new(inner.x, row))
+                .find(|link| link.cells.iter().any(|cells| cells.contains(position)));
+            if under.is_some() {
+                return under;
             }
             let Some(M2Value::Markup {
                 html,
@@ -2228,6 +2263,55 @@ mod tests {
             .any(|cells| cells.contains(Position::new(x, y))));
         assert!(block.link_at(&context, Position::new(0, 0)).is_none());
         assert_eq!(block.links(&context), [link]);
+    }
+
+    #[test]
+    fn a_linked_function_inside_a_value_is_a_link_where_its_name_is_drawn() {
+        use crate::backend::Role;
+
+        let target = "file:///tmp/directory/file.m2#L60:C36-L60:C48";
+        let word = |text: &str| M2Value::Token {
+            text: text.into(),
+            role: Role::Function,
+        };
+        let value = M2Value::HashTable(vec![
+            [
+                word("lift"),
+                M2Value::Linked {
+                    value: Box::new(word("FunctionClosure")),
+                    target: target.into(),
+                },
+            ],
+            [word("random"), word("FunctionClosure")],
+        ]);
+        for display in [MathDisplay::Unicode, MathDisplay::Typeset] {
+            let context = RenderContext::new(60, 0).with_display(display);
+            let block = OutputBlock::rendered(value.clone(), None);
+            let mut buffer = Buffer::empty(Rect::new(0, 0, 60, block.height(&context)));
+            block.render_local(&context, &mut buffer);
+            let drawn_after = |key: &str| {
+                (0..buffer.area.height)
+                    .find_map(|y| {
+                        let row: String = (0..60).map(|x| buffer[(x, y)].symbol()).collect();
+                        let after = row.find(key)?;
+                        let at = after + row[after..].find("FunctionClosure")?;
+                        Some(Position::new(row[..at].chars().count() as u16, y))
+                    })
+                    .expect("the entry is drawn")
+            };
+
+            let linked = drawn_after("lift");
+            let link = block
+                .link_at(&context, linked)
+                .unwrap_or_else(|| panic!("{display:?}: a link under the linked name"));
+            assert_eq!(&*link.target, target);
+            let last = Position::new(linked.x + "FunctionClosure".len() as u16 - 1, linked.y);
+            assert!(block.link_at(&context, last).is_some(), "{display:?}");
+            assert!(
+                block.link_at(&context, drawn_after("random")).is_none(),
+                "{display:?}: a function with no source links nowhere"
+            );
+        }
     }
 
     #[test]

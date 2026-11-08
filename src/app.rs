@@ -642,7 +642,7 @@ impl App {
 
     fn open_source_file(&mut self, source: SourceLink) -> bool {
         let path = &source.path;
-        match read_code(&path) {
+        match read_code(path) {
             Ok(code) => {
                 let page = markup::page(&format!("{}\n{code}", path.display()));
                 self.workspace

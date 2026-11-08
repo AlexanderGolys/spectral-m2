@@ -12,6 +12,7 @@
 //! structure, never from matching text.
 
 use std::ops::Range;
+use std::sync::Arc;
 
 use ratatui::style::Color;
 
@@ -255,6 +256,11 @@ fn role_spans(
     style: MathStyle,
 ) -> Result<Vec<SpanLine>, UnsupportedTeX> {
     match value {
+        M2Value::Linked { value, target } => {
+            let mut rows = role_spans(value, width, style)?;
+            link(rows.iter_mut().flatten(), target);
+            Ok(rows)
+        }
         M2Value::Type(inner) => {
             let mut rows = role_spans(inner, width, style)
                 .unwrap_or_else(|_| MathBlock::fitted(vec![MathBlock::value(inner, style)], width));
@@ -277,6 +283,14 @@ fn role_spans(
         M2Value::Net(text) => Ok(prose(text, HLGroup::String, width)),
         M2Value::Markup { html, .. } => markup::spans(html, width)
             .ok_or_else(|| UnsupportedTeX("markup that does not read as HTML".into())),
+    }
+}
+
+/// Make every one of `spans` link to `target`.
+fn link<'a>(spans: impl IntoIterator<Item = &'a mut TextSpan>, target: &str) {
+    let target: Arc<str> = target.into();
+    for span in spans {
+        span.target = Some(target.clone());
     }
 }
 
@@ -1429,6 +1443,12 @@ impl MathBlock {
         self
     }
 
+    /// The same block, every span of it linking to `target`.
+    fn linked(mut self, target: &str) -> Self {
+        link(self.rows.iter_mut().flatten(), target);
+        self
+    }
+
     fn atom(text: &str, kind: HLGroup) -> Self {
         Self {
             rows: vec![vec![TextSpan::new(text, kind)]],
@@ -1557,6 +1577,7 @@ impl MathBlock {
     fn value(value: &M2Value, style: MathStyle) -> Self {
         match value {
             M2Value::Type(value) => Self::value(value, style).retag(HLGroup::Type),
+            M2Value::Linked { value, target } => Self::value(value, style).linked(target),
             M2Value::Tex {
                 source, fallback, ..
             } => Math::from_tex(source, style).map_or_else(

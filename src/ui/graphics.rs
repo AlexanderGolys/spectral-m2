@@ -1083,7 +1083,7 @@ mod tests {
     /// Frames showing `ids`, the pictures off screen standing `near` the viewport as
     /// a feed reports them afresh each frame, until the worker has encoded all asked.
     fn settled_near(gallery: &mut Gallery, ids: &[ImageId], near: &[(ImageId, usize)]) -> String {
-        let mut frame = |gallery: &mut Gallery| {
+        let frame = |gallery: &mut Gallery| {
             gallery.distances = near.iter().copied().collect();
             gallery.synchronise(&shown(ids), Passthrough::Direct)
         };

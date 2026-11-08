@@ -1,6 +1,6 @@
 [package]
 name = "spectral-m2"
-version = "1.2.3-dev.3"
+version = "1.2.3-dev.5"
 edition = "2021"
 description = "A syntax-aware terminal shell for Macaulay2"
 license = "MIT OR Apache-2.0"

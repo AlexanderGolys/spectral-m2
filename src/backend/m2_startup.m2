@@ -124,6 +124,11 @@ announceReady := (() -> (
     -- M2's own test for whether a function was ever bound to a name.
     hasAttribute := value Core#"private dictionary"#"hasAttribute";
     reverseDictionary := value Core#"private dictionary"#"ReverseDictionary";
+    -- The `file://` target documentation links to source files with, carrying a
+    -- FilePosition as its fragment, which the shell opens in the reference pane.
+    sourceTarget := position -> urlEncode("file://" | toAbsolutePath position#0
+        | "#L" | toString position#1 | ":C" | toString position#2
+        | "-L" | toString position#3 | ":C" | toString position#4);
 
     -- A value that is one word with a role in code -- null, a Boolean, a
     -- string, a function -- is sent with that role, so the shell colours it as
@@ -138,10 +143,19 @@ announceReady := (() -> (
     -- named one is drawn by its name; an anonymous one's Net only says where it
     -- was written (`FunctionClosure[stdio:2:36-2:42]`), so it is drawn by its
     -- class instead.
-    render Function := HashTable => value -> asToken(
-        if hasAttribute(value, reverseDictionary) then toString value
-        else toString class value,
-        "function"
+    -- A function written in a source file still on disk also links to where it
+    -- was written; one typed at the prompt was written in no file.
+    render Function := HashTable => value -> (
+        word := asToken(
+            if hasAttribute(value, reverseDictionary) then toString value
+            else toString class value,
+            "function"
+        );
+        position := locate value;
+        if position === null or not fileExists position#0 then word
+        else hashTable {
+            symbol linked => hashTable {symbol value => word, symbol target => sourceTarget position}
+        }
     );
     -- Every documentation node at once: DIV, TABLE, UL and the rest all descend
     -- from Hypertext. Its examples were run with the print width M2 gives every
@@ -214,18 +228,14 @@ announceReady := (() -> (
             page = substring(page, match#0#0 + match#0#1));
         linked | page);
     -- A source position is drawn as the link documentation gives it: its text
-    -- spelt as shortly as there, and a `file://` target carrying the position as
-    -- its fragment, which the shell opens in the reference pane.
+    -- spelt as shortly as there, linking to the position itself.
     render FilePosition := HashTable => value -> (
-        file := value#0;
         position := ":" | toString value#1 | ":" | toString value#2
             | "-" | toString value#3 | ":" | toString value#4;
         hashTable {
             symbol location => hashTable {
-                symbol text => foldedPath file | position,
-                symbol target => urlEncode("file://" | toAbsolutePath file
-                    | "#L" | toString value#1 | ":C" | toString value#2
-                    | "-L" | toString value#3 | ":C" | toString value#4)
+                symbol text => foldedPath value#0 | position,
+                symbol target => sourceTarget value
             }
         }
     );

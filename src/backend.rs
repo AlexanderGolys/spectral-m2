@@ -144,6 +144,9 @@ pub enum M2Value {
     /// the `file://` URL, with the position as its fragment, that documentation
     /// links to source files use.
     Location { text: String, target: String },
+    /// A value drawn as it is, which also links to `target`, as the source that
+    /// defines a function does.
+    Linked { value: Box<M2Value>, target: String },
 }
 
 /// What a token is in code, which decides how it is coloured.
@@ -319,7 +322,7 @@ impl M2Value {
 
     fn block(&self, spelling: Spelling) -> RenderedBlock {
         match self {
-            Self::Type(value) => value.block(spelling),
+            Self::Type(value) | Self::Linked { value, .. } => value.block(spelling),
             Self::Tex { fallback, .. } if spelling == Spelling::Ascii => Self::text_block(fallback),
             Self::Tex {
                 source, fallback, ..
@@ -425,7 +428,7 @@ impl M2Value {
 
     pub fn plain_text(&self) -> Option<&str> {
         match self {
-            Self::Type(value) => value.plain_text(),
+            Self::Type(value) | Self::Linked { value, .. } => value.plain_text(),
             Self::Net(text)
             | Self::Markup { fallback: text, .. }
             | Self::Token { text, .. }
@@ -1326,12 +1329,18 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         let function = backend
             .evaluate("Thing#{SpectralTopLevelMode, Print}", Some(13))
             .expect("evaluate function closure");
+        let Some(M2Value::Linked { value: word, .. }) = &function.value else {
+            panic!(
+                "a function written in a file links to it: {:?}",
+                function.value
+            );
+        };
         assert!(matches!(
-            function.value,
-            Some(M2Value::Token {
+            **word,
+            M2Value::Token {
                 role: Role::Function,
                 ..
-            })
+            }
         ));
         // Anonymous, so drawn by its class: its Net would only say where it was
         // written.
@@ -1479,6 +1488,54 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         let mut target = url::Url::from_file_path(&path).unwrap();
         target.set_fragment(Some("L12:C3"));
         assert!(html.contains(&format!("href=\"{target}\"")), "{html}");
+    }
+
+    #[test]
+    fn functions_written_in_source_files_link_to_where_they_were_written() {
+        let path = std::env::temp_dir().join(format!(
+            "spectral function source {}.m2",
+            std::process::id()
+        ));
+        std::fs::write(&path, "linkedProbe = x -> x + 1\n").unwrap();
+        let file = serde_json::to_string(&path.display().to_string()).unwrap();
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        backend
+            .evaluate(&format!("load {file}"), None)
+            .expect("load the probe");
+        let named = backend
+            .evaluate("linkedProbe", None)
+            .expect("a named function");
+        let core = backend
+            .evaluate("first values new HashTable from CC_*", None)
+            .expect("a function from Core");
+        let typed = backend.evaluate("x -> x", None).expect("a typed function");
+        std::fs::remove_file(&path).unwrap();
+
+        let Some(M2Value::Linked { value, target }) = named.value else {
+            panic!("a function from a file links to it: {:?}", named.value);
+        };
+        assert!(
+            matches!(*value, M2Value::Token { ref text, role: Role::Function } if text == "linkedProbe")
+        );
+        let mut source = url::Url::from_file_path(&path).unwrap();
+        source.set_fragment(None);
+        assert!(target.starts_with(&format!("{source}#L1:C")), "{target}");
+        assert!(
+            matches!(core.value, Some(M2Value::Linked { ref target, .. }) if target.starts_with("file://")),
+            "{:?}",
+            core.value
+        );
+        assert!(
+            matches!(
+                typed.value,
+                Some(M2Value::Token {
+                    role: Role::Function,
+                    ..
+                })
+            ),
+            "a function typed at the prompt was written in no file: {:?}",
+            typed.value
+        );
     }
 
     #[test]
