@@ -10,7 +10,6 @@ use ratatui::widgets::{Block as TuiBlock, Clear, Widget};
 use ratatui::Frame;
 use these_macros_should_be_illegal::discriminated_str;
 
-use super::settings::theme::groups::{scheme, HLGroup};
 use super::Editor;
 use crate::app::session::CommittedCell;
 use crate::code::highlight::Highlighter;
@@ -26,6 +25,7 @@ use crate::ui::feed::Feed;
 use crate::ui::graphics::kitty::ImageId;
 use crate::ui::statusline::{StatusLine, StatusLineContext};
 use crate::ui::syntax_tree::SyntaxTreeBlock;
+use crate::ui::theme::groups::{scheme, HLGroup};
 
 /// Content rendered by one workspace pane.
 #[discriminated_str(label)]

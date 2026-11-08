@@ -539,7 +539,7 @@ mod tests {
     use super::*;
     use crate::code::highlight::Highlighter;
     use crate::code::semantic::{SemanticHighlighter, SourceId};
-    use crate::ui::controller::settings::theme::groups::HLGroup;
+    use crate::ui::theme::groups::HLGroup;
 
     // The fixture checks wire ordering independently of the client implementation.
     const SERVER: &str = r#"

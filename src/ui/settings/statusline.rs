@@ -9,10 +9,10 @@ use super::tabs::SettingRow;
 use super::Settings;
 use crate::ui::action::Action;
 use crate::ui::controller::picker::{PickerInput, PickerItem, PickerValue, Row};
-use crate::ui::controller::settings::theme::groups::scheme;
 use crate::ui::controller::EditorEvent;
 use crate::ui::cycle::cyclic;
 use crate::ui::key::KeyEvent;
+use crate::ui::theme::groups::scheme;
 use crossterm::event::KeyCode;
 use ratatui::text::Span;
 

@@ -884,8 +884,8 @@ mod tests {
 
     use super::*;
     use crate::ui::cell::{CellState, EvaluationBlock, OutputBlock, TextBlock};
-    use crate::ui::controller::settings::theme::groups::Groups;
     use crate::ui::graphics::kitty::KittyImage;
+    use crate::ui::theme::groups::Groups;
 
     /// A one-row block counting actual cell rendering.
     struct Counted(Arc<AtomicUsize>);
@@ -1495,7 +1495,7 @@ mod tests {
             fn highlight(&mut self, source: &str) -> Vec<crate::ui::block::HLSpan> {
                 vec![crate::ui::block::HLSpan::new(
                     0..source.len(),
-                    crate::ui::controller::settings::theme::groups::HLGroup::Type,
+                    crate::ui::theme::groups::HLGroup::Type,
                 )]
             }
         }

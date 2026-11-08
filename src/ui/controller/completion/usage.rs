@@ -13,7 +13,7 @@ use m2_syn::nodes::{
 use m2_syn::visit::{self, Visit};
 use serde::{Deserialize, Serialize};
 
-use crate::ui::controller::settings::{config_file, Persisted};
+use crate::ui::settings::{config_file, Persisted};
 
 /// Counts of global symbol references from evaluated source.
 #[derive(Default, Serialize, Deserialize)]

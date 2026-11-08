@@ -4,9 +4,8 @@
 pub mod commands;
 mod completion;
 mod highlight_debug;
-mod picker;
+pub(crate) mod picker;
 mod screen;
-pub mod settings;
 mod view;
 
 use std::env;
@@ -23,11 +22,6 @@ use ratatui::Frame;
 use self::highlight_debug::{DebugEntry, DebugSection};
 use self::picker::{Picker, PickerController, PickerMode};
 use self::screen::{ScreenCapture, ScreenSelection};
-use self::settings::keymap::{Keymaps, Shortcut};
-use self::settings::statusline::{StatusComponent, StatusLinePosition, StatusSegment};
-use self::settings::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
-use self::settings::theme::Appearance;
-use self::settings::{tabs as settings_tabs, Persisted, SavedSettings, Settings};
 pub use self::view::{CommittedCells, ReferenceEntry, ViewKind, Viewport};
 use self::{
     commands::Command,
@@ -54,6 +48,11 @@ use crate::code::file::abbreviate_home;
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::SEMANTIC_GROUPS;
 use crate::input::{InputCode, InputContext};
+use crate::ui::settings::keymap::{Keymaps, Shortcut};
+use crate::ui::settings::statusline::{StatusComponent, StatusLinePosition, StatusSegment};
+use crate::ui::settings::{tabs as settings_tabs, Persisted, SavedSettings, Settings};
+use crate::ui::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
+use crate::ui::theme::Appearance;
 
 /// An outward effect produced while handling input or an [`Action`].
 pub enum Reaction {
@@ -1968,8 +1967,8 @@ mod saved_setup_tests {
 
 #[cfg(test)]
 mod unified_settings_tests {
-    use super::settings::keymap::settings_tab;
     use super::*;
+    use crate::ui::settings::keymap::settings_tab;
 
     #[test]
     fn keymaps_open_within_settings_capture_shortcuts_and_keep_the_tab_after_rebinding() {

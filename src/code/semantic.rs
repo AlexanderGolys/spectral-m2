@@ -14,7 +14,7 @@ pub use self::client::SERVER_EXECUTABLE;
 use self::client::{Client, Event};
 use super::highlight::{Highlighter, SyntaxHighlighter};
 use crate::ui::block::HLSpan;
-use crate::ui::controller::settings::theme::groups::HLGroup;
+use crate::ui::theme::groups::HLGroup;
 
 /// Characters other than letters and digits that continue a Macaulay2 name.
 const NAME_PUNCTUATION: &[char] = &['\'', '_', '$'];
@@ -796,7 +796,7 @@ mod tests {
 
     #[test]
     fn a_plain_value_leaves_its_syntax_color() {
-        let groups = crate::ui::controller::settings::theme::groups::scheme();
+        let groups = crate::ui::theme::groups::scheme();
         for (syntax, semantic) in [(HLGroup::Boolean, HLGroup::LspVariable)] {
             let layered: HLSpan = HLSpan::new(0..4, syntax).marked(semantic);
             let plain: HLSpan = HLSpan::new(0..4, syntax);

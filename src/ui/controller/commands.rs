@@ -14,11 +14,11 @@ use ratatui::text::{Line, Span};
 use these_macros_should_be_illegal::discriminated_str;
 
 use super::picker::{Picker, PickerInput, PickerItem};
-use super::settings::keymap::Keymaps;
-use super::settings::theme::groups::scheme;
 use super::EditorEvent;
 use crate::ui::action::Action;
 use crate::ui::key::KeyEvent;
+use crate::ui::settings::keymap::Keymaps;
+use crate::ui::theme::groups::scheme;
 
 /// Prefix that turns input text into a live command query.
 pub const PREFIX: &str = "/";

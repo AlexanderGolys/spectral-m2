@@ -8,12 +8,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, BorderType, Borders, Paragraph, Widget};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::settings::theme::groups::{scheme, HLGroup};
 use super::EditorEvent;
 use crate::ui::action::Action;
 use crate::ui::block::{Element, TextSpan};
 use crate::ui::config::UI;
 use crate::ui::key::KeyEvent;
+use crate::ui::theme::groups::{scheme, HLGroup};
 use crate::ui::wrap::{WordWrap, WrapPolicy};
 
 /// Gutter in front of the selected row.
@@ -939,14 +939,14 @@ impl PickerController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::controller::settings::theme::groups::{publish, Groups};
     use crate::ui::key::KeyMod;
+    use crate::ui::theme::groups::{publish, Groups};
     use crossterm::event::KeyCode;
     use ratatui::style::Color;
 
     #[test]
     fn keymap_capture_precedes_navigation_and_escape_cancels_only_capture() {
-        use crate::ui::controller::settings::keymap::{KeymapRow, Shortcut};
+        use crate::ui::settings::keymap::{KeymapRow, Shortcut};
 
         let row = KeymapRow::new(Action::ClearFeed.into(), KeyCode::F(2).into());
         let mut controller = PickerController {

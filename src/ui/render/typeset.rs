@@ -6,8 +6,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::backend::{CollectionKind, M2Value, Role, SPACED_OPTION_ARROW};
 use crate::ui::block::Text;
-use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
-use crate::ui::graphics::{self, typeset::Rgb, Pictured, Typesetting};
+use crate::ui::graphics::{self, ratex::Rgb, Pictured, Typesetting};
+use crate::ui::theme::groups::{Groups, HLGroup};
 use crate::ui::wrap::WrappedText;
 
 use super::maths::{self, MathBlock, MathInk, MathStyle};

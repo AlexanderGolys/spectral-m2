@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::ui::controller::settings::theme::groups::Groups;
+use crate::ui::theme::groups::Groups;
 
 /// The print width M2 runs documentation examples at.
 const EXAMPLE_WIDTH: usize = 77;
@@ -85,7 +85,7 @@ fn document_layout_is_shared_by_painting_and_pointer_checks() {
         ));
     }
     assert!(!Rc::ptr_eq(&first, &lines(html, 40, &context).unwrap()));
-    crate::ui::controller::settings::theme::groups::publish(Groups::default());
+    crate::ui::theme::groups::publish(Groups::default());
     assert!(!Rc::ptr_eq(
         &first,
         &lines(html, EXAMPLE_WIDTH, &context).unwrap()

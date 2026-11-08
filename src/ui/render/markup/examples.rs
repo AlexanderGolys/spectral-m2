@@ -509,7 +509,7 @@ fn buffer_lines(buffer: &Buffer) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::controller::settings::theme::groups::HLGroup;
+    use crate::ui::theme::groups::HLGroup;
 
     /// The print width M2 runs documentation examples at.
     const EXAMPLE_WIDTH: usize = 77;

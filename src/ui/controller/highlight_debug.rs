@@ -3,7 +3,7 @@
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
-use super::settings::theme::groups::scheme;
+use crate::ui::theme::groups::scheme;
 
 /// A titled run of entries, drawn together in columns.
 pub struct DebugSection {

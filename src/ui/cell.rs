@@ -30,7 +30,8 @@ use crate::backend::transcript::{captured_output, strip_m2_location};
 use crate::backend::{M2Response, M2Value};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::SourceId;
-use crate::ui::config::{Glyph, UI};
+use crate::ui::config::UI;
+use crate::ui::glyphs::Glyph;
 
 macro_rules! row_count {
     ($rows:expr) => {
@@ -1256,7 +1257,7 @@ struct ValueLayout {
     width: u16,
     pixel_cell: Option<ratatui::layout::Size>,
     math: maths::MathStyle,
-    groups: &'static crate::ui::controller::settings::theme::groups::Groups,
+    groups: &'static crate::ui::theme::groups::Groups,
     lines: Rc<Vec<Line<'static>>>,
 }
 
@@ -2074,8 +2075,8 @@ impl Block for ErrorMessageBlock {
 mod tests {
     use super::*;
     use crate::code::highlight::Highlighter;
-    use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
     use crate::ui::syntax_tree::SyntaxTreeBlock;
+    use crate::ui::theme::groups::{Groups, HLGroup};
     use m2_syn::{DelimiterKind, DoubleSpan, PrettyNode, Span as M2Span};
 
     #[test]

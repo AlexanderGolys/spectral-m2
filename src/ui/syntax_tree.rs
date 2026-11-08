@@ -11,7 +11,7 @@ use super::cell::{Cell, CodeBlock};
 use super::config::UI;
 use super::render::selection::Inclusions;
 use super::render::RenderContext;
-use crate::ui::controller::settings::theme::groups::HLGroup;
+use crate::ui::theme::groups::HLGroup;
 
 /// One committed cell followed by its typed syntax presentation.
 pub struct SyntaxTreeBlock {

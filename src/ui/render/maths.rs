@@ -23,10 +23,10 @@ use these_macros_should_be_illegal::*;
 use crate::backend::{CollectionKind, M2Value, OPTION_ARROW, SPACED_OPTION_ARROW};
 use crate::ui::block::TextSpan;
 use crate::ui::config::UI;
-use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
 use crate::ui::cycle::cyclic;
 use crate::ui::graphics;
 use crate::ui::present::{wrap, SpanLine};
+use crate::ui::theme::groups::{Groups, HLGroup};
 use crate::ui::wrap::WordWrap;
 
 use super::markup;
@@ -2044,7 +2044,7 @@ mod tests {
 
     #[test]
     fn interval_fields_keep_their_type_highlights() {
-        let groups = crate::ui::controller::settings::theme::groups::scheme();
+        let groups = crate::ui::theme::groups::scheme();
         for (source, letter) in [(r"\square\mathbb R", "RR"), (r"\square\mathbb C", "CC")] {
             assert_eq!(
                 Math::parse(source).expect("an interval field parses"),

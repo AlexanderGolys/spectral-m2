@@ -11,12 +11,10 @@ use unicode_width::UnicodeWidthStr;
 
 use super::block::{Element, Text, TextSpan};
 use super::config::UI;
-use super::controller::settings::statusline::{
-    StatusComponent, StatusLineSettings, STATUS_SLOT_COUNT,
-};
-use super::controller::settings::theme::groups::{scheme, Groups, HLGroup};
 use super::debug::mebibytes;
 use super::graphics::Usage;
+use super::theme::groups::{scheme, Groups, HLGroup};
+use crate::ui::settings::statusline::{StatusComponent, StatusLineSettings, STATUS_SLOT_COUNT};
 
 /// Runtime state reported by the configured language server.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -310,7 +308,7 @@ impl Element for StatusLine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::controller::settings::statusline::StatusSegment;
+    use crate::ui::settings::statusline::StatusSegment;
 
     fn spans(text: &str) -> Vec<TextSpan> {
         vec![TextSpan::new(text, HLGroup::Statusline1)]

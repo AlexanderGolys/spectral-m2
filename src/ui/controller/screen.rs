@@ -12,7 +12,6 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use ratatui::Frame;
 
-use super::settings::theme::groups::scheme;
 use super::{Editor, Reaction};
 use crate::ui::graphics::{
     self,
@@ -20,6 +19,7 @@ use crate::ui::graphics::{
 };
 use crate::ui::render::selection::{Layer, Seam};
 use crate::ui::text_object::{Bracket, CharClass};
+use crate::ui::theme::groups::scheme;
 
 /// A selectable cell position: a content row and a screen column, so a
 /// selection stays on its text while the pane scrolls. Positions order as text

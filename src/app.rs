@@ -36,7 +36,6 @@ use crate::ui::action::Action;
 use crate::ui::block::Block;
 use crate::ui::cell::{response_blocks, SourceBlock, TextBlock};
 use crate::ui::config::UI;
-use crate::ui::controller::settings::theme::groups::{scheme, HLGroup};
 use crate::ui::controller::{
     CommittedCells, Editor, EditorUpdate, Reaction, ReferenceEntry, ViewKind,
 };
@@ -44,6 +43,7 @@ use crate::ui::graphics;
 use crate::ui::key::{KeyEvent, Keyboard};
 use crate::ui::render::markup;
 use crate::ui::terminal::ReplTerminal;
+use crate::ui::theme::groups::{scheme, HLGroup};
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(80);
 /// How often to look for pictures the worker has finished encoding while any remain.

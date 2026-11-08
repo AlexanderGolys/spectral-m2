@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
-use crate::ui::controller::settings::theme::groups::Groups;
+use crate::ui::theme::groups::Groups;
 
 /// What the typed text in `range` may be completed to, in order of preference.
 pub struct Completion {

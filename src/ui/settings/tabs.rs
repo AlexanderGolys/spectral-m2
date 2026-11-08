@@ -9,10 +9,10 @@ use super::layout::LayoutSetting;
 use super::rendering::RenderingSetting;
 use super::selection::SelectionSetting;
 use super::statusline;
-use super::theme::groups::scheme;
 use super::Settings;
 use crate::ui::controller::picker::{PickerItem, PickerTab, PickerValue, Row};
 use crate::ui::controller::EditorEvent;
+use crate::ui::theme::groups::scheme;
 
 /// One setting listed on a tab, reading and stepping its value in [`Settings`].
 pub trait SettingRow: Copy + Send + 'static {

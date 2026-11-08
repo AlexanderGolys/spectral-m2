@@ -15,7 +15,7 @@ use std::{env, fs, mem, thread};
 
 use crate::cli::M2Options;
 use crate::errors::{Error, Result};
-use crate::ui::controller::settings::theme::groups::HLGroup;
+use crate::ui::theme::groups::HLGroup;
 use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
 use regex::Regex;
@@ -1850,7 +1850,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     /// along their baselines, and as pieces it sets as `Matrix QQ² ⟵ QQ²`.
     #[test]
     fn matrix_types_keep_their_shape() {
-        use crate::ui::controller::settings::theme::groups::HLGroup;
+        use crate::ui::theme::groups::HLGroup;
 
         let mut backend = M2Backend::spawn().expect("spawn M2");
         let result = backend
@@ -1879,8 +1879,8 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
 
     #[test]
     fn named_rings_and_ring_families_retain_their_type_role_and_math_layout() {
-        use crate::ui::controller::settings::theme::groups::HLGroup;
         use crate::ui::render::maths::{self, FractionStyle};
+        use crate::ui::theme::groups::HLGroup;
 
         let mut backend = M2Backend::spawn().expect("spawn M2");
         let ring = backend.evaluate("R = RR[x_(E_F),x_2,x]", Some(1)).unwrap();
@@ -1923,8 +1923,8 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
 
     #[test]
     fn compound_rings_and_sheaf_subscripts_keep_their_component_colours() {
-        use crate::ui::controller::settings::theme::groups::HLGroup;
         use crate::ui::render::maths::{self, FractionStyle};
+        use crate::ui::theme::groups::HLGroup;
 
         let mut backend = M2Backend::spawn().expect("spawn M2");
         for code in ["RR[x]", "(OO_(Proj(RR_6[x_1,y_{{1}},w])))^5(-2)"] {
@@ -1945,8 +1945,8 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
 
     #[test]
     fn precision_fields_retain_their_mathematical_representation() {
-        use crate::ui::controller::settings::theme::groups::HLGroup;
         use crate::ui::render::maths::{self, FractionStyle};
+        use crate::ui::theme::groups::HLGroup;
 
         let mut backend = M2Backend::spawn().expect("spawn M2");
         for family in ["CC", "CCi", "RR", "RRi"] {

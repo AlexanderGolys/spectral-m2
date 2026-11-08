@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 use crate::input::InputAction;
 use crate::ui::action::Action;
 use crate::ui::controller::picker::{PickerInput, PickerItem, PickerMode, PickerTab, Row};
-use crate::ui::controller::settings::theme::groups::{scheme, HLGroup};
 use crate::ui::controller::EditorEvent;
 use crate::ui::key::{KeyEvent, KeyMod};
+use crate::ui::theme::groups::{scheme, HLGroup};
 use KeyMod::{Alt, Ctrl, Shift};
 
 /// The part of the editor a shortcut works in; each context is a tab of the keymaps

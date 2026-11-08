@@ -17,8 +17,8 @@ pub mod palette;
 use self::groups::StyleDeclaration;
 use self::groups::{Groups, StyleTable};
 use self::palette::Palette;
-use super::Persisted;
 use crate::ui::cycle::cycled;
+use crate::ui::settings::Persisted;
 use ratatui::style::Color as PaletteColor;
 
 /// One palette leaf exposed by the flat appearance picker.
@@ -281,7 +281,7 @@ impl SchemeFile {
 /// Read a theme config, installing its bundled default on first use and replacing it
 /// with a newer bundled default for as long as the user has not edited it.
 fn config_source(name: &str, default: &str) -> Result<String, String> {
-    let Some(path) = super::config_file(&format!("themes/{name}")) else {
+    let Some(path) = crate::ui::settings::config_file(&format!("themes/{name}")) else {
         return Ok(default.into());
     };
     config_at(&path, default)
@@ -592,7 +592,7 @@ impl Appearance {
 mod tests {
     use super::groups::HLGroup;
     use super::*;
-    use crate::ui::controller::settings::{read, write};
+    use crate::ui::settings::{read, write};
     use std::env;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};

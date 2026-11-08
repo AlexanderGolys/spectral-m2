@@ -31,12 +31,12 @@ use self::undo::{EditKind, Snapshot, Undo};
 use crate::code::highlight::Highlighter;
 use crate::ui::block::{HLSpan, Text};
 use crate::ui::config::UI;
-#[cfg(test)]
-use crate::ui::controller::settings::keymap::Keymaps;
-use crate::ui::controller::settings::layout::LayoutSettings;
 use crate::ui::graphics::kitty::PLACEHOLDER;
 use crate::ui::key::KeyEvent;
 use crate::ui::render::{Highlights, Prompt, RenderContext};
+#[cfg(test)]
+use crate::ui::settings::keymap::Keymaps;
+use crate::ui::settings::layout::LayoutSettings;
 use crate::ui::text_object::{Bracket, CharClass};
 use crate::ui::wrap::{offset_at_column, CaretWrap, TextLayout, WrapPolicy};
 
@@ -1379,8 +1379,8 @@ mod tests {
     use super::*;
     use crate::code::highlight::SyntaxHighlighter;
     use crate::ui::config::UI;
-    use crate::ui::controller::settings::theme::groups::Groups;
     use crate::ui::key::KeyMod::{self, Alt, Ctrl, Shift};
+    use crate::ui::theme::groups::Groups;
     use ratatui::style::Modifier;
 
     #[test]
@@ -2018,7 +2018,7 @@ mod tests {
 
     #[test]
     fn semantic_revision_recolors_unchanged_input_without_moving_selection() {
-        use crate::ui::controller::settings::theme::groups::HLGroup;
+        use crate::ui::theme::groups::HLGroup;
         struct ChangingHighlighter {
             revision: u64,
             group: HLGroup,

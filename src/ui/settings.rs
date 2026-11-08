@@ -13,7 +13,6 @@ pub mod rendering;
 pub mod selection;
 pub mod statusline;
 pub mod tabs;
-pub mod theme;
 #[cfg(not(test))]
 use std::env;
 use std::fs;
@@ -29,8 +28,8 @@ use self::layout::LayoutSettings;
 use self::rendering::RenderingSettings;
 use self::selection::SelectionSettings;
 use self::statusline::StatusLineSettings;
-use self::theme::Appearance;
 use crate::ui::key::KeyEvent;
+use crate::ui::theme::Appearance;
 
 /// A settings record kept in a file of its own under the configuration directory.
 pub trait Persisted: Serialize + DeserializeOwned + Default {

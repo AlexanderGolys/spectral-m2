@@ -3,10 +3,10 @@
 use these_macros_should_be_illegal::discriminated_str;
 
 use super::tabs::SettingRow;
-use super::theme::Appearance;
 use super::Settings;
 use crate::ui::controller::picker::PickerValue;
 use crate::ui::cycle::{cycled, cyclic};
+use crate::ui::theme::Appearance;
 
 cyclic! {
     /// One independently cyclic axis of a colour appearance.

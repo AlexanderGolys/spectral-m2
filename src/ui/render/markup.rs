@@ -23,10 +23,10 @@ use super::maths::{inline, MathStyle, Shift};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::PageColors;
 use crate::ui::block::{Link, Text, TextSpan};
-use crate::ui::controller::settings::theme::groups::HLGroup;
 use crate::ui::present::{wrap, SpanLine};
 use crate::ui::render::selection::Inclusions;
 use crate::ui::render::RenderContext;
+use crate::ui::theme::groups::HLGroup;
 use crate::ui::wrap::WordWrap;
 
 mod examples;
@@ -34,7 +34,7 @@ mod examples;
 pub use self::examples::highlighted as source_highlights;
 pub use self::examples::ArchivedExample;
 use crate::backend::M2Response;
-use crate::ui::controller::settings::theme::groups::Groups;
+use crate::ui::theme::groups::Groups;
 
 /// A private prefix supplied by our decorator, never inferred from prose or code.
 const HEADING_MARK: char = '\u{1}';

@@ -5,7 +5,7 @@ use std::ops::{Add, Sub};
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter as TsHighlighter};
 
 use crate::ui::block::HLSpan;
-use crate::ui::controller::settings::theme::groups::{HLGroup, GROUP_DECLARATIONS};
+use crate::ui::theme::groups::{HLGroup, GROUP_DECLARATIONS};
 
 impl Add<u32> for HLSpan {
     type Output = Self;

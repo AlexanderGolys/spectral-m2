@@ -6,8 +6,8 @@
 
 use crate::ui::block::{Element, HLSpan, Text};
 use crate::ui::config::UI;
-use crate::ui::controller::settings::theme::groups::{scheme, Groups};
 use crate::ui::render::maths::{FractionStyle, MathDisplay, MathInk, MathStyle, ScriptColor};
+use crate::ui::theme::groups::{scheme, Groups};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;

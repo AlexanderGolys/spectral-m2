@@ -6,7 +6,7 @@
 //! layout, and sent to the terminal after the frame that first places it.
 
 pub mod kitty;
-pub mod typeset;
+pub mod ratex;
 mod typewriter;
 
 use std::cmp::Reverse;
@@ -32,7 +32,7 @@ use resvg::usvg::{Options, Tree};
 use crate::ui::config::UI;
 use crate::ui::debug::mebibytes;
 use kitty::{ImageId, KittyImage, Passthrough, Piece};
-use typeset::{Break, Rgb, EM, PADDING};
+use ratex::{Break, Rgb, EM, PADDING};
 
 // @##magic
 const TMUX: &str = "tmux";
@@ -519,7 +519,7 @@ impl Gallery {
             .entry(key.clone())
             .or_insert_with(|| {
                 let typeset =
-                    typeset::svg_colored(tex, painted, colour, matrix_row_spacing_percent).ok()?;
+                    ratex::svg_colored(tex, painted, colour, matrix_row_spacing_percent).ok()?;
                 let tree = Tree::from_str(&typeset.svg, &Options::default()).ok()?;
                 Some(Arc::new(Formula {
                     tree,
@@ -830,11 +830,11 @@ mod tests {
     #[test]
     fn a_type_annotation_of_words_and_rings_is_set() {
         let annotation = r"\textrm{Matrix}\ R^{1}\ \textrm{<--}\ \mathbb{Q}[x,y]^{2}";
-        assert!(typeset::svg(annotation, Rgb([255, 255, 255])).is_ok());
+        assert!(ratex::svg(annotation, Rgb([255, 255, 255])).is_ok());
     }
 
     fn formula(tex: &str) -> Formula {
-        let typeset = typeset::svg_colored(
+        let typeset = ratex::svg_colored(
             tex,
             tex,
             Rgb([255, 255, 255]),

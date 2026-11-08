@@ -8,10 +8,10 @@ use ratatui::layout::{Offset, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use super::controller::settings::theme::groups::{Groups, HLGroup};
 use super::graphics::kitty::ImageId;
 use super::render::selection::Inclusions;
 use super::render::RenderContext;
+use super::theme::groups::{Groups, HLGroup};
 
 /// The available width changed, moving every wrap boundary.
 pub struct Resized {

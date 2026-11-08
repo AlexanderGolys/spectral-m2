@@ -3,7 +3,7 @@
 use std::{env, fs, path::PathBuf};
 
 fn main() {
-    let path = "src/ui/controller/settings/theme/groups.toml";
+    let path = "src/ui/theme/groups.toml";
     println!("cargo:rerun-if-changed={path}");
     let groups: toml::Table = toml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
     for name in groups.keys() {

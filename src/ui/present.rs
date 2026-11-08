@@ -44,7 +44,7 @@ pub fn wrap(line: &[TextSpan], width: u16, policy: &dyn WrapPolicy) -> Vec<SpanL
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::controller::settings::theme::groups::HLGroup;
+    use crate::ui::theme::groups::HLGroup;
     use crate::ui::wrap::WordWrap;
 
     fn line() -> SpanLine {
