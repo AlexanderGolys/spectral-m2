@@ -285,9 +285,11 @@ announceReady := (() -> (
     -- A type is a name in code, whatever kind of type it is -- Type,
     -- WrapperType, a class made by `new Type of` -- and so is a package. A ring,
     -- which is also a Type, draws itself, and so does a family of rings such as
-    -- RR and CC, which stands for the ring at default precision.
+    -- RR and CC, which stands for the ring at default precision, and any type
+    -- that gives itself a formula, as RR_* and the other fields of arbitrary
+    -- precision do.
     render Type := HashTable => value -> (
-        if instance(value, Ring) or instance(value, RingFamily) then
+        if instance(value, Ring) or instance(value, RingFamily) or value.?texMath then
             if hasAttribute(value, reverseDictionary) then
                 hashTable {symbol type => renderMutableHashTable value}
             else renderMutableHashTable value

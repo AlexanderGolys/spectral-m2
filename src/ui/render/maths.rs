@@ -679,6 +679,18 @@ impl<'a> Input<'a> {
             "begin" => self.environment(),
             "cdot" => Ok(Math::atom(PRODUCT, HLGroup::Operator)),
             // M2 prefixes interval fields with a square before their blackboard letter.
+            // Named as in code, the square is the `i` closing the field's name: RRi.
+            "square"
+                if !self.style.blackboard && self.rest().trim_start().starts_with(BLACKBOARD) =>
+            {
+                match self.atom()? {
+                    Math::Atom { text, kind } => Ok(Math::Atom {
+                        text: text + INTERVAL_SUFFIX,
+                        kind,
+                    }),
+                    _ => Err(UnsupportedTeX("\\mathbb without a letter".into())),
+                }
+            }
             "square" => Ok(Math::atom("□", HLGroup::Type)),
             // Reached only between factors: a thin space inside a numeral is consumed
             // by the numeral itself.
@@ -865,6 +877,10 @@ impl<'a> Input<'a> {
 /// U+22C5 DOT OPERATOR, whose width is the same under every terminal convention --
 /// unlike U+00B7 MIDDLE DOT, which is East Asian Ambiguous and would shift a border.
 const PRODUCT: &str = "\u{22C5}";
+/// The font command M2 writes a ring's letter in.
+const BLACKBOARD: &str = "\\mathbb";
+/// What ends an interval field's name in code, where its TeX has a square: `RRi`.
+const INTERVAL_SUFFIX: &str = "i";
 const THIN_SPACE: &str = "\\,";
 /// Reserves height for its argument without drawing it.
 const PHANTOM: &str = "\\vphantom";
@@ -2045,10 +2061,11 @@ mod tests {
     #[test]
     fn interval_fields_keep_their_type_highlights() {
         let groups = crate::ui::theme::groups::scheme();
-        for (source, letter) in [(r"\square\mathbb R", "RR"), (r"\square\mathbb C", "CC")] {
+        for (source, name) in [(r"\square\mathbb R", "RRi"), (r"\square\mathbb C", "CCi")] {
             assert_eq!(
                 Math::parse(source).expect("an interval field parses"),
-                Math::Row(vec![atom("□", HLGroup::Type), atom(letter, HLGroup::Type)])
+                atom(name, HLGroup::Type),
+                "named as in code"
             );
             let mut input = Input::new(source, with_blackboard(true));
             input.expression(&[]).expect("an interval field parses");

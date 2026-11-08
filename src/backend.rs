@@ -1965,6 +1965,42 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     }
 
     #[test]
+    fn fields_of_arbitrary_precision_are_drawn_as_the_types_they_are() {
+        use crate::ui::render::maths::{self, MathStyle};
+        use crate::ui::theme::groups::HLGroup;
+
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        for (code, by_name, blackboard) in [
+            ("RR_*", "RR_*", "ℝ_*"),
+            ("CC_*", "CC_*", "ℂ_*"),
+            ("RRi_*", "RRi_*", "□ℝ_*"),
+            ("CCi_*", "CCi_*", "□ℂ_*"),
+            ("RRi_53", "RRi₅₃", "□ℝ₅₃"),
+        ] {
+            let response = backend.evaluate(code, None).expect("evaluate field");
+            assert!(!response.is_error, "{code}: {}", response.transcript);
+            let value = response.value.expect("a field has a value");
+            for (math_fonts, drawn) in [(false, by_name), (true, blackboard)] {
+                let style = MathStyle {
+                    blackboard: math_fonts,
+                    ..MathStyle::default()
+                };
+                let rows = maths::spans(&value, 80, style).expect("a field renders as maths");
+                let text: String = rows
+                    .iter()
+                    .flatten()
+                    .map(|span| span.content.as_str())
+                    .collect();
+                assert_eq!(text, drawn, "{code} with math fonts {math_fonts}");
+                assert!(
+                    rows.iter().flatten().all(|span| span.kind == HLGroup::Type),
+                    "{code}: {rows:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn inexact_values_render_without_private_core_helpers() {
         let mut backend = M2Backend::spawn().expect("spawn M2");
         let result = backend.evaluate("1.3", Some(1)).expect("evaluate real");
