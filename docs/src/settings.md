@@ -110,7 +110,7 @@ On first use, Spectral provides editable files in `$XDG_CONFIG_HOME/spectral-m2/
 
 Existing files are preserved. Newly introduced linked groups inherit the bundled defaults even when an older `groups.toml` does not list them. Invalid configurations report their error and fall back to bundled defaults. Removing a config file restores its bundled version on the next start.
 
-The source default is `src/ui/controller/settings/theme/groups.toml`. Rust's group enum, style fields, reflection, and indexing are generated from that file at build time; adding a group requires one declaration there. Rebuilding is required to add a group to the application, but users can edit existing groups and palettes without rebuilding.
+The source default is `src/ui/theme/groups.toml`. Rust's group enum, style fields, reflection, and indexing are generated from that file at build time; adding a group requires one declaration there. Rebuilding is required to add a group to the application, but users can edit existing groups and palettes without rebuilding.
 
 ### Required groups and default links
 
