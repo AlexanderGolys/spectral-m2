@@ -36,6 +36,12 @@ pub struct Glyphs {
     pub fold_rule: Glyph,
     pub unevaluated_cell: Glyph,
     pub rejected_cell: Glyph,
+    /// Marks which renderer laid out an output cell's value.
+    pub renderer_markup: Glyph,
+    pub renderer_typeset: Glyph,
+    pub renderer_ascii: Glyph,
+    pub renderer_unicode: Glyph,
+    pub renderer_plain: Glyph,
     /// Stands in for the leading part of text trimmed to fit.
     pub trimmed: Glyph,
     /// Either side of a picker value that steps with the horizontal arrows.
@@ -181,6 +187,26 @@ pub const UI: UiConfig = UiConfig {
             preferred: " ",
             basic: "x",
         },
+        renderer_markup: Glyph {
+            preferred: "\u{f0219}",
+            basic: "D",
+        },
+        renderer_typeset: Glyph {
+            preferred: "\u{f02e9}",
+            basic: "P",
+        },
+        renderer_ascii: Glyph {
+            preferred: "\u{f120}",
+            basic: "A",
+        },
+        renderer_unicode: Glyph {
+            preferred: "∑",
+            basic: "U",
+        },
+        renderer_plain: Glyph {
+            preferred: "\u{f036}",
+            basic: "T",
+        },
         trimmed: Glyph {
             preferred: "󰨾 ",
             basic: "...",
@@ -269,6 +295,11 @@ mod tests {
             glyphs.fold_rule,
             glyphs.unevaluated_cell,
             glyphs.rejected_cell,
+            glyphs.renderer_markup,
+            glyphs.renderer_typeset,
+            glyphs.renderer_ascii,
+            glyphs.renderer_unicode,
+            glyphs.renderer_plain,
             glyphs.step_back,
             glyphs.step_forward,
             glyphs.picker_rule,

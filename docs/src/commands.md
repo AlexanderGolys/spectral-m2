@@ -16,7 +16,7 @@ Commands are handled by Spectral rather than sent to Macaulay2.
 | `/ast` | `F6` | Show the `m2-syn` tree of committed cells beside the session. |
 | `/save [file]` | | Write the code of every committed cell to `file`, or, without one, keep it where exit does. |
 | `/load <file>` | | Restart Macaulay2, then run the code in `file` as if it had been typed. |
-| `/sessions` | `F7` | Browse saved sessions, newest first. Enter previews one; `Ctrl+Enter` restarts and runs it. |
+| `/sessions` | `F7` | Browse saved sessions, newest first. Enter previews one; `F8` restarts and runs it. |
 | `/view <file>` | | Show a highlighted file beside the shell without evaluating it. |
 | `/save-selection [file]` | `Ctrl+Shift+S` | Save selected code to a file, or to the session archive when no file is named. |
 | `/resume` | `Ctrl+R` | Run the code the previous session left, one submission at a time, so the feed reads as it did. |
@@ -39,6 +39,6 @@ Open the code view with `F2`, select the setup lines you want to reuse, and pres
 
 To choose a filename, type `/save-selection setup.m2` first, select the setup code in the code view, then press `Enter`.
 
-Next time, press `F7` or use `/sessions`. Each row shows the beginning of a saved session. Press `Enter` to inspect its highlighted source, then `Ctrl+Enter` to restart Macaulay2 and run it. You can also inspect any `.m2` file with `/view file` before running it.
+Next time, press `F7` or use `/sessions`. Each row shows the beginning of a saved session. Press `Enter` to inspect its highlighted source, then `F8` to restart Macaulay2 and run it. You can also inspect any `.m2` file with `/view file` before running it.
 
 Session code is archived on exit, restart, and when opening the session browser, under `$XDG_STATE_HOME/spectral-m2/sessions` (`~/.local/state` when unset). An unchanged session is archived once per shell run. `/resume` continues to use the most recently kept whole session. Archives contain executable source; running one recomputes its results.

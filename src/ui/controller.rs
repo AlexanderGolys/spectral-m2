@@ -340,6 +340,11 @@ impl Editor {
         self.settings.rendering.language_server
     }
 
+    /// Whether text may be drawn in italics.
+    pub fn italics(&self) -> bool {
+        self.settings.rendering.italics
+    }
+
     /// Whether source takes semantic colors from the language server.
     pub fn semantic_highlighting(&self) -> bool {
         self.settings.rendering.semantic_colors()
@@ -1560,6 +1565,12 @@ impl Editor {
             .with_matrix_row_spacing(self.settings.rendering.matrix_row_spacing_percent)
             .with_display(self.settings.rendering.maths)
             .with_recent_outputs(self.feed.recent_outputs())
+            .with_ink(self.settings.rendering.math_ink)
+            .with_script_colors(
+                self.settings.rendering.index_color,
+                self.settings.rendering.exponent_color,
+            )
+            .with_original_text(self.settings.rendering.original_output)
             .with_output_limit(self.settings.layout.output_rows)
     }
 

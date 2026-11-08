@@ -126,17 +126,20 @@ impl Panes {
         }
     }
 
-    /// Step the view beside the session with `Ctrl+Left` or `Ctrl+Right` while the
-    /// shell has focus, its plain arrows moving through the input; whether it did.
+    /// Step the view beside the session with `Ctrl+PageUp` or `Ctrl+PageDown` while
+    /// the shell has focus, its arrows moving through the input; whether it did.
     pub fn step_split_view(&mut self, key: KeyEvent) -> bool {
-        let stepping = matches!(key.code, KeyCode::Left | KeyCode::Right)
-            && key.ctrl()
+        let step = match key.code {
+            KeyCode::PageUp => KeyCode::Left,
+            KeyCode::PageDown => KeyCode::Right,
+            _ => return false,
+        };
+        key.ctrl()
             && !key.shift()
-            && !key.alt();
-        stepping
+            && !key.alt()
             && self.split()
             && self.active != Self::SPLIT
-            && self.list[Self::SPLIT].handle_key(key.code.into())
+            && self.list[Self::SPLIT].handle_key(step.into())
     }
 }
 
@@ -192,22 +195,29 @@ mod tests {
     }
 
     #[test]
-    fn control_arrows_step_the_view_beside_a_focused_shell() {
+    fn control_page_keys_step_the_view_beside_a_focused_shell() {
         let mut panes = Panes::new();
-        assert!(!panes.step_split_view(KeyCode::Right + KeyMod::Ctrl));
+        assert!(!panes.step_split_view(KeyCode::PageDown + KeyMod::Ctrl));
         panes.open_view(ViewKind::Code);
-        assert!(panes.step_split_view(KeyCode::Right + KeyMod::Ctrl));
+        assert!(panes.step_split_view(KeyCode::PageDown + KeyMod::Ctrl));
         assert_eq!(panes.list[Panes::SPLIT].view, ViewKind::Code.cycle(1));
-        assert!(panes.step_split_view(KeyCode::Left + KeyMod::Ctrl));
+        assert!(panes.step_split_view(KeyCode::PageUp + KeyMod::Ctrl));
         assert_eq!(panes.list[Panes::SPLIT].view, ViewKind::Code);
         assert!(
-            !panes.step_split_view(KeyCode::Right.into()),
-            "plain arrows edit"
+            !panes.step_split_view(KeyCode::PageDown.into()),
+            "plain page keys scroll"
         );
-        assert!(
-            !panes.step_split_view(KeyCode::Right + KeyMod::Ctrl + KeyMod::Shift),
-            "word selection stays the input's"
-        );
+        for word_motion in [
+            KeyCode::Right + KeyMod::Ctrl,
+            KeyCode::Left + KeyMod::Ctrl,
+            KeyCode::Right + KeyMod::Ctrl + KeyMod::Shift,
+        ] {
+            assert!(
+                !panes.step_split_view(word_motion),
+                "word motion stays the input's"
+            );
+        }
+        assert_eq!(panes.list[Panes::SPLIT].view, ViewKind::Code);
         assert_eq!(panes.active, 0);
     }
 

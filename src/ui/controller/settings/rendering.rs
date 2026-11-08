@@ -12,7 +12,7 @@ use crate::ui::config::UI;
 use crate::ui::controller::picker::{PickerOption, PickerValue};
 use crate::ui::cycle::cyclic;
 use crate::ui::graphics;
-use crate::ui::render::maths::{FractionStyle, MathDisplay};
+use crate::ui::render::maths::{FractionStyle, MathDisplay, MathInk, ScriptColor};
 
 /// The values of the *rendering* tab.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -26,6 +26,16 @@ pub struct RenderingSettings {
     /// Swap code and canvas backgrounds in the reference pane.
     pub reference_code_background: bool,
     pub maths: MathDisplay,
+    /// Whether returned maths takes a colour per role or one colour throughout.
+    pub math_ink: MathInk,
+    /// The colour of subscripts in returned maths.
+    pub index_color: ScriptColor,
+    /// The colour of superscripts in returned maths.
+    pub exponent_color: ScriptColor,
+    /// Whether returned values are drawn as the text Macaulay2 printed for them.
+    pub original_output: bool,
+    /// Whether text may be drawn in italics.
+    pub italics: bool,
     pub fractions: FractionStyle,
     /// Whether rings are drawn as blackboard glyphs (`ℤ`) rather than by name (`ZZ`).
     pub math_fonts: bool,
@@ -43,6 +53,11 @@ impl Default for RenderingSettings {
             semantic_highlighting: true,
             reference_code_background: false,
             maths: MathDisplay::default(),
+            math_ink: MathInk::default(),
+            index_color: ScriptColor::default(),
+            exponent_color: ScriptColor::default(),
+            original_output: false,
+            italics: true,
             fractions: FractionStyle::default(),
             math_fonts: false,
             matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
@@ -68,12 +83,20 @@ impl RenderingSettings {
         (
             self.reference_code_background,
             self.maths,
+            self.math_ink,
+            self.index_color,
+            self.exponent_color,
+            self.original_output,
             self.fractions,
             self.math_fonts,
             self.matrix_row_spacing_percent,
         ) != (
             other.reference_code_background,
             other.maths,
+            other.math_ink,
+            other.index_color,
+            other.exponent_color,
+            other.original_output,
             other.fractions,
             other.math_fonts,
             other.matrix_row_spacing_percent,
@@ -94,6 +117,11 @@ cyclic! {
         LanguageServer = "language server",
         SemanticHighlighting = "semantic highlighting",
         Maths = "maths",
+        OriginalOutput = "original output text",
+        MathInk = "maths colours",
+        IndexColor = "index colours",
+        ExponentColor = "exponent colours",
+        Italics = "italics",
         Fractions = "fractions",
         MathFonts = "math fonts",
         MatrixRowSpacing = "matrix row spacing",
@@ -124,6 +152,11 @@ impl SettingRow for RenderingSetting {
             Self::LanguageServer => "analyse the session's source with m2-ls when it is installed",
             Self::SemanticHighlighting => "enrich source colors using the language server",
             Self::Maths => "draw returned maths as Unicode text, plain ASCII, or typeset pictures",
+            Self::OriginalOutput => "show every returned value as the text Macaulay2 printed, unrendered",
+            Self::MathInk => "colour returned maths by role, or in the value colour with types in the type colour",
+            Self::IndexColor => "colour of subscripts: their own, their symbol's, or the operator colour; delimiters and punctuation keep theirs",
+            Self::ExponentColor => "colour of exponents: their own, their symbol's, or the operator colour; delimiters and punctuation keep theirs",
+            Self::Italics => "draw emphasised and commented text in italics",
             Self::Fractions => "how rational values are drawn",
             Self::MathFonts => "use TeX math fonts like mathbb, mathcal",
             Self::MatrixRowSpacing => {
@@ -150,6 +183,21 @@ impl SettingRow for RenderingSetting {
                     }),
                 }
             }),
+            Self::OriginalOutput => switch(rendering.original_output, "on"),
+            Self::MathInk => PickerValue::among(MathInk::CHOICES, &rendering.math_ink, |&ink| {
+                ink.label().into()
+            }),
+            Self::IndexColor => {
+                PickerValue::among(ScriptColor::CHOICES, &rendering.index_color, |&color| {
+                    color.label().into()
+                })
+            }
+            Self::ExponentColor => {
+                PickerValue::among(ScriptColor::CHOICES, &rendering.exponent_color, |&color| {
+                    color.label().into()
+                })
+            }
+            Self::Italics => switch(rendering.italics, "on"),
             Self::Fractions => {
                 PickerValue::among(FractionStyle::CHOICES, &rendering.fractions, |&style| {
                     style.label().into()
@@ -177,6 +225,11 @@ impl SettingRow for RenderingSetting {
                 rendering.semantic_highlighting = !rendering.semantic_highlighting
             }
             Self::Maths => rendering.maths = rendering.maths.cycle(delta),
+            Self::OriginalOutput => rendering.original_output = !rendering.original_output,
+            Self::MathInk => rendering.math_ink = rendering.math_ink.cycle(delta),
+            Self::IndexColor => rendering.index_color = rendering.index_color.cycle(delta),
+            Self::ExponentColor => rendering.exponent_color = rendering.exponent_color.cycle(delta),
+            Self::Italics => rendering.italics = !rendering.italics,
             Self::Fractions => rendering.fractions = rendering.fractions.cycle(delta),
             Self::MathFonts => rendering.math_fonts = !rendering.math_fonts,
             Self::MatrixRowSpacing => {
@@ -204,8 +257,13 @@ impl SettingRow for RenderingSetting {
         let rendering = settings.rendering;
         match self {
             Self::SemanticHighlighting => rendering.language_server,
-            Self::Fractions | Self::MathFonts => !rendering.pictured(),
+            Self::Fractions | Self::MathFonts => {
+                !rendering.pictured() && !rendering.original_output
+            }
             Self::MatrixRowSpacing => rendering.pictured(),
+            Self::Maths | Self::MathInk | Self::IndexColor | Self::ExponentColor => {
+                !rendering.original_output
+            }
             _ => true,
         }
     }
@@ -307,5 +365,43 @@ mod tests {
         assert!(!rendering.semantic_colors());
         rendering.language_server = true;
         assert!(rendering.semantic_colors());
+    }
+
+    #[test]
+    fn original_output_text_locks_the_rows_that_shape_rendered_maths() {
+        let mut settings = Settings::default();
+        let shaping = [
+            RenderingSetting::Maths,
+            RenderingSetting::MathInk,
+            RenderingSetting::IndexColor,
+            RenderingSetting::ExponentColor,
+            RenderingSetting::Fractions,
+        ];
+        for setting in shaping {
+            assert!(setting.row(settings).selectable(), "{}", setting.label());
+        }
+        RenderingSetting::OriginalOutput.adjust(&mut settings, 1);
+        assert!(settings.rendering.original_output);
+        for setting in shaping {
+            assert!(!setting.row(settings).selectable(), "{}", setting.label());
+        }
+    }
+
+    #[test]
+    fn every_new_rendering_choice_cycles_and_asks_for_a_reformat() {
+        let mut settings = Settings::default();
+        let before = settings.rendering;
+        for setting in [
+            RenderingSetting::MathInk,
+            RenderingSetting::IndexColor,
+            RenderingSetting::ExponentColor,
+            RenderingSetting::OriginalOutput,
+        ] {
+            let mut changed = settings;
+            setting.adjust(&mut changed, 1);
+            assert!(changed.rendering.reformats(&before), "{}", setting.label());
+        }
+        RenderingSetting::Italics.adjust(&mut settings, 1);
+        assert!(!settings.rendering.italics);
     }
 }

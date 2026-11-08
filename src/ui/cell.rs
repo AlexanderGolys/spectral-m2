@@ -30,7 +30,7 @@ use crate::backend::transcript::{captured_output, strip_m2_location};
 use crate::backend::{M2Response, M2Value};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::SourceId;
-use crate::ui::config::UI;
+use crate::ui::config::{Glyph, UI};
 
 macro_rules! row_count {
     ($rows:expr) => {
@@ -1222,8 +1222,37 @@ struct OutputCell {
     type_parts: Vec<M2Value>,
 }
 
+/// The path that turned a value into the rows of its output cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ValueRenderer {
+    /// A documentation page laid out from its HTML.
+    Markup,
+    /// Typeset pictures.
+    Typeset,
+    /// Macaulay2's own plain-text spelling of the value.
+    Ascii,
+    /// Maths laid out in Unicode characters.
+    Unicode,
+    /// The value's text, only wrapped.
+    Plain,
+}
+
+impl ValueRenderer {
+    fn glyph(self) -> Glyph {
+        let glyphs = UI.glyphs;
+        match self {
+            Self::Markup => glyphs.renderer_markup,
+            Self::Typeset => glyphs.renderer_typeset,
+            Self::Ascii => glyphs.renderer_ascii,
+            Self::Unicode => glyphs.renderer_unicode,
+            Self::Plain => glyphs.renderer_plain,
+        }
+    }
+}
+
 /// Retained ordinary value rows, independent of folding and output labels.
 struct ValueLayout {
+    renderer: ValueRenderer,
     width: u16,
     pixel_cell: Option<ratatui::layout::Size>,
     math: maths::MathStyle,
@@ -1357,16 +1386,27 @@ impl OutputBlock {
         // and keeps the single value colour it always had.
         let width = usize::from(self.value_width(cell, context));
         let style = context.math();
+        let remember = |renderer, lines: Rc<Vec<Line<'static>>>, pixel_cell| {
+            cell.layout.replace(Some(ValueLayout {
+                renderer,
+                width: width as u16,
+                pixel_cell,
+                math: style,
+                groups: theme,
+                lines: lines.clone(),
+            }));
+            lines
+        };
         if let Some(M2Value::Markup {
             html,
             example_width,
             ..
-        }) = &cell.value
+        }) = cell.value.as_ref().filter(|_| !style.original_text)
         {
             if let Some(lines) =
                 markup::lines(html, *example_width, &context.with_width(width as u16))
             {
-                return lines;
+                return remember(ValueRenderer::Markup, lines, None);
             }
         }
         let pixel_cell = (style.display == MathDisplay::Typeset)
@@ -1389,52 +1429,55 @@ impl OutputBlock {
             }),
             _ => None,
         };
-        let mut lines: Vec<Line<'static>> =
-            match (style.display, token.as_ref().or(cell.value.as_ref())) {
-                (MathDisplay::Typeset, Some(value)) => {
-                    Some(super::render::typeset::lines(value, width, theme, style))
-                }
-                (MathDisplay::Ascii, Some(M2Value::Type(value))) => Some(
-                    value
-                        .ascii()
-                        .lines()
-                        .map(|line| Line::from(Span::styled(line.to_string(), theme.type_info())))
-                        .collect(),
+        let value = token
+            .as_ref()
+            .or(cell.value.as_ref())
+            .filter(|_| !style.original_text);
+        let (renderer, mut lines): (_, Vec<Line<'static>>) = match (style.display, value) {
+            (MathDisplay::Typeset, Some(value)) => (
+                ValueRenderer::Typeset,
+                super::render::typeset::lines(value, width, theme, style),
+            ),
+            (MathDisplay::Ascii, Some(M2Value::Type(value))) => (
+                ValueRenderer::Ascii,
+                value
+                    .ascii()
+                    .lines()
+                    .map(|line| Line::from(Span::styled(line.to_string(), theme.type_info())))
+                    .collect(),
+            ),
+            (
+                MathDisplay::Ascii,
+                Some(
+                    value @ (M2Value::Tex { .. }
+                    | M2Value::Collection { .. }
+                    | M2Value::Option { .. }
+                    | M2Value::HashTable(_)),
                 ),
-                (
-                    MathDisplay::Ascii,
-                    Some(
-                        value @ (M2Value::Tex { .. }
-                        | M2Value::Collection { .. }
-                        | M2Value::Option { .. }
-                        | M2Value::HashTable(_)),
-                    ),
-                ) => Some(
-                    value
-                        .ascii()
-                        .lines()
-                        .map(|line| Line::from(Span::styled(line.to_string(), theme.value())))
-                        .collect(),
-                ),
-                _ => None,
-            }
-            .unwrap_or_else(|| {
-                match token
-                    .as_ref()
-                    .or(cell.value.as_ref())
-                    .map(|value| maths::spans(value, width, style))
-                {
-                    Some(Ok(rows)) => rows
-                        .into_iter()
+            ) => (
+                ValueRenderer::Ascii,
+                value
+                    .ascii()
+                    .lines()
+                    .map(|line| Line::from(Span::styled(line.to_string(), theme.value())))
+                    .collect(),
+            ),
+            _ => match value.map(|value| maths::spans(value, width, style)) {
+                Some(Ok(rows)) => (
+                    ValueRenderer::Unicode,
+                    rows.into_iter()
                         .map(|row| Line::from(row.spans(theme)))
                         .collect(),
-                    _ => self
-                        .layout(cell, context)
+                ),
+                _ => (
+                    ValueRenderer::Plain,
+                    self.layout(cell, context)
                         .into_iter()
                         .map(|line| Line::from(Span::styled(line, theme.value())))
                         .collect(),
-                }
-            });
+                ),
+            },
+        };
         let limit = (UI.max_output_preview_cells / usize::from(context.width().max(1))).max(1);
         if lines.len() > limit {
             let head = limit.saturating_sub(1) / 2;
@@ -1445,15 +1488,16 @@ impl OutputBlock {
                 [Line::raw("… output preview truncated (render limit) …")],
             );
         }
-        let lines = Rc::new(lines);
-        cell.layout.replace(Some(ValueLayout {
-            width: width as u16,
-            pixel_cell,
-            math: style,
-            groups: theme,
-            lines: lines.clone(),
-        }));
-        lines
+        remember(renderer, Rc::new(lines), pixel_cell)
+    }
+
+    /// The path that laid out `cell`'s value rows.
+    fn renderer(&self, cell: &OutputCell, context: &RenderContext) -> ValueRenderer {
+        self.unfolded_lines(cell, context);
+        cell.layout
+            .borrow()
+            .as_ref()
+            .map_or(ValueRenderer::Plain, |layout| layout.renderer)
     }
 
     /// Value rows kept above the fold and rows hidden by it, when `rows` exceed
@@ -1561,7 +1605,9 @@ impl OutputBlock {
     fn type_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
         let theme = context.groups();
         let width = usize::from(self.text_width(context));
-        if context.math().display == MathDisplay::Typeset && !cell.type_parts.is_empty() {
+        let math = context.math();
+        let rendered = !cell.type_parts.is_empty() && !math.original_text;
+        if math.display == MathDisplay::Typeset && rendered {
             return super::render::typeset::annotation(
                 &cell.type_parts,
                 width,
@@ -1569,7 +1615,7 @@ impl OutputBlock {
                 context.math(),
             );
         }
-        if !cell.type_parts.is_empty() && context.math().display != MathDisplay::Ascii {
+        if rendered && math.display != MathDisplay::Ascii {
             return maths::annotation(&cell.type_parts, width, context.math())
                 .into_iter()
                 .map(|row| Line::from(row.spans(theme)))
@@ -1732,14 +1778,18 @@ impl Block for OutputBlock {
                 let label = format!("o{number}");
                 let width = label.chars().count() as u16;
                 // The label's last character crosses the border, so labels of one
-                // length line up.
-                let start = (layout.inset() + 1).saturating_sub(width);
+                // length line up; the renderer's icon takes the column the label
+                // would start in, and the label sits one column after it.
+                let icon = (layout.inset() + 1).saturating_sub(width);
                 let style = match context.is_recent_output(number) {
                     true => theme.recent_output(),
                     false => theme.output_number(),
                 };
+                let renderer = self.renderer(cell, context).glyph().current();
+                Paragraph::new(Span::styled(renderer, style))
+                    .render(Rect::new(area.x + icon, row, 1, 1), buf);
                 Paragraph::new(Span::styled(label, style))
-                    .render(Rect::new(area.x + start, row, width, 1), buf);
+                    .render(Rect::new(area.x + icon + 1, row, width, 1), buf);
             }
             if let Some((head, hidden)) = self.cell_fold(cell, context) {
                 for (offset, line) in Self::fold_lines(hidden, area.width, context)
@@ -2507,16 +2557,21 @@ mod tests {
     }
 
     #[test]
-    fn a_full_width_label_ends_on_the_shared_border() {
+    fn a_full_width_label_follows_its_renderer_icon() {
         let output = OutputBlock::value("a\nb".into(), None).numbered(123);
+        let icon = output
+            .renderer(&output.cells[0], &RenderContext::new(20, 0))
+            .glyph()
+            .current();
         let output = rendered_buffer(&output, 20);
         let border = inset();
 
         assert_eq!(output[(border, 0)].symbol(), "╭");
-        assert_eq!(output[(border - 3, 1)].symbol(), "o");
-        assert_eq!(output[(border - 2, 1)].symbol(), "1");
-        assert_eq!(output[(border - 1, 1)].symbol(), "2");
-        assert_eq!(output[(border, 1)].symbol(), "3");
+        assert_eq!(output[(border - 3, 1)].symbol(), icon);
+        assert_eq!(output[(border - 2, 1)].symbol(), "o");
+        assert_eq!(output[(border - 1, 1)].symbol(), "1");
+        assert_eq!(output[(border, 1)].symbol(), "2");
+        assert_eq!(output[(border + 1, 1)].symbol(), "3");
         assert_eq!(output[(border, 2)].symbol(), "│");
         assert_eq!(output[(border, 3)].symbol(), "╰");
     }

@@ -10,7 +10,7 @@ use crate::ui::controller::settings::theme::groups::{Groups, HLGroup};
 use crate::ui::graphics::{self, typeset::Rgb, Pictured, Typesetting};
 use crate::ui::wrap::WrappedText;
 
-use super::maths::{self, MathBlock, MathStyle};
+use super::maths::{self, MathBlock, MathInk, MathStyle};
 
 /// What M2 sets between the items of a collection.
 const COLLECTION_TEX_SEPARATOR: &str = r",\,";
@@ -31,7 +31,8 @@ pub fn lines(
         M2Value::Tex { .. } => graphics::typeset_alone,
         _ => graphics::typeset,
     };
-    Block::value(value, width.max(1), groups, style, None, picture).lines
+    let ink = (style.ink == MathInk::Monochrome).then(|| groups.style(HLGroup::Value));
+    Block::value(value, width.max(1), groups, style, ink, picture).lines
 }
 
 /// The pieces of a type annotation, which carry their own spacing, set together in
@@ -303,7 +304,7 @@ impl Block {
         };
         let painted = match ink {
             Some(_) => tex.clone(),
-            None => maths::colored_tex(&tex, groups),
+            None => maths::colored_tex(&tex, groups, style),
         };
         let formula = Typesetting {
             tex: &tex,
@@ -334,7 +335,7 @@ impl Block {
                 width,
                 groups,
                 style,
-                Some(text_ink(HLGroup::Type)),
+                Some(groups.style(HLGroup::Type)),
                 picture,
             ),
             M2Value::Tex {
@@ -750,7 +751,11 @@ mod tests {
             else {
                 panic!("a formula for {kind:?}");
             };
-            assert_ne!(maths::colored_tex(&part.tex, &groups), part.tex, "{kind:?}");
+            assert_ne!(
+                maths::colored_tex(&part.tex, &groups, MathStyle::default()),
+                part.tex,
+                "{kind:?}"
+            );
         }
     }
 

@@ -9,7 +9,7 @@
 | `Up`, `Down` | Move vertically within multiline input. At its boundaries, browse history only while recalling untouched entries; editing stops boundary history navigation. Single-line input searches history by prefix. |
 | `Ctrl+Up`, `Ctrl+Down` | Browse all input history from any line, even after editing a recalled entry. Returning past the newest entry restores the draft and cursor. |
 | `PageUp`, `PageDown` | Scroll the feed. |
-| `Ctrl+Left`, `Ctrl+Right` | Move the cursor by a word; with a view open beside the session, switch preview tabs instead. |
+| `Ctrl+Left`, `Ctrl+Right` | Move the cursor by a word. |
 | `Ctrl+Backspace`, `Ctrl+Delete` | Delete what `Ctrl+Left` or `Ctrl+Right` would move over. `Alt` works the same, and so does `Ctrl+H`, which some terminals send for `Ctrl+Backspace`. |
 | `Ctrl+Z`, `Ctrl+Shift+Z` | Undo or redo an edit to the input. |
 | `Home`, `End` | Move to the start or end of the line. |
@@ -25,7 +25,7 @@
 | `Ctrl+L` | Clear the whole input as one undoable edit. |
 | `Ctrl+Shift+S` | Save selected code as a reusable session. Select setup lines in the code view to keep just that starting point. |
 | `F7` | Browse saved sessions; Enter previews the selected session. |
-| `Ctrl+Enter` | Restart Macaulay2 and run the file currently shown in the reference pane. |
+| `F8` | Restart Macaulay2 and run the file currently shown in the reference pane. |
 | `Ctrl+/` | Toggle commands. |
 | `Ctrl+O` | Toggle settings. |
 | `Ctrl+K` | Open the keymaps tab in Settings; close it when already there. |
@@ -44,7 +44,7 @@
 | Click | Focus a pane; drag the divider to resize the split. |
 | `Up`, `Down`, `PageUp`, `PageDown` | Scroll a preview. |
 | `Left`, `Right` | Switch to the previous or next occupied recent preview tab. |
-| `Ctrl+Left`, `Ctrl+Right` | Switch preview tabs from either pane, while the shell's plain arrows move through its input. |
+| `Ctrl+PageUp`, `Ctrl+PageDown` | Switch preview tabs from either pane, while the shell's arrows, with or without `Ctrl`, move through its input. |
 
 | `Ctrl+Shift+B` | Return to the previous recent preview tab. |
 

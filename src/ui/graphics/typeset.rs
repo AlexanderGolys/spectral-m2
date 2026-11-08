@@ -333,7 +333,7 @@ mod tests {
             r"\left(\begin{matrix}x&2\\3&y\end{matrix}\right)",
             r"\texttt{MdCode}\left\{\texttt{ring R}\right\},\,\texttt{ -- get the ring}",
         ] {
-            let painted = crate::ui::render::maths::colored_tex(tex, &groups);
+            let painted = crate::ui::render::maths::colored_tex(tex, &groups, Default::default());
             let original = svg(tex, INK).unwrap();
             let colored = svg_colored(tex, &painted, INK, PERCENT_PER_ARRAYSTRETCH)
                 .unwrap()

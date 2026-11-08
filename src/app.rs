@@ -19,7 +19,7 @@ use crossterm::execute;
 use lsp_types::ServerInfo;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::layout::{Position, Rect};
-use ratatui::style::Modifier;
+use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
@@ -652,7 +652,7 @@ impl App {
                 let block = SourceBlock::new(code, page, focus);
                 let blocks: Vec<Box<dyn Block>> = vec![
                     Box::new(TextBlock::system(format!(
-                        "{} — Ctrl+Enter runs this file",
+                        "{} — F8 runs this file",
                         path.display()
                     ))),
                     Box::new(block),
@@ -813,6 +813,11 @@ impl App {
                 .draw_shared_status(frame, status, beside.view, active == Panes::SPLIT);
         }
         workspace.editor.draw_margin(frame, margin);
+        if !workspace.editor.italics() {
+            frame
+                .buffer_mut()
+                .set_style(screen, Style::new().remove_modifier(Modifier::ITALIC));
+        }
     }
 
     /// Bring every view to its newest content, as the shell follows its own feed.

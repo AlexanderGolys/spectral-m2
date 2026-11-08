@@ -384,7 +384,7 @@ impl Default for Keymaps {
                 keymap!(fixed A::ToggleHighlightDebug => Char('d') + Ctrl + Shift),
                 keymap!(A::SaveSelection => Char('s') + Ctrl + Shift),
                 keymap!(A::BrowseSessions => F(7)),
-                keymap!(A::RunViewedFile => Enter + Ctrl),
+                keymap!(A::RunViewedFile => F(8)),
                 keymap!(A::CopySelection => Char('y') + Ctrl),
                 keymap!(fixed A::Submit => Enter),
                 keymap!(fixed A::ScrollFeedUp => PageUp),
@@ -726,5 +726,12 @@ mod tests {
             Keymaps::replaying(&loaded).key(InputAction::Redo),
             Some(key!(Char('y') + Alt))
         );
+    }
+
+    #[test]
+    fn running_the_viewed_file_avoids_the_enter_chord_the_system_reserves() {
+        let keymaps = Keymaps::default();
+        assert!(keymaps.action(key!(Enter + Ctrl), false).is_none());
+        assert!(keymaps.action(key!(F(8)), false) == Some(Action::RunViewedFile));
     }
 }

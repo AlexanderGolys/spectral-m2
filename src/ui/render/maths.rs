@@ -135,9 +135,60 @@ impl MathDisplay {
     }
 }
 
+cyclic! {
+    /// Whether returned maths takes a colour per role or one colour throughout.
+    #[discriminated_str(label)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[non_exhaustive]
+    pub enum MathInk {
+        /// Every number, name and operator in the colour of its role.
+        #[default]
+        Syntax = "syntax",
+        /// The value colour throughout, the type colour for a type.
+        Monochrome = "monochrome",
+    }
+}
+
+cyclic! {
+    /// The colour of an index or an exponent, apart from its delimiters and
+    /// punctuation, which keep their own.
+    #[discriminated_str(label)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[non_exhaustive]
+    pub enum ScriptColor {
+        /// Each piece in the colour of its own role.
+        #[default]
+        Own = "original",
+        /// The colour of the symbol the script is attached to.
+        Symbol = "symbol",
+        /// The operator colour.
+        Operator = "operator",
+    }
+}
+
+impl ScriptColor {
+    /// The role `script`'s pieces take on `base`, or `None` when they keep their own.
+    fn role(self, base: &Math) -> Option<HLGroup> {
+        match self {
+            Self::Own => None,
+            Self::Symbol => Some(base.leading_role().unwrap_or(HLGroup::Variable)),
+            Self::Operator => Some(HLGroup::Operator),
+        }
+    }
+}
+
 /// How returned maths is set, as chosen in settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MathStyle {
+    pub ink: MathInk,
+    /// The colour of subscripts.
+    pub index_color: ScriptColor,
+    /// The colour of superscripts.
+    pub exponent_color: ScriptColor,
+    /// Whether a value is drawn as the text Macaulay2 printed for it, not rendered.
+    pub original_text: bool,
     pub fractions: FractionStyle,
     /// Whether a ring such as `\mathbb Z` is drawn with its blackboard glyph `ℤ`
     /// rather than the name `ZZ` it has in code.
@@ -150,6 +201,10 @@ pub struct MathStyle {
 impl Default for MathStyle {
     fn default() -> Self {
         Self {
+            ink: MathInk::default(),
+            index_color: ScriptColor::default(),
+            exponent_color: ScriptColor::default(),
+            original_text: false,
             fractions: FractionStyle::default(),
             blackboard: false,
             display: MathDisplay::default(),
@@ -178,9 +233,30 @@ pub fn spans(
     style: impl Into<MathStyle>,
 ) -> Result<Vec<SpanLine>, UnsupportedTeX> {
     let style = style.into();
+    let mut rows = role_spans(value, width, style)?;
+    if style.ink == MathInk::Monochrome {
+        let ink = match value {
+            M2Value::Type(_) => HLGroup::Type,
+            _ => HLGroup::Value,
+        };
+        for span in rows.iter_mut().flatten() {
+            if span.kind != HLGroup::Canvas {
+                span.kind = ink;
+            }
+        }
+    }
+    Ok(rows)
+}
+
+/// [`spans`], each span in the colour of its role.
+fn role_spans(
+    value: &M2Value,
+    width: usize,
+    style: MathStyle,
+) -> Result<Vec<SpanLine>, UnsupportedTeX> {
     match value {
         M2Value::Type(inner) => {
-            let mut rows = spans(inner, width, style)
+            let mut rows = role_spans(inner, width, style)
                 .unwrap_or_else(|_| MathBlock::fitted(vec![MathBlock::value(inner, style)], width));
             for span in rows.iter_mut().flatten() {
                 span.kind = HLGroup::Type;
@@ -188,7 +264,7 @@ pub fn spans(
             Ok(rows)
         }
         M2Value::Tex { source, .. } => {
-            Ok(Math::from_tex(source, style.blackboard)?.wrapped(width, style.fractions))
+            Ok(Math::from_tex(source, style)?.wrapped(width, style.fractions))
         }
         M2Value::Collection { kind, items } if *kind != CollectionKind::VerticalList => Ok(
             MathBlock::fitted(MathBlock::listed(*kind, items, width, style), width),
@@ -224,7 +300,11 @@ pub fn annotation(parts: &[M2Value], width: usize, style: impl Into<MathStyle>) 
 /// fractions along the row. `None` when this renderer does not read it, or it needs
 /// more rows than one -- a matrix cannot sit inside a line of prose.
 pub fn inline(tex: &str, blackboard: bool) -> Option<SpanLine> {
-    let rows = Math::parse_with(tex, blackboard)
+    let style = MathStyle {
+        blackboard,
+        ..MathStyle::default()
+    };
+    let rows = Math::parse_with(tex, style)
         .ok()?
         .layout(FractionStyle::Inline)
         .into_rows();
@@ -265,8 +345,14 @@ pub fn pictured_tex(tex: &str) -> String {
 
 /// Add theme colours to complete TeX atoms, preserving the original typesetting commands.
 /// Unsupported input is left to the typesetter unchanged.
-pub fn colored_tex(source: &str, groups: &Groups) -> String {
-    let mut input = Input::new(source, true);
+pub fn colored_tex(source: &str, groups: &Groups, style: MathStyle) -> String {
+    let mut input = Input::new(
+        source,
+        MathStyle {
+            blackboard: true,
+            ..style
+        },
+    );
     if input.expression(&[]).is_err() || !input.rest().is_empty() {
         return source.to_string();
     }
@@ -310,16 +396,16 @@ pub fn colored_tex(source: &str, groups: &Groups) -> String {
 struct Input<'a> {
     source: &'a str,
     at: usize,
-    blackboard: bool,
+    style: MathStyle,
     highlights: Vec<(Range<usize>, HLGroup)>,
 }
 
 impl<'a> Input<'a> {
-    fn new(source: &'a str, blackboard: bool) -> Self {
+    fn new(source: &'a str, style: MathStyle) -> Self {
         Self {
             source: source.trim(),
             at: 0,
-            blackboard,
+            style,
             highlights: Vec::new(),
         }
     }
@@ -441,9 +527,13 @@ impl<'a> Input<'a> {
         let mut base = self.atom()?;
         loop {
             if self.eat("^") {
+                let first_highlight = self.highlights.len();
+                let exponent = self.atom()?;
+                let exponent =
+                    self.tinted(exponent, &base, first_highlight, self.style.exponent_color);
                 base = Math::Power {
                     base: Box::new(base),
-                    exponent: Box::new(self.atom()?),
+                    exponent: Box::new(exponent),
                 };
             } else if self.eat("_") {
                 let start = self.at;
@@ -454,6 +544,8 @@ impl<'a> Input<'a> {
                     self.highlights.truncate(first_highlight);
                     self.highlights.push((start..self.at, HLGroup::Type));
                 }
+                let subscript =
+                    self.tinted(subscript, &base, first_highlight, self.style.index_color);
                 base = Math::Index {
                     base: Box::new(base),
                     subscript: Box::new(subscript),
@@ -462,6 +554,24 @@ impl<'a> Input<'a> {
                 return Ok(base);
             }
         }
+    }
+
+    /// `script` and the highlights recorded from `first_highlight` on, recoloured as
+    /// `color` asks for a script of `base`.
+    fn tinted(
+        &mut self,
+        script: Math,
+        base: &Math,
+        first_highlight: usize,
+        color: ScriptColor,
+    ) -> Math {
+        let Some(role) = color.role(base) else {
+            return script;
+        };
+        for (_, kind) in &mut self.highlights[first_highlight..] {
+            *kind = kind.scripted(role);
+        }
+        script.tinted(role)
     }
 
     fn atom(&mut self) -> Result<Math, UnsupportedTeX> {
@@ -611,15 +721,16 @@ impl<'a> Input<'a> {
                 Ok(match font {
                     _ if constant => body.retag(HLGroup::Builtin),
                     "mathbb" => Math::retag(
-                        body.lettered(&DOUBLE_STRUCK, self.blackboard),
+                        body.lettered(&DOUBLE_STRUCK, self.style.blackboard),
                         HLGroup::Type,
                     ),
                     "texttt" => body.named_in_code(),
-                    "mathfrak" => {
-                        Math::retag(body.lettered(&FRAKTUR, self.blackboard), HLGroup::Type)
-                    }
+                    "mathfrak" => Math::retag(
+                        body.lettered(&FRAKTUR, self.style.blackboard),
+                        HLGroup::Type,
+                    ),
                     "mathcal" => {
-                        Math::retag(body.lettered(&SCRIPT, self.blackboard), HLGroup::Type)
+                        Math::retag(body.lettered(&SCRIPT, self.style.blackboard), HLGroup::Type)
                     }
                     _ => body,
                 })
@@ -914,12 +1025,12 @@ impl Math {
     /// Parse one M2 TeX expression.
     #[cfg(test)]
     pub fn parse(source: &str) -> Result<Self, UnsupportedTeX> {
-        Self::parse_with(source, false)
+        Self::parse_with(source, MathStyle::default())
     }
 
     /// Parse one M2 TeX expression, drawing rings as blackboard glyphs when asked.
-    fn parse_with(source: &str, blackboard: bool) -> Result<Self, UnsupportedTeX> {
-        let mut input = Input::new(source, blackboard);
+    fn parse_with(source: &str, style: MathStyle) -> Result<Self, UnsupportedTeX> {
+        let mut input = Input::new(source, style);
         let parsed = input.expression(&[])?;
         match input.rest().is_empty() {
             true => Ok(parsed),
@@ -969,6 +1080,58 @@ impl Math {
             Self::Atom { kind, .. } => *kind == HLGroup::Type,
             Self::Row(pieces) => !pieces.is_empty() && pieces.iter().all(Self::is_type_name),
             _ => false,
+        }
+    }
+
+    /// The role of the first atom, which is the one a script attached to this reads as.
+    fn leading_role(&self) -> Option<HLGroup> {
+        match self {
+            Self::Atom { kind, .. } => Some(*kind),
+            Self::Row(pieces) => pieces.iter().find_map(Self::leading_role),
+            Self::Power { base, .. } | Self::Index { base, .. } => base.leading_role(),
+            _ => None,
+        }
+    }
+
+    /// Give every atom in a subtree `role`, except the delimiters and punctuation
+    /// that structure it.
+    fn tinted(self, role: HLGroup) -> Self {
+        match self {
+            Self::Atom { text, kind } => Self::Atom {
+                text,
+                kind: kind.scripted(role),
+            },
+            Self::Row(pieces) => {
+                Self::Row(pieces.into_iter().map(|piece| piece.tinted(role)).collect())
+            }
+            Self::Power { base, exponent } => Self::Power {
+                base: Box::new(base.tinted(role)),
+                exponent: Box::new(exponent.tinted(role)),
+            },
+            Self::Index { base, subscript } => Self::Index {
+                base: Box::new(base.tinted(role)),
+                subscript: Box::new(subscript.tinted(role)),
+            },
+            Self::Fraction {
+                numerator,
+                denominator,
+            } => Self::Fraction {
+                numerator: Box::new(numerator.tinted(role)),
+                denominator: Box::new(denominator.tinted(role)),
+            },
+            Self::Delimited { left, right, body } => Self::Delimited {
+                left,
+                right,
+                body: Box::new(body.tinted(role)),
+            },
+            Self::Grid { rows, kind } => Self::Grid {
+                rows: rows
+                    .into_iter()
+                    .map(|row| row.into_iter().map(|entry| entry.tinted(role)).collect())
+                    .collect(),
+                kind,
+            },
+            Self::Space => Self::Space,
         }
     }
 
@@ -1073,12 +1236,12 @@ impl Math {
     ///
     /// For a String, a Net or null M2 answers `tex` with the raw text instead, which
     /// is not maths -- read as TeX, `hello world` would set as the name `helloworld`.
-    fn from_tex(source: &str, blackboard: bool) -> Result<Self, UnsupportedTeX> {
+    fn from_tex(source: &str, style: MathStyle) -> Result<Self, UnsupportedTeX> {
         let maths = source
             .strip_prefix('$')
             .and_then(|tex| tex.strip_suffix('$'))
             .ok_or_else(|| UnsupportedTeX("not maths: no $ delimiters".into()))?;
-        Self::parse_with(maths, blackboard)
+        Self::parse_with(maths, style)
     }
 
     /// A row's pieces laid out in order, split wherever a long row may break.
@@ -1181,6 +1344,17 @@ impl Math {
             return None;
         };
         shift.form(text).map(|text| MathBlock::atom(&text, *kind))
+    }
+}
+
+impl HLGroup {
+    /// This role in a script recoloured to `role`: delimiters, punctuation and
+    /// fraction rules structure a script and keep their own.
+    fn scripted(self, role: Self) -> Self {
+        match self {
+            Self::Delimiter | Self::Punctuation | Self::FractionRule => self,
+            _ => role,
+        }
     }
 }
 
@@ -1369,7 +1543,7 @@ impl MathBlock {
             M2Value::Type(value) => Self::value(value, style).retag(HLGroup::Type),
             M2Value::Tex {
                 source, fallback, ..
-            } => Math::from_tex(source, style.blackboard).map_or_else(
+            } => Math::from_tex(source, style).map_or_else(
                 |_| Self::text(fallback, HLGroup::Value),
                 |math| math.layout(style.fractions),
             ),
@@ -1720,6 +1894,13 @@ mod tests {
     use super::*;
     use crate::backend::Role;
 
+    fn with_blackboard(blackboard: bool) -> MathStyle {
+        MathStyle {
+            blackboard,
+            ..MathStyle::default()
+        }
+    }
+
     fn atom(text: &str, kind: HLGroup) -> Math {
         Math::atom(text, kind)
     }
@@ -1822,14 +2003,14 @@ mod tests {
         let groups = Groups::default();
         let tex = r"\left\{\textcolor{#112233}{\texttt{Z}},\,1\right\}";
 
-        let painted = colored_tex(tex, &groups);
+        let painted = colored_tex(tex, &groups, MathStyle::default());
 
         assert!(
             painted.contains(r"\textcolor{#112233}{\texttt{Z}}"),
             "{painted}"
         );
         assert_ne!(painted, tex);
-        assert!(Math::from_tex(&format!("${tex}$"), true).is_ok());
+        assert!(Math::from_tex(&format!("${tex}$"), with_blackboard(true)).is_ok());
     }
 
     #[test]
@@ -1841,7 +2022,7 @@ mod tests {
                 .unwrap()
                 .wrapped(80, FractionStyle::Stacked);
             assert!(rows.iter().flatten().all(|span| span.kind == HLGroup::Type));
-            let painted = colored_tex(&source, &groups);
+            let painted = colored_tex(&source, &groups, MathStyle::default());
             let Color::Rgb(r, g, b) = groups.style(HLGroup::Type).fg.unwrap() else {
                 panic!("the theme has an RGB type colour");
             };
@@ -1869,14 +2050,14 @@ mod tests {
                 Math::parse(source).expect("an interval field parses"),
                 Math::Row(vec![atom("□", HLGroup::Type), atom(letter, HLGroup::Type)])
             );
-            let mut input = Input::new(source, true);
+            let mut input = Input::new(source, with_blackboard(true));
             input.expression(&[]).expect("an interval field parses");
             assert!(input.rest().is_empty());
             assert_eq!(
                 input.highlights,
                 [(0..7, HLGroup::Type), (7..source.len(), HLGroup::Type)]
             );
-            assert_ne!(colored_tex(source, groups), source);
+            assert_ne!(colored_tex(source, groups, MathStyle::default()), source);
         }
     }
 
@@ -1920,7 +2101,7 @@ mod tests {
             (r"x_{\texttt{print}}", HLGroup::Function),
             (r"x_{\pi}", HLGroup::Builtin),
         ] {
-            let mut input = Input::new(source, true);
+            let mut input = Input::new(source, with_blackboard(true));
             input.expression(&[]).expect("parses");
             assert!(
                 input.highlights.iter().any(|(_, kind)| *kind == group),
@@ -2460,7 +2641,7 @@ mod tests {
         r"${\mathbb C}_{53}\mathopen{}\left[x_{\left\{1,\:1\right\}}\right]$";
 
     fn rendered(source: &str, blackboard: bool) -> String {
-        Math::from_tex(source, blackboard)
+        Math::from_tex(source, with_blackboard(blackboard))
             .expect("parses")
             .wrapped(80, FractionStyle::Stacked)
             .iter()
@@ -2500,7 +2681,7 @@ mod tests {
             (r"$x\Longrightarrow x$", "x⟹x"),
         ] {
             assert_eq!(rendered(source, false), drawn);
-            let kinds = Math::from_tex(source, false)
+            let kinds = Math::from_tex(source, MathStyle::default())
                 .expect("parses")
                 .wrapped(80, FractionStyle::Stacked)
                 .into_iter()
@@ -2552,7 +2733,7 @@ mod tests {
     #[test]
     fn a_name_in_typewriter_face_is_coloured_as_code_names_it() {
         let kinds = |source| {
-            let rows = Math::from_tex(source, false)
+            let rows = Math::from_tex(source, MathStyle::default())
                 .expect("parses")
                 .wrapped(80, FractionStyle::Stacked);
             rows.iter()
@@ -2576,7 +2757,7 @@ mod tests {
     #[test]
     fn a_quotient_ring_is_parsed_and_so_coloured_by_structure() {
         let ring = r"$\frac{{\mathbb Q}\mathopen{}\left[x\right]}{x^{3}-1}$";
-        let rows = Math::from_tex(ring, false)
+        let rows = Math::from_tex(ring, MathStyle::default())
             .expect("a quotient ring parses")
             .wrapped(80, FractionStyle::Stacked);
 
@@ -2585,8 +2766,79 @@ mod tests {
         assert!(kinds.contains(&HLGroup::Type) && kinds.contains(&HLGroup::Number));
         assert!(Math::from_tex(
             r"$\frac{{\mathbb Z}\mathopen{}\left[x\,{.}{.}\,y\right]}{x^{2}}$",
-            false
+            MathStyle::default()
         )
         .is_ok());
+    }
+
+    fn tex_value(source: &str) -> M2Value {
+        M2Value::Tex {
+            source: source.into(),
+            fallback: source.into(),
+            code: source.into(),
+        }
+    }
+
+    #[test]
+    fn indexes_take_the_colour_chosen_for_them_but_keep_their_punctuation() {
+        let kinds = |index_color| {
+            let style = MathStyle {
+                index_color,
+                ..MathStyle::default()
+            };
+            roles(&spans(&tex_value("$x_{1,2}^{3}$"), 80, style).expect("parses"))
+        };
+        let of = |roles: &[(String, HLGroup)], text: &str| {
+            roles
+                .iter()
+                .find(|(content, _)| content.contains(text))
+                .map(|(_, kind)| *kind)
+        };
+        let own = kinds(ScriptColor::Own);
+        assert_eq!(of(&own, "1"), Some(HLGroup::Number));
+        let symbol = kinds(ScriptColor::Symbol);
+        assert_eq!(of(&symbol, "1"), Some(HLGroup::Variable));
+        assert_eq!(of(&symbol, ","), Some(HLGroup::Punctuation));
+        assert_eq!(of(&symbol, "{"), Some(HLGroup::Delimiter));
+        assert_eq!(
+            of(&symbol, "³"),
+            Some(HLGroup::Number),
+            "exponents are separate"
+        );
+        let operator = kinds(ScriptColor::Operator);
+        assert_eq!(of(&operator, "2"), Some(HLGroup::Operator));
+    }
+
+    #[test]
+    fn exponents_take_the_colour_chosen_for_them() {
+        let style = MathStyle {
+            exponent_color: ScriptColor::Symbol,
+            ..MathStyle::default()
+        };
+        let rows = roles(&spans(&tex_value("$x^{2}$"), 80, style).expect("parses"));
+        assert_eq!(
+            rows,
+            [
+                ("x".to_string(), HLGroup::Variable),
+                ("²".to_string(), HLGroup::Variable)
+            ]
+        );
+    }
+
+    #[test]
+    fn monochrome_maths_is_the_value_colour_and_a_type_stays_a_type() {
+        let style = MathStyle {
+            ink: MathInk::Monochrome,
+            ..MathStyle::default()
+        };
+        let polynomial = spans(&tex_value("$x^{2}+3y$"), 80, style).expect("parses");
+        assert!(polynomial
+            .iter()
+            .flatten()
+            .filter(|span| span.kind != HLGroup::Canvas)
+            .all(|span| span.kind == HLGroup::Value));
+        let ring = M2Value::Type(Box::new(tex_value("$R$")));
+        let ring = spans(&ring, 80, style).expect("parses");
+        assert!(ring.iter().flatten().all(|span| span.kind == HLGroup::Type));
     }
 }

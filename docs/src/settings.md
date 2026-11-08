@@ -23,6 +23,23 @@ Changes are kept between sessions. The appearance is saved to `appearance.json` 
 | Complete after | Characters of a name, or of a file name in a string, typed before it is completed. |
 | Hint completion below | Show an inline hint only when the number of candidates is less than this value. Defaults to 10; 0 disables hints. Saved as `input.hintCompletionBelow`, an integer from 0 to 65535. |
 
+**Rendering**
+
+| Setting | Choices |
+| --- | --- |
+| Language server | Analyse the session's source with `m2-ls` when it is installed. |
+| Semantic highlighting | Enrich source colours using the language server. |
+| Maths | Draw returned maths as Unicode text, plain ASCII, or typeset pictures. |
+| Original output text | Show every returned value as the text Macaulay2 printed, unrendered. The rows that shape rendered maths are locked while it is on. |
+| Maths colours | `syntax` colours maths by role; `monochrome` draws it in the value colour, with types, and the type annotation beside a value, in the type colour. |
+| Index colours | `original`, the colour of the indexed `symbol`, or the `operator` colour, for subscripts. Delimiters and punctuation inside an index keep their own colour. |
+| Exponent colours | The same three choices, for exponents. |
+| Italics | Turn off to draw no text in italics anywhere. Typeset pictures keep the italic of TeX's own math font. |
+| Fractions, Math fonts | How rational values and rings are drawn, when maths is not a picture. |
+| Matrix row spacing | Distance between the rows of a typeset matrix, relative to TeX's own. |
+| Compute examples | Run documentation examples again, each for at most this long, to draw their values. |
+| Swap reference backgrounds | Exchange the reference pane canvas and code backgrounds. |
+
 **Statusline**
 
 | Setting | Choices |

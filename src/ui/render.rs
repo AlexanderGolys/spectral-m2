@@ -7,7 +7,7 @@
 use crate::ui::block::{Element, HLSpan, Text};
 use crate::ui::config::UI;
 use crate::ui::controller::settings::theme::groups::{scheme, Groups};
-use crate::ui::render::maths::{FractionStyle, MathDisplay, MathStyle};
+use crate::ui::render::maths::{FractionStyle, MathDisplay, MathInk, MathStyle, ScriptColor};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
@@ -145,6 +145,34 @@ impl RenderContext {
         Self {
             math: MathStyle {
                 display,
+                ..self.math
+            },
+            ..self
+        }
+    }
+
+    pub fn with_ink(self, ink: MathInk) -> Self {
+        Self {
+            math: MathStyle { ink, ..self.math },
+            ..self
+        }
+    }
+
+    pub fn with_script_colors(self, index_color: ScriptColor, exponent_color: ScriptColor) -> Self {
+        Self {
+            math: MathStyle {
+                index_color,
+                exponent_color,
+                ..self.math
+            },
+            ..self
+        }
+    }
+
+    pub fn with_original_text(self, original_text: bool) -> Self {
+        Self {
+            math: MathStyle {
+                original_text,
                 ..self.math
             },
             ..self
