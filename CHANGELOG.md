@@ -4,23 +4,21 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-10
+
 ### Added
 
 - The language server now does more than colour code. `Alt+K` (or a middle click on code in the input) floats a small panel with what the name is. `Alt+Shift+K` describes it in full beside the session, in a view that takes no tab. `Ctrl+]` (or Shift+click) goes to its definition: in the input, in an earlier cell or in a file. Problems the server finds are underlined, with the message for the one under the cursor below the input. Occurrences of the name under the cursor are shaded. Signatures of known functions show while typing a call. Names bound in the session complete before they have run. `Alt+Shift+F` formats the input. A file shown beside the session folds where the server says it can: double-click the ▾ in its gutter. See *What the language server knows* in the book.
 - A new book, in `book/`, replaces the old one in `docs/`: a guided tour of the shell, every command, key, setting and option, and how the shell works with Macaulay2. Its Macaulay2 examples are highlighted by `mdbook-tsitter` 4 from the grammar itself, with no parser to build first.
 - Whole cells and results can be selected: double-click outside any text for the one under the click, triple-click for its whole submission, or step through them with `Alt+Up` and `Alt+Down`, then `Up`, `Down`, `y` (or `Ctrl+Y`) and `Esc`. A *copy cells as* selection setting copies them as raw text or as a session, `i1 : code` and `o1 = value`.
 - Triple-click selects a paragraph in the input, the feed and the previews, and the status line says what a copy took.
-
 - A crash is recorded, with its backtrace, in `$XDG_STATE_HOME/spectral-m2/crash.log` (default `~/.local/state/spectral-m2/crash.log`), and its one-line cause and the path are printed once the terminal is restored; until now the message was discarded together with stderr while the screen was drawn.
 - A `FilePosition` value in the output is a link to its source, as source locations in documentation are: click it to open the file at that position.
 - A **debug** statusline component shows the `sp2` version and memory, the M2 process's memory, the pictures held by the terminal, and the frame rate. The highlight debug view names the version as well.
 - Keymaps joins Settings as its sixth tab; `/keymaps` opens it directly. Statusline destination checklists separate off from the five segment choices.
-
 - A statusline component checklist assigns each item to one of five fixed segments or hides it. Components sharing a segment follow list order, including rendering settings and individual or combined process versions. Empty segments give neighbours more room without moving their anchors.
-
 - Middle-click documentation and source links to open them in the reference pane, or Ctrl-click to open them in the feed.
 - A rendering setting swaps the reference pane canvas and code backgrounds.
-
 - A saved-session browser (`/sessions`, `F7`) with source previews and `Ctrl+Enter` to restart and run a chosen session.
 - Save selected setup code as a reusable session with `Ctrl+Shift+S` or `/save-selection [file]`.
 - Preview files without evaluating them with `/view <file>`.
@@ -33,13 +31,9 @@ All notable changes to Spectral M2 are documented here.
 - An option's default in a documentation page, `default value null`, is coloured as code: `null`, `true`, `false`, strings and names take their own colours.
 - A method a page lists without documentation of its own is set on a red-tinted background (the `MarkupMissingDoc` group) instead of being followed by "(missing documentation)".
 - `Ctrl+Left` and `Ctrl+Right` move the input's cursor by words with a preview open, instead of switching its tab; `Ctrl+PageUp` and `Ctrl+PageDown` switch tabs from either pane.
-
 - Documentation opened through links uses the same example computation, semantic analysis, and selected math renderer as session output; enriched results refresh both panes.
-
 - Double-click expansion also works for standalone outputs opened directly into the feed.
-
 - Split views show pickers only in the focused pane; reference pages have no enclosing border and underline hovered links.
-
 - Debugger entry from interactive input no longer gets stranded when M2 cannot display its source; exit commands return to a usable session.
 - Ordinary errors return to normal input by default, preserving existing session state. `--debugger` opts into automatic debugger entry.
 - Clicked documentation opens in a separate reference pane without changing the session or its feed.
@@ -275,7 +269,8 @@ First crates.io release.
 - Reorganized the shell around workspace sessions, typed feed blocks, responsive panes, and independently rendered previews.
 - Made installation Cargo-managed and removed manual binary copying and local-bin symlinks.
 
-[Unreleased]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.3...HEAD
+[Unreleased]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.0...v1.2.1
