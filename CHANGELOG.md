@@ -4,6 +4,10 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- With maths drawn as Unicode or ASCII, no formula is typeset by RaTeX or sent to the terminal as a picture any more. Clicking a result's renderer icon no longer typesets it behind the scenes to find out whether pictures would work, the icon offers pictures only while maths is drawn as pictures, and switching away from pictures drops those the terminal holds and stops those still being encoded.
+
 ## [1.3.0] - 2026-11-10
 
 ### Added

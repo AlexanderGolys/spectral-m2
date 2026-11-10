@@ -1895,6 +1895,7 @@ impl Editor {
         highlighter: &mut dyn Highlighter,
         in_debugger: bool,
     ) {
+        crate::ui::graphics::suspend(self.settings.rendering.maths != MathDisplay::Typeset);
         if crate::ui::graphics::refresh_cell_size() {
             self.feed.on_event(&Reformatted);
             self.reference.on_event(&Reformatted);
