@@ -392,7 +392,9 @@ impl SourceBlock {
     fn line_starts(rows: &[Option<SourceRow>]) -> impl Iterator<Item = (usize, &SourceRow)> {
         rows.iter().enumerate().filter_map(|(index, row)| {
             let row = row.as_ref()?;
-            let previous = index.checked_sub(1).and_then(|previous| rows[previous].as_ref());
+            let previous = index
+                .checked_sub(1)
+                .and_then(|previous| rows[previous].as_ref());
             previous
                 .is_none_or(|previous| previous.line != row.line)
                 .then_some((index, row))
@@ -415,7 +417,10 @@ impl Block for SourceBlock {
     fn focus_row(&self, context: &RenderContext) -> Option<u16> {
         let row = self.focused_cells(context).first()?.y;
         let rows = self.rows(context);
-        self.shown_rows(&rows).get(usize::from(row)).copied().flatten()
+        self.shown_rows(&rows)
+            .get(usize::from(row))
+            .copied()
+            .flatten()
     }
 
     fn render_local(&self, context: &RenderContext, buffer: &mut Buffer) {
@@ -2453,7 +2458,11 @@ mod tests {
         let mut buffer = Buffer::empty(Rect::new(0, 0, context.width(), block.height(context)));
         block.render_local(context, &mut buffer);
         (0..buffer.area.height)
-            .map(|y| (0..buffer.area.width).map(|x| buffer[(x, y)].symbol()).collect())
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
             .collect()
     }
 
@@ -2486,7 +2495,9 @@ mod tests {
         let mut inclusions = Inclusions::default();
         block.local_selection_inclusions(&context, &mut inclusions);
         let below = row_of(&rows, "g = 1");
-        assert!(inclusions.layer_at(Position::new(context.width() / 2, below)).is_some());
+        assert!(inclusions
+            .layer_at(Position::new(context.width() / 2, below))
+            .is_some());
 
         assert!(block.toggle_fold(Position::new(0, first), &context));
         assert_eq!(block.height(&context), unfolded);

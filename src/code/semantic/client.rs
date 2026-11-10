@@ -16,14 +16,14 @@ use lsp_types::notification::{
     Notification as NotificationMethod, PublishDiagnostics,
 };
 use lsp_types::request::{
-    DocumentHighlightRequest, FoldingRangeRequest, DocumentSymbolRequest, Formatting, GotoDefinition, HoverRequest,
-    Initialize, Request as RequestMethod, SemanticTokensFullRequest, SemanticTokensRefresh,
-    Shutdown, SignatureHelpRequest,
+    DocumentHighlightRequest, DocumentSymbolRequest, FoldingRangeRequest, Formatting,
+    GotoDefinition, HoverRequest, Initialize, Request as RequestMethod, SemanticTokensFullRequest,
+    SemanticTokensRefresh, Shutdown, SignatureHelpRequest,
 };
 use lsp_types::{
-    DocumentHighlight, FoldingRange, DocumentSymbolResponse, GotoDefinitionResponse, Hover, HoverContents,
-    InitializeResult, Location, MarkedString, NumberOrString, ParameterLabel, Position,
-    PublishDiagnosticsParams, SemanticTokens, SemanticTokensLegend,
+    DocumentHighlight, DocumentSymbolResponse, FoldingRange, GotoDefinitionResponse, Hover,
+    HoverContents, InitializeResult, Location, MarkedString, NumberOrString, ParameterLabel,
+    Position, PublishDiagnosticsParams, SemanticTokens, SemanticTokensLegend,
     SemanticTokensServerCapabilities, ServerInfo, SignatureHelp, TextEdit,
 };
 use serde_json::{json, Value};
@@ -563,7 +563,10 @@ impl Worker<'_> {
                 SignatureHelpRequest::METHOD,
                 json!({ "textDocument": document, "position": point(offset) }),
             ),
-            Question::Folds => (FoldingRangeRequest::METHOD, json!({ "textDocument": document })),
+            Question::Folds => (
+                FoldingRangeRequest::METHOD,
+                json!({ "textDocument": document }),
+            ),
             Question::Format => (
                 Formatting::METHOD,
                 json!({ "textDocument": document, "options": { "tabSize": 4, "insertSpaces": true } }),
@@ -1005,11 +1008,11 @@ fn edited(text: &str, edits: Vec<TextEdit>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ops::RangeInclusive;
     use crate::code::highlight::Highlighter;
     use crate::code::semantic::query::{QueryId, Severity};
     use crate::code::semantic::{SemanticHighlighter, SourceId};
     use crate::ui::theme::groups::HLGroup;
+    use std::ops::RangeInclusive;
 
     // The fixture checks wire ordering independently of the client implementation.
     const SERVER: &str = r#"
@@ -1461,7 +1464,10 @@ while True:
             panic!("{:?}", answers[&format]);
         };
         assert_ne!(formatted, "f=x->x\nideal(1,2)");
-        assert_eq!(answers[&folds], Answer::Folds(vec![RangeInclusive::new(0, 3)]));
+        assert_eq!(
+            answers[&folds],
+            Answer::Folds(vec![RangeInclusive::new(0, 3)])
+        );
     }
 
     #[test]
