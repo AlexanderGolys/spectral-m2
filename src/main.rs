@@ -1,5 +1,8 @@
 //! A syntax-highlighted terminal interface for an interactive Macaulay2 session.
 
+// Unit tests may spell non-ASCII text; everything else takes it from `ui::glyphs`.
+#![cfg_attr(test, allow(clippy::non_ascii_literal))]
+
 mod app;
 mod backend;
 mod cli;

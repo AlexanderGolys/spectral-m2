@@ -126,7 +126,7 @@ fn compact_source(text: &str, width: usize) -> String {
     } else {
         text.chars()
             .take(width.saturating_sub(1))
-            .chain(['…'])
+            .chain(UI.glyphs.ellipsis.current().chars())
             .collect()
     }
 }

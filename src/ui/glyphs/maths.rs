@@ -86,3 +86,68 @@ pub const SHORT_BRACES: [(&str, [&str; 4]); 2] = [
     ("{", ["\u{23B0}", "", "\u{23B1}", ""]),
     ("}", ["\u{23B1}", "", "\u{23B0}", ""]),
 ];
+
+/// A TeX math alphabet as Unicode sets it: capitals in a run of the Mathematical
+/// Alphanumeric Symbols block, bar the few Unicode had already placed among the
+/// letterlike symbols.
+pub struct Alphabet {
+    first_capital: u32,
+    letterlike: &'static [(char, char)],
+    /// Whether M2 spells a letter in this alphabet twice in code, `\mathbb Q` as `QQ`,
+    /// rather than a lone `Q` that reads as a variable.
+    pub doubled_in_code: bool,
+}
+
+impl Alphabet {
+    /// `letter` in this alphabet, when it is a capital.
+    pub fn glyph(&self, letter: char) -> Option<char> {
+        letter.is_ascii_uppercase().then(|| {
+            self.letterlike
+                .iter()
+                .find(|(plain, _)| *plain == letter)
+                .map_or_else(
+                    || {
+                        char::from_u32(self.first_capital + u32::from(letter) - u32::from('A'))
+                            .expect("a capital of the alphabet")
+                    },
+                    |(_, glyph)| *glyph,
+                )
+        })
+    }
+}
+
+/// Blackboard bold, TeX's `\mathbb`.
+pub const DOUBLE_STRUCK: Alphabet = Alphabet {
+    first_capital: 0x1D538,
+    letterlike: &[
+        ('C', 'ℂ'),
+        ('H', 'ℍ'),
+        ('N', 'ℕ'),
+        ('P', 'ℙ'),
+        ('Q', 'ℚ'),
+        ('R', 'ℝ'),
+        ('Z', 'ℤ'),
+    ],
+    doubled_in_code: true,
+};
+/// TeX's `\mathfrak`.
+pub const FRAKTUR: Alphabet = Alphabet {
+    first_capital: 0x1D504,
+    letterlike: &[('C', 'ℭ'), ('H', 'ℌ'), ('I', 'ℑ'), ('R', 'ℜ'), ('Z', 'ℨ')],
+    doubled_in_code: false,
+};
+/// TeX's `\mathcal`.
+pub const SCRIPT: Alphabet = Alphabet {
+    first_capital: 0x1D49C,
+    letterlike: &[
+        ('B', 'ℬ'),
+        ('E', 'ℰ'),
+        ('F', 'ℱ'),
+        ('H', 'ℋ'),
+        ('I', 'ℐ'),
+        ('L', 'ℒ'),
+        ('M', 'ℳ'),
+        ('R', 'ℛ'),
+    ],
+    doubled_in_code: false,
+};

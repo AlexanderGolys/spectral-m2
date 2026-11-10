@@ -17,8 +17,9 @@ use crate::ui::block::TextSpan;
 use crate::ui::config::UI;
 use crate::ui::cycle::cyclic;
 use crate::ui::glyphs::maths::{
-    CONSTANT_COMMANDS, FRACTION_RULE, LONG_LEFT_ARROW, LONG_MAPSTO, LONG_RIGHT_ARROW,
-    OPERATOR_COMMANDS, PRODUCT, SETMINUS, SQUARE, SUPERSCRIPT_DIGITS,
+    Alphabet, CONSTANT_COMMANDS, DOUBLE_STRUCK, FRACTION_RULE, FRAKTUR, LONG_LEFT_ARROW,
+    LONG_MAPSTO, LONG_RIGHT_ARROW, OPERATOR_COMMANDS, PRODUCT, SCRIPT, SETMINUS, SQUARE,
+    SUPERSCRIPT_DIGITS,
 };
 pub use crate::ui::glyphs::maths::{SHORT_BRACES, TALL_FENCES};
 use crate::ui::graphics;
@@ -927,66 +928,6 @@ const NULL_WORD: &str = "null";
 const DELIMITERS: &str = "()[]{}|.";
 /// Fences TeX spells as a command, with the glyph a terminal draws for each.
 const FENCE_COMMANDS: [(&str, char); 2] = [("\\langle", '\u{27E8}'), ("\\rangle", '\u{27E9}')];
-/// A TeX math alphabet as Unicode sets it: capitals in a run of the Mathematical
-/// Alphanumeric Symbols block, bar the few Unicode had already placed among the
-/// letterlike symbols.
-struct Alphabet {
-    first_capital: u32,
-    letterlike: &'static [(char, char)],
-    /// Whether M2 spells a letter in this alphabet twice in code, `\mathbb Q` as `QQ`,
-    /// rather than a lone `Q` that reads as a variable.
-    doubled_in_code: bool,
-}
-
-impl Alphabet {
-    fn glyph(&self, letter: char) -> Option<char> {
-        letter.is_ascii_uppercase().then(|| {
-            self.letterlike
-                .iter()
-                .find(|(plain, _)| *plain == letter)
-                .map_or_else(
-                    || {
-                        char::from_u32(self.first_capital + u32::from(letter) - u32::from('A'))
-                            .expect("a capital of the alphabet")
-                    },
-                    |(_, glyph)| *glyph,
-                )
-        })
-    }
-}
-
-const DOUBLE_STRUCK: Alphabet = Alphabet {
-    first_capital: 0x1D538,
-    letterlike: &[
-        ('C', 'ℂ'),
-        ('H', 'ℍ'),
-        ('N', 'ℕ'),
-        ('P', 'ℙ'),
-        ('Q', 'ℚ'),
-        ('R', 'ℝ'),
-        ('Z', 'ℤ'),
-    ],
-    doubled_in_code: true,
-};
-const FRAKTUR: Alphabet = Alphabet {
-    first_capital: 0x1D504,
-    letterlike: &[('C', 'ℭ'), ('H', 'ℌ'), ('I', 'ℑ'), ('R', 'ℜ'), ('Z', 'ℨ')],
-    doubled_in_code: false,
-};
-const SCRIPT: Alphabet = Alphabet {
-    first_capital: 0x1D49C,
-    letterlike: &[
-        ('B', 'ℬ'),
-        ('E', 'ℰ'),
-        ('F', 'ℱ'),
-        ('H', 'ℋ'),
-        ('I', 'ℐ'),
-        ('L', 'ℒ'),
-        ('M', 'ℳ'),
-        ('R', 'ℛ'),
-    ],
-    doubled_in_code: false,
-};
 /// Font commands M2 wraps names in. All are transparent to layout: they change how a
 /// name is *set*, never what it is. `mathit` marks multi-character names, which is how
 /// M2 keeps `x2` from reading as a power; the parser gets that from structure instead.

@@ -10,7 +10,6 @@ keywords = ["macaulay2", "repl", "terminal", "syntax-highlighting", "tui"]
 categories = ["command-line-utilities", "development-tools"]
 include = [
     "build.rs",
-    "build/*.rs",
     "src/**/*.rs",
     "src/backend/m2_startup.m2",
     "src/**/*.toml",
@@ -62,6 +61,10 @@ pulldown-cmark-escape = "0.11.0"
 [lints.rust]
 missing_docs = "deny"
 unreachable_patterns = "allow"
+
+[lints.clippy]
+# Non-ASCII text belongs in `src/ui/glyphs.rs`, which allows it.
+non_ascii_literal = "deny"
 
 [dev-dependencies]
 

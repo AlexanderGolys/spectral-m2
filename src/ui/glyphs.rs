@@ -1,6 +1,8 @@
 //! Symbols the shell's chrome draws beyond ASCII, each with the spelling a
 //! limited terminal uses instead.
 
+#![allow(clippy::non_ascii_literal)]
+
 use std::sync::LazyLock;
 
 use crate::env::ENV;
