@@ -6,10 +6,12 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem;
-use std::rc::Rc;
+use std::ptr;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
+use html2text::config::Config;
 use html2text::render::{RichAnnotation, RichDecorator, TaggedLine, TextDecorator};
 use html2text::{Element, Handle, RcDom};
 use m2_syn::native::parse_native;
@@ -22,7 +24,7 @@ use unicode_width::UnicodeWidthStr;
 use super::maths::{inline, MathStyle, Shift};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::PageColors;
-use crate::ui::block::{Link, Text, TextSpan};
+use crate::ui::block::{HLSpan, Link, Text, TextSpan};
 use crate::ui::present::{wrap, SpanLine};
 use crate::ui::render::selection::Inclusions;
 use crate::ui::render::RenderContext;
@@ -44,11 +46,20 @@ const SYNOPSIS_LABEL: &str = "h5";
 const SYNOPSIS_LEVEL: usize = 5;
 /// What M2's documentation sets between a name and its description.
 const DESCRIPTION_MARK: &str = " -- ";
+/// What M2's menus set between a method and the page that documents it.
+const ALIAS_POINTER: &str = "-- see";
+/// What M2 sets before an optional input's default, which it spells as code.
+const DEFAULT_VALUE: &str = "default value ";
 /// How the URL of a link to a source position begins.
 const FILE_LINK_SCHEME: &str = "file://";
 /// How the URL of a link that only carries a highlight group through layout
 /// begins: it is painted in that group and is no link to the reader.
 const GROUP_LINK_SCHEME: &str = "group:";
+/// How the URL of a link that lays a highlight group over its text begins,
+/// keeping the text's own colours beneath.
+const MARK_LINK_SCHEME: &str = "mark:";
+/// What M2 sets after a method listed in a page that has no documentation.
+const MISSING_DOCUMENTATION: &str = "(missing documentation)";
 /// The attribute typeset maths names each piece's highlight group by, until
 /// the document is parsed and the piece can be told to sit inside a link.
 const GROUP_ATTRIBUTE: &str = "data-group";
@@ -204,7 +215,7 @@ fn document(html: &str, example_width: usize, context: &RenderContext) -> Option
                 && entry.math == context.math()
                 && entry.numbers_printed == context.numbers_printed()
                 && entry.code_style == context.code_style()
-                && std::ptr::eq(entry.groups, context.groups())
+                && ptr::eq(entry.groups, context.groups())
                 && entry.html == html
         })?;
         let entry = documents.remove(index)?;
@@ -300,7 +311,8 @@ pub fn links(html: &str, example_width: usize, context: &RenderContext) -> Vec<L
         .links
         .iter()
         .flatten()
-        .filter_map(|(_, link)| seen.insert(Rc::as_ptr(link)).then(|| link.as_ref().clone()))
+        .filter(|(_, link)| seen.insert(Rc::as_ptr(link)))
+        .map(|(_, link)| link.as_ref().clone())
         .collect()
 }
 
@@ -381,6 +393,7 @@ pub fn code_sources(html: &str, example_width: usize) -> Vec<String> {
     preformatted_sources(html)
         .iter()
         .flat_map(|source| examples::code_sources(source, example_width))
+        .chain(inline_code_sources(html))
         .collect()
 }
 
@@ -659,16 +672,26 @@ fn unescape_text(html: &str) -> String {
         .replace("&amp;", "&")
 }
 
-fn layout(html: &str, width: usize, blackboard: bool) -> Option<Vec<HtmlLine>> {
-    let config = html2text::config::with_decorator(Decorator(RichDecorator::new()))
+fn html_config() -> Config<Decorator> {
+    html2text::config::with_decorator(Decorator(RichDecorator::new()))
         .link_footnotes(false)
         .unicode_strikeout(false)
         .min_wrap_width(TABLE_COLUMN_MIN_WIDTH)
-        .allow_width_overflow();
+        .allow_width_overflow()
+}
+
+/// `html` parsed, its maths typeset and its presentation wrappers normalized.
+fn normalized(config: &Config<Decorator>, html: &str, blackboard: bool) -> Option<RcDom> {
     let html = typeset_maths(html, blackboard);
     let dom = config.parse_html(html.as_bytes()).ok()?;
     normalize(&dom.document, false);
-    decorate_inline(&dom.document, &mut false);
+    Some(dom)
+}
+
+fn layout(html: &str, width: usize, blackboard: bool) -> Option<Vec<HtmlLine>> {
+    let config = html_config();
+    let dom = normalized(&config, html, blackboard)?;
+    decorate_inline(&dom.document, &mut false, page(html));
     let tree = config.dom_to_render_tree(&dom).ok()?;
     config.render_to_lines(tree, width).ok()
 }
@@ -676,8 +699,10 @@ fn layout(html: &str, width: usize, blackboard: bool) -> Option<Vec<HtmlLine>> {
 /// Normalize M2's presentation wrappers before layout. Example tables describe
 /// consecutive code blocks; data tables keep their rows, columns and borders.
 fn normalize(node: &Handle, in_examples: bool) -> Vec<Handle> {
-    if tag_of(node).as_deref() == Some("li") {
-        link_signature(node);
+    match tag_of(node).as_deref() {
+        Some("li") => link_signature(node),
+        Some("span") => default_as_code(node),
+        _ => {}
     }
     let (replacement, subscript, in_examples, flatten, group) = match &node.data {
         Element { name, attrs, .. } => {
@@ -763,6 +788,26 @@ fn normalize(node: &Handle, in_examples: bool) -> Vec<Handle> {
     }
 }
 
+/// Set an optional input's `default value null` with its default as code, so the
+/// default is coloured as the value it is.
+fn default_as_code(span: &Handle) {
+    let Some(text) = span.children.borrow().first().and_then(text_leaf) else {
+        return;
+    };
+    if span.children.borrow().len() != 1 {
+        return;
+    }
+    let Some(default) = text.strip_prefix(DEFAULT_VALUE) else {
+        return;
+    };
+    if default.trim().is_empty() || parse_native(default).is_err() {
+        return;
+    }
+    let label = element("span", &escape_text(DEFAULT_VALUE));
+    let code = element("code", &escape_text(default));
+    adopted_by(Rc::clone(span), vec![label, code]);
+}
+
 /// Give an unlinked method signature its entry's documentation destination.
 fn link_signature(item: &Handle) {
     let signature = find_signature(item);
@@ -775,21 +820,84 @@ fn link_signature(item: &Handle) {
     if !reads_as_code(&signature) {
         return;
     }
-    let alias = find_element(item, "a").and_then(|link| attribute(&link, "href"));
-    if alias.is_none() && !text.contains('(') {
-        return;
+    let note = taken_note(&signature);
+    let mut children = signature.children.take();
+    let alias = match note {
+        EntryNote::Alias(alias) => alias,
+        EntryNote::MissingDocumentation => {
+            children = vec![carrying(
+                MARK_LINK_SCHEME,
+                HLGroup::MarkupMissingDoc,
+                children,
+            )];
+            None
+        }
+        EntryNote::None => None,
+    };
+    if alias.is_some() || text.contains('(') {
+        let target =
+            alias.unwrap_or_else(|| serde_json::to_string(text.trim()).expect("text serializes"));
+        let link = parsed_element(
+            &format!(
+                "<a href=\"{}\"></a>",
+                escape_text(&target).replace('"', "&quot;")
+            ),
+            "a",
+        );
+        children = vec![adopted_by(link, children)];
     }
-    let target =
-        alias.unwrap_or_else(|| serde_json::to_string(text.trim()).expect("text serializes"));
-    let link = parsed_element(
-        &format!(
-            "<a href=\"{}\"></a>",
-            escape_text(&target).replace('"', "&quot;")
-        ),
-        "a",
-    );
-    let children = signature.children.take();
-    signature.children.replace(vec![adopted_by(link, children)]);
+    adopted_by(signature, children);
+}
+
+/// What M2 sets after a method in a page's menu, which the method's own drawing
+/// replaces.
+#[derive(Debug)]
+enum EntryNote {
+    /// ` -- see page -- headline`: documented on that page, which the signature
+    /// links to instead, as every such entry repeated the pointer.
+    Alias(Option<String>),
+    /// ` (missing documentation)`: shown by a tint rather than in words.
+    MissingDocumentation,
+    None,
+}
+
+/// The note after `signature`, taken out of its entry. Other links in an entry,
+/// such as an option's type, are not the signature's.
+fn taken_note(signature: &Handle) -> EntryNote {
+    let Some(parent) = signature.parent.take() else {
+        return EntryNote::None;
+    };
+    signature.parent.set(Some(Weak::clone(&parent)));
+    let Some(parent) = parent.upgrade() else {
+        return EntryNote::None;
+    };
+    let mut children = parent.children.borrow_mut();
+    let Some(at) = children
+        .iter()
+        .position(|child| Rc::ptr_eq(child, signature))
+    else {
+        return EntryNote::None;
+    };
+    match children
+        .get(at + 1)
+        .and_then(text_leaf)
+        .as_deref()
+        .map(str::trim)
+    {
+        Some(ALIAS_POINTER) => {
+            let alias = children[at + 2..]
+                .iter()
+                .find_map(|child| find_element(child, "a"))
+                .and_then(|link| attribute(&link, "href"));
+            children.truncate(at + 1);
+            EntryNote::Alias(alias)
+        }
+        Some(MISSING_DOCUMENTATION) => {
+            children.remove(at + 1);
+            EntryNote::MissingDocumentation
+        }
+        _ => EntryNote::None,
+    }
 }
 
 fn find_signature(node: &Handle) -> Option<Handle> {
@@ -819,7 +927,7 @@ fn attribute(node: &Handle, key: &str) -> Option<String> {
 }
 
 /// Attach inline semantics before width-dependent layout splits the text.
-fn decorate_inline(node: &Handle, described: &mut bool) {
+fn decorate_inline(node: &Handle, described: &mut bool, page: u64) {
     let tag = tag_of(node);
     if tag
         .as_deref()
@@ -827,16 +935,13 @@ fn decorate_inline(node: &Handle, described: &mut bool) {
     {
         return;
     }
-    if tag.as_deref() == Some("a")
-        && plain_text(node).is_some_and(|text| text.contains('('))
-        && reads_as_code(node)
-    {
+    if tag.as_deref() == Some("a") && is_code_link(node) {
         let children = node.children.take();
         node.children.replace(vec![adopt("code", children)]);
     }
     if tag.as_deref() == Some("code") {
         let source = inline_text(node);
-        paint_inline_code(node, &code(&source), &mut 0);
+        paint_inline_code(node, &analysed_code(page, &source), &mut 0);
         return;
     }
     let mut local = false;
@@ -869,11 +974,60 @@ fn decorate_inline(node: &Handle, described: &mut bool) {
                 decorated.push(child);
             }
         } else {
-            decorate_inline(&child, described);
+            decorate_inline(&child, described, page);
             decorated.push(child);
         }
     }
     adopted_by(Rc::clone(node), decorated);
+}
+
+/// Whether a link is set as code: a method's signature, or the name of the node
+/// it opens, which a page's analysis can tell the kind of.
+fn is_code_link(node: &Handle) -> bool {
+    let text = inline_text(node);
+    let text = text.trim();
+    (text.contains('(') || names_its_target(node))
+        && !SOURCE_LOCATION.is_match(text)
+        && parse_native(text).is_ok()
+}
+
+/// Whether `node` links to the documentation node its own text names.
+fn names_its_target(node: &Handle) -> bool {
+    let key =
+        attribute(node, "href").and_then(|target| serde_json::from_str::<String>(&target).ok());
+    key.is_some_and(|key| inline_text(node).trim() == key)
+}
+
+/// The code a page sets inline, as `decorate_inline` reads it: every source that
+/// is to be coloured by its analysis.
+fn inline_code_sources(html: &str) -> Vec<String> {
+    let config = html_config();
+    let Some(dom) = normalized(&config, html, MathStyle::default().blackboard) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    collect_inline_code(&dom.document, &mut found);
+    found
+}
+
+fn collect_inline_code(node: &Handle, found: &mut Vec<String>) {
+    let tag = tag_of(node);
+    if tag
+        .as_deref()
+        .is_some_and(|tag| matches!(tag, "pre" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"))
+    {
+        return;
+    }
+    if tag.as_deref() == Some("code") || (tag.as_deref() == Some("a") && is_code_link(node)) {
+        let source = inline_text(node);
+        if parse_native(&source).is_ok() && !found.contains(&source) {
+            found.push(source);
+        }
+        return;
+    }
+    for child in node.children.borrow().iter() {
+        collect_inline_code(child, found);
+    }
 }
 
 /// Text leaves serialized without introducing layout whitespace.
@@ -1112,7 +1266,12 @@ fn adopt(tag: &str, children: Vec<Handle>) -> Handle {
 
 /// A link holding `children` that only carries `group` through layout.
 fn group_link(group: HLGroup, children: Vec<Handle>) -> Handle {
-    let scheme = GROUP_LINK_SCHEME;
+    carrying(GROUP_LINK_SCHEME, group, children)
+}
+
+/// A link holding `children` that carries `group` through layout under `scheme`:
+/// [`GROUP_LINK_SCHEME`] paints them in it, [`MARK_LINK_SCHEME`] lays it over them.
+fn carrying(scheme: &str, group: HLGroup, children: Vec<Handle>) -> Handle {
     let group = group.description();
     let wrapper = parsed_element(&format!(r#"<a href="{scheme}{group}"></a>"#), "a");
     adopted_by(wrapper, children)
@@ -1202,9 +1361,16 @@ fn row(line: &TaggedLine<Vec<RichAnnotation>>) -> SpanLine {
                 .and_then(|name| HLGroup::named(name).ok()),
             _ => None,
         });
-        let linked = run.tag.iter().any(
-            |tag| matches!(tag, RichAnnotation::Link(url) if !url.starts_with(GROUP_LINK_SCHEME)),
-        );
+        let carried_mark = run.tag.iter().find_map(|tag| match tag {
+            RichAnnotation::Link(url) => url
+                .strip_prefix(MARK_LINK_SCHEME)
+                .and_then(|name| HLGroup::named(name).ok()),
+            _ => None,
+        });
+        let linked = run.tag.iter().any(|tag| {
+            matches!(tag, RichAnnotation::Link(url)
+                if !url.starts_with(GROUP_LINK_SCHEME) && !url.starts_with(MARK_LINK_SCHEME))
+        });
         // A link to another documentation node carries its key as an M2 string,
         // as the shell's startup rewrites it; any other link only reads as one.
         let target = run.tag.iter().find_map(|tag| match tag {
@@ -1258,17 +1424,19 @@ fn row(line: &TaggedLine<Vec<RichAnnotation>>) -> SpanLine {
         // A definition term is always set in emphasis, which would set `Usage:`
         // apart from the other property labels.
         let emphasis = run.tag.contains(&RichAnnotation::Emphasis) && level != SYNOPSIS_LEVEL;
-        // A link in prose takes the link colour; one set as code keeps the
-        // syntax colours of its code. Both are slanted like emphasis.
+        // A link keeps the colours of its text, prose or code, and only has a soft
+        // underline laid over them.
         let strong = run.tag.contains(&RichAnnotation::Strong);
-        let mark = if strong && (emphasis || linked) {
+        let mark = if carried_mark.is_some() {
+            carried_mark
+        } else if strong && emphasis {
             Some(HLGroup::MarkupStrongEmphasis)
         } else if strong {
             Some(HLGroup::MarkupStrong)
-        } else if emphasis || linked && is_code && !file_link {
+        } else if emphasis {
             Some(HLGroup::MarkupEmphasis)
         } else if linked {
-            Some(HLGroup::MarkupLink)
+            Some(HLGroup::MarkupDocLink)
         } else if run.tag.contains(&RichAnnotation::Strikeout) {
             Some(HLGroup::MarkupStrike)
         } else {
@@ -1312,9 +1480,18 @@ fn example(text: &str, preformatted: bool) -> SpanLine {
 /// plain value text.
 fn code(source: &str) -> Vec<TextSpan> {
     let marked = CODE.with_borrow_mut(|highlighter| highlighter.highlight(source));
+    filled(source, &marked)
+}
+
+/// `source` coloured as M2 code under what the analysis of `page` found in it.
+fn analysed_code(page: u64, source: &str) -> Vec<TextSpan> {
+    filled(source, &examples::highlighted(page, source))
+}
+
+fn filled(source: &str, marked: &[HLSpan]) -> Vec<TextSpan> {
     let mut spans = Vec::new();
     let mut at = 0;
-    for mark in &marked {
+    for mark in marked {
         if mark.content.start < at {
             continue;
         }
@@ -1324,7 +1501,10 @@ fn code(source: &str) -> Vec<TextSpan> {
                 HLGroup::Value,
             ));
         }
-        spans.push(TextSpan::new(&source[mark.content.clone()], mark.kind));
+        spans.push(TextSpan::new(
+            &source[mark.content.clone()],
+            mark.flattened_kind(),
+        ));
         at = mark.content.end;
     }
     if at < source.len() {

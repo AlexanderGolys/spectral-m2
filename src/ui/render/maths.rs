@@ -11,16 +11,7 @@
 //! implies, so the scheme paints output the way it paints code — from parsed
 //! structure, never from matching text.
 
-use std::ops::Range;
-use std::sync::Arc;
-
-use ratatui::style::Color;
-
-use serde::{Deserialize, Serialize};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-
-use these_macros_should_be_illegal::*;
-
+use super::markup;
 use crate::backend::{CollectionKind, M2Value, OPTION_ARROW, SPACED_OPTION_ARROW};
 use crate::ui::block::TextSpan;
 use crate::ui::config::UI;
@@ -29,8 +20,12 @@ use crate::ui::graphics;
 use crate::ui::present::{wrap, SpanLine};
 use crate::ui::theme::groups::{Groups, HLGroup};
 use crate::ui::wrap::WordWrap;
-
-use super::markup;
+use ratatui::style::Color;
+use serde::{Deserialize, Serialize};
+use std::ops::Range;
+use std::sync::Arc;
+use these_macros_should_be_illegal::*;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// A piece of parsed maths, tagged with the role that decides its colour.
 #[derive(Clone, Debug, PartialEq, Eq)]

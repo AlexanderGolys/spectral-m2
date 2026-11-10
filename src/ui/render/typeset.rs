@@ -21,10 +21,32 @@ const COLLECTION_SEPARATOR: &str = ", ";
 /// The image backend, returning terminal-cell rows for one formula.
 type Picture = fn(Typesetting, Rgb, u16) -> Option<Pictured>;
 
-/// A value's rows as drawn, and the links among them.
+/// How a piece of TeX was drawn, the least faithful first so that `min` finds the
+/// weakest piece of a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Form {
+    /// M2's own plain-text spelling, because nothing else could draw it.
+    Net,
+    Unicode,
+    Picture,
+}
+
+impl Form {
+    /// The weaker of two forms, where a part that is no TeX has none.
+    fn weakest(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        match (first, second) {
+            (Some(first), Some(second)) => Some(first.min(second)),
+            (first, second) => first.or(second),
+        }
+    }
+}
+
+/// A value's rows as drawn, the links among them, and the weakest form that drew
+/// any TeX in them.
 pub struct Drawn {
     pub lines: Vec<Line<'static>>,
     pub links: Vec<Link>,
+    pub form: Option<Form>,
 }
 
 /// Render each value in its own representation, without converting text into TeX.
@@ -34,8 +56,10 @@ pub fn drawn(value: &M2Value, width: usize, groups: &Groups, style: MathStyle) -
         _ => graphics::typeset,
     };
     let ink = (style.ink == MathInk::Monochrome).then(|| groups.style(HLGroup::Value));
-    let Block { lines, links, .. } = Block::value(value, width.max(1), groups, style, ink, picture);
-    Drawn { lines, links }
+    let Block {
+        lines, links, form, ..
+    } = Block::value(value, width.max(1), groups, style, ink, picture);
+    Drawn { lines, links, form }
 }
 
 /// The pieces of a type annotation, which carry their own spacing, set together in
@@ -207,6 +231,8 @@ struct Block {
     baseline: usize,
     /// The links drawn among `lines`, placed from the block's top left corner.
     links: Vec<Link>,
+    /// The weakest form that drew TeX among `lines`; none when none was.
+    form: Option<Form>,
 }
 
 impl Block {
@@ -215,6 +241,14 @@ impl Block {
             lines,
             baseline,
             links: Vec::new(),
+            form: None,
+        }
+    }
+
+    fn drawn_as(self, form: Form) -> Self {
+        Self {
+            form: Some(form),
+            ..self
         }
     }
 
@@ -254,7 +288,9 @@ impl Block {
     fn stacked(blocks: Vec<Self>) -> Self {
         let mut lines = Vec::new();
         let mut links = Vec::new();
+        let mut form = None;
         for block in blocks {
+            form = Form::weakest(form, block.form);
             let offset = Offset {
                 x: 0,
                 y: lines.len() as i32,
@@ -264,6 +300,7 @@ impl Block {
         }
         Self {
             links,
+            form,
             ..Self::centred(lines)
         }
     }
@@ -283,7 +320,9 @@ impl Block {
         let mut lines = vec![Line::default(); baseline + below];
         let mut links = Vec::new();
         let mut column = 0;
+        let mut form = None;
         for block in [self, other] {
+            form = Form::weakest(form, block.form);
             let width = block.width();
             let offset = baseline - block.baseline;
             let height = block.lines.len();
@@ -308,6 +347,7 @@ impl Block {
             lines,
             baseline,
             links,
+            form,
         }
     }
 
@@ -381,7 +421,7 @@ impl Block {
             Rgb([r, g, b]),
             u16::try_from(width).unwrap_or(u16::MAX),
         )?;
-        Some(Self::new(lines, baseline))
+        Some(Self::new(lines, baseline).drawn_as(Form::Picture))
     }
 
     fn value(
@@ -426,8 +466,10 @@ impl Block {
                         .collect::<Vec<_>>()
                 });
                 match lines.filter(|lines| !lines.is_empty()) {
-                    Some(lines) => Self::centred(lines),
-                    None => Self::wrapped(fallback, text_ink(HLGroup::Value), width),
+                    Some(lines) => Self::centred(lines).drawn_as(Form::Unicode),
+                    None => {
+                        Self::wrapped(fallback, text_ink(HLGroup::Value), width).drawn_as(Form::Net)
+                    }
                 }
             }
             M2Value::Token { text, role } => Self::wrapped(text, text_ink(role.group()), width),
@@ -790,13 +832,14 @@ mod tests {
             ],
         };
         let block = Block::value(&value, 80, &groups, MathStyle::default(), None, spelled);
-        assert_eq!(
-            text(&block.lines),
-            [concat!(
-                r"\left[\left\langle\!\left|1,\,2\right|\!\right\rangle,\,\left(3\right)\right]",
-                " = [<|1, 2|>, (3)]"
-            )]
-        );
+        let fenced = |kind: CollectionKind, items: &str| {
+            let (open, close) = kind.tex_delimiters();
+            format!("{open}{items}{close}")
+        };
+        let angled = fenced(CollectionKind::AngleBarList, r"1,\,2");
+        let sequence = fenced(CollectionKind::Sequence, "3");
+        let formula = fenced(CollectionKind::Array, &format!(r"{angled},\,{sequence}"));
+        assert_eq!(text(&block.lines), [format!("{formula} = [<|1, 2|>, (3)]")]);
     }
 
     #[test]
@@ -890,6 +933,28 @@ mod tests {
     }
 
     #[test]
+    fn the_form_names_what_drew_the_tex_not_what_was_tried() {
+        let groups = Groups::default();
+        let refused: Picture = |_, _, _| None;
+        let draw = |value: &M2Value, picture| {
+            Block::value(value, 80, &groups, MathStyle::default(), None, picture).form
+        };
+        let drawable = tex(r"$\frac{x}{3}$", "x/3");
+        let undrawable = tex(r"$\undefinedcommand{x}$", "x");
+
+        assert_eq!(draw(&drawable, spelled), Some(Form::Picture));
+        assert_eq!(draw(&drawable, refused), Some(Form::Unicode));
+        assert_eq!(draw(&undrawable, refused), Some(Form::Net));
+        assert_eq!(draw(&word("null", Role::Null), refused), None);
+
+        let mixed = M2Value::Option {
+            key: Box::new(drawable),
+            value: Box::new(undrawable),
+        };
+        assert_eq!(draw(&mixed, refused), Some(Form::Net));
+    }
+
+    #[test]
     fn a_collection_with_an_item_that_has_no_tex_form_is_drawn_item_by_item() {
         let groups = Groups::default();
         let value = M2Value::Collection {
@@ -900,7 +965,10 @@ mod tests {
             ],
         };
 
-        assert!(collection_formula(CollectionKind::List, std::slice::from_ref(&value), &groups).is_none());
+        assert!(
+            collection_formula(CollectionKind::List, std::slice::from_ref(&value), &groups)
+                .is_none()
+        );
         assert!(matches!(&value, M2Value::Collection { items, .. }
             if collection_formula(CollectionKind::AngleBarList, items, &groups).is_none()));
     }

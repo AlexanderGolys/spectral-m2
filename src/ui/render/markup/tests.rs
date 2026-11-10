@@ -61,6 +61,89 @@ fn method_signatures_keep_syntax_and_link_to_their_direct_or_alias_documentation
 }
 
 #[test]
+fn a_method_documented_elsewhere_drops_the_pointer_its_link_replaces() {
+    let html = "<ul><li><span><kbd>probe(ZZ)</kbd> -- see <span><a title='headline' href='&quot;page&quot;'>page</a> -- headline</span></span></li></ul>";
+    let rows = spans(html, 90).unwrap();
+    let text: String = rows
+        .iter()
+        .flatten()
+        .map(|span| span.content.as_str())
+        .collect();
+    assert!(!text.contains("see"), "{text}");
+    assert!(!text.contains("headline"), "{text}");
+    let signature = rows
+        .iter()
+        .flatten()
+        .find(|span| span.content.contains("probe"))
+        .unwrap();
+    assert_eq!(signature.target.as_deref(), Some("\"page\""));
+}
+
+#[test]
+fn an_option_name_does_not_link_to_the_type_its_entry_mentions() {
+    let html = "<ul><li><span><span class='tt'>Probe</span><span class='tt'> => </span><span>a <a href='&quot;Type&quot;'>type</a></span>, <span>default value null</span></span></li></ul>";
+    let rows = spans(html, 90).unwrap();
+    let name = rows
+        .iter()
+        .flatten()
+        .find(|span| span.content.contains("Probe"))
+        .unwrap();
+    assert_eq!(name.target, None);
+    let text: String = rows
+        .iter()
+        .flatten()
+        .map(|span| span.content.as_str())
+        .collect();
+    assert!(text.contains("default value null"), "{text}");
+}
+
+#[test]
+fn a_method_without_documentation_is_tinted_instead_of_labelled() {
+    for signature in ["probe(Matrix)", "Probe ? String"] {
+        let html = format!("<ul><li><span><span class='tt'>{}</span> (missing documentation)<!--tag: x--></span></li></ul>", escape_text(signature));
+        let rows = spans(&html, 90).unwrap();
+        let text: String = rows
+            .iter()
+            .flatten()
+            .map(|span| span.content.as_str())
+            .collect();
+        assert!(!text.contains("missing"), "{text}");
+        let pieces: Vec<_> = rows
+            .iter()
+            .flatten()
+            .filter(|span| !span.content.trim().is_empty() && !span.content.starts_with('*'))
+            .collect();
+        assert!(!pieces.is_empty(), "{text}");
+        assert!(
+            pieces
+                .iter()
+                .all(|span| span.mark == Some(HLGroup::MarkupMissingDoc)),
+            "{pieces:?}"
+        );
+    }
+}
+
+#[test]
+fn an_option_default_is_coloured_as_code() {
+    for default in ["null", "true", "false", "&quot;0.0&quot;"] {
+        let html = format!("<ul><li><span><span class='tt'>Probe</span><span class='tt'> => </span><span>default value {default}</span>, prose</span></li></ul>");
+        let rows = spans(&html, 90).unwrap();
+        let spans: Vec<_> = rows.iter().flatten().collect();
+        let label = spans
+            .iter()
+            .find(|span| span.content.contains("default"))
+            .unwrap();
+        let value = spans
+            .iter()
+            .find(|span| span.content.contains(&default.replace("&quot;", "\"")))
+            .unwrap();
+        assert_ne!(value.kind, label.kind, "{default}");
+        let text: String = spans.iter().map(|span| span.content.as_str()).collect();
+        assert!(text.contains("default value "), "{text}");
+    }
+}
+
+#[test]
 fn document_layout_is_shared_by_painting_and_pointer_checks() {
     let html = "<p><a href='&quot;ZZ&quot;'>integers</a></p><pre>i1 : 2+2\n\no1 = 4</pre>";
     let context = RenderContext::new(60, 0);
@@ -684,7 +767,7 @@ fn a_token_built_of_others_leaves_colours_to_them_and_keeps_its_links() {
             .unwrap_or_else(|| panic!("{text} in {spans:?}"))
     };
     assert_eq!(piece("FunctionClosure").kind, HLGroup::Type);
-    assert_eq!(piece("b.m2").mark, Some(HLGroup::MarkupLink));
+    assert_eq!(piece("b.m2").mark, Some(HLGroup::MarkupDocLink));
 }
 
 #[test]
@@ -802,4 +885,35 @@ fn semantic_colours_of_computed_source_refresh_the_enclosing_example() {
         !Rc::ptr_eq(&before, &after),
         "enclosing rows retained stale semantic colours"
     );
+}
+
+#[test]
+fn a_documentation_name_takes_the_colour_its_pages_analysis_found_for_it() {
+    let html = "<p>See <a href='&quot;HeaderType&quot;'>HeaderType</a> and \
+        <a href='&quot;integers&quot;'>the integers</a>.</p>";
+    assert_eq!(inline_code_sources(html), ["HeaderType"]);
+    let kind_of = |name: &str| {
+        spans(html, 80)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .find(|span| span.content.contains(name))
+            .map(|span| span.kind)
+    };
+    let plain = kind_of("HeaderType");
+    remember_colors(crate::code::semantic::PageColors {
+        page: page(html),
+        sources: vec![(
+            "HeaderType".to_string(),
+            vec![HLSpan::new(0..10, HLGroup::Type)],
+        )],
+    });
+    assert_eq!(kind_of("HeaderType"), Some(HLGroup::Type));
+    assert_ne!(plain, Some(HLGroup::Type));
+    assert_eq!(
+        kind_of("the integers"),
+        Some(HLGroup::Value),
+        "prose stays prose"
+    );
+    forget_colors();
 }

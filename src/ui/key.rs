@@ -44,7 +44,9 @@ impl Keyboard {
             }
             return None;
         }
-        (event.kind != KeyEventKind::Release).then(|| {
+        let desktop_chord =
+            cfg!(not(target_os = "macos")) && event.modifiers.contains(CrosstermModifiers::SUPER);
+        (event.kind != KeyEventKind::Release && !desktop_chord).then(|| {
             let mut key = KeyEvent::from(event);
             key.modifiers |= self.modifiers;
             key
@@ -223,7 +225,7 @@ impl From<CrosstermKeyEvent> for KeyEvent {
         use KeyMod::*;
         let mut key = Self::new(event.code);
         let ctrl = if cfg!(target_os = "macos") {
-            CrosstermModifiers::SUPER | CrosstermModifiers::CONTROL
+            CrosstermModifiers::SUPER
         } else {
             CrosstermModifiers::CONTROL
         };
@@ -263,6 +265,13 @@ mod tests {
         };
         let terminal = CrosstermKeyEvent::new(KeyCode::Char('x'), modifier);
         assert!(KeyEvent::from(terminal).ctrl());
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn super_chords_belong_to_the_desktop() {
+        let chord = CrosstermKeyEvent::new(KeyCode::Tab, CrosstermModifiers::SUPER);
+        assert_eq!(Keyboard::default().event(chord), None);
     }
 
     #[test]

@@ -4,8 +4,8 @@
 //! Every session appends to one history file and takes in what the others appended,
 //! so input submitted in any session can be recalled in all of them.
 
+use crate::env::ENV;
 use std::collections::HashMap;
-use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
@@ -257,9 +257,7 @@ fn history_file_path() -> Option<PathBuf> {
 
 #[cfg(not(test))]
 fn history_file_path() -> Option<PathBuf> {
-    let state_dir = env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))?;
+    let state_dir = ENV.state_home()?;
     Some(state_dir.join("spectral-m2").join("history.jsonl"))
 }
 
@@ -273,7 +271,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system clock should be after the Unix epoch")
             .as_nanos();
-        env::temp_dir().join(format!(
+        ENV.temp_dir().join(format!(
             "spectral-m2-history-{}-{nonce}.jsonl",
             std::process::id()
         ))

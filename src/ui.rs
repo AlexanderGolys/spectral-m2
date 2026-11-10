@@ -11,9 +11,12 @@ mod debug;
 // UI. Drop these allows as each module gains its first caller.
 pub mod element;
 mod feed;
+pub mod floating;
+pub mod fold;
 pub mod geometry;
 pub mod glyphs;
 pub mod graphics;
+pub mod item;
 pub mod key;
 pub mod present;
 pub mod render;

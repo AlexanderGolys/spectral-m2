@@ -7,76 +7,26 @@
 //! its own under the user's configuration directory.
 
 pub mod appearance;
+pub mod config;
 pub mod keymap;
 pub mod layout;
 pub mod rendering;
 pub mod selection;
 pub mod statusline;
 pub mod tabs;
-#[cfg(not(test))]
-use std::env;
-use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use self::keymap::Shortcut;
+pub use self::config::*;
+pub use self::keymap::*;
 use self::layout::LayoutSettings;
 use self::rendering::RenderingSettings;
 use self::selection::SelectionSettings;
 use self::statusline::StatusLineSettings;
 use crate::ui::key::KeyEvent;
 use crate::ui::theme::Appearance;
-
-/// A settings record kept in a file of its own under the configuration directory.
-pub trait Persisted: Serialize + DeserializeOwned + Default {
-    /// The record's file inside the shell's configuration directory.
-    const FILE: &'static str;
-
-    /// The saved record, or the defaults when none was saved or it no longer reads.
-    fn load() -> Self {
-        config_file(Self::FILE)
-            .as_deref()
-            .and_then(read)
-            .unwrap_or_default()
-    }
-
-    /// Keep this record for the next session.
-    fn save(&self) {
-        if let Some(path) = config_file(Self::FILE) {
-            let _ = write(&path, self);
-        }
-    }
-}
-
-pub fn read<T: DeserializeOwned>(path: &Path) -> Option<T> {
-    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
-}
-
-pub fn write<T: Serialize>(path: &Path, record: &T) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, serde_json::to_vec_pretty(record)?)
-}
-
-#[cfg(not(test))]
-pub(super) fn config_file(name: &str) -> Option<PathBuf> {
-    let config = env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(config.join(env!("CARGO_PKG_NAME")).join(name))
-}
-
-/// Tests have no configuration directory, so a developer's saved settings neither
-/// leak into them nor are overwritten by them.
-#[cfg(test)]
-pub(super) fn config_file(_: &str) -> Option<PathBuf> {
-    None
-}
 
 /// Everything the settings picker adjusts, a section for each of its tabs.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -158,10 +108,12 @@ fn section_of<Section: DeserializeOwned + Default>(older: &Map<String, Value>) -
 
 #[cfg(test)]
 mod tests {
-    use std::env;
+    use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crossterm::event::KeyCode::Char;
+
+    use crate::env::ENV;
 
     use super::keymap::Keymaps;
     use super::statusline::{StatusComponent, StatusLinePosition, StatusSegment};
@@ -178,7 +130,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system clock should be after the Unix epoch")
             .as_nanos();
-        let path = env::temp_dir().join(format!(
+        let path = ENV.temp_dir().join(format!(
             "spectral-m2-settings-{}-{nonce}.json",
             std::process::id()
         ));
@@ -196,8 +148,8 @@ mod tests {
         saved.selection.copy_on_select = false;
         saved.selection.raw = true;
 
-        write(&path, &saved).expect("write settings");
-        let loaded: SavedSettings = read(&path).expect("read settings");
+        saved.write(&path).expect("write settings");
+        let loaded = SavedSettings::read(&path).expect("read settings");
         let _ = fs::remove_file(&path);
 
         assert_eq!(loaded.rendering.fractions, FractionStyle::Inline);

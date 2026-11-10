@@ -47,6 +47,8 @@ pub struct UiConfig {
     /// How long after the last keystroke that changed the input it keeps the
     /// typing prompt.
     pub typing_prompt_ms: u64,
+    /// How long the status line says what a copy took.
+    pub copy_notice_ms: u64,
     pub prompt_margin: u16,
     pub cell_margin: u16,
     pub cell_gap: u16,
@@ -88,6 +90,16 @@ pub struct UiConfig {
     /// gap included; a wider type goes below the value instead.
     pub max_type_share: f32,
     pub typeset: TypesetConfig,
+    pub floating: FloatingConfig,
+}
+
+/// Limits of a panel floating beside a point.
+#[derive(Clone, Copy, Debug)]
+pub struct FloatingConfig {
+    /// Columns, border included.
+    pub max_width: u16,
+    /// Rows of content, border excluded.
+    pub max_rows: u16,
 }
 
 /// Presentation configuration used by every UI element.
@@ -95,6 +107,7 @@ pub const UI: UiConfig = UiConfig {
     screen_margin: 1,
     feed_margin: 1,
     glyphs: GLYPHS,
+
     spinner: SpinnerConfig {
         frames: &["󰋙 ", "󰫃 ", "󰫄 ", "󰫅 ", "󰫆 ", "󰫇 ", "󰫈 ", "󰋘 ", " "],
         // frames: &["", "", "", "", "", ""],
@@ -103,6 +116,7 @@ pub const UI: UiConfig = UiConfig {
     },
 
     typing_prompt_ms: 200,
+    copy_notice_ms: 2000,
     prompt_margin: 2,
     cell_margin: 0,
     cell_gap: 3,
@@ -132,10 +146,15 @@ pub const UI: UiConfig = UiConfig {
     printed_margin: 1,
     type_gap: 2,
     max_type_share: 0.3,
+
     typeset: TypesetConfig {
         em_per_cell_height: 0.65,
         baseline_per_cell_height: 0.77,
         min_scale: 0.6,
+    },
+    floating: FloatingConfig {
+        max_width: 72,
+        max_rows: 8,
     },
 };
 

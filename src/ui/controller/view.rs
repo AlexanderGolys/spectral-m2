@@ -16,7 +16,7 @@ use crate::code::highlight::Highlighter;
 use crate::ui::action::Action;
 use crate::ui::block::{Block, Element, TextSpan};
 use crate::ui::block::{Reformatted, Rethemed};
-use crate::ui::cell::{Cell, CodeBlock, TextBlock};
+use crate::ui::cell::{CodeBlock, M2CodeCell, TextBlock};
 use crate::ui::config::UI;
 use crate::ui::cycle::cycled;
 use crate::ui::element::EventListener;
@@ -147,7 +147,7 @@ impl Viewport {
                 ViewKind::Code => (!committed.cells.is_empty())
                     .then(|| {
                         Box::new(CodeBlock::new(committed.cells.iter().map(|cell| {
-                            Cell::highlighted(
+                            M2CodeCell::highlighted(
                                 cell.code.clone(),
                                 Some((cell.number, cell.state)),
                                 cell.source_id,
@@ -162,7 +162,12 @@ impl Viewport {
                     .iter()
                     .map(|cell| {
                         Box::new(SyntaxTreeBlock::new(
-                            Cell::highlighted(cell.code.clone(), None, cell.source_id, highlighter),
+                            M2CodeCell::highlighted(
+                                cell.code.clone(),
+                                None,
+                                cell.source_id,
+                                highlighter,
+                            ),
                             cell.tree.clone(),
                         )) as Box<dyn Block>
                     })

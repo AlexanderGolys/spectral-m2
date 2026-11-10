@@ -5,10 +5,11 @@
 //! receives its highlighter separately because highlighting is an application-wide
 //! service rather than editor state.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
+use std::{iter, ptr};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Offset, Position, Rect};
@@ -19,7 +20,10 @@ use unicode_width::UnicodeWidthStr;
 
 use super::block::{Block, Element, HLSpan, Link, Text};
 use super::element::paste;
+use super::fold::{FoldRanges, LineFolds};
+use super::graphics::cell_size;
 use super::graphics::{self, kitty::ImageId};
+use super::item::{Item, ItemKind};
 use super::present;
 use super::render::maths::MathDisplay;
 use super::render::selection::Inclusions;
@@ -215,14 +219,14 @@ impl CellMarker {
 }
 
 /// One lexical Macaulay2 input cell and the byte ranges highlighted within it.
-pub struct Cell {
+pub struct M2CodeCell {
     text: String,
     number: Option<(u32, CellState)>,
     spans: Vec<HLSpan>,
     wrap_ranges: Vec<Range<usize>>,
 }
 
-impl Cell {
+impl M2CodeCell {
     pub(super) fn new(text: String, number: Option<(u32, CellState)>, spans: Vec<HLSpan>) -> Self {
         let wrap_ranges = spans.iter().map(|span| span.content.clone()).collect();
         Self {
@@ -259,7 +263,7 @@ impl Cell {
 
     /// Put this cell and another cell into one code block.
     #[cfg(test)]
-    fn join(self, other: Cell) -> CodeBlock {
+    fn join(self, other: M2CodeCell) -> CodeBlock {
         CodeBlock::new([self, other])
     }
 
@@ -285,19 +289,27 @@ impl Cell {
 
 /// One feed block containing one or more lexical input cells.
 pub struct CodeBlock {
-    cells: Vec<Cell>,
+    cells: Vec<M2CodeCell>,
 }
 
-/// A source document with semantic colours and an optional referenced fragment.
+/// A source document with semantic colours and an optional referenced fragment,
+/// its foldable stretches folded to their first line on a double click beside it.
 pub struct SourceBlock {
     code: RefCell<CodeBlock>,
     page: u64,
     focus: Option<Range<usize>>,
+    folds: LineFolds,
+}
+
+/// One row of a source's full layout: the line it shows and the part of the text on it.
+struct SourceRow {
+    line: u32,
+    text: Range<usize>,
 }
 
 impl SourceBlock {
     pub fn new(source: String, page: u64, focus: Option<Range<usize>>) -> Self {
-        let cell = Cell::highlighted(
+        let cell = M2CodeCell::highlighted(
             source,
             None,
             SourceId::Page { page, index: 0 },
@@ -307,7 +319,14 @@ impl SourceBlock {
             code: RefCell::new(CodeBlock::new([cell])),
             page,
             focus,
+            folds: LineFolds::default(),
         }
+    }
+
+    /// Fold the stretches in `ranges`, which may be learned only later.
+    pub fn with_folds(mut self, ranges: FoldRanges) -> Self {
+        self.folds = LineFolds::new(ranges);
+        self
     }
 
     fn focused_cells(&self, context: &RenderContext) -> Vec<Rect> {
@@ -334,43 +353,166 @@ impl SourceBlock {
             })
             .collect()
     }
+
+    /// Every row of the layout with nothing folded, none for the padding around the code.
+    fn rows(&self, context: &RenderContext) -> Vec<Option<SourceRow>> {
+        let code = self.code.borrow();
+        let cell = &code.cells[0];
+        let gutter = cell.marker().width(code.layout());
+        let mut rows = vec![None];
+        rows.extend(
+            cell.wrapped(context.width().saturating_sub(gutter))
+                .source_lines()
+                .map(|(range, _)| {
+                    Some(SourceRow {
+                        line: cell.text[..range.start].matches('\n').count() as u32,
+                        text: range.clone(),
+                    })
+                }),
+        );
+        rows.resize_with(usize::from(code.height(context)), || None);
+        rows
+    }
+
+    /// Where each row of the unfolded layout is shown, none when it is folded away.
+    fn shown_rows(&self, rows: &[Option<SourceRow>]) -> Vec<Option<u16>> {
+        let mut next = 0;
+        rows.iter()
+            .map(|row| {
+                let hidden = row.as_ref().is_some_and(|row| self.folds.hides(row.line));
+                (!hidden).then(|| {
+                    next += 1;
+                    next - 1
+                })
+            })
+            .collect()
+    }
+
+    /// The rows that begin a line, by their row in the unfolded layout.
+    fn line_starts(rows: &[Option<SourceRow>]) -> impl Iterator<Item = (usize, &SourceRow)> {
+        rows.iter().enumerate().filter_map(|(index, row)| {
+            let row = row.as_ref()?;
+            let previous = index.checked_sub(1).and_then(|previous| rows[previous].as_ref());
+            previous
+                .is_none_or(|previous| previous.line != row.line)
+                .then_some((index, row))
+        })
+    }
+
+    fn gutter(&self) -> (u16, u16) {
+        let code = self.code.borrow();
+        let layout = code.layout();
+        (layout.frame().inset(), code.cells[0].marker().width(layout))
+    }
 }
 
 impl Block for SourceBlock {
     fn height(&self, context: &RenderContext) -> u16 {
-        self.code.borrow().height(context)
+        let rows = self.rows(context);
+        self.shown_rows(&rows).iter().flatten().count() as u16
     }
 
     fn focus_row(&self, context: &RenderContext) -> Option<u16> {
-        self.focused_cells(context).first().map(|cells| cells.y)
+        let row = self.focused_cells(context).first()?.y;
+        let rows = self.rows(context);
+        self.shown_rows(&rows).get(usize::from(row)).copied().flatten()
     }
 
     fn render_local(&self, context: &RenderContext, buffer: &mut Buffer) {
+        let area = *buffer.area();
+        let rows = self.rows(context);
+        let mut full = Buffer::empty(Rect::new(area.x, area.y, area.width, rows.len() as u16));
         {
             let mut code = self.code.borrow_mut();
             let cell = &mut code.cells[0];
             cell.spans = markup::source_highlights(self.page, &cell.text);
-            code.render_local(context, buffer);
+            code.render_local(context, &mut full);
         }
         if let Some(background) = context.groups().selection().bg {
             for cells in self.focused_cells(context) {
-                for position in cells.intersection(*buffer.area()).positions() {
-                    buffer[position].set_bg(background);
+                for position in (cells + Offset::new(area.x as i32, area.y as i32))
+                    .intersection(*full.area())
+                    .positions()
+                {
+                    full[position].set_bg(background);
                 }
+            }
+        }
+        let shown = self.shown_rows(&rows);
+        for (row, y) in shown.iter().enumerate() {
+            let Some(y) = y.filter(|y| *y < area.height) else {
+                continue;
+            };
+            for x in area.left()..area.right() {
+                buffer[(x, area.y + y)] = full[(x, area.y + row as u16)].clone();
+            }
+        }
+        let (separator, gutter) = self.gutter();
+        let style = context.groups().fold_marker();
+        let code = self.code.borrow();
+        for (index, row) in Self::line_starts(&rows) {
+            let (Some(range), Some(y)) = (self.folds.starting_at(row.line), shown[index]) else {
+                continue;
+            };
+            let y = area.y + y;
+            if y >= area.bottom() {
+                continue;
+            }
+            let folded = self.folds.is_folded(row.line);
+            let glyph = match folded {
+                true => UI.glyphs.fold_closed,
+                false => UI.glyphs.fold_open,
+            };
+            buffer.set_string(
+                area.x + separator.saturating_sub(1),
+                y,
+                glyph.current(),
+                style,
+            );
+            if folded {
+                let x = area.x + gutter + code.cells[0].text[row.text.clone()].width() as u16 + 1;
+                let hidden = range.end() - range.start();
+                buffer.set_stringn(
+                    x,
+                    y,
+                    format!("{} {hidden} lines", UI.glyphs.folded_lines.current()),
+                    usize::from(area.right().saturating_sub(x)),
+                    style,
+                );
             }
         }
     }
 
+    fn toggle_fold(&mut self, position: Position, context: &RenderContext) -> bool {
+        let (_, gutter) = self.gutter();
+        if position.x >= gutter {
+            return false;
+        }
+        let rows = self.rows(context);
+        let shown = self.shown_rows(&rows);
+        let Some(row) = shown
+            .iter()
+            .position(|y| *y == Some(position.y))
+            .and_then(|row| rows[row].as_ref())
+        else {
+            return false;
+        };
+        self.folds.toggle(row.line)
+    }
+
     fn local_selection_inclusions(&self, context: &RenderContext, inclusions: &mut Inclusions) {
+        let mut unfolded = Inclusions::default();
         self.code
             .borrow()
-            .local_selection_inclusions(context, inclusions);
+            .local_selection_inclusions(context, &mut unfolded);
+        let shown = self.shown_rows(&self.rows(context));
+        *inclusions += unfolded.folded(|row| shown.get(usize::from(row)).copied().flatten());
     }
 }
 
 impl CodeBlock {
     /// Create a code block from lexical cells in display order.
-    pub fn new(cells: impl IntoIterator<Item = Cell>) -> Self {
+    pub fn new(cells: impl IntoIterator<Item = M2CodeCell>) -> Self {
         Self {
             cells: cells.into_iter().collect(),
         }
@@ -439,7 +581,7 @@ impl IncompleteBlock {
     /// Create an unfinished block from the parser's complete active source.
     pub fn new(source: String, spans: Vec<HLSpan>) -> Self {
         Self {
-            code: CodeBlock::new([Cell::rejected(source, spans)]),
+            code: CodeBlock::new([M2CodeCell::rejected(source, spans)]),
         }
     }
 
@@ -531,7 +673,7 @@ fn beside_gutter(prefix: u16, context: &RenderContext, height: u16) -> Rect {
 }
 
 fn cell_lines(
-    cell: &Cell,
+    cell: &M2CodeCell,
     marker: CellMarker,
     layout: CellLayout,
     context: &RenderContext,
@@ -614,7 +756,7 @@ impl EvaluationOutput {
 /// Submitted cells that resolve in place while their M2 evaluation runs.
 pub struct EvaluationBlock {
     id: u64,
-    cells: Vec<(Cell, EvaluationState)>,
+    cells: Vec<(M2CodeCell, EvaluationState)>,
     outputs: Vec<EvaluationOutput>,
     /// Whether the code wraps within its results' frame rather than the full width.
     framed_code: bool,
@@ -651,7 +793,7 @@ impl EvaluationBlock {
             id: 0,
             cells: cells
                 .into_iter()
-                .map(|(text, spans)| (Cell::rejected(text, spans), EvaluationState::Shown))
+                .map(|(text, spans)| (M2CodeCell::rejected(text, spans), EvaluationState::Shown))
                 .collect(),
             outputs: Vec::new(),
             framed_code: false,
@@ -667,7 +809,10 @@ impl EvaluationBlock {
     pub fn invalid(id: u64, source: String, spans: Vec<HLSpan>, message: String) -> Self {
         Self {
             id,
-            cells: vec![(Cell::rejected(source, spans), EvaluationState::Invalid)],
+            cells: vec![(
+                M2CodeCell::rejected(source, spans),
+                EvaluationState::Invalid,
+            )],
             outputs: vec![EvaluationOutput::Evaluation(Box::new(ErrorMessageBlock {
                 message,
             }))],
@@ -687,7 +832,7 @@ impl EvaluationBlock {
                 .enumerate()
                 .map(|(index, (text, spans))| {
                     (
-                        Cell::rejected(text, spans),
+                        M2CodeCell::rejected(text, spans),
                         match index {
                             0 => first,
                             _ => EvaluationState::Queued,
@@ -905,6 +1050,27 @@ impl EvaluationBlock {
     }
 }
 
+impl EvaluationBlock {
+    /// Draw the returned value whose renderer icon is at local `position` by its
+    /// next renderer; false when no icon is there.
+    pub fn cycle_renderer(&mut self, position: Position, context: &RenderContext) -> bool {
+        let mut top = self.code_height(context) + self.output_margin();
+        for output in &mut self.outputs {
+            let bottom = top.saturating_add(output.block().height(context));
+            if (top..bottom).contains(&position.y) {
+                return match output {
+                    EvaluationOutput::Value(block) => {
+                        block.cycle_renderer(Position::new(position.x, position.y - top), context)
+                    }
+                    EvaluationOutput::Evaluation(_) | EvaluationOutput::Printed(_) => false,
+                };
+            }
+            top = bottom;
+        }
+        false
+    }
+}
+
 impl Block for EvaluationBlock {
     fn pictures(&self) -> Vec<ImageId> {
         self.outputs
@@ -921,6 +1087,10 @@ impl Block for EvaluationBlock {
 
     fn toggle_fold(&mut self, position: Position, context: &RenderContext) -> bool {
         Self::toggle_fold(self, position, context)
+    }
+
+    fn cycle_renderer(&mut self, position: Position, context: &RenderContext) -> bool {
+        Self::cycle_renderer(self, position, context)
     }
 
     fn height(&self, context: &RenderContext) -> u16 {
@@ -996,6 +1166,32 @@ impl Block for EvaluationBlock {
             );
             y = y.saturating_add(height);
         }
+    }
+
+    fn items(&self, context: &RenderContext) -> Vec<Item> {
+        let layout = self.layout();
+        let code_width = self.code_width(context);
+        let mut row = 1;
+        let mut items = Vec::new();
+        for (cell, state) in &self.cells {
+            let marker = state.marker();
+            let height = cell
+                .wrapped(code_width.saturating_sub(marker.width(layout)))
+                .height();
+            items.push(Item::new(
+                ItemKind::Input,
+                row..row.saturating_add(height),
+                marker.number(),
+                cell.text.clone(),
+            ));
+            row = row.saturating_add(height);
+        }
+        let mut top = self.code_height(context) + self.output_margin();
+        for block in self.outputs() {
+            items.extend(block.items(context).into_iter().map(|item| item.moved(top)));
+            top = top.saturating_add(block.height(context));
+        }
+        items
     }
 
     fn links(&self, context: &RenderContext) -> Vec<Link> {
@@ -1187,6 +1383,15 @@ impl Block for TextBlock {
             }
         }
     }
+    fn items(&self, context: &RenderContext) -> Vec<Item> {
+        let (margin, number) = match self.kind {
+            TextKind::System => (0, None),
+            TextKind::Printed { number } => (UI.printed_margin, number),
+        };
+        let rows = margin..self.height(context).saturating_sub(margin);
+        vec![Item::new(ItemKind::Note, rows, number, self.text.clone())]
+    }
+
     fn local_selection_inclusions(&self, context: &RenderContext, inclusions: &mut Inclusions) {
         if matches!(self.kind, TextKind::Printed { .. }) {
             let body = self.body(context);
@@ -1222,6 +1427,8 @@ struct OutputCell {
     ty: Option<String>,
     /// The annotation's pieces, set from their structure when M2 sent them.
     type_parts: Vec<M2Value>,
+    /// The renderer the reader chose for this value over the one settings pick.
+    chosen: Cell<Option<ValueRenderer>>,
 }
 
 /// The path that turned a value into the rows of its output cell.
@@ -1240,6 +1447,40 @@ enum ValueRenderer {
 }
 
 impl ValueRenderer {
+    /// Every renderer, in the order a click on the icon steps through them.
+    const ALL: [Self; 5] = [
+        Self::Markup,
+        Self::Typeset,
+        Self::Unicode,
+        Self::Ascii,
+        Self::Plain,
+    ];
+
+    /// The renderer that laid out TeX the typesetter could draw as `form`: a
+    /// picture, else the maths it falls back to, else M2's own net.
+    fn drawing(form: Option<typeset::Form>) -> Self {
+        match form {
+            Some(typeset::Form::Net) => Self::Ascii,
+            Some(typeset::Form::Unicode) => Self::Unicode,
+            Some(typeset::Form::Picture) | None => Self::Typeset,
+        }
+    }
+
+    /// `style` set so that the paths that pick a renderer pick this one.
+    fn imposed(self, style: maths::MathStyle) -> maths::MathStyle {
+        let display = match self {
+            Self::Typeset => MathDisplay::Typeset,
+            Self::Ascii => MathDisplay::Ascii,
+            Self::Unicode => MathDisplay::Unicode,
+            Self::Markup | Self::Plain => style.display,
+        };
+        maths::MathStyle {
+            original_text: self == Self::Plain,
+            display,
+            ..style
+        }
+    }
+
     fn glyph(self) -> Glyph {
         let glyphs = UI.glyphs;
         match self {
@@ -1285,6 +1526,7 @@ impl OutputBlock {
                 value: None,
                 ty: ty.map(|ty| ty.trim_end().to_string()),
                 type_parts: Vec::new(),
+                chosen: Cell::default(),
             }],
             expanded: false,
             framed: true,
@@ -1304,6 +1546,7 @@ impl OutputBlock {
                 value: Some(value),
                 ty,
                 type_parts: Vec::new(),
+                chosen: Cell::default(),
             }],
             expanded: false,
             framed: true,
@@ -1365,6 +1608,12 @@ impl OutputBlock {
     fn layout(&self, cell: &OutputCell, context: &RenderContext) -> Vec<String> {
         let width = self.value_width(cell, context);
         let text = match &cell.value {
+            // Chosen by the reader, the page is shown as M2 printed it.
+            Some(M2Value::Markup { fallback, .. })
+                if cell.chosen.get() == Some(ValueRenderer::Plain) =>
+            {
+                fallback.clone()
+            }
             Some(value @ M2Value::Markup { .. }) => value.render_at(width.into()),
             _ => cell.text.clone(),
         };
@@ -1389,7 +1638,10 @@ impl OutputBlock {
         // name and an operator each take their own colour. Anything else is flat text
         // and keeps the single value colour it always had.
         let width = usize::from(self.value_width(cell, context));
-        let style = context.math();
+        let style = cell
+            .chosen
+            .get()
+            .map_or_else(|| context.math(), |chosen| chosen.imposed(context.math()));
         let remember = |renderer, lines: Rc<Vec<Line<'static>>>, links, pixel_cell| {
             cell.layout.replace(Some(ValueLayout {
                 renderer,
@@ -1415,13 +1667,13 @@ impl OutputBlock {
             }
         }
         let pixel_cell = (style.display == MathDisplay::Typeset)
-            .then(super::graphics::cell_size)
+            .then(cell_size)
             .flatten();
         if let Some(layout) = cell.layout.borrow().as_ref().filter(|layout| {
             layout.width == width as u16
                 && layout.pixel_cell == pixel_cell
                 && layout.math == style
-                && std::ptr::eq(layout.groups, theme)
+                && ptr::eq(layout.groups, theme)
         }) {
             return layout.lines.clone();
         }
@@ -1443,7 +1695,7 @@ impl OutputBlock {
             (MathDisplay::Typeset, Some(value)) => {
                 let drawn = typeset::drawn(value, width, theme, style);
                 links = drawn.links;
-                (ValueRenderer::Typeset, drawn.lines)
+                (ValueRenderer::drawing(drawn.form), drawn.lines)
             }
             (MathDisplay::Ascii, Some(M2Value::Type(value))) => (
                 ValueRenderer::Ascii,
@@ -1572,7 +1824,7 @@ impl OutputBlock {
             lines[..head]
                 .iter()
                 .cloned()
-                .chain(std::iter::repeat_n(Line::default(), usize::from(FOLD_ROWS)))
+                .chain(iter::repeat_n(Line::default(), usize::from(FOLD_ROWS)))
                 .chain(lines[head + hidden..].iter().cloned())
                 .collect()
         } else {
@@ -1614,18 +1866,65 @@ impl OutputBlock {
         toggled
     }
 
+    /// The column of the renderer's icon: the label's last character crosses the
+    /// border, so labels of one length line up, and the icon takes the column the
+    /// label would start in.
+    fn icon_column(&self, number: u32) -> u16 {
+        let width = format!("o{number}").chars().count() as u16;
+        (self.border_layout().inset() + 1).saturating_sub(width)
+    }
+
+    /// The renderers `cell`'s value can be drawn by, the ones that would be
+    /// ignored for its kind of value left out.
+    fn renderers(&self, cell: &OutputCell, context: &RenderContext) -> Vec<ValueRenderer> {
+        let chosen = cell.chosen.get();
+        let drawn = ValueRenderer::ALL
+            .into_iter()
+            .filter(|&renderer| {
+                cell.chosen.set(Some(renderer));
+                self.renderer(cell, context) == renderer
+            })
+            .collect();
+        cell.chosen.set(chosen);
+        drawn
+    }
+
+    /// Draw the value whose renderer icon is at local `position` by its next
+    /// renderer, so what an author wrote can be told from what it was drawn as.
+    fn cycle_renderer(&mut self, position: Position, context: &RenderContext) -> bool {
+        let area = Rect::new(0, 0, context.width(), self.height(context));
+        let mut row = Bordered::inner(area, self.border_layout()).y;
+        for (index, cell) in self.cells.iter().enumerate() {
+            row = row.saturating_add(Self::gap(index));
+            let icon = cell
+                .number
+                .map(|number| Position::new(self.icon_column(number), row));
+            if icon == Some(position) {
+                let current = self.renderer(cell, context);
+                let options = self.renderers(cell, context);
+                if !options.contains(&current) {
+                    return false;
+                }
+                let next = options
+                    .iter()
+                    .cycle()
+                    .skip_while(|&&it| it != current)
+                    .nth(1);
+                cell.chosen.set(next.copied());
+                return next.is_some_and(|&next| next != current);
+            }
+            row = row.saturating_add(row_count!(self.lines(cell, context).len()));
+        }
+        false
+    }
+
     fn type_lines(&self, cell: &OutputCell, context: &RenderContext) -> Vec<Line<'static>> {
         let theme = context.groups();
         let width = usize::from(self.text_width(context));
         let math = context.math();
         let rendered = !cell.type_parts.is_empty() && !math.original_text;
         if math.display == MathDisplay::Typeset && rendered {
-            return super::render::typeset::annotation(
-                &cell.type_parts,
-                width,
-                theme,
-                context.math(),
-            );
+            return typeset::annotation(&cell.type_parts, width, theme, context.math());
         }
         if rendered && math.display != MathDisplay::Ascii {
             return maths::annotation(&cell.type_parts, width, context.math())
@@ -1793,6 +2092,10 @@ impl Block for OutputBlock {
         Self::toggle_fold(self, position, context)
     }
 
+    fn cycle_renderer(&mut self, position: Position, context: &RenderContext) -> bool {
+        Self::cycle_renderer(self, position, context)
+    }
+
     fn height(&self, context: &RenderContext) -> u16 {
         row_count!(self.body(context).len()).saturating_add(2)
     }
@@ -1822,7 +2125,7 @@ impl Block for OutputBlock {
                 // The label's last character crosses the border, so labels of one
                 // length line up; the renderer's icon takes the column the label
                 // would start in, and the label sits one column after it.
-                let icon = (layout.inset() + 1).saturating_sub(width);
+                let icon = self.icon_column(number);
                 let style = match context.is_recent_output(number) {
                     true => theme.recent_output(),
                     false => theme.output_number(),
@@ -1852,6 +2155,27 @@ impl Block for OutputBlock {
             }
             row = row.saturating_add(row_count!(self.lines(cell, context).len()));
         }
+    }
+
+    fn items(&self, context: &RenderContext) -> Vec<Item> {
+        let area = Rect::new(0, 0, context.width(), self.height(context));
+        let mut row = Bordered::inner(area, self.border_layout()).y;
+        let mut items = Vec::new();
+        for (index, cell) in self.cells.iter().enumerate() {
+            row = row.saturating_add(Self::gap(index));
+            let shown = row_count!(self.lines(cell, context).len());
+            items.push(
+                Item::new(
+                    ItemKind::Output,
+                    row..row.saturating_add(shown),
+                    cell.number,
+                    cell.text.clone(),
+                )
+                .with_type(cell.ty.clone()),
+            );
+            row = row.saturating_add(shown);
+        }
+        items
     }
 
     fn links(&self, context: &RenderContext) -> Vec<Link> {
@@ -1983,6 +2307,11 @@ pub struct WarningBlock {
 }
 
 impl Block for WarningBlock {
+    fn items(&self, context: &RenderContext) -> Vec<Item> {
+        let rows = 0..self.height(context);
+        vec![Item::new(ItemKind::Note, rows, None, self.text.clone())]
+    }
+
     fn height(&self, context: &RenderContext) -> u16 {
         row_count!(word_lines(
             &self.text,
@@ -2089,6 +2418,11 @@ pub struct ErrorMessageBlock {
 }
 
 impl Block for ErrorMessageBlock {
+    fn items(&self, context: &RenderContext) -> Vec<Item> {
+        let rows = 0..self.height(context);
+        vec![Item::new(ItemKind::Note, rows, None, self.message.clone())]
+    }
+
     fn height(&self, context: &RenderContext) -> u16 {
         row_count!(error_box_text(&self.message, context).len()).saturating_add(2)
     }
@@ -2113,6 +2447,50 @@ mod tests {
     use crate::ui::syntax_tree::SyntaxTreeBlock;
     use crate::ui::theme::groups::{Groups, HLGroup};
     use m2_syn::{DelimiterKind, DoubleSpan, PrettyNode, Span as M2Span};
+
+    /// The rows `block` draws, as text.
+    fn drawn_rows(block: &dyn Block, context: &RenderContext) -> Vec<String> {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, context.width(), block.height(context)));
+        block.render_local(context, &mut buffer);
+        (0..buffer.area.height)
+            .map(|y| (0..buffer.area.width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn a_source_folds_a_stretch_to_its_first_line_by_a_double_click_beside_it() {
+        let source = "f = x -> (\n    y := x;\n    y\n    )\ng = 1".to_string();
+        let ranges = FoldRanges::default();
+        let mut block = SourceBlock::new(source, 0, None).with_folds(ranges.clone());
+        let context = RenderContext::new(40, 0);
+        let unfolded = block.height(&context);
+        let row_of = |rows: &[String], text: &str| {
+            rows.iter().position(|row| row.contains(text)).unwrap() as u16
+        };
+        let rows = drawn_rows(&block, &context);
+        let first = row_of(&rows, "f = x");
+        assert!(!rows[usize::from(first)].contains(UI.glyphs.fold_open.current()));
+
+        ranges.borrow_mut().push(0..=3);
+        let rows = drawn_rows(&block, &context);
+        assert!(rows[usize::from(first)].contains(UI.glyphs.fold_open.current()));
+        assert!(!block.toggle_fold(Position::new(context.width() - 1, first), &context));
+        assert!(block.toggle_fold(Position::new(0, first), &context));
+
+        let rows = drawn_rows(&block, &context);
+        assert_eq!(block.height(&context), unfolded - 3);
+        assert!(rows[usize::from(first)].contains(UI.glyphs.fold_closed.current()));
+        assert!(rows[usize::from(first)].contains("3 lines"));
+        assert!(rows.iter().all(|row| !row.contains("y := x")));
+        assert!(rows.iter().any(|row| row.contains("g = 1")));
+        let mut inclusions = Inclusions::default();
+        block.local_selection_inclusions(&context, &mut inclusions);
+        let below = row_of(&rows, "g = 1");
+        assert!(inclusions.layer_at(Position::new(context.width() / 2, below)).is_some());
+
+        assert!(block.toggle_fold(Position::new(0, first), &context));
+        assert_eq!(block.height(&context), unfolded);
+    }
 
     #[test]
     fn oversized_plain_output_has_a_bounded_preview_even_when_expanded() {
@@ -2399,7 +2777,7 @@ mod tests {
             assert!(row[..usize::from(inset())].trim().is_empty());
             assert!(!row.contains('┈'));
         }
-        let ordinary = CodeBlock::new([Cell::rejected("f(\nx\n".into(), Vec::new())]);
+        let ordinary = CodeBlock::new([M2CodeCell::rejected("f(\nx\n".into(), Vec::new())]);
         assert_eq!(rows, rendered_rows(&ordinary, 50));
         let buffer = rendered_buffer(&block, 50);
         assert_eq!(Some(buffer[(0, 0)].bg), groups.code().bg);
@@ -2430,7 +2808,7 @@ mod tests {
             "comments",
             PrettyNode::collection("Comments · 0 items", None),
         );
-        SyntaxTreeBlock::new(Cell::new("(x,y)".to_string(), None, Vec::new()), root)
+        SyntaxTreeBlock::new(M2CodeCell::new("(x,y)".to_string(), None, Vec::new()), root)
     }
 
     #[test]
@@ -2499,7 +2877,8 @@ mod tests {
         };
         let tree = cells.remove(0).tree;
         let context = RenderContext::new(100, 0);
-        let block = SyntaxTreeBlock::new(Cell::new(source.to_string(), None, Vec::new()), tree);
+        let block =
+            SyntaxTreeBlock::new(M2CodeCell::new(source.to_string(), None, Vec::new()), tree);
         let screen = block
             .tree_lines(&context)
             .iter()
@@ -2547,7 +2926,7 @@ mod tests {
             "closing",
             PrettyNode::token("Token", "]", span.subspan(3, 4)),
         );
-        let block = SyntaxTreeBlock::new(Cell::new("[ab]".into(), None, Vec::new()), array);
+        let block = SyntaxTreeBlock::new(M2CodeCell::new("[ab]".into(), None, Vec::new()), array);
         let buffer = rendered_buffer(&block, 60);
         let rows: Vec<String> = (0..buffer.area().height)
             .map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect())
@@ -2601,7 +2980,7 @@ mod tests {
         let span = M2Span::for_text("xy");
         let mut tree = PrettyNode::syntax("Root", Some(span.clone()));
         tree.push_node("operator", PrettyNode::token("Adj", "Adj", span.at(1)));
-        let block = SyntaxTreeBlock::new(Cell::new("xy".to_string(), None, Vec::new()), tree);
+        let block = SyntaxTreeBlock::new(M2CodeCell::new("xy".to_string(), None, Vec::new()), tree);
         let screen: String = block
             .tree_lines(&context)
             .iter()
@@ -2619,7 +2998,7 @@ mod tests {
         let context = RenderContext::new(40, 0);
         let source = (0..20).map(|_| "long").collect::<Vec<_>>().join(" \n");
         let tree = PrettyNode::syntax("Root", Some(M2Span::for_text(source.clone())));
-        let block = SyntaxTreeBlock::new(Cell::new(source, None, Vec::new()), tree);
+        let block = SyntaxTreeBlock::new(M2CodeCell::new(source, None, Vec::new()), tree);
         let line = &block.tree_lines(&context)[0];
 
         assert!(line.width() <= usize::from(context.width()));
@@ -2629,7 +3008,7 @@ mod tests {
     #[test]
     fn code_and_output_reserve_the_cell_marker_margin() {
         let width = 40;
-        let input = CodeBlock::new([Cell::input("x".to_string(), Vec::new())]);
+        let input = CodeBlock::new([M2CodeCell::input("x".to_string(), Vec::new())]);
         let output = OutputBlock::value("x".to_string(), None);
 
         let input = rendered_rows(&input, width);
@@ -2662,6 +3041,36 @@ mod tests {
     }
 
     #[test]
+    fn clicking_the_renderer_icon_steps_through_the_ways_to_draw_the_value() {
+        let context = RenderContext::new(40, 0);
+        let page = M2Value::Markup {
+            html: "<p>rendered words</p>".into(),
+            fallback: "original words".into(),
+            example_width: 80,
+        };
+        let mut output = OutputBlock::rendered(page, None).numbered(1);
+        let icon = Position::new(output.icon_column(1), 1);
+        let drawn = |output: &OutputBlock| output.renderer(&output.cells[0], &context);
+        let shown = |output: &OutputBlock| {
+            output
+                .lines(&output.cells[0], &context)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<String>()
+        };
+        assert_eq!(drawn(&output), ValueRenderer::Markup);
+        assert!(shown(&output).contains("rendered words"));
+
+        assert!(output.cycle_renderer(icon, &context));
+        assert_eq!(drawn(&output), ValueRenderer::Plain);
+        assert!(shown(&output).contains("original words"));
+
+        assert!(!output.cycle_renderer(Position::new(icon.x + 4, 1), &context));
+        assert!(output.cycle_renderer(icon, &context));
+        assert_eq!(drawn(&output), ValueRenderer::Markup);
+    }
+
+    #[test]
     fn the_latest_outputs_keep_their_numbered_labels() {
         let context = RenderContext::new(20, 0).with_recent_outputs([Some(9), Some(8), Some(7)]);
         let label = |number| {
@@ -2681,7 +3090,7 @@ mod tests {
 
     #[test]
     fn hard_wrapped_code_keeps_its_prefix() {
-        let input = CodeBlock::new([Cell::input("abcdefgh".to_string(), Vec::new())]);
+        let input = CodeBlock::new([M2CodeCell::input("abcdefgh".to_string(), Vec::new())]);
 
         let rows = rendered_rows(&input, (prefix() + 4) as u16);
         assert_eq!(
@@ -2799,7 +3208,7 @@ mod tests {
 
     #[test]
     fn wrapping_paints_each_source_range() {
-        let cell = Cell::input(
+        let cell = M2CodeCell::input(
             "abcdefgh".to_string(),
             vec![HLSpan::new(0..8, HLGroup::Variable)],
         );
@@ -2841,8 +3250,9 @@ mod tests {
         }
 
         let mut highlighter = WholeCellHighlighter;
-        let code = Cell::input("x".to_string(), highlighter.highlight("x"))
-            .join(Cell::input("y".to_string(), highlighter.highlight("y")));
+        let code = M2CodeCell::input("x".to_string(), highlighter.highlight("x")).join(
+            M2CodeCell::input("y".to_string(), highlighter.highlight("y")),
+        );
 
         assert_eq!(code.cells[0].text, "x");
         assert_eq!(code.cells[0].spans[0].content, 0..1);
@@ -2982,7 +3392,7 @@ mod tests {
 
         let rows = rendered_rows(&block, 20);
         let input = rendered_rows(
-            &CodeBlock::new([Cell::input("x".to_string(), Vec::new())]),
+            &CodeBlock::new([M2CodeCell::input("x".to_string(), Vec::new())]),
             20,
         );
         assert_eq!(rows.len(), 3);
@@ -3260,7 +3670,7 @@ mod tests {
             }
         }
         let source = "\"abcdefghijklmn\"";
-        let mut cell = Cell::new(
+        let mut cell = M2CodeCell::new(
             source.to_string(),
             None,
             vec![HLSpan::new(0..source.len(), HLGroup::String)],

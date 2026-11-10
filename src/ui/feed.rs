@@ -19,6 +19,8 @@ use super::graphics::{self, kitty::ImageId};
 use super::render::selection::Inclusions;
 use super::render::{RenderContext, RECENT_OUTPUTS};
 
+mod selection;
+
 /// Retained position metadata for one feed viewport.
 struct ViewportState {
     area: Rect,
@@ -304,6 +306,8 @@ pub struct Feed {
     labelled: [Option<u32>; RECENT_OUTPUTS],
     /// Whether the block the feed was created with still leads it.
     opened: bool,
+    /// The cell or result taken whole, if one is.
+    selected: Option<selection::BlockSelection>,
 }
 
 impl Feed {
@@ -317,6 +321,7 @@ impl Feed {
             surface: None,
             labelled: [None; RECENT_OUTPUTS],
             opened: true,
+            selected: None,
         }
     }
 
@@ -389,6 +394,7 @@ impl Feed {
     /// Remove every block and reset scrolling.
     pub fn clear(&mut self) {
         self.blocks.clear();
+        self.selected = None;
         self.opened = false;
         self.scroll = 0;
         self.anchor = None;
@@ -535,6 +541,33 @@ impl Feed {
         toggled
     }
 
+    /// Draw the value whose renderer icon is at a screen position by its next
+    /// renderer, keeping the top row in place.
+    pub fn cycle_renderer(&mut self, position: Position) -> bool {
+        let Some(surface) = &self.surface else {
+            return false;
+        };
+        let Some(&(index, area, start)) = surface
+            .placements
+            .iter()
+            .find(|(_, area, _)| area.contains(position))
+        else {
+            return false;
+        };
+        let (context, anchor) = (surface.context, surface.anchor);
+        let block = &mut self.blocks[index];
+        let cycled = block.content.block_mut().cycle_renderer(
+            Position::new(position.x - area.x, start + position.y - area.y),
+            &context,
+        );
+        if cycled {
+            block.forget_layout();
+            self.anchor = anchor;
+            self.surface = None;
+        }
+        cycled
+    }
+
     /// The link drawn at a screen position, with the cells of it on screen.
     pub fn link_at(&self, position: Position) -> Option<Link> {
         let surface = self.surface.as_ref()?;
@@ -653,6 +686,7 @@ impl Feed {
         }
         self.scroll = surface.scroll;
         self.surface = Some(surface);
+        self.paint_selection(&context, target);
         (underfilled, inclusions)
     }
 

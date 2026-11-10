@@ -24,6 +24,9 @@ const RAW_STRING_OPENER: &str = "///";
 pub struct Names {
     started: BTreeSet<String>,
     bound: BTreeSet<String>,
+    /// Names the language server reads as bound in the session's source,
+    /// the input included, before M2 has run them.
+    analysed: BTreeSet<String>,
     locals: BTreeSet<String>,
     usage: Usage,
     /// Frequencies for names introduced by this session, never saved to disk.
@@ -35,6 +38,7 @@ impl Default for Names {
         Self {
             started: BTreeSet::new(),
             bound: BTreeSet::new(),
+            analysed: BTreeSet::new(),
             locals: BTreeSet::new(),
             usage: Usage::load(),
             session_usage: BTreeMap::new(),
@@ -54,6 +58,11 @@ impl Names {
     /// Add names the session has bound since.
     pub fn bind(&mut self, names: Vec<String>) {
         self.bound.extend(names);
+    }
+
+    /// Replace the names the language server last read as bound.
+    pub fn analyse(&mut self, names: impl IntoIterator<Item = String>) {
+        self.analysed = names.into_iter().collect();
     }
 
     /// Save library-symbol frequencies and retain session-name frequencies only in memory.
@@ -95,6 +104,11 @@ impl Names {
                 .collect::<Vec<String>>()
         };
         let mut found = matching(&self.bound);
+        found.extend(
+            matching(&self.analysed)
+                .into_iter()
+                .filter(|name| name != prefix && !self.knows(name)),
+        );
         found.extend(
             matching(&self.started)
                 .into_iter()
@@ -253,6 +267,15 @@ mod tests {
         assert_eq!(typing("f(x -- ide"), Typing::Other);
         assert_eq!(typing("-* ide"), Typing::Other);
         assert_eq!(typing("x + "), Typing::Other);
+    }
+
+    #[test]
+    fn names_the_server_reads_as_bound_complete_before_m2_has_run_them() {
+        let mut names = Names::default();
+        names.analyse(["myFunction".to_string(), "my".to_string()]);
+        assert_eq!(names.starting_with("my"), vec!["myFunction".to_string()]);
+        names.analyse(Vec::new());
+        assert!(names.starting_with("my").is_empty());
     }
 
     #[test]

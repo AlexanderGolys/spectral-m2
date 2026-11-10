@@ -11,16 +11,19 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
-use std::{env, fs, mem, thread};
+use std::{fs, mem, thread};
 
 use crate::cli::M2Options;
+use crate::env::ENV;
 use crate::errors::{Error, Result};
 use crate::ui::theme::groups::HLGroup;
+use html2text::config;
 use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
 use regex::Regex;
 use serde::Deserialize;
 use term_maths::RenderedBlock;
+use these_macros_should_be_illegal::enum_fn;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -150,43 +153,27 @@ pub enum M2Value {
 }
 
 /// What a token is in code, which decides how it is coloured.
+// @##hlg
+// @##refactor all HLGroups probably better just set in one file for entire shell, easier to manage
+#[non_exhaustive]
+#[enum_fn(pub const group -> HLGroup, missing=HLGroup::Text)]
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-#[non_exhaustive]
 pub enum Role {
-    Null,
-    Boolean,
-    String,
-    Function,
-    Type,
-    Package,
-    Keyword,
-    Operator,
-    Command,
-    Symbol,
-}
-
-impl Role {
-    /// The group code paints the same thing with, so a value reads as it would
-    /// typed: `null` as a builtin, `true` as a Boolean, a name as a function.
-    pub(super) const fn group(self) -> HLGroup {
-        match self {
-            Role::Null => HLGroup::Builtin,
-            Role::Boolean => HLGroup::Boolean,
-            Role::String => HLGroup::String,
-            Role::Function => HLGroup::Function,
-            Role::Type => HLGroup::Type,
-            Role::Package => HLGroup::Package,
-            Role::Keyword => HLGroup::Keyword,
-            Role::Operator => HLGroup::Operator,
-            Role::Command => HLGroup::Macro,
-            Role::Symbol => HLGroup::Variable,
-            _ => HLGroup::Text,
-        }
-    }
+    Null = HLGroup::Builtin,
+    Boolean = HLGroup::Boolean,
+    String = HLGroup::String,
+    Function = HLGroup::Function,
+    Type = HLGroup::Type,
+    Package = HLGroup::Package,
+    Keyword = HLGroup::Keyword,
+    Operator = HLGroup::Operator,
+    Command = HLGroup::Macro,
+    Symbol = HLGroup::Variable,
 }
 
 /// The characters a value's text layout may draw with.
+//
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Spelling {
     /// Two-dimensional maths and tall brackets.
@@ -195,10 +182,11 @@ enum Spelling {
     Ascii,
 }
 
+// @##stale
 impl Spelling {
     const fn arrow(self) -> &'static str {
         match self {
-            Self::Unicode => SPACED_OPTION_ARROW,
+            Self::Unicode => " => ",
             Self::Ascii => " => ",
         }
     }
@@ -211,7 +199,6 @@ pub enum CollectionKind {
     Array,
     Sequence,
     AngleBarList,
-    /// A List set one entry per row rather than along one line.
     VerticalList,
 }
 
@@ -241,10 +228,24 @@ impl CollectionKind {
             Self::List | Self::VerticalList => (r"\left\{", r"\right\}"),
             Self::Array => (r"\left[", r"\right]"),
             Self::Sequence => (r"\left(", r"\right)"),
-            Self::AngleBarList => (r"\left\langle\!\left|", r"\right|\!\right\rangle"),
+            Self::AngleBarList => (r"\left\langle", r"\right\rangle"),
         }
     }
 }
+
+macro_rules! text_block {
+    ($str:expr) => {
+        RenderedBlock::from_text($str)
+    };
+}
+macro_rules! stack {
+    ($b0:expr, $($b:expr),*) => {$b0 $(.beside(&$b))*};
+}
+
+// pub trait RenderM2Output {
+//     fn render(&self) -> RenderedBlock
+//
+// }
 
 impl M2Value {
     fn normalize(source: &str) -> String {
@@ -257,7 +258,7 @@ impl M2Value {
             .replace(r"\texttt", r"\text")
             .replace(r"\left\{", r"\left{")
             .replace(r"\right\}", r"\right}")
-            .replace(r"\Rightarrow", &format!(r"\text{{{OPTION_ARROW}}}"))
+        // .replace(r"\Rightarrow", &format!(r"\text{{{OPTION_ARROW}}}"))
     }
 
     fn text_block(text: &str) -> RenderedBlock {
@@ -278,7 +279,7 @@ impl M2Value {
     /// A curly brace `height` rows tall. An odd one has its cusp on the middle
     /// row; an even one, having no middle row, splits the cusp across the two
     /// rows about its middle, which at height two is the whole brace.
-    // @##magic
+    // @##no_ascii
     // @##issue non-ascii glyphs set in random place
     fn curly(height: usize, left: bool, baseline: usize) -> RenderedBlock {
         let (single, top, cusp, bottom, upper_cusp, lower_cusp) = match left {
@@ -304,14 +305,12 @@ impl M2Value {
 
     fn brace(block: RenderedBlock, spelling: Spelling) -> RenderedBlock {
         match (block.is_empty(), spelling) {
-            (true, _) => RenderedBlock::from_text("{}"),
+            (true, _) => text_block!("{}"),
 
-            (false, Spelling::Ascii) => RenderedBlock::from_text("{")
-                .beside(&block)
-                .beside(&RenderedBlock::from_text("}")),
+            (false, Spelling::Ascii) => stack!(text_block!("{"), block, text_block!("}")),
 
             (false, Spelling::Unicode) => {
-                let space = RenderedBlock::from_text(" ");
+                let space = text_block!(" ");
                 let body = space.beside(&block).beside(&space);
                 let left = Self::curly(body.height(), true, body.baseline());
                 let right = Self::curly(body.height(), false, body.baseline());
@@ -346,17 +345,19 @@ impl M2Value {
             | Self::Location { text, .. } => Self::text_block(text),
             Self::HashTable(rows) => Self::brace(
                 Self::stack(rows.iter().map(|row| {
-                    row[0]
-                        .block(spelling)
-                        .beside(&RenderedBlock::from_text(spelling.arrow()))
-                        .beside(&row[1].block(spelling))
+                    stack!(
+                        row[0].block(spelling),
+                        text_block!(spelling.arrow()),
+                        row[1].block(spelling)
+                    )
                 })),
                 spelling,
             ),
-            Self::Option { key, value } => key
-                .block(spelling)
-                .beside(&RenderedBlock::from_text(spelling.arrow()))
-                .beside(&value.block(spelling)),
+            Self::Option { key, value } => stack!(
+                key.block(spelling),
+                text_block!(spelling.arrow()),
+                value.block(spelling)
+            ),
             Self::Collection {
                 kind: CollectionKind::VerticalList,
                 items,
@@ -366,18 +367,14 @@ impl M2Value {
             ),
             Self::Collection { kind, items } => {
                 let (open, close) = kind.delimiters();
-                let separator = RenderedBlock::from_text(", ");
+                let separator = text_block!(", ");
                 items
                     .iter()
                     .map(|item| item.block(spelling))
-                    .reduce(|entries, item| entries.beside(&separator).beside(&item))
+                    .reduce(|entries, item| stack!(entries, separator, item))
                     .map_or_else(
-                        || RenderedBlock::from_text(&format!("{open}{close}")),
-                        |entries| {
-                            RenderedBlock::from_text(open)
-                                .beside(&entries)
-                                .beside(&RenderedBlock::from_text(close))
-                        },
+                        || text_block!(&format!("{open}{close}")),
+                        |entries| stack!(text_block!(open), entries, text_block!(close)),
                     )
             }
         }
@@ -386,7 +383,7 @@ impl M2Value {
     /// Render this value at a requested terminal width.
     pub fn render_at(&self, width: usize) -> String {
         match self {
-            Self::Markup { html, fallback, .. } => html2text::config::plain()
+            Self::Markup { html, fallback, .. } => config::plain()
                 .link_footnotes(false)
                 .string_from_read(html.as_bytes(), width.max(1))
                 .unwrap_or_else(|_| fallback.clone())
@@ -599,12 +596,12 @@ impl M2Backend {
     /// Spectral's persistent configuration directory.
     fn config_dir() -> Result<PathBuf> {
         #[cfg(test)]
-        return Ok(env::temp_dir().join(format!("spectral-m2-test-{}", std::process::id())));
+        return Ok(ENV
+            .temp_dir()
+            .join(format!("spectral-m2-test-{}", std::process::id())));
 
         #[cfg(not(test))]
-        env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        ENV.config_home()
             .map(|config| config.join("spectral-m2"))
             .ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::NotFound, "no configuration directory")
@@ -1220,6 +1217,23 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     }
 
     #[test]
+    fn frames_survive_the_user_redefining_to_string() {
+        let mut backend = M2Backend::spawn().expect("spawn M2");
+        backend
+            .evaluate("toString ZZ := integer -> \"redefined\"", Some(1))
+            .expect("redefine toString");
+
+        let after = backend
+            .evaluate("6 * 7", Some(2))
+            .expect("frame arrives after the redefinition");
+
+        assert!(!after.is_error, "{}", after.transcript);
+        assert_eq!(after.number, 2);
+        assert_eq!(after.rendered_value().as_deref(), Some("42"));
+        assert!(after.has_value);
+    }
+
+    #[test]
     fn evaluation_distinguishes_printed_null_from_returned_value() {
         let mut backend = M2Backend::spawn().expect("spawn M2");
 
@@ -1287,19 +1301,39 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
                 ..
             })
         ));
-        let position = backend
-            .evaluate(
-                r#"new FilePosition from ("/tmp/dir/a b.m2", 3, 4, 5, 9, 3, 4)"#,
-                Some(8),
+        let directory = ENV
+            .temp_dir()
+            .join(format!("sp2-position-{}", std::process::id()));
+        fs::create_dir_all(&directory).expect("make a directory for a source file");
+        let file = directory.join("a b.m2");
+        fs::write(&file, "x = 1\n").expect("write a source file");
+        let position = |file: &std::path::Path| {
+            format!(
+                "new FilePosition from ({}, 3, 4, 5, 9, 3, 4)",
+                m2_string_literal(file.display())
             )
+        };
+        let existing = backend
+            .evaluate(&position(&file), Some(8))
             .expect("evaluate a source position");
-        let Some(M2Value::Location { text, target }) = &position.value else {
-            panic!("a source position arrives as a location");
+        let Some(M2Value::Location { text, target }) = &existing.value else {
+            panic!("a position in a file that exists arrives as a location");
         };
         assert!(text.ends_with("a b.m2:3:4-5:9"), "{text}");
         let link = crate::code::location::SourceLink::parse(target).expect("a file target");
-        assert_eq!(link.path, std::path::PathBuf::from("/tmp/dir/a b.m2"));
+        assert_eq!(link.path, file);
         assert!(link.command().contains("3, 4, 5, 9"));
+        fs::remove_dir_all(&directory).expect("remove the source file");
+        for missing in [file.as_path(), std::path::Path::new("stdio")] {
+            let value = backend
+                .evaluate(&position(missing), Some(9))
+                .expect("evaluate a source position")
+                .value;
+            assert!(
+                matches!(&value, Some(M2Value::Net(text)) if text.ends_with(":3:4-5:9")),
+                "a position in no file stays plain text: {value:?}"
+            );
+        }
         let contained = backend
             .evaluate("{Type, WrapperType, Core}", Some(9))
             .expect("evaluate types in a list");
@@ -1473,7 +1507,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
 
     #[test]
     fn documentation_source_locations_become_resolved_file_links() {
-        let path = std::env::temp_dir().join(format!(
+        let path = ENV.temp_dir().join(format!(
             "spectral documentation source {}.m2",
             std::process::id()
         ));
@@ -1492,7 +1526,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
 
     #[test]
     fn functions_written_in_source_files_link_to_where_they_were_written() {
-        let path = std::env::temp_dir().join(format!(
+        let path = ENV.temp_dir().join(format!(
             "spectral function source {}.m2",
             std::process::id()
         ));
@@ -2148,7 +2182,9 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
 
     #[test]
     fn init_file_is_loaded() {
-        let base = env::temp_dir().join(format!("spectral-m2-init-test-{}", std::process::id()));
+        let base = ENV
+            .temp_dir()
+            .join(format!("spectral-m2-init-test-{}", std::process::id()));
         let config = base.join("spectral-m2");
         fs::create_dir_all(&config).expect("create temp config dir");
         let init_file = config.join("init.m2");

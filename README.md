@@ -65,15 +65,11 @@ Spectral preserves normal Macaulay2 initialization, including `~/.Macaulay2/init
 
 ## Documentation
 
-The [mdBook](https://github.com/AlexanderGolys/spectral-m2/tree/master/docs) describes editing, commands, workspaces, previews, styles, and every default key. Its Macaulay2 examples are highlighted by `mdbook-tsitter` using a Cargo-built parser. From a source checkout:
+The [book](https://github.com/AlexanderGolys/spectral-m2/tree/master/book) shows how to work in the shell, how to make it yours, and lists every command, key, setting and option. From a source checkout:
 
 ```sh
-cargo install mdbook --version 0.5.3 --locked
-cargo install mdbook-tsitter
-cargo build --release --locked \
-    --manifest-path docs/parser/Cargo.toml \
-    --target-dir target/docs-parser
-mdbook serve docs --hostname 127.0.0.1 --port 3000
+cargo install mdbook mdbook-tsitter
+mdbook serve book --open
 ```
 
 ## License

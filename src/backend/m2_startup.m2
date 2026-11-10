@@ -20,10 +20,17 @@
 -- scaffolding: no echoed input, no `iN :` prompt, no `oN =` labels. Printed text
 -- arrives as itself and needs no unpicking.
 
-needsPackage "JSON"
-
 announceReady := (() -> (
     mode := global SpectralTopLevelMode;
+
+    -- Frames are encoded by `encodeFrame` rather than by the JSON package, whose
+    -- encoder reaches `toString` through the session's method tables: a user's
+    -- `toString ZZ := x -> "a"` turned every number in a frame into `a`. These
+    -- three are taken once, before any user code runs, and a later redefinition
+    -- replaces a table entry without touching the function captured here.
+    integerText := lookup(toString, ZZ);
+    symbolText := lookup(toString, Symbol);
+    stringLiteral := lookup(format, String);
 
     -- The stock debugger hook prints `code current`. Source submitted through
     -- stdin has no readable file behind it; failure to display it must not
@@ -125,10 +132,20 @@ announceReady := (() -> (
     hasAttribute := value Core#"private dictionary"#"hasAttribute";
     reverseDictionary := value Core#"private dictionary"#"ReverseDictionary";
     -- The `file://` target documentation links to source files with, carrying a
-    -- FilePosition as its fragment, which the shell opens in the reference pane.
-    sourceTarget := position -> urlEncode("file://" | toAbsolutePath position#0
-        | "#L" | toString position#1 | ":C" | toString position#2
-        | "-L" | toString position#3 | ":C" | toString position#4);
+    -- FilePosition as its fragment, which the shell opens in the reference pane;
+    -- null when the file is not found. Documentation links only a file found as
+    -- written or under a directory of the path, and so does this: a position
+    -- built into M2 names the directory it was built in, and one in typed input
+    -- names no file at all.
+    sourceTarget := position -> (
+        file := position#0;
+        candidates := if #file == 0 then {} else
+            select(join({file}, apply(path, directory -> directory | file)), fileExists);
+        if #candidates == 0 then null
+        else urlEncode("file://" | toAbsolutePath first candidates
+            | "#L" | integerText position#1 | ":C" | integerText position#2
+            | (if #position > 3 then "-L" | integerText position#3 | ":C" | integerText position#4 else ""))
+    );
 
     -- A value that is one word with a role in code -- null, a Boolean, a
     -- string, a function -- is sent with that role, so the shell colours it as
@@ -152,10 +169,9 @@ announceReady := (() -> (
             "function"
         );
         position := locate value;
-        if position === null or not fileExists position#0 then word
-        else hashTable {
-            symbol linked => hashTable {symbol value => word, symbol target => sourceTarget position}
-        }
+        target := if position =!= null then sourceTarget position;
+        if target === null then word
+        else hashTable {symbol linked => hashTable {symbol value => word, symbol target => target}}
     );
     -- Every documentation node at once: DIV, TABLE, UL and the rest all descend
     -- from Hypertext. Its examples were run with the print width M2 gives every
@@ -219,25 +235,26 @@ announceReady := (() -> (
             file := replace("&amp;", "&", replace("&gt;", ">", replace("&lt;", "<", substring(match#1, page))));
             candidates := select(join({file}, apply(path, directory -> directory | file)), fileExists);
             original := substring(match#0, page);
-            target := if #candidates == 0 then null else
-                urlEncode("file://" | toAbsolutePath first candidates | "#L"
-                    | substring(match#2, page) | ":C" | substring(match#3, page));
+            target := if #candidates != 0 then
+					urlEncode("file://" | toAbsolutePath first candidates | "#L"
+							| substring(match#2, page) | ":C" | substring(match#3, page));
             linked = linked | substring(page, 0, match#0#0)
                 | (if target === null then original else
                     "<a href=\"" | escapeAttribute target | "\">" | original | "</a>");
             page = substring(page, match#0#0 + match#0#1));
         linked | page);
     -- A source position is drawn as the link documentation gives it: its text
-    -- spelt as shortly as there, linking to the position itself.
+    -- spelt as shortly as there, linking to the position itself when its file is
+    -- found; else it stays plain text.
     render FilePosition := HashTable => value -> (
-        position := ":" | toString value#1 | ":" | toString value#2
-            | "-" | toString value#3 | ":" | toString value#4;
-        hashTable {
-            symbol location => hashTable {
-                symbol text => foldedPath value#0 | position,
-                symbol target => sourceTarget value
-            }
-        }
+        -- Typed input gives a bare `file:line:column`; only a located source
+        -- carries the end of its range.
+        position := ":" | integerText value#1 | ":" | integerText value#2
+            | (if #value > 3 then "-" | integerText value#3 | ":" | integerText value#4 else "");
+        text := (if #value#0 > 0 then foldedPath value#0 else "") | position;
+        target := sourceTarget value;
+        if target === null then hashTable {symbol net => text}
+        else hashTable {symbol location => hashTable {symbol text => text, symbol target => target}}
     );
     render hypertextType := HashTable => value -> hashTable {
         symbol markup => hashTable {symbol html => shortenedPaths linkedSources linkedKeys html value, symbol fallback =>
@@ -336,8 +353,22 @@ announceReady := (() -> (
     -- start with it is the user's own doing and reads back as a frame, which is
     -- the same bargain any in-band marker makes.
     frameMark := ascii 29;
+    encodeFrame := null;
+    encodeFrame = value -> (
+        if value === null then "null"
+        else if instance(value, Boolean) then (if value then "true" else "false")
+        else if instance(value, ZZ) then integerText value
+        else if instance(value, String) then stringLiteral value
+        else if instance(value, VisibleList) then
+            "[" | demark(", ", apply(value, encodeFrame)) | "]"
+        else if instance(value, HashTable) then
+            "{" | demark(", ", apply(keys value, key ->
+                stringLiteral(if instance(key, Symbol) then symbolText key else key)
+                | ": " | encodeFrame value#key)) | "}"
+        else error "a frame holds only null, booleans, integers, strings, lists and tables"
+    );
     emitFrame := payload -> (
-        stdio << frameMark << toJSON payload << endl << flush;
+        stdio << frameMark << encodeFrame payload << endl << flush;
     );
     -- The names the shell completes, chosen as M2's own readline chooses them:
     -- every symbol in scope whose name begins with a letter or digit. Output
@@ -364,7 +395,7 @@ announceReady := (() -> (
         "value" => renderedValue,
         "typeInfo" => typeInfo,
         "typeParts" => typeParts,
-        "hasValue" => OutputDictionary#?("o" | toString lineNumber),
+        "hasValue" => OutputDictionary#?("o" | integerText lineNumber),
         "depth" => interpreterDepth,
         "error" => not completed
     };
@@ -451,18 +482,10 @@ announceReady := (() -> (
 
     -- Announced once the hooks are installed and before the first cell can be
     -- read, so the shell knows the child is up, which M2 it got, and every name
-    -- the session starts with. Called below, once the JSON names are given back.
+    -- the session starts with. Called below.
     () -> emitFrame hashTable {"ready" => version#"VERSION", "names" => newNames dictionaryPath}
 ))()
 
--- Hand back the name the JSON transport borrowed. A freshly loaded package's
--- dictionary is inserted at the FRONT of dictionaryPath -- ahead of the user's
--- own -- so leaving it loaded reserves `json`, `toJSON`, `fromJSON` and the
--- formatting options. It does not merely shadow: `json = 3` fails outright with
--- "assignment to protected global variable 'toJSON'", naming a symbol the user
--- never typed. `dismiss` returns the names; the package itself stays loaded, so
--- the reference captured in the closure above keeps working.
-dismiss JSON
 announceReady()
 
 -- Last, so that nothing above is echoed: from here the channel carries only what

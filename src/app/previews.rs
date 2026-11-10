@@ -72,6 +72,13 @@ impl<T> PreviewTabs<T> {
         self.next = (self.next + 1) % RECENT_PREVIEWS;
     }
 
+    /// Set the active view aside for one that holds no tab: it is gone once
+    /// another is chosen, and never replaces a recent one.
+    pub fn open_transient(&mut self, current: Option<T>) {
+        self.save(current);
+        self.active = None;
+    }
+
     pub fn select(&mut self, tab: PreviewTab, current: Option<T>) -> Option<T> {
         self.save(current);
         let selected = match tab {
@@ -148,6 +155,17 @@ mod tests {
         assert_eq!(tabs.active, Some(first));
         assert_eq!(tabs.label(first), Some("replacement"));
         assert_eq!(tabs.select(PreviewTab::Recent(1), Some(99)), Some(1));
+    }
+
+    #[test]
+    fn a_transient_view_keeps_the_tab_it_covers_and_is_gone_once_left() {
+        let mut tabs = PreviewTabs::default();
+        tabs.open(None, "kept".into());
+        let kept = tabs.active.unwrap();
+        tabs.open_transient(Some(1));
+        assert_eq!(tabs.active, None);
+        assert_eq!(tabs.select(kept, Some(2)), Some(1));
+        assert!(tabs.saved().all(|saved| *saved != 2));
     }
 
     #[test]

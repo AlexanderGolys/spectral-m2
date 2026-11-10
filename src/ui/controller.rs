@@ -8,13 +8,13 @@ pub(crate) mod picker;
 mod screen;
 mod view;
 
-use std::env;
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use lsp_types::ServerInfo;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, Clear, Paragraph, Widget};
 use ratatui::Frame;
@@ -46,13 +46,36 @@ use super::{
 };
 use crate::code::file::abbreviate_home;
 use crate::code::highlight::Highlighter;
+use crate::code::semantic::query::Finding;
+use crate::code::semantic::SourceId;
 use crate::code::semantic::SEMANTIC_GROUPS;
+use crate::env::ENV;
 use crate::input::{InputCode, InputContext};
-use crate::ui::settings::keymap::{Keymaps, Shortcut};
+use crate::ui::floating::{Anchor, Floating};
+use crate::ui::settings::selection::CopyFormat;
 use crate::ui::settings::statusline::{StatusComponent, StatusLinePosition, StatusSegment};
-use crate::ui::settings::{tabs as settings_tabs, Persisted, SavedSettings, Settings};
+use crate::ui::settings::{tabs as settings_tabs, *};
 use crate::ui::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
+use crate::ui::theme::palette::blend;
 use crate::ui::theme::Appearance;
+
+/// How far a hovered link's colours move toward the text colour.
+const LINK_HOVER_BRIGHTENING: f32 = 0.35;
+
+/// Left clicks on one cell, each within the double-click pause of the one before.
+struct ClickRun {
+    at: Instant,
+    position: Position,
+    count: u8,
+}
+
+/// `count` of a noun, as a status line says it: `1 line`, `2 lines`.
+fn counted(count: usize, noun: &str) -> String {
+    match count {
+        1 => format!("1 {noun}"),
+        _ => format!("{count} {noun}s"),
+    }
+}
 
 /// An outward effect produced while handling input or an [`Action`].
 pub enum Reaction {
@@ -85,6 +108,33 @@ pub enum Reaction {
     Load(String),
     /// Run the code the previous session left.
     Resume,
+    /// Ask the language server about the name at a point in code.
+    Lookup(Lookup, CodePoint),
+    /// Have the language server format this input.
+    Format(String),
+}
+
+/// What is asked about a name in code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Lookup {
+    /// What it is, in brief, beside where it was asked.
+    Brief,
+    /// All that is known about it, beside the session.
+    Description,
+    /// Where it is defined.
+    Definition,
+}
+
+/// A point in code that something was asked about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CodePoint {
+    /// The input, or a source the session holds.
+    pub source: Option<SourceId>,
+    /// Bytes into that source.
+    pub offset: usize,
+    /// Where on screen it was asked.
+    pub anchor: Anchor,
 }
 
 /// A session result to apply to the editor model.
@@ -113,6 +163,32 @@ pub enum EditorUpdate {
     KnownNames(Vec<String>),
     /// Names the session bound since M2 last reported.
     BoundNames(Vec<String>),
+    /// What the language server read in the session: the names its source binds,
+    /// replacing those read before.
+    AnalysedNames(Vec<String>),
+    /// What the language server found in the input as it last saw it.
+    InputFindings(Vec<Finding>),
+    /// Float something beside a point until the next key or click.
+    Float(Floating),
+    /// Put the input's cursor at a byte offset.
+    InputCursor(usize),
+    /// Where code shown beside the session folds became known.
+    FoldsLearned,
+    /// Where the name under the cursor occurs in the input as it read at a revision.
+    InputOccurrences {
+        revision: u64,
+        ranges: Vec<Range<usize>>,
+    },
+    /// Select the `index`th code cell of a submission in the feed.
+    SelectCell {
+        submission: u64,
+        index: usize,
+    },
+    /// Replace the input's text, as one undoable edit, if it still reads `was`.
+    InputRewritten {
+        was: String,
+        now: String,
+    },
     /// Documentation examples were computed again or their code analysed, so
     /// the pages showing them draw them differently.
     ExamplesComputed,
@@ -218,9 +294,15 @@ pub struct Editor {
     pane_focused: bool,
     highlight_debug: bool,
     highlight_debug_scroll: usize,
+    /// What floats beside where it was asked for, until the next key or click.
+    floating: Option<Floating>,
+    /// Where the input's cursor was last drawn.
+    input_cursor: Option<Position>,
     frame_stats: FrameStats,
-    /// When and where the previous left click landed, to recognise a double click.
-    last_click: Option<(Instant, Position)>,
+    /// The run of left clicks on one cell that the latest belongs to.
+    last_click: Option<ClickRun>,
+    /// What the latest copy took, and when, until the status line stops saying so.
+    copied: Option<(Instant, String)>,
     /// Where the mouse last was, so the link under it is underlined.
     pointer: Option<Position>,
     /// Whether Ctrl is held, so the link under the pointer shows it would open.
@@ -266,8 +348,11 @@ impl Editor {
             pane_focused: true,
             highlight_debug: false,
             highlight_debug_scroll: 0,
+            floating: None,
+            input_cursor: None,
             frame_stats: FrameStats::default(),
             last_click: None,
+            copied: None,
             pointer: None,
             control_held: false,
         };
@@ -319,14 +404,42 @@ impl Editor {
         self.processing
     }
 
-    /// How much longer the input shows the typing prompt, if it does.
-    pub fn typing_remaining(&self) -> Option<Duration> {
-        self.input.typing_remaining()
+    const COPY_NOTICE: Duration = Duration::from_millis(UI.copy_notice_ms);
+
+    /// Say in the status line what a copy took, for a moment.
+    pub fn note_copied(&mut self, text: &str) {
+        let lines = text.lines().count();
+        let taken = match lines {
+            0 | 1 => counted(text.chars().count(), "character"),
+            lines => counted(lines, "line"),
+        };
+        self.copied = Some((Instant::now(), format!("Copied {taken}")));
     }
 
-    /// Return the input to its resting prompt once typing has paused; whether it did.
-    pub fn settle_typing(&mut self) -> bool {
-        self.input.settle_typing()
+    /// How long until something on screen changes by itself: the input's typing
+    /// prompt resting, or the note of a copy lapsing.
+    pub fn settles_in(&self) -> Option<Duration> {
+        let notice = self
+            .copied
+            .as_ref()
+            .and_then(|(at, _)| Self::COPY_NOTICE.checked_sub(at.elapsed()));
+        [self.input.typing_remaining(), notice]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    /// Let go of what has run its time, the typing prompt and the note of a copy;
+    /// whether either did.
+    pub fn settle(&mut self) -> bool {
+        let lapsed = self
+            .copied
+            .as_ref()
+            .is_some_and(|(at, _)| at.elapsed() >= Self::COPY_NOTICE);
+        if lapsed {
+            self.copied = None;
+        }
+        self.input.settle_typing() | lapsed
     }
 
     /// How long each documentation example may take to be computed again.
@@ -334,14 +447,14 @@ impl Editor {
         self.settings.rendering.example_timeout()
     }
 
-    /// Whether the persisted settings run the language server.
-    pub fn language_server(&self) -> bool {
-        self.settings.rendering.language_server
-    }
-
     /// Whether text may be drawn in italics.
     pub fn italics(&self) -> bool {
         self.settings.rendering.italics
+    }
+
+    /// Whether the persisted settings run the language server.
+    pub fn language_server(&self) -> bool {
+        self.settings.rendering.language_server
     }
 
     /// Whether source takes semantic colors from the language server.
@@ -358,6 +471,11 @@ impl Editor {
             text
         };
         (draft, self.feed.incomplete_source(), self.input.revision())
+    }
+
+    /// Where the input's cursor is, as a byte offset into its text.
+    pub fn input_cursor(&self) -> usize {
+        self.input.field().cursor()
     }
 
     /// Refresh transcript source colors without changing editor interaction state.
@@ -461,6 +579,29 @@ impl Editor {
                 self.names.bind(names);
                 self.input.forget_completion();
             }
+            EditorUpdate::AnalysedNames(names) => {
+                self.names.analyse(names);
+                self.input.forget_completion();
+            }
+            EditorUpdate::InputFindings(findings) => self.input.set_findings(findings),
+            EditorUpdate::Float(floating) => self.floating = Some(floating),
+            EditorUpdate::InputCursor(offset) => self.input.field_mut().place_cursor(offset),
+            EditorUpdate::InputOccurrences { revision, ranges } => {
+                self.input.set_occurrences(revision, ranges)
+            }
+            EditorUpdate::SelectCell { submission, index } => {
+                if !self.feed.select_cell(submission, index) {
+                    self.input
+                        .set_diagnostic("the cell defining it is no longer shown".into(), None);
+                }
+            }
+            EditorUpdate::InputRewritten { was, now } => {
+                if self.input.text() == was {
+                    self.input.field_mut().select_all();
+                    self.input.field_mut().insert_str(&now);
+                }
+            }
+            EditorUpdate::FoldsLearned => self.reference.on_event(&Reformatted),
             EditorUpdate::ExamplesComputed => {
                 self.feed.on_event(&Reformatted);
                 self.reference.on_event(&Reformatted);
@@ -568,9 +709,29 @@ impl Editor {
     /// Longest pause between two clicks on one cell that still reads as a double click.
     const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
+    /// Clicks a run counts to before starting over: one, a word, a paragraph.
+    const LONGEST_CLICK_RUN: u8 = 3;
+
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Reaction {
+        if matches!(event.kind, MouseEventKind::Down(_)) {
+            self.floating = None;
+        }
         let reaction = self.route_mouse(event);
         self.copied_on_select(reaction)
+    }
+
+    /// What a click on code asks about the name under it: a middle click what it
+    /// is, a click with Shift held where it is defined.
+    fn lookup_click(event: MouseEvent) -> Option<Lookup> {
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Middle) => Some(Lookup::Brief),
+            MouseEventKind::Down(MouseButton::Left)
+                if event.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                Some(Lookup::Definition)
+            }
+            _ => None,
+        }
     }
 
     /// What finishing a mouse selection does: copy it, or leave it to the copy key.
@@ -588,27 +749,54 @@ impl Editor {
         let pointer = Position::new(event.column, event.row);
         self.pointer = Some(pointer);
         self.control_held = event.modifiers.contains(KeyModifiers::CONTROL);
+        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
+            self.feed.deselect();
+        }
+        if let Some(lookup) = Self::lookup_click(event) {
+            if let Some(offset) = self.input.offset_under(pointer) {
+                return Reaction::Lookup(
+                    lookup,
+                    CodePoint {
+                        source: None,
+                        offset,
+                        anchor: Anchor::At(pointer),
+                    },
+                );
+            }
+        }
         if let Some(in_feed) = Self::link_click(event) {
             if let Some(link) = self.feed.link_at(pointer) {
                 self.screen_selection = None;
                 return Self::open_link(link.target.to_string(), in_feed);
             }
         }
-        let double = self.double_clicked(event);
-        if double && self.feed.toggle_fold(pointer) {
+        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
+            && self.feed.cycle_renderer(pointer)
+        {
+            self.screen_selection = None;
+            return Reaction::Continue;
+        }
+        let clicks = self.clicks(event);
+        if clicks >= 2 && self.feed.toggle_fold(pointer) {
             self.last_click = None;
             self.screen_selection = None;
             return Reaction::Continue;
         }
-        if double && self.input.contains(event) {
+        if clicks >= 2 && self.input.contains(event) {
             self.screen_selection = None;
             return self
                 .input
-                .handle_double_click(event)
+                .handle_repeated_click(event, clicks)
                 .map_or(Reaction::Continue, Reaction::Copy);
         }
-        if let Some(copy) = double.then(|| self.pick_screen_text(event)).flatten() {
-            return copy;
+        if clicks >= 2 {
+            let picked = match self.outside_text(event) {
+                true => self.select_block_at(pointer, clicks),
+                false => self.pick_screen_text(event, clicks),
+            };
+            if let Some(reaction) = picked {
+                return reaction;
+            }
         }
         if let Some(action) = self.handle_screen_mouse(event) {
             return action;
@@ -666,17 +854,44 @@ impl Editor {
         self.control_held = held;
     }
 
-    /// Record a left press, reporting whether it repeats the previous one in time and place.
-    fn double_clicked(&mut self, event: MouseEvent) -> bool {
+    /// Record a left press, reporting how many presses in a row the run it belongs to
+    /// has: each repeating the previous one in time and place, counted again from one
+    /// after the third. None for anything but a press.
+    fn clicks(&mut self, event: MouseEvent) -> u8 {
         let MouseEventKind::Down(MouseButton::Left) = event.kind else {
-            return false;
+            return 0;
         };
-        let click = (Instant::now(), Position::new(event.column, event.row));
-        self.last_click
-            .replace(click)
-            .is_some_and(|(at, position)| {
-                position == click.1 && click.0.duration_since(at) <= Self::DOUBLE_CLICK
-            })
+        let (at, position) = (Instant::now(), Position::new(event.column, event.row));
+        let count = match &self.last_click {
+            Some(run)
+                if run.position == position && at.duration_since(run.at) <= Self::DOUBLE_CLICK =>
+            {
+                run.count % Self::LONGEST_CLICK_RUN + 1
+            }
+            _ => 1,
+        };
+        self.last_click = Some(ClickRun {
+            at,
+            position,
+            count,
+        });
+        count
+    }
+
+    /// Take the cell or result under a click outside any text, or with a third click
+    /// everything its submission printed and returned, copying it as the settings say.
+    fn select_block_at(&mut self, pointer: Position, clicks: u8) -> Option<Reaction> {
+        if !self.feed.select_at(pointer, clicks == 3) {
+            return None;
+        }
+        self.screen_selection = None;
+        self.screen_selecting = false;
+        self.input.field_mut().clear_selection();
+        Some(
+            self.feed
+                .selected_text(self.settings.selection.copy_format)
+                .map_or(Reaction::Continue, Reaction::Copy),
+        )
     }
 
     pub fn handle_preview_mouse(&mut self, event: MouseEvent) -> Reaction {
@@ -689,9 +904,14 @@ impl Editor {
                 return Self::open_link(link.target.to_string(), in_feed);
             }
         }
-        let double = self.double_clicked(event);
-        let reaction = double
-            .then(|| self.pick_screen_text(event))
+        let clicks = self.clicks(event);
+        if clicks >= 2 && self.reference.toggle_fold(pointer) {
+            self.last_click = None;
+            self.screen_selection = None;
+            return Reaction::Continue;
+        }
+        let reaction = (clicks >= 2)
+            .then(|| self.pick_screen_text(event, clicks))
             .flatten()
             .or_else(|| self.handle_screen_mouse(event))
             .unwrap_or(Reaction::Continue);
@@ -705,11 +925,18 @@ impl Editor {
 
     /// Forward unbound shell input to its focused component.
     pub fn handle_input(&mut self, key: KeyEvent) -> Reaction {
+        self.floating = None;
         if matches!(self.focus(), ElementFocus::Picker(_)) {
             return self.handle_picker_key(key);
         }
         if let Some(action) = self.handle_debug_key(key) {
             return action;
+        }
+        if self.feed.has_selection() {
+            match self.handle_block_key(key) {
+                Some(reaction) => return reaction,
+                None => self.feed.deselect(),
+            }
         }
         let edit = self.keymaps.edit(key);
         self.screen_selection = None;
@@ -725,8 +952,53 @@ impl Editor {
         Reaction::Continue
     }
 
+    /// What a key does while a cell or result is selected, if it is one of the keys
+    /// that act on it; any other leaves the selection and types as usual.
+    fn handle_block_key(&mut self, key: KeyEvent) -> Option<Reaction> {
+        if key.ctrl() || key.alt() || key.shift() {
+            return None;
+        }
+        Some(match key.code {
+            KeyCode::Up => self.step_block_selection(-1),
+            KeyCode::Down => self.step_block_selection(1),
+            KeyCode::Esc => {
+                self.feed.deselect();
+                Reaction::Continue
+            }
+            KeyCode::Char('y') => self
+                .feed
+                .selected_text(self.settings.selection.copy_format)
+                .map_or(Reaction::Continue, Reaction::Copy),
+            _ => return None,
+        })
+    }
+
+    /// Move the selection to the previous or next cell or result, and off whatever
+    /// text was selected.
+    fn step_block_selection(&mut self, delta: i8) -> Reaction {
+        if self.feed.step_selection(delta) {
+            self.screen_selection = None;
+            self.screen_selecting = false;
+            self.input.field_mut().clear_selection();
+        }
+        Reaction::Continue
+    }
+
+    /// The text a copy or a save takes: what is selected in the input, else on screen,
+    /// else the cell or result selected whole, as `format` copies it.
+    fn selected_text(&self, format: CopyFormat) -> Option<String> {
+        let typed = match self.previewing {
+            true => None,
+            false => self.input.field().selected_text().map(str::to_string),
+        };
+        typed
+            .or_else(|| self.selected_screen_text())
+            .or_else(|| self.feed.selected_text(format).filter(|_| !self.previewing))
+    }
+
     /// React to a mapped command after its originating key has been discarded.
     pub fn handle_action(&mut self, action: Action) -> Reaction {
+        self.floating = None;
         if matches!(self.focus(), ElementFocus::Picker(_)) {
             return self.handle_picker_action(action);
         }
@@ -739,24 +1011,33 @@ impl Editor {
         ) {
             self.screen_selection = None;
         }
+        if !matches!(
+            action,
+            Action::SelectPreviousBlock
+                | Action::SelectNextBlock
+                | Action::CopySelection
+                | Action::SaveSelection
+                | Action::ScrollFeedUp
+                | Action::ScrollFeedDown
+        ) {
+            self.feed.deselect();
+        }
         if let Some(reaction) = self.perform(action, "") {
             return reaction;
         }
 
         if action == Action::CopySelection {
-            let text = if self.previewing {
-                self.selected_screen_text()
-            } else {
-                self.input
-                    .field()
-                    .selected_text()
-                    .map(str::to_string)
-                    .or_else(|| self.selected_screen_text())
-            };
-            return text.map_or(Reaction::Continue, Reaction::Copy);
+            return self
+                .selected_text(self.settings.selection.copy_format)
+                .map_or(Reaction::Continue, Reaction::Copy);
         }
         if self.previewing {
             return Reaction::Continue;
+        }
+        match action {
+            Action::SelectPreviousBlock => return self.step_block_selection(-1),
+            Action::SelectNextBlock => return self.step_block_selection(1),
+            _ => {}
         }
         if action == Action::Submit {
             self.input.clear_diagnostic();
@@ -775,8 +1056,25 @@ impl Editor {
             return Reaction::Submit;
         }
 
+        let at_cursor = |lookup| {
+            Reaction::Lookup(
+                lookup,
+                CodePoint {
+                    source: None,
+                    offset: self.input.field().cursor(),
+                    anchor: Anchor::InputCursor,
+                },
+            )
+        };
         match action {
+            Action::Describe => return at_cursor(Lookup::Brief),
+            Action::DescribeBeside => return at_cursor(Lookup::Description),
+            Action::GoToDefinition => return at_cursor(Lookup::Definition),
+            Action::FormatInput => return Reaction::Format(self.input.text().to_string()),
             Action::CopySelection => unreachable!("copy selection is handled before editing"),
+            Action::SelectPreviousBlock | Action::SelectNextBlock => {
+                unreachable!("block selection is handled before editing")
+            }
             Action::Submit => unreachable!("submission is handled before component dispatch"),
             Action::ScrollFeedUp => self.feed.scroll(1),
             Action::ScrollFeedDown => self.feed.scroll(-1),
@@ -839,27 +1137,16 @@ impl Editor {
             Action::ViewFile if !argument.is_empty() => {
                 self.leave_pickers(Reaction::ViewFile(argument.to_string()))
             }
-            Action::SaveSelection => {
-                let source = if self.previewing {
-                    self.selected_screen_text()
-                } else {
-                    self.input
-                        .field()
-                        .selected_text()
-                        .map(str::to_string)
-                        .or_else(|| self.selected_screen_text())
-                };
-                match source {
-                    Some(source) => {
-                        self.leave_pickers(Reaction::SaveSelection(argument.to_string(), source))
-                    }
-                    None => {
-                        self.input
-                            .set_diagnostic("select code before saving".into(), None);
-                        Reaction::Continue
-                    }
+            Action::SaveSelection => match self.selected_text(CopyFormat::Raw) {
+                Some(source) => {
+                    self.leave_pickers(Reaction::SaveSelection(argument.to_string(), source))
                 }
-            }
+                None => {
+                    self.input
+                        .set_diagnostic("select code before saving".into(), None);
+                    Reaction::Continue
+                }
+            },
             Action::ViewFile => {
                 self.input.set_diagnostic("name a file".into(), None);
                 Reaction::Continue
@@ -881,6 +1168,12 @@ impl Editor {
             | Action::ScrollFeedDown
             | Action::OpenCommands
             | Action::ToggleHighlightDebug
+            | Action::SelectPreviousBlock
+            | Action::SelectNextBlock
+            | Action::Describe
+            | Action::DescribeBeside
+            | Action::GoToDefinition
+            | Action::FormatInput
             | Action::CopySelection => return None,
         })
     }
@@ -1486,6 +1779,17 @@ impl Editor {
     /// The key hints segment of the idle line; typing leaves no use for the
     /// commands picker's key.
     fn idle_hints(&self) -> Vec<TextSpan> {
+        if self.feed.has_selection() {
+            return [("↑↓ ", "move · "), ("y ", "yank · "), ("Esc ", "deselect")]
+                .into_iter()
+                .flat_map(|(key, label)| {
+                    [
+                        TextSpan::new(key, HLGroup::KeymapHint),
+                        TextSpan::new(label, HLGroup::StatuslineHintLabel),
+                    ]
+                })
+                .collect();
+        }
         let settings_key = self
             .keymaps
             .key_for(Action::OpenSettings)
@@ -1563,13 +1867,13 @@ impl Editor {
             .with_blackboard(self.settings.rendering.math_fonts)
             .with_matrix_row_spacing(self.settings.rendering.matrix_row_spacing_percent)
             .with_display(self.settings.rendering.maths)
-            .with_recent_outputs(self.feed.recent_outputs())
             .with_ink(self.settings.rendering.math_ink)
             .with_script_colors(
                 self.settings.rendering.index_color,
                 self.settings.rendering.exponent_color,
             )
             .with_original_text(self.settings.rendering.original_output)
+            .with_recent_outputs(self.feed.recent_outputs())
             .with_output_limit(self.settings.layout.output_rows)
     }
 
@@ -1691,6 +1995,10 @@ impl Editor {
             frame.buffer_mut(),
         ) {
             frame.set_cursor_position(cursor);
+            self.input_cursor = Some(cursor);
+        }
+        if let Some(floating) = &self.floating {
+            floating.draw(frame.buffer_mut(), area, self.input_cursor);
         }
         TuiBlock::default()
             .style(theme.statusline_bg())
@@ -1711,7 +2019,8 @@ impl Editor {
     fn location(&self) -> StatusLocation {
         StatusLocation {
             scheme: self.settings.appearance.scheme().label().to_string(),
-            directory: env::current_dir()
+            directory: ENV
+                .current_dir()
                 .map(|directory| abbreviate_home(&directory))
                 .unwrap_or_default(),
         }
@@ -1720,7 +2029,9 @@ impl Editor {
     /// What the session is doing, as the status line's left side says it, when
     /// it is doing anything.
     fn shell_state(&self) -> Option<TextSpan> {
-        if self.processing {
+        if let Some((_, copied)) = &self.copied {
+            Some(TextSpan::new(copied.clone(), HLGroup::StatuslineState))
+        } else if self.processing {
             Some(TextSpan::new("Processing", HLGroup::StatuslineWarning))
         } else {
             self.continuation.as_ref().map(|reason| {
@@ -1736,8 +2047,17 @@ impl Editor {
             } else {
                 HLGroup::MarkupLinkHover
             });
+            let text = scheme().style(HLGroup::Text).fg;
             for cells in link.cells {
                 frame.buffer_mut().set_style(cells, hovered);
+                for position in cells.positions() {
+                    let cell = &mut frame.buffer_mut()[position];
+                    if let (Some(text), Color::Rgb(..)) = (text, cell.fg) {
+                        if let Ok(brightened) = blend(cell.fg, text, LINK_HOVER_BRIGHTENING) {
+                            cell.set_fg(brightened);
+                        }
+                    }
+                }
             }
         }
     }
@@ -2061,5 +2381,126 @@ mod documentation_rendering_tests {
         render(&mut editor);
         assert!(transcript.get() > before.0);
         assert!(reference.get() > before.1);
+    }
+}
+
+#[cfg(test)]
+mod language_server_tests {
+    use ratatui::backend::TestBackend;
+    use ratatui::text::Line;
+    use ratatui::Terminal;
+
+    use super::*;
+    use crate::code::highlight::SyntaxHighlighter;
+    use crate::ui::floating::FloatingContent;
+
+    const PANEL_TEXT: &str = "floating words";
+
+    struct Words;
+
+    impl FloatingContent for Words {
+        fn lines(&self, _width: u16) -> Vec<Line<'static>> {
+            vec![Line::from(PANEL_TEXT)]
+        }
+    }
+
+    /// The symbol of each cell drawn, row by row.
+    fn cells(editor: &mut Editor) -> Vec<Vec<String>> {
+        let mut terminal = Terminal::new(TestBackend::new(60, 20)).expect("test terminal");
+        terminal
+            .draw(|frame| editor.draw(frame, frame.area(), &mut SyntaxHighlighter::new(), false))
+            .expect("drawing");
+        let buffer = terminal.backend().buffer();
+        (0..20)
+            .map(|y| {
+                (0..60)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn screen(editor: &mut Editor) -> String {
+        cells(editor)
+            .iter()
+            .map(|row| row.concat() + "\n")
+            .collect()
+    }
+
+    #[test]
+    fn the_name_at_the_cursor_is_looked_up_where_the_cursor_is() {
+        let mut editor = Editor::new(String::new());
+        editor.paste("ideal x");
+        editor.input.field_mut().place_cursor(2);
+        for (action, lookup) in [
+            (Action::Describe, Lookup::Brief),
+            (Action::DescribeBeside, Lookup::Description),
+            (Action::GoToDefinition, Lookup::Definition),
+        ] {
+            let Reaction::Lookup(asked, point) = editor.handle_action(action) else {
+                panic!("{action:?} asks the language server");
+            };
+            assert_eq!(asked, lookup);
+            assert_eq!(point.source, None);
+            assert_eq!(point.offset, 2);
+        }
+    }
+
+    #[test]
+    fn a_floating_panel_shows_until_the_next_key() {
+        let mut editor = Editor::new(String::new());
+        editor.paste("ideal x");
+        editor.apply(EditorUpdate::Float(Floating::new(
+            Words,
+            Anchor::InputCursor,
+        )));
+        assert!(screen(&mut editor).contains(PANEL_TEXT));
+        editor.handle_input(KeyCode::Left.into());
+        assert!(!screen(&mut editor).contains(PANEL_TEXT));
+    }
+
+    #[test]
+    fn a_middle_click_on_the_input_looks_up_the_name_under_it() {
+        let mut editor = Editor::new(String::new());
+        editor.paste("ideal x");
+        let shown = cells(&mut editor);
+        let row = shown
+            .iter()
+            .position(|row| row.concat().contains("ideal x"))
+            .unwrap();
+        let column = shown[row].iter().position(|cell| cell == "x").unwrap();
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Middle),
+            column: column as u16,
+            row: row as u16,
+            modifiers: KeyModifiers::NONE,
+        };
+        let Reaction::Lookup(Lookup::Brief, point) = editor.handle_mouse(click) else {
+            panic!("a middle click on code asks what it is");
+        };
+        assert_eq!(point.offset, "ideal ".len());
+        assert_eq!(
+            point.anchor,
+            Anchor::At(Position::new(column as u16, row as u16))
+        );
+    }
+
+    #[test]
+    fn formatting_replaces_the_input_only_while_it_reads_as_it_was_sent() {
+        let mut editor = Editor::new(String::new());
+        editor.paste("f=x->x");
+        let Reaction::Format(sent) = editor.handle_action(Action::FormatInput) else {
+            panic!("formatting asks the language server");
+        };
+        editor.apply(EditorUpdate::InputRewritten {
+            was: sent.clone(),
+            now: "f = x -> x".into(),
+        });
+        assert_eq!(editor.submission(), "f = x -> x");
+        editor.apply(EditorUpdate::InputRewritten {
+            was: sent,
+            now: "stale".into(),
+        });
+        assert_eq!(editor.submission(), "f = x -> x");
     }
 }

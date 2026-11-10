@@ -9,6 +9,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use super::graphics::kitty::ImageId;
+use super::item::Item;
 use super::render::selection::Inclusions;
 use super::render::RenderContext;
 use super::theme::groups::{Groups, HLGroup};
@@ -62,8 +63,19 @@ pub trait Block {
     /// Add zero-based regions that copied selections must omit.
     fn local_selection_inclusions(&self, _: &RenderContext, _: &mut Inclusions) {}
 
+    /// The cells and results a selection can take whole, with the rows they cover.
+    fn items(&self, _: &RenderContext) -> Vec<Item> {
+        Vec::new()
+    }
+
     /// Expand or fold content at a local position, returning whether its layout changed.
     fn toggle_fold(&mut self, _: Position, _: &RenderContext) -> bool {
+        false
+    }
+
+    /// Draw the value whose renderer icon is at local `position` by its next
+    /// renderer, returning whether its layout changed.
+    fn cycle_renderer(&mut self, _: Position, _: &RenderContext) -> bool {
         false
     }
 
@@ -140,6 +152,15 @@ impl<T> HLSpan<T> {
         Self {
             mark: Some(mark),
             ..self
+        }
+    }
+
+    /// The one group that stands for both of this span's, where text can only be set in
+    /// a single one: the semantic group, unless it leaves the syntax colour as it is.
+    pub fn flattened_kind(&self) -> HLGroup {
+        match self.mark {
+            Some(HLGroup::LspVariable) | None => self.kind,
+            Some(mark) => mark,
         }
     }
 

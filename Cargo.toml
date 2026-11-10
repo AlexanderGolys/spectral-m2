@@ -1,6 +1,6 @@
 [package]
 name = "spectral-m2"
-version = "1.2.3-dev.5"
+version = "1.2.3-dev.18"
 edition = "2021"
 description = "A syntax-aware terminal shell for Macaulay2"
 license = "MIT OR Apache-2.0"
@@ -52,9 +52,11 @@ ttf-parser = "0.25.1"
 unicode-width = "0.2"
 url = "2.5"
 toml = "1.1.4"
-these-macros-should-be-illegal = "0.7.0"
+these-macros-should-be-illegal = "0.13.0"
 tree-sitter-highlight = "0.26.13"
 tree-sitter-macaulay2 = "=6.2.0"
+pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }
+pulldown-cmark-escape = "0.11.0"
 
 [lints.rust]
 missing_docs = "deny"

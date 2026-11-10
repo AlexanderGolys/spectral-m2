@@ -29,6 +29,7 @@ use self::hints::Hint;
 use self::history::History;
 use self::undo::{EditKind, Snapshot, Undo};
 use crate::code::highlight::Highlighter;
+use crate::code::semantic::query::{Finding, Severity};
 use crate::ui::block::{HLSpan, Text};
 use crate::ui::config::UI;
 use crate::ui::graphics::kitty::PLACEHOLDER;
@@ -126,6 +127,15 @@ impl InputTextField {
         (start < end).then_some(start..end)
     }
 
+    /// Move the cursor to `offset`, letting go of any selection; an offset past
+    /// the text or inside a character leaves it where it is.
+    pub fn place_cursor(&mut self, offset: usize) {
+        if offset <= self.text.len() && self.text.is_char_boundary(offset) {
+            self.cursor = offset;
+            self.anchor = None;
+        }
+    }
+
     pub fn selected_text(&self) -> Option<&str> {
         self.selection().map(|range| &self.text[range])
     }
@@ -180,6 +190,36 @@ impl InputTextField {
         if let Some(range) = range {
             self.select(range);
         }
+    }
+
+    /// Select what a triple click at `cursor` picks out: the lines around it up to the
+    /// blank ones either side; nothing on a blank line.
+    pub fn select_paragraph(&mut self, cursor: usize) {
+        let mut offset = 0;
+        let lines: Vec<Range<usize>> = self
+            .text
+            .split('\n')
+            .map(|line| {
+                let range = offset..offset + line.len();
+                offset = range.end + 1;
+                range
+            })
+            .collect();
+        let blank = |line: &Range<usize>| self.text[line.clone()].trim().is_empty();
+        let Some(at) = lines
+            .iter()
+            .position(|line| line.start <= cursor && cursor <= line.end)
+            .filter(|&at| !blank(&lines[at]))
+        else {
+            return;
+        };
+        let first = lines[..at].iter().rposition(blank).map_or(0, |gap| gap + 1);
+        let last = lines[at..]
+            .iter()
+            .position(blank)
+            .map_or(lines.len(), |gap| at + gap)
+            - 1;
+        self.select(lines[first].start..lines[last].end);
     }
 
     fn select(&mut self, range: Range<usize>) {
@@ -646,6 +686,10 @@ pub struct InputCode {
     settings: LayoutSettings,
     diagnostic: Option<String>,
     diagnostic_range: Option<Range<usize>>,
+    /// What the language server found in the input as it last saw it.
+    findings: Vec<Finding>,
+    /// Where the name under the cursor occurs, for the text at a revision.
+    occurrences: (u64, Vec<Range<usize>>),
     /// The command typed so far, drawn in the command colour.
     command_range: Option<Range<usize>>,
     selecting: bool,
@@ -687,6 +731,8 @@ impl InputCode {
             settings: LayoutSettings::default(),
             diagnostic: None,
             diagnostic_range: None,
+            findings: Vec::new(),
+            occurrences: (0, Vec::new()),
             command_range: None,
             selecting: false,
             highlighted_revision: u64::MAX,
@@ -759,7 +805,49 @@ impl InputCode {
         self.diagnostic_range = range;
     }
 
-    /// Mark the part of the text that is a command being typed, if any is.
+    pub fn set_findings(&mut self, findings: Vec<Finding>) {
+        self.findings = findings;
+    }
+
+    /// Mark where the name under the cursor occurs in the text as it read at
+    /// `revision`; marks for another revision are not drawn.
+    pub fn set_occurrences(&mut self, revision: u64, ranges: Vec<Range<usize>>) {
+        self.occurrences = (revision, ranges);
+    }
+
+    /// The findings that still fit the text: an edit since the server looked can
+    /// leave a range past the end or inside a character, until it looks again.
+    fn current_findings(&self) -> impl Iterator<Item = &Finding> {
+        let text = self.field.text();
+        self.findings.iter().filter(move |finding| {
+            finding.range.end <= text.len()
+                && text.is_char_boundary(finding.range.start)
+                && text.is_char_boundary(finding.range.end)
+        })
+    }
+
+    /// The message under the input: the shell's own diagnostic, else what the
+    /// server found under the cursor, else its first error.
+    fn shown_diagnostic(&self) -> Option<(String, Severity)> {
+        if let Some(diagnostic) = &self.diagnostic {
+            return Some((diagnostic.clone(), Severity::Error));
+        }
+        let cursor = self.field.cursor();
+        let mut findings = self.current_findings();
+        let under =
+            |finding: &&Finding| finding.range.contains(&cursor) || finding.range.end == cursor;
+        let chosen = self
+            .current_findings()
+            .filter(under)
+            .min_by_key(|finding| finding.severity)
+            .or_else(|| findings.find(|finding| finding.severity == Severity::Error))?;
+        let message = match &chosen.code {
+            Some(code) => format!("{code}: {}", chosen.message),
+            None => chosen.message.clone(),
+        };
+        Some((message, chosen.severity))
+    }
+
     pub fn set_command_range(&mut self, range: Option<Range<usize>>) {
         self.command_range = range;
     }
@@ -972,22 +1060,37 @@ impl InputCode {
         (true, None)
     }
 
-    /// Select the word or bracketed block under a double click, returning what
-    /// it selected; none when the click is outside the text.
-    pub fn handle_double_click(&mut self, event: MouseEvent) -> Option<String> {
+    /// Select what the `clicks`th click of a run picks out under it, a word or
+    /// bracketed block for the second and a paragraph for the third, returning
+    /// what it selected; none when the click is outside the text.
+    pub fn handle_repeated_click(&mut self, event: MouseEvent, clicks: u8) -> Option<String> {
         let area = self.text_area;
         if !area.contains(Position::new(event.column, event.row)) {
             return None;
         }
         self.selecting = false;
         let cursor = self.cursor_at_mouse(event, area, self.scroll);
-        self.field.select_around(cursor);
+        match clicks {
+            2 => self.field.select_around(cursor),
+            _ => self.field.select_paragraph(cursor),
+        }
         self.field.selected_text().map(str::to_string)
     }
 
+    /// The text offset under `point`, when it is over the input's text.
+    pub fn offset_under(&self, point: Position) -> Option<usize> {
+        self.text_area
+            .contains(point)
+            .then(|| self.cursor_at(point, self.text_area, self.scroll))
+    }
+
     fn cursor_at_mouse(&self, event: MouseEvent, area: Rect, scroll: usize) -> usize {
-        let row = event.row.saturating_sub(area.y).min(area.height - 1);
-        let column = event.column.saturating_sub(area.x).min(area.width) as usize;
+        self.cursor_at(Position::new(event.column, event.row), area, scroll)
+    }
+
+    fn cursor_at(&self, point: Position, area: Rect, scroll: usize) -> usize {
+        let row = point.y.saturating_sub(area.y).min(area.height - 1);
+        let column = point.x.saturating_sub(area.x).min(area.width) as usize;
         let source_row = if self.pinned_first_row {
             if row < 2 {
                 0
@@ -1010,6 +1113,8 @@ impl InputCode {
             settings: LayoutSettings::default(),
             diagnostic: None,
             diagnostic_range: None,
+            findings: Vec::new(),
+            occurrences: (0, Vec::new()),
             command_range: None,
             selecting: false,
             highlighted_revision: u64::MAX,
@@ -1084,6 +1189,24 @@ impl InputCode {
                 base,
                 theme,
             );
+            if self.occurrences.0 == self.revision() {
+                for occurrence in &self.occurrences.1 {
+                    line = apply_selection(
+                        line,
+                        visual_line.range.start,
+                        occurrence,
+                        theme.name_occurrence(),
+                    );
+                }
+            }
+            for finding in self.current_findings() {
+                line = apply_selection(
+                    line,
+                    visual_line.range.start,
+                    &finding.range,
+                    theme.style(finding.severity.group()),
+                );
+            }
             if let Some(diagnostic) = self.diagnostic_range.as_ref() {
                 line = apply_selection(
                     line,
@@ -1120,7 +1243,7 @@ impl InputCode {
     /// Height needed by the input within its configured share of the editor.
     pub fn height(&self, width: u16, prefix: u16, editor_height: u16) -> u16 {
         let rows = self.visual_rows(width.saturating_sub(prefix)) as u16;
-        let chrome = 2 + u16::from(self.diagnostic.is_some());
+        let chrome = 2 + u16::from(self.shown_diagnostic().is_some());
         let cap = editor_height
             .saturating_mul(self.settings.max_input_height_percent.into())
             .saturating_div(100)
@@ -1136,7 +1259,7 @@ impl InputCode {
         buffer: &mut Buffer,
     ) -> Option<Position> {
         self.area = area;
-        let diagnostic = self.diagnostic.clone();
+        let diagnostic = self.shown_diagnostic();
         let groups = context.render.groups();
         let code = groups.code();
         let text_width = area.width.saturating_sub(context.render.prefix());
@@ -1195,8 +1318,8 @@ impl InputCode {
             )));
         }
         lines.extend(rows.into_iter().skip(self.scroll).take(body_height));
-        if let Some(message) = diagnostic {
-            let error = groups.error().patch(code);
+        if let Some((message, severity)) = diagnostic {
+            let error = groups.style(severity.message_group()).patch(code);
             lines.push(Line::from(vec![
                 Prompt::new("", error).spans(&())[0].clone(),
                 Span::styled(message, error),
@@ -1413,6 +1536,23 @@ mod tests {
         assert_eq!(selected(1).as_deref(), Some("(x_1, {a, b})"));
         assert_eq!(selected(12).as_deref(), Some("{a, b}"));
         assert_eq!(selected(5), None);
+    }
+
+    #[test]
+    fn a_triple_click_selects_the_lines_around_it_up_to_the_blank_ones() {
+        let source = "a = 1\nb = 2\n\nc = 3\n  \nd = 4";
+        let selected = |cursor: usize| {
+            let mut input = InputCode::new_in_memory();
+            input.insert(source);
+            input.field.select_paragraph(cursor);
+            input.field.selected_text().map(str::to_string)
+        };
+
+        assert_eq!(selected(0).as_deref(), Some("a = 1\nb = 2"));
+        assert_eq!(selected(11).as_deref(), Some("a = 1\nb = 2"));
+        assert_eq!(selected(14).as_deref(), Some("c = 3"));
+        assert_eq!(selected(source.len()).as_deref(), Some("d = 4"));
+        assert_eq!(selected(12), None, "a blank line holds nothing");
     }
 
     #[test]
@@ -1906,6 +2046,72 @@ mod tests {
         assert!(text[1].style.add_modifier.contains(Modifier::UNDERLINED));
         assert_eq!(text[1].style.fg, text[0].style.fg);
         assert_eq!(text[1].style.bg, text[0].style.bg);
+    }
+
+    /// Source left in the plain code colour, so only what is laid over it shows.
+    struct Uncoloured;
+
+    impl Highlighter for Uncoloured {
+        fn highlight(&mut self, _source: &str) -> Vec<crate::ui::block::HLSpan> {
+            Vec::new()
+        }
+    }
+
+    fn finding(range: Range<usize>, severity: Severity, message: &str) -> Finding {
+        Finding {
+            range,
+            severity,
+            message: message.to_string(),
+            code: None,
+        }
+    }
+
+    #[test]
+    fn server_findings_underline_their_range_and_tell_the_one_under_the_cursor() {
+        let mut input = InputCode::new_in_memory();
+        input.field_mut().insert_str("abcd");
+        input.set_findings(vec![
+            finding(0..1, Severity::Hint, "a hint"),
+            finding(3..4, Severity::Error, "an error"),
+        ]);
+        let context = RenderContext::new(40, UI.prompt_width());
+        let lines = input.highlighted_lines(&context, &mut Uncoloured, false, None);
+        let underlined = |content: &str| {
+            lines[0].spans[1..]
+                .iter()
+                .find(|span| span.content == content)
+                .is_some_and(|span| span.style.add_modifier.contains(Modifier::UNDERLINED))
+        };
+        assert!(underlined("a") && underlined("d"));
+        assert!(!underlined("bc"));
+        // Away from every finding, the first error is told.
+        input.field_mut().move_text_start();
+        input.field_mut().move_right();
+        input.field_mut().move_right();
+        assert_eq!(
+            input.shown_diagnostic(),
+            Some(("an error".to_string(), Severity::Error))
+        );
+        input.field_mut().move_text_start();
+        assert_eq!(
+            input.shown_diagnostic(),
+            Some(("a hint".to_string(), Severity::Hint))
+        );
+        input.set_diagnostic("the shell's own".to_string(), None);
+        assert_eq!(
+            input.shown_diagnostic().map(|(message, _)| message),
+            Some("the shell's own".to_string())
+        );
+    }
+
+    #[test]
+    fn a_finding_left_behind_by_an_edit_is_not_drawn() {
+        let mut input = InputCode::new_in_memory();
+        input.field_mut().insert_str("ℤ");
+        input.set_findings(vec![finding(1..2, Severity::Error, "stale")]);
+        let context = RenderContext::new(40, UI.prompt_width());
+        input.highlighted_lines(&context, &mut Uncoloured, false, None);
+        assert_eq!(input.shown_diagnostic(), None);
     }
 
     #[test]

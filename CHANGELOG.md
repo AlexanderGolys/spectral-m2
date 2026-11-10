@@ -6,6 +6,11 @@ All notable changes to Spectral M2 are documented here.
 
 ### Added
 
+- The language server now does more than colour code. `Alt+K` (or a middle click on code in the input) floats a small panel with what the name is. `Alt+Shift+K` describes it in full beside the session, in a view that takes no tab. `Ctrl+]` (or Shift+click) goes to its definition: in the input, in an earlier cell or in a file. Problems the server finds are underlined, with the message for the one under the cursor below the input. Occurrences of the name under the cursor are shaded. Signatures of known functions show while typing a call. Names bound in the session complete before they have run. `Alt+Shift+F` formats the input. A file shown beside the session folds where the server says it can: double-click the ▾ in its gutter. See *What the language server knows* in the book.
+- A new book, in `book/`, replaces the old one in `docs/`: a guided tour of the shell, every command, key, setting and option, and how the shell works with Macaulay2. Its Macaulay2 examples are highlighted by `mdbook-tsitter` 4 from the grammar itself, with no parser to build first.
+- Whole cells and results can be selected: double-click outside any text for the one under the click, triple-click for its whole submission, or step through them with `Alt+Up` and `Alt+Down`, then `Up`, `Down`, `y` (or `Ctrl+Y`) and `Esc`. A *copy cells as* selection setting copies them as raw text or as a session, `i1 : code` and `o1 = value`.
+- Triple-click selects a paragraph in the input, the feed and the previews, and the status line says what a copy took.
+
 - A crash is recorded, with its backtrace, in `$XDG_STATE_HOME/spectral-m2/crash.log` (default `~/.local/state/spectral-m2/crash.log`), and its one-line cause and the path are printed once the terminal is restored; until now the message was discarded together with stderr while the screen was drawn.
 - A `FilePosition` value in the output is a link to its source, as source locations in documentation are: click it to open the file at that position.
 - A **debug** statusline component shows the `sp2` version and memory, the M2 process's memory, the pictures held by the terminal, and the frame rate. The highlight debug view names the version as well.
@@ -22,6 +27,12 @@ All notable changes to Spectral M2 are documented here.
 - Delete the whole current input line with `Ctrl+U`.
 
 ### Fixed
+
+- A method documented on another page is listed by its own name alone, linked to that page, without the repeated `-- see page -- headline` after it.
+- An option's name in a documentation page no longer links to the type its entry mentions.
+- An option's default in a documentation page, `default value null`, is coloured as code: `null`, `true`, `false`, strings and names take their own colours.
+- A method a page lists without documentation of its own is set on a red-tinted background (the `MarkupMissingDoc` group) instead of being followed by "(missing documentation)".
+- `Ctrl+Left` and `Ctrl+Right` move the input's cursor by words with a preview open, instead of switching its tab; `Ctrl+PageUp` and `Ctrl+PageDown` switch tabs from either pane.
 
 - Documentation opened through links uses the same example computation, semantic analysis, and selected math renderer as session output; enriched results refresh both panes.
 

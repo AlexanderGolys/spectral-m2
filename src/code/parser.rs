@@ -79,6 +79,32 @@ pub fn incomplete_reason(error: &NativeParseError) -> String {
         .to_string()
 }
 
+/// Characters M2's lexer reads as operators in newer releases but as ordinary
+/// identifier characters in the release the shell runs, so the two disagree on
+/// what `a§a` is. Source containing one is refused rather than guessed at. The
+/// set is `ismathoperator` in M2's `ctype.d`.
+fn is_ambiguous_symbol(character: char) -> bool {
+    matches!(
+        character,
+        '\u{A0}'..='\u{BF}'
+            | '\u{D7}'
+            | '\u{F7}'
+            | '\u{2190}'..='\u{23FF}'
+            | '\u{27C0}'..='\u{27FF}'
+            | '\u{2900}'..='\u{2BFF}'
+    )
+}
+
+/// The message for a failure that tripped over an ambiguous symbol, if it did.
+fn ambiguous_symbol_message(source: &str, range: &Option<Range<usize>>) -> Option<String> {
+    let symbol = source
+        .get(range.clone()?.start..)?
+        .chars()
+        .next()
+        .filter(|&character| is_ambiguous_symbol(character))?;
+    Some(format!("`{symbol}` is not supported in source"))
+}
+
 /// Classify a buffer without evaluating it.
 pub fn check(source: &str) -> ParseVerdict {
     match parse_native(source) {
@@ -91,10 +117,9 @@ pub fn check(source: &str) -> ParseVerdict {
                 .span()
                 .bounds()
                 .map(|(start, end)| start.min(source.len())..end.min(source.len()));
-            ParseVerdict::SyntaxError(SyntaxDiagnostic {
-                message: error.to_string(),
-                range,
-            })
+            let message =
+                ambiguous_symbol_message(source, &range).unwrap_or_else(|| error.to_string());
+            ParseVerdict::SyntaxError(SyntaxDiagnostic { message, range })
         }
     }
 }
@@ -251,6 +276,35 @@ mod tests {
         let cells = cells_of(source);
         assert_eq!(cells, ["  a = 5  \n\n\t", "b = 6  "]);
         assert_eq!(cells.concat(), source);
+    }
+
+    #[test]
+    fn an_ambiguous_symbol_is_refused_by_name() {
+        for (source, symbol) in [("§", '§'), ("a§a", '§'), ("1 § 2", '§'), ("a×b", '×')] {
+            let ParseVerdict::SyntaxError(diagnostic) = check(source) else {
+                panic!("expected {source:?} to be refused");
+            };
+            assert!(
+                diagnostic.message.contains(symbol),
+                "{}",
+                diagnostic.message
+            );
+            assert!(
+                !diagnostic.message.contains("expected"),
+                "{}",
+                diagnostic.message
+            );
+        }
+    }
+
+    #[test]
+    fn an_ambiguous_symbol_is_fine_inside_strings_and_comments() {
+        for source in ["\"§\"", "-- §", "///a×b///"] {
+            assert!(
+                matches!(check(source), ParseVerdict::Complete(_)),
+                "{source:?}"
+            );
+        }
     }
 
     #[test]

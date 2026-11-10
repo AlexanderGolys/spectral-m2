@@ -1,12 +1,11 @@
 //! The terminal's own monospace font for typewriter maths, drawn in the cells
 //! KaTeX lays out for its Typewriter face so the spacing of a formula is kept.
 
-use std::env;
 use std::fmt::Write;
 use std::fs;
-use std::path::PathBuf;
 use std::sync::LazyLock;
 
+use crate::env::ENV;
 use fontdb::{Database, Family, Query};
 use ttf_parser::{Face, OutlineBuilder};
 
@@ -132,9 +131,7 @@ impl OutlineBuilder for SvgPath {
 
 /// The font family the running terminal's configuration names.
 fn configured_family() -> Option<String> {
-    let config = env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    let config = ENV.config_home()?;
     let read = |name: &str| fs::read_to_string(config.join(name)).ok();
     let family = match super::terminal()? {
         "kitty" => kitty_family(&read(KITTY_CONFIG)?),

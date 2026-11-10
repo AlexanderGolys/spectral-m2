@@ -1,6 +1,7 @@
 //! Session source identities, semantic-token projection, and cached highlighting.
 
 mod client;
+pub mod query;
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -12,10 +13,15 @@ use lsp_types::{
 
 pub use self::client::SERVER_EXECUTABLE;
 use self::client::{Client, Event};
+use self::query::{Answer, Binding, Finding, Query, QueryId, Question};
 use super::highlight::{Highlighter, SyntaxHighlighter};
 use crate::ui::block::HLSpan;
 use crate::ui::theme::groups::HLGroup;
 
+/// The code the server reports a parse failure under. The shell's own parser
+/// decides what is wrong with the syntax: an input left open is a continuation,
+/// not an error.
+const SYNTAX_ERROR: &str = "X01";
 /// Characters other than letters and digits that continue a Macaulay2 name.
 const NAME_PUNCTUATION: &[char] = &['\'', '_', '$'];
 const OPTION: SemanticTokenModifier = SemanticTokenModifier::new("option");
@@ -93,6 +99,8 @@ pub enum SourceId {
     Pending(u64),
     /// The editable input in an interpreter generation.
     Draft(u64),
+    /// Source asked about on its own, apart from the session.
+    Apart(QueryId),
     /// One code block on a documentation page.
     Page {
         /// The page.
@@ -161,6 +169,8 @@ pub struct SemanticHighlighter {
     /// Whether its semantic tokens color source.
     semantic: bool,
     version: i32,
+    /// The identity the next question takes.
+    next_query: u64,
 }
 
 /// What changed since the highlighter was last polled.
@@ -174,6 +184,14 @@ pub struct Polled {
     pub failure: Option<String>,
     /// Documentation pages whose analysis finished.
     pub pages: Vec<PageColors>,
+    /// Answers to questions put with [`SemanticHighlighter::ask`] and
+    /// [`SemanticHighlighter::ask_apart`].
+    pub answers: Vec<(QueryId, Answer)>,
+    /// What the server now finds wrong in the session, by segment, replacing
+    /// what it found before.
+    pub findings: Option<Vec<(SourceId, Finding)>>,
+    /// The names the session's source binds, replacing those bound before.
+    pub bindings: Option<Vec<Binding>>,
 }
 
 /// The semantic colours of a documentation page's code blocks.
@@ -198,7 +216,53 @@ impl SemanticHighlighter {
             server: false,
             semantic: false,
             version: 0,
+            next_query: 0,
         }
+    }
+
+    /// Ask `question` about the point `local` bytes into the segment `source` of
+    /// the session as last updated; nothing without a server or that segment.
+    pub fn ask(
+        &mut self,
+        source: SourceId,
+        local: usize,
+        question: fn(usize) -> Question,
+    ) -> Option<QueryId> {
+        let document = self.document.clone()?;
+        let offset = document.offset_in(source, local)?;
+        self.put(document, question(offset))
+    }
+
+    /// Ask `question` about `source` on its own, apart from the session.
+    pub fn ask_apart(&mut self, source: &str, question: Question) -> Option<QueryId> {
+        let id = QueryId(self.next_query);
+        let mut document = Document::new(id.0);
+        document.push(SourceId::Apart(id), source);
+        self.put(Arc::new(document), question)
+    }
+
+    fn put(&mut self, document: Arc<Document>, question: Question) -> Option<QueryId> {
+        let client = self.client.as_ref()?;
+        let id = QueryId(self.next_query);
+        self.next_query += 1;
+        client.ask(Query {
+            id,
+            document,
+            question,
+        });
+        Some(id)
+    }
+
+    /// Whether a language server is running to be asked.
+    pub fn serving(&self) -> bool {
+        self.client.is_some()
+    }
+
+    /// The identity of the live input in the session as last updated.
+    pub fn draft(&self) -> Option<SourceId> {
+        self.document
+            .as_ref()
+            .map(|document| SourceId::Draft(document.generation))
     }
 
     /// Start or stop the optional server and whether its tokens color source,
@@ -324,6 +388,24 @@ impl SemanticHighlighter {
                         });
                     }
                 }
+                Event::Answered { query, answer } => polled.answers.push((query.id, answer)),
+                Event::Findings { document, findings } => {
+                    if self.is_current(&document) {
+                        polled.findings = Some(
+                            findings
+                                .into_iter()
+                                .filter(|(_, finding)| {
+                                    finding.code.as_deref() != Some(SYNTAX_ERROR)
+                                })
+                                .collect(),
+                        );
+                    }
+                }
+                Event::Bindings { document, bindings } => {
+                    if self.is_current(&document) {
+                        polled.bindings = Some(bindings);
+                    }
+                }
                 Event::Failed(message) => {
                     self.client = None;
                     self.clear_current();
@@ -333,6 +415,12 @@ impl SemanticHighlighter {
             }
         }
         polled
+    }
+
+    fn is_current(&self, document: &Document) -> bool {
+        self.document.as_ref().is_some_and(|current| {
+            current.version == document.version && current.generation == document.generation
+        })
     }
 
     fn apply(
@@ -540,7 +628,7 @@ pub const SEMANTIC_GROUPS: [HLGroup; 28] = [
     HLGroup::Macro,
     HLGroup::Attribute,
     HLGroup::RingGenerator,
-        HLGroup::Option,
+    HLGroup::Option,
     HLGroup::Installation,
     HLGroup::CompiledFunction,
     HLGroup::Regex,
@@ -797,11 +885,10 @@ mod tests {
     #[test]
     fn a_plain_value_leaves_its_syntax_color() {
         let groups = crate::ui::theme::groups::scheme();
-        for (syntax, semantic) in [(HLGroup::Boolean, HLGroup::LspVariable)] {
-            let layered: HLSpan = HLSpan::new(0..4, syntax).marked(semantic);
-            let plain: HLSpan = HLSpan::new(0..4, syntax);
-            assert_eq!(layered.style(groups), plain.style(groups), "{semantic:?}");
-        }
+        let (syntax, semantic) = (HLGroup::Boolean, HLGroup::LspVariable);
+        let layered: HLSpan = HLSpan::new(0..4, syntax).marked(semantic);
+        let plain: HLSpan = HLSpan::new(0..4, syntax);
+        assert_eq!(layered.style(groups), plain.style(groups), "{semantic:?}");
     }
 
     #[test]

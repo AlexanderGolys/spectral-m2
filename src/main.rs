@@ -5,6 +5,7 @@ mod backend;
 mod cli;
 mod code;
 mod crash;
+mod env;
 mod errors;
 mod input;
 mod ui;

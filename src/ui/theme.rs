@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::fmt::Formatter;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -13,10 +14,8 @@ use serde::{Deserialize, Serialize};
 pub mod groups;
 pub mod palette;
 
-#[cfg(test)]
-use self::groups::StyleDeclaration;
-use self::groups::{Groups, StyleTable};
-use self::palette::Palette;
+pub(crate) use self::groups::*;
+pub(crate) use self::palette::*;
 use crate::ui::cycle::cycled;
 use crate::ui::settings::Persisted;
 use ratatui::style::Color as PaletteColor;
@@ -100,7 +99,7 @@ pub enum Mode {
 }
 
 impl fmt::Display for Mode {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Dark => "dark",
             Self::Light => "light",
@@ -109,23 +108,12 @@ impl fmt::Display for Mode {
 }
 
 /// Variant names divided by their terminal-background mode.
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[serde(default)]
 struct Variants {
-    #[serde(default)]
     dark: Vec<String>,
-    #[serde(default)]
     light: Vec<String>,
-}
-
-/// One named color's values across every scheme variant.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct VariantColors {
-    #[serde(default)]
-    dark: Option<ModeColors>,
-    #[serde(default)]
-    light: Option<ModeColors>,
 }
 
 /// A mode-wide color, or colors keyed by variant when they differ.
@@ -134,6 +122,14 @@ struct VariantColors {
 enum ModeColors {
     Shared(PaletteColor),
     Variants(HashMap<String, PaletteColor>),
+}
+/// One named color's values across every scheme variant.
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(default)]
+struct VariantColors {
+    dark: Option<ModeColors>,
+    light: Option<ModeColors>,
 }
 
 impl VariantColors {
@@ -394,16 +390,6 @@ pub struct Appearance {
     pub transparent_background: bool,
 }
 
-/// Stable appearance names stored independently of in-memory picker indices.
-#[derive(Serialize, Deserialize)]
-struct StoredAppearance {
-    scheme: String,
-    variant: String,
-    #[serde(alias = "brightness")]
-    mode: Mode,
-    transparent_background: bool,
-}
-
 impl Default for Appearance {
     fn default() -> Self {
         let scheme = SCHEMES
@@ -425,39 +411,6 @@ impl Default for Appearance {
 
 impl Persisted for Appearance {
     const FILE: &'static str = "appearance.json";
-}
-
-impl From<Appearance> for StoredAppearance {
-    fn from(appearance: Appearance) -> Self {
-        Self {
-            scheme: appearance.scheme().label().into(),
-            variant: appearance.variant().label().into(),
-            mode: appearance.mode(),
-            transparent_background: appearance.transparent_background,
-        }
-    }
-}
-
-impl TryFrom<StoredAppearance> for Appearance {
-    type Error = String;
-
-    /// The appearance a stored one names, unless its scheme or variant is gone.
-    fn try_from(stored: StoredAppearance) -> Result<Self, Self::Error> {
-        let scheme = SCHEMES
-            .iter()
-            .position(|scheme| scheme.label() == stored.scheme)
-            .ok_or_else(|| format!("no scheme {}", stored.scheme))?;
-        let variant = SCHEMES[scheme]
-            .variants()
-            .iter()
-            .position(|variant| variant.label() == stored.variant && variant.mode() == stored.mode)
-            .ok_or_else(|| format!("no variant {} of {}", stored.variant, stored.scheme))?;
-        Ok(Self {
-            scheme: SchemeIndex(scheme),
-            variant: VariantIndex(variant),
-            transparent_background: stored.transparent_background,
-        })
-    }
 }
 
 impl Appearance {
@@ -587,13 +540,54 @@ impl Appearance {
         }
     }
 }
+/// Stable appearance names stored independently of in-memory picker indices.
+#[derive(Serialize, Deserialize)]
+struct StoredAppearance {
+    scheme: String,
+    variant: String,
+    #[serde(alias = "brightness")]
+    mode: Mode,
+    transparent_background: bool,
+}
 
+impl From<Appearance> for StoredAppearance {
+    fn from(appearance: Appearance) -> Self {
+        Self {
+            scheme: appearance.scheme().label().into(),
+            variant: appearance.variant().label().into(),
+            mode: appearance.mode(),
+            transparent_background: appearance.transparent_background,
+        }
+    }
+}
+
+impl TryFrom<StoredAppearance> for Appearance {
+    type Error = String;
+
+    /// The appearance a stored one names, unless its scheme or variant is gone.
+    fn try_from(stored: StoredAppearance) -> Result<Self, Self::Error> {
+        let scheme = SCHEMES
+            .iter()
+            .position(|scheme| scheme.label() == stored.scheme)
+            .ok_or_else(|| format!("no scheme {}", stored.scheme))?;
+        let variant = SCHEMES[scheme]
+            .variants()
+            .iter()
+            .position(|variant| variant.label() == stored.variant && variant.mode() == stored.mode)
+            .ok_or_else(|| format!("no variant {} of {}", stored.variant, stored.scheme))?;
+        Ok(Self {
+            scheme: SchemeIndex(scheme),
+            variant: VariantIndex(variant),
+            transparent_background: stored.transparent_background,
+        })
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::groups::HLGroup;
     use super::*;
-    use crate::ui::settings::{read, write};
-    use std::env;
+    use crate::env::ENV;
+    use crate::ui::settings::Persisted;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -617,7 +611,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = env::temp_dir().join(format!(
+        let dir = ENV.temp_dir().join(format!(
             "spectral-theme-config-{}-{nonce}",
             std::process::id()
         ));
@@ -636,7 +630,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = env::temp_dir().join(format!(
+        let dir = ENV.temp_dir().join(format!(
             "spectral-theme-update-{}-{nonce}",
             std::process::id()
         ));
@@ -673,14 +667,14 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = env::temp_dir().join(format!(
+        let path = ENV.temp_dir().join(format!(
             "spectral-m2-appearance-{}-{nonce}.json",
             std::process::id()
         ));
         let appearance = Appearance::default().cycle_theme(1).cycle_background();
-        write(&path, &appearance).unwrap();
+        appearance.write(&path).unwrap();
 
-        assert_eq!(read(&path), Some(appearance));
+        assert_eq!(Appearance::read(&path), Some(appearance));
         let _ = fs::remove_file(path);
     }
 

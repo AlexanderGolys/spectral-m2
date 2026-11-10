@@ -15,6 +15,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, BorderType, Padding, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
+pub mod markdown;
 pub mod markup;
 pub mod maths;
 pub mod selection;
@@ -33,6 +34,8 @@ enum BorderPlacement {
     },
 }
 
+// @##TODO
+// add to // /@@settings
 /// How many of the latest outputs M2 also names `oo`, `ooo` and `oooo`.
 pub const RECENT_OUTPUTS: usize = 3;
 

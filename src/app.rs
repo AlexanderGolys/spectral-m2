@@ -28,19 +28,27 @@ use self::panes::{pane_layout, ratio_for_width, Pane, Panes, MIN_PANE_WIDTH};
 use self::previews::{PreviewTab, PreviewTabs, RECENT_PREVIEWS};
 use self::session::Session;
 use crate::backend::M2Backend;
+use crate::backend::M2Value;
 use crate::code::file as code_file;
 use crate::code::location::SourceLink;
+use crate::code::location::{SourcePoint, SourceRange};
+use crate::code::semantic::query::{Answer, Place, QueryId, Question};
 use crate::code::semantic::SemanticHighlighter;
+use crate::code::semantic::SourceId;
 use crate::errors::Result;
 use crate::ui::action::Action;
 use crate::ui::block::Block;
+use crate::ui::cell::OutputBlock;
 use crate::ui::cell::{response_blocks, SourceBlock, TextBlock};
 use crate::ui::config::UI;
 use crate::ui::controller::{
-    CommittedCells, Editor, EditorUpdate, Reaction, ReferenceEntry, ViewKind,
+    CodePoint, CommittedCells, Editor, EditorUpdate, Lookup, Reaction, ReferenceEntry, ViewKind,
 };
+use crate::ui::floating::{Anchor, Floating, MarkupContent};
+use crate::ui::fold::FoldRanges;
 use crate::ui::graphics;
 use crate::ui::key::{KeyEvent, Keyboard};
+use crate::ui::render::markdown;
 use crate::ui::render::markup;
 use crate::ui::terminal::ReplTerminal;
 use crate::ui::theme::groups::{scheme, HLGroup};
@@ -48,6 +56,9 @@ use crate::ui::theme::groups::{scheme, HLGroup};
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(80);
 /// How often to look for pictures the worker has finished encoding while any remain.
 const PICTURE_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const NO_LANGUAGE_SERVER: &str = "the language server is not running";
+const NOTHING_KNOWN: &str = "nothing is known about this";
+const NO_DEFINITION: &str = "no definition found";
 
 struct PreviewSnapshot {
     pane: Pane,
@@ -110,6 +121,24 @@ struct App {
     previews: PreviewTabs<PreviewSnapshot>,
     preview_controls: Vec<(Rect, PreviewControl)>,
     archived_code: String,
+    /// Questions put to the language server, by what their answers are for.
+    asked: HashMap<QueryId, Asked>,
+    /// The input's revision and cursor when the server was last asked about them.
+    asked_at: Option<(u64, usize)>,
+}
+
+/// What an answer from the language server is for.
+#[derive(Clone, Debug)]
+enum Asked {
+    Lookup(Lookup, Anchor),
+    /// Where the name under the cursor occurs, in the input at a revision.
+    Occurrences(u64),
+    /// The call the cursor is in, in the input at a revision.
+    Signature(u64),
+    /// Formatting the input, which then read this.
+    Format(String),
+    /// The stretches of a file shown beside the session that fold.
+    Folds(FoldRanges),
 }
 
 impl App {
@@ -128,6 +157,8 @@ impl App {
             previews: PreviewTabs::default(),
             preview_controls: Vec::new(),
             archived_code: String::new(),
+            asked: HashMap::new(),
+            asked_at: None,
         }
     }
 
@@ -165,7 +196,7 @@ impl App {
             && self.previews.active.is_some()
             && !key.alt()
             && !key.shift()
-            && (previewing || key.ctrl())
+            && previewing
             && matches!(
                 key.code,
                 crossterm::event::KeyCode::Left | crossterm::event::KeyCode::Right
@@ -384,6 +415,21 @@ impl App {
                     .editor
                     .apply(EditorUpdate::Diagnostic(error.to_string())),
             },
+            Reaction::Lookup(lookup, point) => {
+                self.look_up(lookup, point);
+                true
+            }
+            Reaction::Format(code) => {
+                match workspace.highlighter.ask_apart(&code, Question::Format) {
+                    Some(id) => {
+                        self.asked.insert(id, Asked::Format(code));
+                        true
+                    }
+                    None => workspace
+                        .editor
+                        .apply(EditorUpdate::Diagnostic(NO_LANGUAGE_SERVER.to_string())),
+                }
+            }
             Reaction::ViewFile(typed) => self.open_source_file(SourceLink {
                 path: code_file::resolve(&typed),
                 range: None,
@@ -422,6 +468,7 @@ impl App {
                 workspace.editor.apply(workspace.session.restart())
             }
             Reaction::Copy(text) => {
+                workspace.editor.note_copied(&text);
                 let _ = execute!(io::stdout(), CopyToClipboard::to_clipboard_from(text));
                 true
             }
@@ -564,6 +611,156 @@ impl App {
         }
     }
 
+    /// Show `blocks` beside the session for a moment, holding no tab of its own.
+    fn show_transient(&mut self, blocks: Vec<Box<dyn Block>>) {
+        let current = self.take_preview();
+        self.previews.open_transient(current);
+        if self.panes.split() {
+            self.panes.list[Panes::SPLIT] = Pane::new(ViewKind::Reference);
+        } else {
+            self.panes.open_view(ViewKind::Reference);
+        }
+        self.workspace.editor.open_reference(blocks, None);
+    }
+
+    /// Put `lookup` to the language server about the name at `point`.
+    fn look_up(&mut self, lookup: Lookup, point: CodePoint) {
+        let workspace = &mut self.workspace;
+        let question = match lookup {
+            Lookup::Brief | Lookup::Description => Question::Hover,
+            Lookup::Definition => Question::Definition,
+        };
+        let asked = point
+            .source
+            .or_else(|| workspace.highlighter.draft())
+            .and_then(|source| workspace.highlighter.ask(source, point.offset, question));
+        match asked {
+            Some(id) => {
+                self.asked.insert(id, Asked::Lookup(lookup, point.anchor));
+            }
+            None => {
+                workspace
+                    .editor
+                    .apply(EditorUpdate::Diagnostic(NO_LANGUAGE_SERVER.to_string()));
+            }
+        }
+    }
+
+    /// Ask where the name under the input's cursor occurs whenever the cursor or
+    /// the text moved, and after an edit which call the cursor is in.
+    fn ask_about_cursor(&mut self) {
+        let workspace = &mut self.workspace;
+        let (draft, _, revision) = workspace.editor.analysis_input();
+        let at = (revision, workspace.editor.input_cursor());
+        if self.asked_at == Some(at) || draft.is_empty() {
+            return;
+        }
+        let edited = self.asked_at.is_none_or(|(asked, _)| asked != revision);
+        self.asked_at = Some(at);
+        let Some(source) = workspace.highlighter.draft() else {
+            return;
+        };
+        let mut ask = |question: fn(usize) -> Question, asked: Asked| {
+            if let Some(id) = workspace.highlighter.ask(source, at.1, question) {
+                self.asked.insert(id, asked);
+            }
+        };
+        ask(Question::Highlights, Asked::Occurrences(revision));
+        if edited {
+            ask(Question::Signature, Asked::Signature(revision));
+        }
+    }
+
+    /// Carry out what the language server answered to a question asked for `asked`.
+    fn answered(&mut self, asked: Asked, answer: Answer) -> bool {
+        let editor = &mut self.workspace.editor;
+        match (asked, answer) {
+            (Asked::Lookup(Lookup::Brief, anchor), Answer::Hover(Some(text))) => {
+                editor.apply(EditorUpdate::Float(Floating::new(
+                    MarkupContent::from_markdown(markdown::lead(&text)),
+                    anchor,
+                )))
+            }
+            (Asked::Lookup(Lookup::Description, _), Answer::Hover(Some(text))) => {
+                let html = markdown::html(&text);
+                let width = usize::from(self.pane_areas.last().map_or(0, |area| area.width));
+                self.show_transient(vec![Box::new(
+                    OutputBlock::rendered(
+                        M2Value::Markup {
+                            html,
+                            fallback: text,
+                            example_width: width,
+                        },
+                        None,
+                    )
+                    .without_frame(),
+                )]);
+                true
+            }
+            (Asked::Lookup(_, _), Answer::Hover(None)) => {
+                editor.apply(EditorUpdate::Diagnostic(NOTHING_KNOWN.to_string()))
+            }
+            (Asked::Lookup(_, _), Answer::Definition(places)) => match places.into_iter().next() {
+                Some(place) => self.go_to(place),
+                None => editor.apply(EditorUpdate::Diagnostic(NO_DEFINITION.to_string())),
+            },
+            (Asked::Occurrences(revision), Answer::Highlights(places)) => {
+                let draft = self.workspace.highlighter.draft();
+                let ranges = places
+                    .into_iter()
+                    .filter(|(source, _)| Some(*source) == draft)
+                    .map(|(_, range)| range)
+                    .collect();
+                editor.apply(EditorUpdate::InputOccurrences { revision, ranges })
+            }
+            (Asked::Signature(revision), Answer::Signature(signatures))
+                if revision == editor.analysis_input().2 =>
+            {
+                match signatures.into_iter().next() {
+                    Some(signature) => editor.apply(EditorUpdate::Float(Floating::new(
+                        signature,
+                        Anchor::InputCursor,
+                    ))),
+                    None => true,
+                }
+            }
+            (Asked::Folds(folds), Answer::Folds(ranges)) => {
+                *folds.borrow_mut() = ranges;
+                editor.apply(EditorUpdate::FoldsLearned)
+            }
+            (Asked::Format(was), Answer::Formatted(Some(now))) => {
+                editor.apply(EditorUpdate::InputRewritten { was, now })
+            }
+            _ => true,
+        }
+    }
+
+    fn go_to(&mut self, place: Place) -> bool {
+        let editor = &mut self.workspace.editor;
+        match place {
+            Place::Source(SourceId::Draft(_), range) => {
+                editor.apply(EditorUpdate::InputCursor(range.start))
+            }
+            Place::Source(
+                SourceId::Cell {
+                    submission, index, ..
+                },
+                _,
+            ) => editor.apply(EditorUpdate::SelectCell { submission, index }),
+            Place::Source(_, _) => true,
+            Place::File { path, line, column } => self.open_source_file(SourceLink {
+                path,
+                range: Some(SourceRange {
+                    start: SourcePoint {
+                        line: line as usize + 1,
+                        column: column as usize,
+                    },
+                    end: None,
+                }),
+            }),
+        }
+    }
+
     fn select_preview(&mut self, tab: PreviewTab) {
         if self.previews.label(tab).is_none()
             || (self.panes.split() && self.previews.active == Some(tab))
@@ -649,7 +846,11 @@ impl App {
                     .highlighter
                     .analyse_page(page, vec![code.clone()]);
                 let focus = source.range.map(|range| range.bytes(&code));
-                let block = SourceBlock::new(code, page, focus);
+                let folds = FoldRanges::default();
+                if let Some(id) = self.workspace.highlighter.ask_apart(&code, Question::Folds) {
+                    self.asked.insert(id, Asked::Folds(folds.clone()));
+                }
+                let block = SourceBlock::new(code, page, focus).with_folds(folds);
                 let blocks: Vec<Box<dyn Block>> = vec![
                     Box::new(TextBlock::system(format!(
                         "{} — F8 runs this file",
@@ -824,7 +1025,7 @@ impl App {
     /// Advance whatever the shell animates while M2 works, and settle the typing
     /// prompt once typing pauses; whether anything changed.
     fn animate(&mut self) -> bool {
-        let settled = self.workspace.editor.settle_typing();
+        let settled = self.workspace.editor.settle();
         let animated = self.workspace.session.busy() && self.workspace.editor.animate();
         settled || animated
     }
@@ -833,7 +1034,7 @@ impl App {
     fn event_timeout(&self) -> Duration {
         self.workspace
             .editor
-            .typing_remaining()
+            .settles_in()
             .map_or(EVENT_POLL_INTERVAL, |remaining| {
                 remaining.min(EVENT_POLL_INTERVAL)
             })
@@ -921,8 +1122,43 @@ impl App {
                 .update(workspace.session.semantic_document(pending, draft));
             workspace.analysis_state = Some(state);
         }
+        self.ask_about_cursor();
+        let workspace = &mut self.workspace;
         let polled = workspace.highlighter.poll();
         recolored |= polled.recolored;
+        if (recolored || polled.failure.is_some()) && !workspace.highlighter.serving() {
+            // Nothing the server found or read stands once it is gone.
+            running &= workspace
+                .editor
+                .apply(EditorUpdate::InputFindings(Vec::new()));
+            running &= workspace
+                .editor
+                .apply(EditorUpdate::AnalysedNames(Vec::new()));
+        }
+        if let Some(findings) = polled.findings {
+            let draft = workspace.highlighter.draft();
+            let findings = findings
+                .into_iter()
+                .filter(|(source, _)| Some(*source) == draft)
+                .map(|(_, finding)| finding)
+                .collect();
+            running &= workspace
+                .editor
+                .apply(EditorUpdate::InputFindings(findings));
+            dirty = true;
+        }
+        for (id, answer) in polled.answers {
+            if let Some(asked) = self.asked.remove(&id) {
+                running &= self.answered(asked, answer);
+                dirty = true;
+            }
+        }
+        let workspace = &mut self.workspace;
+        if let Some(bindings) = polled.bindings {
+            running &= workspace.editor.apply(EditorUpdate::AnalysedNames(
+                bindings.into_iter().map(|binding| binding.name).collect(),
+            ));
+        }
         if !polled.pages.is_empty() {
             polled.pages.into_iter().for_each(markup::remember_colors);
             running &= workspace.editor.apply(EditorUpdate::ExamplesComputed);

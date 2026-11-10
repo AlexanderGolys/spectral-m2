@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
 use super::block::Block;
-use super::cell::{Cell, CodeBlock};
+use super::cell::{CodeBlock, M2CodeCell};
 use super::config::UI;
 use super::render::selection::Inclusions;
 use super::render::RenderContext;
@@ -176,7 +176,7 @@ fn delimiter_text(node: &PrettyNode) -> &str {
 
 impl SyntaxTreeBlock {
     /// Create a highlighted committed cell and its `m2-syn` pretty tree.
-    pub fn new(cell: Cell, tree: PrettyNode) -> Self {
+    pub fn new(cell: M2CodeCell, tree: PrettyNode) -> Self {
         Self {
             code: CodeBlock::new([cell]),
             tree,

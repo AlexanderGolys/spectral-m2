@@ -323,6 +323,43 @@ impl ScreenCapture {
         (CharClass::of(character) == CharClass::Word).then(|| (self.word(at), reach))
     }
 
+    /// Whether `at` is on text a selection can read, rather than on the decoration
+    /// or the blanks around it.
+    fn holds_text(&self, at: ScreenPosition) -> bool {
+        self.cell(at)
+            .is_some_and(|cell| cell.layer.is_some() && cell.selectable)
+    }
+
+    /// The rows of text around `at`, up to the rows holding none either side, and
+    /// how to read them.
+    fn paragraph(&self, at: ScreenPosition) -> Option<(Region, Reach)> {
+        let layer = self.cell(at)?.layer?;
+        let holds_text = |row: i64| {
+            self.rows.get(&row).is_some_and(|cells| {
+                cells
+                    .iter()
+                    .any(|cell| cell.layer == Some(layer) && cell.selectable)
+            })
+        };
+        if !holds_text(at.row) {
+            return None;
+        }
+        let first = (i64::MIN..at.row)
+            .rev()
+            .take_while(|&row| holds_text(row))
+            .last()
+            .unwrap_or(at.row);
+        let last = (at.row + 1..)
+            .take_while(|&row| holds_text(row))
+            .last()
+            .unwrap_or(at.row);
+        let region = Region::Flow {
+            start: ScreenPosition::new(self.area.x, first),
+            end: ScreenPosition::new(self.area.right().saturating_sub(1), last),
+        };
+        Some((region, Reach::Layer(layer)))
+    }
+
     /// The cells a picture's showing covers.
     fn showing_extent(&self, showing: Showing) -> Region {
         let covered = self.rows.iter().flat_map(|(&row, cells)| {
@@ -492,9 +529,20 @@ impl Editor {
         Some(Reaction::Continue)
     }
 
-    /// Select and copy what a double click picks out of the pane under it: a word,
-    /// a bracketed block or a picture, typed annotations included.
-    pub fn pick_screen_text(&mut self, event: MouseEvent) -> Option<Reaction> {
+    /// Whether a click is on the decoration or blanks of the pane under it, rather
+    /// than on its text.
+    pub fn outside_text(&self, event: MouseEvent) -> bool {
+        let pointer = Position::new(event.column, event.row);
+        self.captures
+            .iter()
+            .find(|capture| capture.area.contains(pointer))
+            .is_some_and(|capture| !capture.holds_text(capture.position(event)))
+    }
+
+    /// Select and copy what the `clicks`th click of a run picks out of the pane
+    /// under it: a word, a bracketed block or a picture, typed annotations
+    /// included, for the second, and the paragraph for the third.
+    pub fn pick_screen_text(&mut self, event: MouseEvent, clicks: u8) -> Option<Reaction> {
         let raw = self.settings.selection.raw;
         let pointer = Position::new(event.column, event.row);
         let capture = self
@@ -502,7 +550,11 @@ impl Editor {
             .iter()
             .find(|capture| capture.area.contains(pointer))?;
         let area = capture.area;
-        let (region, reach) = capture.pick(capture.position(event))?;
+        let at = capture.position(event);
+        let (region, reach) = match clicks {
+            2 => capture.pick(at)?,
+            _ => capture.paragraph(at)?,
+        };
         let reach = if raw { Reach::Verbatim } else { reach };
         let text = capture.text(region, reach)?;
         self.input.field_mut().clear_selection();
@@ -700,6 +752,7 @@ mod tests {
     use crate::ui::cell::OutputBlock;
     use crate::ui::controller::EditorUpdate;
     use crate::ui::render::maths::SHORT_BRACES;
+    use crate::ui::settings::selection::CopyFormat;
 
     /// A pane at `area` that drew `text` on every line, every cell selectable.
     fn pane(area: Rect, text: &str) -> ScreenCapture {
@@ -907,8 +960,10 @@ mod tests {
     fn double_click(capture: ScreenCapture, column: u16, line: u16) -> Option<String> {
         let mut editor = Editor::new(String::new());
         editor.captures = vec![capture];
-        match editor.pick_screen_text(mouse(MouseEventKind::Down(MouseButton::Left), column, line))
-        {
+        match editor.pick_screen_text(
+            mouse(MouseEventKind::Down(MouseButton::Left), column, line),
+            2,
+        ) {
             Some(Reaction::Copy(text)) => Some(text),
             _ => None,
         }
@@ -1080,7 +1135,7 @@ mod tests {
         let press = mouse(MouseEventKind::Down(MouseButton::Left), 5, 0);
 
         assert!(matches!(
-            editor.pick_screen_text(press),
+            editor.pick_screen_text(press, 2),
             Some(Reaction::Copy(_))
         ));
         assert_eq!(editor.selected_screen_text().as_deref(), Some("foo"));
@@ -1217,6 +1272,194 @@ mod tests {
         assert_eq!(drag(ty + 4, value), "Type7");
     }
 
+    /// A feed of one submission: `1+1` and `2+2` with their values, each shown with
+    /// the number M2 gave it.
+    fn session() -> (Editor, Vec<String>) {
+        use crate::ui::cell::{CellState, EvaluationBlock};
+        let mut block = EvaluationBlock::new(
+            1,
+            [
+                ("1+1".to_string(), Vec::new()),
+                ("2+2".to_string(), Vec::new()),
+            ],
+        );
+        for (index, (number, value)) in [(1, "2"), (2, "4")].into_iter().enumerate() {
+            let output = OutputBlock::value(value.to_string(), Some("ZZ".into())).numbered(number);
+            block.succeed(
+                index,
+                number,
+                CellState::Value,
+                Vec::new(),
+                None,
+                Some(output),
+            );
+        }
+        showing(Box::new(block), (60, 30))
+    }
+
+    fn pressed(key: crossterm::event::KeyCode) -> crate::ui::key::KeyEvent {
+        crate::ui::key::KeyEvent::new(key)
+    }
+
+    /// What `y` copies after the selection has stepped `steps` times.
+    fn yanked_after(editor: &mut Editor, steps: &[Action]) -> Option<String> {
+        for &step in steps {
+            editor.handle_action(step);
+        }
+        match editor.handle_input(pressed(crossterm::event::KeyCode::Char('y'))) {
+            Reaction::Copy(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_keys_step_through_cells_and_results_from_the_last_up() {
+        let (mut editor, _) = session();
+        let up = Action::SelectPreviousBlock;
+        assert_eq!(yanked_after(&mut editor, &[up]).as_deref(), Some("4"));
+        assert_eq!(yanked_after(&mut editor, &[up]).as_deref(), Some("2"));
+        assert_eq!(yanked_after(&mut editor, &[up]).as_deref(), Some("2+2"));
+        assert_eq!(yanked_after(&mut editor, &[up]).as_deref(), Some("1+1"));
+        assert_eq!(
+            yanked_after(&mut editor, &[up]).as_deref(),
+            Some("1+1"),
+            "the first cell is the end"
+        );
+        let down = Action::SelectNextBlock;
+        assert_eq!(yanked_after(&mut editor, &[down]).as_deref(), Some("2+2"));
+    }
+
+    #[test]
+    fn a_session_copy_carries_the_prompts() {
+        let (mut editor, _) = session();
+        editor.settings.selection.copy_format = CopyFormat::Session;
+        let up = Action::SelectPreviousBlock;
+        assert_eq!(
+            yanked_after(&mut editor, &[up]).as_deref(),
+            Some("o2 = 4\n\no2 : ZZ")
+        );
+        assert_eq!(
+            yanked_after(&mut editor, &[up, up, up]).as_deref(),
+            Some("i1 : 1+1")
+        );
+    }
+
+    #[test]
+    fn a_key_other_than_the_selecting_ones_leaves_the_selection_and_types() {
+        let (mut editor, _) = session();
+        editor.handle_action(Action::SelectPreviousBlock);
+        assert!(editor.feed.has_selection());
+        editor.handle_input(pressed(crossterm::event::KeyCode::Char('k')));
+        assert!(!editor.feed.has_selection());
+        assert_eq!(editor.analysis_input().0, "k");
+
+        editor.handle_action(Action::SelectPreviousBlock);
+        editor.handle_input(pressed(crossterm::event::KeyCode::Esc));
+        assert!(!editor.feed.has_selection());
+        assert_eq!(editor.analysis_input().0, "k", "Esc only lets go");
+    }
+
+    /// Press the left button twice or three times on one cell, as a click run does,
+    /// and return what the last press reacted with.
+    fn clicked(editor: &mut Editor, times: usize, column: u16, row: u16) -> Reaction {
+        let press = mouse(MouseEventKind::Down(MouseButton::Left), column, row);
+        let mut reaction = Reaction::Continue;
+        for _ in 0..times {
+            reaction = editor.handle_mouse(press);
+            editor.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                ..press
+            });
+        }
+        reaction
+    }
+
+    #[test]
+    fn a_double_click_outside_the_text_takes_the_cell_or_result_whole() {
+        let (mut editor, rows) = session();
+        let row = rows
+            .iter()
+            .position(|row| row.contains("2+2"))
+            .expect("the cell is drawn") as u16;
+        let Reaction::Copy(text) = clicked(&mut editor, 2, 0, row) else {
+            panic!("clicking beside a cell copies it");
+        };
+        assert_eq!(text, "2+2");
+        assert!(editor.feed.has_selection());
+    }
+
+    #[test]
+    fn a_triple_click_outside_the_text_takes_the_whole_submission() {
+        let (mut editor, rows) = session();
+        let row = rows
+            .iter()
+            .position(|row| row.contains("2+2"))
+            .expect("the cell is drawn") as u16;
+        editor.settings.selection.copy_format = CopyFormat::Session;
+        let Reaction::Copy(text) = clicked(&mut editor, 3, 0, row) else {
+            panic!("clicking beside a cell copies it");
+        };
+        assert_eq!(
+            text,
+            "i1 : 1+1\n\no1 = 2\n\no1 : ZZ\n\ni2 : 2+2\n\no2 = 4\n\no2 : ZZ"
+        );
+    }
+
+    #[test]
+    fn a_press_elsewhere_lets_go_of_a_selected_block() {
+        let (mut editor, rows) = session();
+        let row = rows.iter().position(|row| row.contains("2+2")).unwrap() as u16;
+        clicked(&mut editor, 2, 0, row);
+        assert!(editor.feed.has_selection());
+        clicked(&mut editor, 1, 20, row + 8);
+        assert!(!editor.feed.has_selection());
+    }
+
+    #[test]
+    fn a_selection_made_by_hand_is_copied_only_when_asked_to() {
+        let (mut editor, rows) = session();
+        editor.settings.selection.copy_on_select = false;
+        let row = rows.iter().position(|row| row.contains("2+2")).unwrap() as u16;
+        assert!(matches!(
+            clicked(&mut editor, 2, 0, row),
+            Reaction::Continue
+        ));
+        let Reaction::Copy(text) = editor.handle_action(Action::CopySelection) else {
+            panic!("the copy key copies what was selected");
+        };
+        assert_eq!(text, "2+2");
+    }
+
+    #[test]
+    fn a_run_of_clicks_counts_to_three_and_starts_over() {
+        let mut editor = Editor::new(String::new());
+        let press = mouse(MouseEventKind::Down(MouseButton::Left), 4, 4);
+        let counts: Vec<u8> = (0..4).map(|_| editor.clicks(press)).collect();
+        assert_eq!(counts, [1, 2, 3, 1]);
+        let elsewhere = mouse(MouseEventKind::Down(MouseButton::Left), 5, 4);
+        assert_eq!(editor.clicks(elsewhere), 1);
+        let release = mouse(MouseEventKind::Up(MouseButton::Left), 5, 4);
+        assert_eq!(editor.clicks(release), 0);
+    }
+
+    #[test]
+    fn a_paragraph_is_the_rows_of_text_between_the_empty_ones() {
+        let area = Rect::new(0, 0, 4, 5);
+        let mut capture = pane(area, "ab");
+        for cell in capture.rows.get_mut(&2).unwrap() {
+            cell.selectable = false;
+        }
+        let rows = |at: i64| {
+            capture
+                .paragraph(ScreenPosition::new(1, at))
+                .map(|(region, _)| region.rows())
+        };
+        assert_eq!(rows(0), Some(0..=1));
+        assert_eq!(rows(1), Some(0..=1));
+        assert_eq!(rows(2), None, "an empty row is no paragraph");
+        assert_eq!(rows(4), Some(3..=4));
+    }
+
     #[test]
     fn a_double_click_in_the_feed_is_painted_as_a_selection() {
         let block = OutputBlock::value("value42 next".to_string(), None);
@@ -1243,7 +1486,7 @@ mod tests {
             .expect("the value is drawn");
 
         let press = mouse(MouseEventKind::Down(MouseButton::Left), x, y);
-        assert!(editor.pick_screen_text(press).is_some());
+        assert!(editor.pick_screen_text(press, 2).is_some());
         let after = draw(&mut editor);
 
         let selected = scheme().selection().bg;
@@ -1264,7 +1507,7 @@ mod tests {
         let mut editor = Editor::new(String::new());
         editor.captures = vec![drawn(&["x = foo + 1"])];
         let press = mouse(MouseEventKind::Down(MouseButton::Left), 5, 0);
-        editor.pick_screen_text(press);
+        editor.pick_screen_text(press, 2);
 
         editor.apply(EditorUpdate::Ignore);
         assert!(editor.selected_screen_text().is_some());

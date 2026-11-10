@@ -2,7 +2,7 @@
 
 ## Blackboard letters don't look like LaTeX { #blackboard }
 
-With [Math fonts](settings.md) on, `ZZ` is drawn as `ℤ`. Spectral sends the character; the terminal picks the font that draws it, and no terminal lets an application choose. Programming fonts rarely contain `ℤ`, `ℚ`, `ℝ` or `ℂ`, so the terminal falls back to whatever installed font does. That is usually a thin sans-serif outline, nothing like `\mathbb` in LaTeX.
+With [Math fonts](reference/settings.md#rendering) on, `ZZ` is drawn as `ℤ`. Spectral sends the character; the terminal picks the font that draws it, and no terminal lets an application choose. Programming fonts rarely contain `ℤ`, `ℚ`, `ℝ` or `ℂ`, so the terminal falls back to whatever installed font does. That is usually a thin sans-serif outline, nothing like `\mathbb` in LaTeX.
 
 **Latin Modern Math**, the OpenType form of LaTeX's own Computer Modern, has blackboard capitals at their Unicode code points. Install it (it ships with TeX Live, and most distributions package it, e.g. `otf-latin-modern`) and send the double-struck capitals to it.
 
@@ -30,7 +30,7 @@ Other terminals
 
 ### Fine print
 
-The mapping above covers blackboard capitals only. Script and fraktur capitals (`\mathcal`, `\mathfrak`) live at other code points and need their own mapping, to Latin Modern Math or STIX Two Math. For maths drawn exactly as LaTeX sets it, use [typeset maths](settings.md#typeset-maths) instead.
+The mapping above covers blackboard capitals only. Script and fraktur capitals (`\mathcal`, `\mathfrak`) live at other code points and need their own mapping, to Latin Modern Math or STIX Two Math. For maths drawn exactly as LaTeX sets it, use [typeset maths](shell/results.md#typeset) instead.
 
 ## Typeset maths is blank inside tmux { #typeset-tmux }
 

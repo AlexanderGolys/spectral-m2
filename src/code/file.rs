@@ -2,12 +2,12 @@
 //! kept on every exit and restart so the next session can resume it. Typed
 //! file names complete to the entries they can name.
 
-use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::env::ENV;
 use m2_syn::{lex_str_recovering, CommentTrivia, LexErrorKind, Spanned};
 
 /// The extension a file of Macaulay2 code carries.
@@ -54,15 +54,15 @@ pub fn resolve(typed: &str) -> PathBuf {
 
 /// `typed` with a leading `~` read as the home directory.
 fn expand_home(typed: &str) -> PathBuf {
-    match (typed.strip_prefix("~/"), env::var_os("HOME")) {
-        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+    match (typed.strip_prefix("~/"), ENV.home()) {
+        (Some(rest), Some(home)) => home.join(rest),
         _ => PathBuf::from(typed),
     }
 }
 
 /// `path` spelled with the home directory as a leading `~`.
 pub fn abbreviate_home(path: &Path) -> String {
-    match env::var_os("HOME").and_then(|home| path.strip_prefix(home).ok()) {
+    match ENV.home().and_then(|home| path.strip_prefix(home).ok()) {
         Some(rest) if rest.as_os_str().is_empty() => "~".into(),
         Some(rest) => format!("~/{}", rest.display()),
         None => path.display().to_string(),
@@ -129,9 +129,7 @@ pub fn write(path: &Path, code: &str) -> io::Result<()> {
 /// Where the code of the previous session is kept.
 #[cfg(not(test))]
 pub fn previous_session() -> Option<PathBuf> {
-    let state = env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))?;
+    let state = ENV.state_home()?;
     Some(
         state
             .join(env!("CARGO_PKG_NAME"))
@@ -244,7 +242,9 @@ mod tests {
 
     #[test]
     fn a_typed_path_completes_to_the_entries_it_can_name() {
-        let root = env::temp_dir().join(format!("spectral-m2-completion-{}", std::process::id()));
+        let root = ENV
+            .temp_dir()
+            .join(format!("spectral-m2-completion-{}", std::process::id()));
         for directory in ["ring", "rational"] {
             fs::create_dir_all(root.join(directory)).unwrap();
         }
@@ -274,18 +274,15 @@ mod tests {
 
     #[test]
     fn a_leading_tilde_is_the_home_directory() {
-        let Some(home) = env::var_os("HOME") else {
+        let Some(home) = ENV.home() else {
             return;
         };
-        assert_eq!(
-            resolve("~/work/ring"),
-            PathBuf::from(home).join("work/ring.m2")
-        );
+        assert_eq!(resolve("~/work/ring"), home.join("work/ring.m2"));
     }
 
     #[test]
     fn the_home_directory_is_spelled_as_a_tilde() {
-        let Some(home) = env::var_os("HOME").map(PathBuf::from) else {
+        let Some(home) = ENV.home() else {
             return;
         };
         assert_eq!(abbreviate_home(&home), "~");

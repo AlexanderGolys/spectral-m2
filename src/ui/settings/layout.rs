@@ -10,6 +10,8 @@ use crate::ui::config::UI;
 use crate::ui::controller::picker::PickerValue;
 use crate::ui::cycle::cyclic;
 
+// @@@settings.layout
+// @##issue.magic
 const MAX_INPUT_HEIGHT_PERCENT: u8 = 100;
 const INPUT_HEIGHT_STEP_PERCENT: i8 = 5;
 const MIN_COMPLETE_AFTER: u8 = 1;

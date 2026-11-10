@@ -1,0 +1,38 @@
+[book]
+title = "Spectral M2"
+description = "A syntax-aware terminal shell for Macaulay2: highlighted input, values drawn from their structure, typeset maths and documentation beside your session."
+authors = ["Alexander Golys"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "html"
+# A typo in SUMMARY.md fails the build instead of creating an empty page.
+create-missing = false
+
+# Runs after mdBook's `links` preprocessor so code pulled in with
+# {{#include}} is highlighted too.
+[preprocessor.tsitter]
+after = ["links"]
+everforest = true
+
+# One entry per fence language used in the book. Macaulay2 is highlighted by
+# its own grammar, fetched and compiled on the first build.
+[preprocessor.tsitter.languages]
+macaulay2 = { aliases = ["m2", "macaulay2"] }
+bash = { aliases = ["bash", "sh", "shell", "console"] }
+toml = {}
+
+[output.html]
+git-repository-url = "https://github.com/AlexanderGolys/spectral-m2"
+git-repository-icon = "fab-github"
+edit-url-template = "https://github.com/AlexanderGolys/spectral-m2/edit/master/book/{path}"
+no-section-label = true
+
+# No print icon in the top-right corner (and no print.html page).
+[output.html.print]
+enable = false
+
+[output.html.fold]
+enable = true
+level = 1

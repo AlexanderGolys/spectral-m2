@@ -237,10 +237,11 @@ impl<'ast> Visit<'ast> for References {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::env::ENV;
 
     #[test]
     fn independent_writers_merge_usage_and_reload_the_same_counts() {
-        let path = std::env::temp_dir().join(format!(
+        let path = ENV.temp_dir().join(format!(
             "spectral-m2-completion-{}-{}.json",
             std::process::id(),
             rand::random::<u64>()

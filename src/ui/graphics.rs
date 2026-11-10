@@ -11,7 +11,6 @@ mod typewriter;
 
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::process::{Command, Stdio};
@@ -29,6 +28,7 @@ use std::ops::Range;
 use resvg::tiny_skia::{Pixmap, PixmapPaint, Transform};
 use resvg::usvg::{Options, Tree};
 
+use crate::env::ENV;
 use crate::ui::config::UI;
 use crate::ui::debug::mebibytes;
 use kitty::{ImageId, KittyImage, Passthrough, Piece};
@@ -36,15 +36,11 @@ use ratex::{Break, Rgb, EM, PADDING};
 
 // @##magic
 const TMUX: &str = "tmux";
-/// Set in every process tmux runs.
-const TMUX_VARIABLE: &str = "TMUX";
 /// Lets this pane's escape sequences through tmux to the terminal.
 const TMUX_ALLOW_PASSTHROUGH: [&str; 4] = ["set", "-p", "allow-passthrough", "on"];
 /// tmux's names for the terminal its client runs in, one a line: as the terminal
 /// reports itself, then its `TERM`.
 const TMUX_CLIENT_TERMINAL: &str = "#{client_termtype}\n#{client_termname}";
-/// Variables naming the terminal outside tmux, most specific first.
-const TERMINAL_VARIABLES: [&str; 2] = ["TERM_PROGRAM", "TERM"];
 /// What a `TERM` puts before the terminal's own name, as in `xterm-ghostty`.
 const TERM_FAMILY_PREFIX: &str = "xterm-";
 /// Terminals drawing kitty pictures by Unicode placeholders, as they name themselves.
@@ -75,7 +71,7 @@ static GALLERY: LazyLock<Mutex<Gallery>> = LazyLock::new(|| Mutex::new(Gallery::
 /// Learn what the terminal can draw. Runs on the alternate screen before any event
 /// is read, since a terminal asked directly answers as input.
 pub fn detect() {
-    let canvas = match env::var_os(TMUX_VARIABLE).is_some() {
+    let canvas = match ENV.in_tmux() {
         true => tmux_canvas(),
         false => queried_canvas(),
     };
@@ -120,12 +116,9 @@ fn tmux_canvas() -> Option<Canvas> {
 /// tmux, the terminal tmux runs in.
 pub fn terminal() -> Option<&'static str> {
     static TERMINAL: LazyLock<Option<String>> = LazyLock::new(|| {
-        let names = match env::var_os(TMUX_VARIABLE).is_some() {
+        let names = match ENV.in_tmux() {
             true => tmux_client_names(),
-            false => TERMINAL_VARIABLES
-                .iter()
-                .filter_map(|variable| env::var(variable).ok())
-                .collect(),
+            false => ENV.terminal_names(),
         };
         names.iter().find_map(|name| printable_name(name))
     });

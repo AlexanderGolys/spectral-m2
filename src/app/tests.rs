@@ -89,8 +89,9 @@ fn incomplete_file_and_live_input_keep_uniform_padding() {
 #[test]
 fn first_session_displays_initialization_output() {
     use ratatui::{backend::TestBackend, Terminal};
-    let directory =
-        std::env::temp_dir().join(format!("spectral-startup-output-{}", std::process::id()));
+    let directory = ENV
+        .temp_dir()
+        .join(format!("spectral-startup-output-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let init = directory.join("init.m2");
     std::fs::write(&init, "print \"startup output probe\"\n").unwrap();
@@ -132,6 +133,7 @@ fn a_submitted_comment_is_visible_on_the_next_frame() {
 }
 
 use super::*;
+use crate::env::ENV;
 use std::time::Instant;
 
 #[test]
@@ -178,8 +180,9 @@ fn cancelling_an_accidental_continuation_preserves_the_live_session() {
 #[test]
 fn viewing_a_file_preserves_the_draft_and_evaluates_nothing() {
     use crate::ui::controller::{Reaction, ViewKind};
-    let directory =
-        std::env::temp_dir().join(format!("spectral-file-preview-{}", std::process::id()));
+    let directory = ENV
+        .temp_dir()
+        .join(format!("spectral-file-preview-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("preview.m2");
     std::fs::write(&path, "error \"must not execute\"").unwrap();
@@ -239,8 +242,9 @@ fn clicked_documentation_is_rendered_outside_the_session_feed() {
 #[test]
 fn source_file_links_preview_encoded_paths_without_evaluating_them() {
     use ratatui::{backend::TestBackend, Terminal};
-    let directory =
-        std::env::temp_dir().join(format!("spectral-source-link-{}", std::process::id(),));
+    let directory = ENV
+        .temp_dir()
+        .join(format!("spectral-source-link-{}", std::process::id(),));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("source file.m2");
     let source = "error \"sourcePreviewMustNotExecute\"";
@@ -321,4 +325,33 @@ fn a_documentation_link_can_open_in_the_feed_without_opening_a_split() {
     assert!(app.workspace.session.code().contains("help \"isPrime\""));
     assert!(app.documentation.is_none());
     assert!(!app.workspace.session.busy());
+}
+
+#[test]
+fn control_arrows_move_the_inputs_cursor_by_words_with_a_preview_open() {
+    use crate::ui::controller::ViewKind;
+    use crate::ui::key::{KeyEvent, KeyMod};
+    use crossterm::event::KeyCode;
+    let mut app = super::App::new(crate::backend::M2Backend::spawn().unwrap());
+    app.open_preview(ViewKind::Code, "code".into());
+    app.open_preview(ViewKind::Output, "output".into());
+    let shown = app.panes.list[super::Panes::SPLIT].view;
+    assert!(app.panes.split());
+    app.workspace.editor.paste("one two");
+
+    app.handle_key(KeyCode::Left + KeyMod::Ctrl);
+    assert_eq!(
+        app.panes.list[super::Panes::SPLIT].view,
+        shown,
+        "the preview stays put"
+    );
+    app.workspace.editor.paste("X");
+    assert_eq!(app.workspace.editor.analysis_input().0, "one Xtwo");
+
+    app.handle_key(KeyEvent::new(KeyCode::PageUp).with(KeyMod::Ctrl));
+    assert_ne!(
+        app.panes.list[super::Panes::SPLIT].view,
+        shown,
+        "Ctrl+PageUp steps the preview"
+    );
 }

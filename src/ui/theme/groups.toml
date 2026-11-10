@@ -54,7 +54,7 @@ Punctuation = { link = "Muted", captures = ["punctuation.bracket"] }
 Variable = { link = "Text", captures = ["variable"] }
 Method = { link = "Function", captures = ["type.parameter"] }
 TypeParameter = { link = "Type" }
-RingGenerator = { link = "Bg1" }
+RingGenerator = { link = "Text" }
 Option = { link = "Property" }
 LspVariable = {}
 Installation = { link = "Function", captures = ["label"] }
@@ -73,12 +73,22 @@ MarkupStrongEmphasis = { bold = true, italic = true }
 MarkupStrike = { crossed_out = true }
 # A link is drawn in the color of printed output, set apart by its slant.
 MarkupLink = { fg_from = "Printed.fg", italic = true }
+# A link to a documentation node keeps the colours of what it is made of and adds
+# only a soft underline; under the pointer the colours are brightened as well.
+MarkupDocLink = { underline = true, sp_from = "Muted.fg" }
+# A method listed in a page without documentation of its own: a link like any
+# other, on a background tinted toward the error colour.
+MarkupMissingDoc = { link = "MarkupDocLink", bg_from = "Canvas.bg", tint_from = "Error.fg", tint = 0.2 }
 MarkupLinkHover = { underline = true }
 MarkupLinkOpen = { underline = true, bold = true }
 DiagnosticError = { sp_from = "Error.fg", underline = true }
 DiagnosticWarning = { sp_from = "Warning.fg", underline = true }
 DiagnosticInfo = { sp_from = "Info.fg", underline = true }
 DiagnosticHint = { sp_from = "Hint.fg", underline = true }
+# Every place the name under the cursor occurs.
+NameOccurrence = { bg_from = "Raised.bg" }
+# The parameter a call's signature is at.
+SignatureActiveParameter = { link = "Parameter", bold = true, underline = true }
 Value = { link = "Text" }
 FractionRule = { sp_from = "Operator.fg", underline = true }
 Printed = { link = "String", bg_from = "Raised.bg", saturation = 55.0, lightening = 15.0 }
@@ -135,6 +145,10 @@ CommandShortcut = { link = "Accent" }
 FrameStats = { link = "Muted" }
 HighlightInspectorTitle = { link = "Accent" }
 HighlightInspectorBorder = { link = "Faint" }
+# A small panel floating beside a point: what a name is, and the like.
+FloatingBorder = { link = "Faint" }
+# Beside a line where code folds, and after a folded line the count of lines it hides.
+FoldMarker = { link = "Muted" }
 ViewDivider = { link = "Faint" }
 SyntaxTreeBranch = { link = "Muted" }
 SyntaxTreeTokenMarker = { link = "Info" }

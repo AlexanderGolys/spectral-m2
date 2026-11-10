@@ -4,8 +4,8 @@
 //! is lost with it. The hook here writes the report to a file instead, and the note
 //! naming that file is printed once the terminal has been restored.
 
+use crate::env::ENV;
 use std::backtrace::Backtrace;
-use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::panic::{self, PanicHookInfo};
@@ -76,9 +76,7 @@ fn summary(info: &PanicHookInfo) -> String {
 }
 
 fn log_path() -> Option<PathBuf> {
-    let state = env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))?;
+    let state = ENV.state_home()?;
     Some(state.join(LOG_DIRECTORY).join(LOG_FILE))
 }
 
@@ -102,7 +100,7 @@ mod tests {
 
     #[test]
     fn reports_are_appended_and_the_directory_is_made() {
-        let directory = env::temp_dir().join(format!("sp2-crash-{}", unix_seconds()));
+        let directory = ENV.temp_dir().join(format!("sp2-crash-{}", unix_seconds()));
         let path = directory.join("nested").join(LOG_FILE);
 
         record(&path, "first\n").unwrap();

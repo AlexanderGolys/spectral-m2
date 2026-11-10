@@ -34,4 +34,10 @@ pub enum Action {
     ReferenceBack = "return to the previous preview",
     ToggleHighlightDebug = "toggle highlight groups",
     CopySelection = "copy the selection",
+    SelectPreviousBlock = "select the previous cell or output",
+    SelectNextBlock = "select the next cell or output",
+    Describe = "tell what the name at the cursor is",
+    DescribeBeside = "describe the name at the cursor beside the session",
+    GoToDefinition = "go to where the name at the cursor is defined",
+    FormatInput = "format the input",
 }

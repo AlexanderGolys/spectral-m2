@@ -124,6 +124,28 @@ impl Inclusions {
         }
     }
 
+    /// The same regions with each row moved to where `shown` puts it, or dropped
+    /// where it is not shown, as when rows are folded away.
+    pub fn folded(&self, shown: impl Fn(u16) -> Option<u16>) -> Self {
+        let rows = |area: Rect| {
+            (area.y..area.bottom())
+                .filter_map(|row| Some(Rect::new(area.x, shown(row)?, area.width, 1)))
+                .collect::<Vec<_>>()
+        };
+        Self {
+            areas: self
+                .areas
+                .iter()
+                .flat_map(|&(area, layer)| rows(area).into_iter().map(move |row| (row, layer)))
+                .collect(),
+            seams: self
+                .seams
+                .iter()
+                .flat_map(|&(area, seam)| rows(area).into_iter().map(move |row| (row, seam)))
+                .collect(),
+        }
+    }
+
     /// Clip to source rows and make the first retained row local zero.
     pub fn project(&self, rows: Range<u16>) -> Self {
         Self {
@@ -170,6 +192,13 @@ impl AddAssign<Offset> for Inclusions {
     fn add_assign(&mut self, offset: Offset) {
         self.areas.iter_mut().for_each(|(area, _)| *area += offset);
         self.seams.iter_mut().for_each(|(area, _)| *area += offset);
+    }
+}
+
+impl AddAssign for Inclusions {
+    fn add_assign(&mut self, other: Self) {
+        self.areas.extend(other.areas);
+        self.seams.extend(other.seams);
     }
 }
 

@@ -16,9 +16,10 @@ use std::sync::RwLock;
 
 use ratatui::style::{Color, Modifier, Style};
 use serde::Deserialize;
-use these_macros_should_be_illegal::enum_fn;
+use these_macros_should_be_illegal::{enum_fn, forall};
 
-use super::palette::Palette;
+use super::*;
+use palette::{self, Palette};
 
 /// One highlight group's style as written in TOML, before it is resolved into a
 /// [`Style`]. Every key is optional, and a declaration replaces a lower layer's one for
@@ -27,48 +28,50 @@ use super::palette::Palette;
 /// Keys apply in field order: start from `link`, set the channels, toggle
 /// modifiers, then adjust colours. Colours are native palette names; `Group.fg`,
 /// `Group.bg` and `Group.sp` name another group's resolved channel.
+#[forall(Option<>)]
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct StyleDeclaration {
     /// Only in `groups.toml`: every scheme must declare this group itself.
+    #[tmsbi(skip)]
     required: bool,
     /// Only in `groups.toml`: the Tree-sitter captures this group draws.
-    captures: Option<Vec<String>>,
+    captures: Vec<String>,
     /// Group whose resolved style this one starts from.
-    link: Option<String>,
+    link: String,
     /// Palette colour for each channel (`sp` is the underline colour); `"none"`
     /// clears what a link supplied.
-    fg: Option<String>,
-    bg: Option<String>,
-    sp: Option<String>,
+    fg: String,
+    bg: String,
+    sp: String,
     /// Channel copied from another group, so one group's colour can serve in a
     /// different channel here (an error foreground as an underline). Exclusive with
     /// the direct channel of the same name.
-    fg_from: Option<String>,
-    bg_from: Option<String>,
-    sp_from: Option<String>,
+    fg_from: String,
+    bg_from: String,
+    sp_from: String,
     /// Modifiers; `false` removes one a link supplied.
-    bold: Option<bool>,
-    italic: Option<bool>,
-    underline: Option<bool>,
-    reverse: Option<bool>,
-    crossed_out: Option<bool>,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    reverse: bool,
+    crossed_out: bool,
     /// Drawn by the terminal blended toward its background.
-    dim: Option<bool>,
+    dim: bool,
     /// Foreground kept at this percentage of its saturation, hue unchanged.
-    saturation: Option<f32>,
+    saturation: f32,
     /// Foreground moved this percentage of the way to the scheme's text colour.
-    lightening: Option<f32>,
+    lightening: f32,
     /// Foreground blended toward the background by this fraction: the group's own
     /// when it has one, else the canvas.
-    darken: Option<f32>,
+    darken: f32,
     /// Background blended toward a palette colour by `bg_blend_amount`, a fraction,
     /// for schemes whose guidelines specify an overlay's opacity.
-    bg_blend: Option<String>,
-    bg_blend_amount: Option<f32>,
+    bg_blend: String,
+    bg_blend_amount: f32,
     /// Background blended toward another group's channel by `tint`, a fraction.
-    tint_from: Option<String>,
-    tint: Option<f32>,
+    tint_from: String,
+    tint: f32,
 }
 
 /// Declarations keyed by highlight group name, as one TOML table holds them.
@@ -149,12 +152,12 @@ impl GroupDeclarations {
     }
 
     fn load() -> Self {
-        match super::config_source("groups.toml", DEFAULTS).and_then(|s| Self::parse(&s)) {
+        match config_source("groups.toml", DEFAULTS).and_then(|s| Self::parse(&s)) {
             Ok(declarations) => {
                 // Validate against every built-in palette before publishing defaults.
                 // A bad user link must not also break the fallback schemes.
-                for (name, source) in super::SCHEME_FILES {
-                    let file: super::SchemeFile =
+                for (name, source) in SCHEME_FILES {
+                    let file: SchemeFile =
                         toml::from_str(source).expect("embedded scheme must parse");
                     if let Err(error) = file.resolve_with(&declarations) {
                         eprintln!(
@@ -181,11 +184,11 @@ pub static GROUP_DECLARATIONS: LazyLock<GroupDeclarations> = LazyLock::new(Group
 macro_rules! highlight_groups {
     ($($group:ident),+ $(,)?) => {
         /// Every syntax and interface highlight group.
-        #[enum_fn(description: &'static str = stringify)]
+        #[enum_fn(pub const description -> &'static str)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub enum HLGroup {$(
             #[doc = concat!("The `", stringify!($group), "` highlight group.")]
-            $group,
+            $group = stringify!($group),
         )+}
 
         impl HLGroup {
@@ -372,7 +375,7 @@ impl StyleResolver<'_> {
                 return Err("lightening must be between 0 and 100".into());
             }
             if let (Some(fg), Some(text)) = (style.fg, self.channel("Text.fg")?) {
-                style.fg = Some(super::palette::blend(fg, text, lightening / 100.0)?);
+                style.fg = Some(palette::blend(fg, text, lightening / 100.0)?);
             }
         }
         if let Some(amount) = declaration.darken {
@@ -381,7 +384,7 @@ impl StyleResolver<'_> {
             }
             let canvas = self.channel("Canvas.bg")?;
             if let (Some(fg), Some(bg)) = (style.fg, style.bg.or(canvas)) {
-                style.fg = Some(super::palette::blend(fg, bg, amount)?);
+                style.fg = Some(blend(fg, bg, amount)?);
             }
         }
         match (&declaration.bg_blend, declaration.bg_blend_amount) {
@@ -391,7 +394,7 @@ impl StyleResolver<'_> {
                     .palette
                     .resolve(Some(color))?
                     .expect("a named palette color exists");
-                style.bg = Some(super::palette::blend(bg, color, amount)?);
+                style.bg = Some(blend(bg, color, amount)?);
             }
             (None, None) => {}
             _ => return Err("bg_blend and bg_blend_amount must be set together".into()),
@@ -402,7 +405,7 @@ impl StyleResolver<'_> {
                     return Err("tint must be between 0 and 1".into());
                 }
                 if let (Some(bg), Some(fg)) = (style.bg, self.channel(reference)?) {
-                    style.bg = Some(super::palette::blend(bg, fg, amount)?);
+                    style.bg = Some(palette::blend(bg, fg, amount)?);
                 }
             }
             (None, None) => {}
@@ -563,6 +566,10 @@ accessors! {
     frame_stats: FrameStats,
     highlight_inspector_title: HighlightInspectorTitle,
     highlight_inspector_border: HighlightInspectorBorder,
+    floating_border: FloatingBorder,
+    fold_marker: FoldMarker,
+    name_occurrence: NameOccurrence,
+    signature_active_parameter: SignatureActiveParameter,
     view_divider: ViewDivider,
     syntax_tree_branch: SyntaxTreeBranch,
     syntax_tree_token_marker: SyntaxTreeTokenMarker,
@@ -580,7 +587,7 @@ accessors! {
 /// The default appearance's resolved scheme, used before any theme is published.
 impl Default for Groups {
     fn default() -> Self {
-        super::Appearance::default().groups()
+        Appearance::default().groups()
     }
 }
 
@@ -589,12 +596,8 @@ mod tests {
     use super::*;
 
     fn fixture() -> (StyleTable, Palette) {
-        let file: super::super::SchemeFile =
-            toml::from_str(super::super::SCHEME_FILES[0].1).unwrap();
-        let palette = file
-            .palette
-            .palette(super::super::Mode::Dark, "mocha")
-            .unwrap();
+        let file: SchemeFile = toml::from_str(SCHEME_FILES[0].1).unwrap();
+        let palette = file.palette.palette(Mode::Dark, "mocha").unwrap();
         (file.groups, palette)
     }
 
@@ -709,13 +712,11 @@ mod tests {
 
         assert_eq!(
             plain.CompletionHint.fg,
-            Some(super::super::palette::blend(accent, canvas_bg, 0.5).unwrap())
+            Some(palette::blend(accent, canvas_bg, 0.5).unwrap())
         );
         assert_eq!(
             own.CompletionHint.fg,
-            Some(
-                super::super::palette::blend(accent, own.CompletionHint.bg.unwrap(), 0.5).unwrap()
-            )
+            Some(palette::blend(accent, own.CompletionHint.bg.unwrap(), 0.5).unwrap())
         );
     }
 
@@ -729,7 +730,7 @@ mod tests {
 
         assert_eq!(
             lightened.CompletionHint.fg,
-            Some(super::super::palette::blend(accent, text, 0.4).unwrap())
+            Some(palette::blend(accent, text, 0.4).unwrap())
         );
     }
 

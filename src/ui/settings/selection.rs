@@ -9,6 +9,21 @@ use super::Settings;
 use crate::ui::controller::picker::PickerValue;
 use crate::ui::cycle::cyclic;
 
+cyclic! {
+    /// How a whole cell or output copies: as its own text, or as the session shows it.
+    #[discriminated_str(label)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[non_exhaustive]
+    pub enum CopyFormat {
+        /// Only the text: code as typed, a value as printed.
+        #[default]
+        Raw = "raw text",
+        /// With the prompts Macaulay2 gives it: `i1 : code`, `o1 = value`, `o1 : Type`.
+        Session = "session",
+    }
+}
+
 /// The values of the *selection* tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -19,6 +34,8 @@ pub struct SelectionSettings {
     /// Whether a mouse selection reads every character as drawn, gutters, frames
     /// and rows on screen included, rather than only the text of what it starts on.
     pub raw: bool,
+    /// What a whole cell or output copies as.
+    pub copy_format: CopyFormat,
 }
 
 impl Default for SelectionSettings {
@@ -26,6 +43,7 @@ impl Default for SelectionSettings {
         Self {
             copy_on_select: true,
             raw: false,
+            copy_format: CopyFormat::default(),
         }
     }
 }
@@ -37,6 +55,7 @@ cyclic! {
     pub enum SelectionSetting {
         CopyOnSelect = "copy on select",
         Raw = "raw selection",
+        CopyFormat = "copy cells as",
     }
 }
 
@@ -53,6 +72,9 @@ impl SettingRow for SelectionSetting {
             Self::Raw => {
                 "select any character as drawn, numbers, frames and rows as on screen included"
             }
+            Self::CopyFormat => {
+                "copy a whole cell or output as its text alone, or with its i1 : and o1 = prompts"
+            }
         }
     }
 
@@ -61,14 +83,20 @@ impl SettingRow for SelectionSetting {
         match self {
             Self::CopyOnSelect => switch(selection.copy_on_select, "on"),
             Self::Raw => switch(selection.raw, "on"),
+            Self::CopyFormat => {
+                PickerValue::among(CopyFormat::CHOICES, &selection.copy_format, |&format| {
+                    format.label().into()
+                })
+            }
         }
     }
 
-    fn adjust(self, settings: &mut Settings, _: i8) {
+    fn adjust(self, settings: &mut Settings, delta: i8) {
         let selection = &mut settings.selection;
         match self {
             Self::CopyOnSelect => selection.copy_on_select = !selection.copy_on_select,
             Self::Raw => selection.raw = !selection.raw,
+            Self::CopyFormat => selection.copy_format = selection.copy_format.cycle(delta),
         }
     }
 }
