@@ -394,6 +394,16 @@ pub(super) struct Painted {
     pub links: Vec<Link>,
 }
 
+impl Painted {
+    /// Drop the bottom row, a margin no link reaches into.
+    fn trim_last_row(&mut self) {
+        if self.lines.pop().is_some() {
+            let rows = u16::try_from(self.lines.len()).unwrap_or(u16::MAX);
+            self.inclusions = self.inclusions.project(0..rows);
+        }
+    }
+}
+
 /// Render a stored example of `page` through the same input, printed, error
 /// and result blocks as a live submission. Its code carries no number or separator: an example's input
 /// numbers are its own, not the session's, while its outputs keep the `oN` the
@@ -414,12 +424,20 @@ pub fn render(
         inclusions: Inclusions::default(),
         links: Vec::new(),
     };
-    for example in transcript(source, example_width)? {
+    let examples = transcript(source, example_width)?;
+    let count = examples.len();
+    for (index, example) in examples.into_iter().enumerate() {
         let block = match computed(page, example.number) {
             Some(response) => example.computed(page, &response),
             None => example.block(page),
         };
-        let next = painted(&block, context);
+        let mut next = painted(&block, context);
+        // An example with nothing to show keeps its code's bottom margin only
+        // when it ends the transcript: the next example's code opens with its
+        // own margin, and the two together would read as an empty line.
+        if index + 1 < count && block.outputs().next().is_none() {
+            next.trim_last_row();
+        }
         let top = i32::try_from(rendered.lines.len()).unwrap_or(i32::MAX);
         rendered
             .inclusions
@@ -558,6 +576,33 @@ mod tests {
         assert!(
             !recorded.contains("four"),
             "other pages keep what was recorded"
+        );
+    }
+
+    #[test]
+    fn examples_with_nothing_to_show_leave_one_row_before_the_next() {
+        let context = RenderContext::new(48, 0);
+        let rows = |source| {
+            render(source, EXAMPLE_WIDTH, UNCOMPUTED, &context)
+                .unwrap()
+                .lines
+                .iter()
+                .map(|line| line.to_string().trim().to_string())
+                .collect::<Vec<_>>()
+        };
+        let between = |rows: &[String], first: &str, second: &str| {
+            let at = |code| rows.iter().position(|row| row == code).unwrap();
+            at(second) - at(first) - 1
+        };
+        let muted = rows("i1 : R = QQ[x];\n\ni2 : S = QQ[y];\n\ni3 : 2+2\n\no3 = 4\n\no3 : ZZ");
+        assert_eq!(between(&muted, "R = QQ[x];", "S = QQ[y];"), 1, "{muted:#?}");
+        assert_eq!(between(&muted, "S = QQ[y];", "2+2"), 1, "{muted:#?}");
+        let last = rows("i1 : 2+2\n\no1 = 4\n\no1 : ZZ\n\ni2 : R = QQ[x];");
+        let code = last.iter().position(|row| row == "R = QQ[x];").unwrap();
+        assert_eq!(
+            last.len() - code - 1,
+            1,
+            "the last example keeps its margin: {last:#?}"
         );
     }
 
