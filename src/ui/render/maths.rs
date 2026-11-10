@@ -12,10 +12,15 @@
 //! structure, never from matching text.
 
 use super::markup;
-use crate::backend::{CollectionKind, M2Value, OPTION_ARROW, SPACED_OPTION_ARROW};
+use crate::backend::{CollectionKind, M2Value, SPACED_OPTION_ARROW};
 use crate::ui::block::TextSpan;
 use crate::ui::config::UI;
 use crate::ui::cycle::cyclic;
+use crate::ui::glyphs::maths::{
+    CONSTANT_COMMANDS, FRACTION_RULE, LONG_LEFT_ARROW, LONG_MAPSTO, LONG_RIGHT_ARROW,
+    OPERATOR_COMMANDS, PRODUCT, SETMINUS, SQUARE, SUPERSCRIPT_DIGITS,
+};
+pub use crate::ui::glyphs::maths::{SHORT_BRACES, TALL_FENCES};
 use crate::ui::graphics;
 use crate::ui::present::{wrap, SpanLine};
 use crate::ui::theme::groups::{Groups, HLGroup};
@@ -700,20 +705,24 @@ impl<'a> Input<'a> {
                     _ => Err(UnsupportedTeX("\\mathbb without a letter".into())),
                 }
             }
-            "square" => Ok(Math::atom("□", HLGroup::Type)),
+            "square" => Ok(Math::atom(SQUARE, HLGroup::Type)),
             // Reached only between factors: a thin space inside a numeral is consumed
             // by the numeral itself.
             "," => Ok(Math::Space),
             // Arrows appear in the types of maps between modules. Both the short and
             // long spellings render long, because U+2190/U+2192 are East Asian
             // Ambiguous while U+27F5/U+27F6 measure one column everywhere.
-            "leftarrow" | "longleftarrow" | "gets" => Ok(Math::atom("\u{27F5}", HLGroup::Operator)),
-            "rightarrow" | "longrightarrow" | "to" => Ok(Math::atom("\u{27F6}", HLGroup::Operator)),
-            "mapsto" | "longmapsto" => Ok(Math::atom("\u{27FC}", HLGroup::Operator)),
+            "leftarrow" | "longleftarrow" | "gets" => {
+                Ok(Math::atom(LONG_LEFT_ARROW, HLGroup::Operator))
+            }
+            "rightarrow" | "longrightarrow" | "to" => {
+                Ok(Math::atom(LONG_RIGHT_ARROW, HLGroup::Operator))
+            }
+            "mapsto" | "longmapsto" => Ok(Math::atom(LONG_MAPSTO, HLGroup::Operator)),
             // M2's own apply-to-list operator, `f \\ L`. It reaches TeX as a command
             // rather than a character, since a bare backslash starts one.
             "backslash" => Ok(Math::atom("\\", HLGroup::Operator)),
-            "setminus" => Ok(Math::atom("\u{2216}", HLGroup::Operator)),
+            "setminus" => Ok(Math::atom(SETMINUS, HLGroup::Operator)),
             brace @ ("{" | "}") => Ok(Math::atom(brace, HLGroup::Delimiter)),
             "left" => self.fences(),
             // A colour already chosen for what it wraps, which the colours inferred from
@@ -883,9 +892,6 @@ impl<'a> Input<'a> {
     }
 }
 
-/// U+22C5 DOT OPERATOR, whose width is the same under every terminal convention --
-/// unlike U+00B7 MIDDLE DOT, which is East Asian Ambiguous and would shift a border.
-const PRODUCT: &str = "\u{22C5}";
 /// The font command M2 writes a ring's letter in.
 const BLACKBOARD: &str = "\\mathbb";
 /// What ends an interval field's name in code, where its TeX has a square: `RRi`.
@@ -907,12 +913,6 @@ const SPACING: [&str; 8] = [
     "\\mathclose{}",
 ];
 const OPERATORS: &str = "+-=<>/*@:~?!%";
-/// M2's constants TeX spells as a command, with the glyph a terminal draws for each.
-const CONSTANT_COMMANDS: [(&str, &str); 3] = [
-    ("pi", "\u{03C0}"),
-    ("gamma", "\u{03B3}"),
-    ("infty", "\u{221E}"),
-];
 /// M2's constants TeX spells as one letter in a font: `ii`, as M2 sets it and as it
 /// is drawn, and `CatalanConstant`.
 const CONSTANT_LETTERS: [(&str, &str); 3] = [("mathbf", "i"), ("mathrm", "i"), ("mathrm", "G")];
@@ -924,51 +924,9 @@ const BOOLEAN_WORDS: [&str; 2] = ["true", "false"];
 /// The word code paints as a builtin among those M2 sets in typewriter face.
 const NULL_WORD: &str = "null";
 
-// @##issue non-ascii glyphs set in random place
-/// Operators TeX spells as a command, with the glyph a terminal draws for each.
-const OPERATOR_COMMANDS: [(&str, &str); 19] = [
-    ("wedge", "\u{2227}"),
-    ("vee", "\u{2228}"),
-    ("otimes", "\u{2297}"),
-    ("oplus", "\u{2295}"),
-    ("circ", "\u{2218}"),
-    ("cap", "\u{2229}"),
-    ("cup", "\u{222A}"),
-    ("times", "\u{00D7}"),
-    ("ast", "\u{2217}"),
-    ("mid", "|"),
-    ("Rightarrow", OPTION_ARROW),
-    ("Leftarrow", "\u{21D0}"),
-    ("Leftrightarrow", "\u{21D4}"),
-    ("Longrightarrow", "\u{27F9}"),
-    ("Longleftarrow", "\u{27F8}"),
-    ("leq", "\u{2264}"),
-    ("geq", "\u{2265}"),
-    ("cdots", "\u{22EF}"),
-    // U+2026 is East Asian Ambiguous, so the low ellipsis is three full stops.
-    ("ldots", "..."),
-];
 const DELIMITERS: &str = "()[]{}|.";
 /// Fences TeX spells as a command, with the glyph a terminal draws for each.
 const FENCE_COMMANDS: [(&str, char); 2] = [("\\langle", '\u{27E8}'), ("\\rangle", '\u{27E9}')];
-/// The pieces a fence grows from when taller than a row: top, extension, bottom,
-/// and the tip a brace points at its baseline with. These families measure one
-/// column under every terminal convention, unlike the box-drawing set.
-pub const TALL_FENCES: [(&str, [&str; 4]); 7] = [
-    ("(", ["\u{239B}", "\u{239C}", "\u{239D}", "\u{239C}"]),
-    (")", ["\u{239E}", "\u{239F}", "\u{23A0}", "\u{239F}"]),
-    ("[", ["\u{23A1}", "\u{23A2}", "\u{23A3}", "\u{23A2}"]),
-    ("]", ["\u{23A4}", "\u{23A5}", "\u{23A6}", "\u{23A5}"]),
-    ("{", ["\u{23A7}", "\u{23AA}", "\u{23A9}", "\u{23A8}"]),
-    ("}", ["\u{23AB}", "\u{23AA}", "\u{23AD}", "\u{23AC}"]),
-    ("|", ["\u{23AA}"; 4]),
-];
-/// Braces two rows high, which leave no room for a tip and so are drawn from
-/// their two halves; without either they would read as parentheses.
-pub const SHORT_BRACES: [(&str, [&str; 4]); 2] = [
-    ("{", ["\u{23B0}", "", "\u{23B1}", ""]),
-    ("}", ["\u{23B1}", "", "\u{23B0}", ""]),
-];
 /// A TeX math alphabet as Unicode sets it: capitals in a run of the Mathematical
 /// Alphanumeric Symbols block, bar the few Unicode had already placed among the
 /// letterlike symbols.
@@ -1355,10 +1313,10 @@ impl Math {
                         | "<"
                         | ">"
                         | "\\"
-                        | "\u{2216}"
-                        | "\u{27F5}"
-                        | "\u{27F6}"
-                        | "\u{27FC}"
+                        | SETMINUS
+                        | LONG_LEFT_ARROW
+                        | LONG_RIGHT_ARROW
+                        | LONG_MAPSTO
                 )
         )
     }
@@ -1399,7 +1357,7 @@ impl Shift {
         text.chars()
             .map(|character| {
                 Some(match (self, character) {
-                    (Self::Raised, '0'..='9') => "\u{2070}\u{00B9}\u{00B2}\u{00B3}\u{2074}\u{2075}\u{2076}\u{2077}\u{2078}\u{2079}"
+                    (Self::Raised, '0'..='9') => SUPERSCRIPT_DIGITS
                         .chars()
                         .nth(character as usize - '0' as usize)?,
                     (Self::Raised, '+') => '\u{207A}',
@@ -1754,7 +1712,7 @@ impl MathBlock {
         let baseline = numerator.height();
         let rule = Self {
             rows: vec![vec![TextSpan::new(
-                "\u{2500}".repeat(width),
+                FRACTION_RULE.repeat(width),
                 HLGroup::Operator,
             )]],
             baseline: 0,

@@ -6,6 +6,8 @@ use std::sync::LazyLock;
 use crate::env::ENV;
 use these_macros_should_be_illegal::forall;
 
+pub mod maths;
+
 /// A preferred symbol and a plain Unicode fallback for limited terminals.
 #[derive(Clone, Copy, Debug)]
 pub struct Glyph {
@@ -63,6 +65,28 @@ pub struct Glyphs(
     step_forward,
     // Divides a picker's rows from what it shows beneath them.
     picker_rule,
+    // A full-width rule: under a title, and around the syntax tree.
+    rule,
+    // What a table too wide to fit draws between the cells it stacks in a row.
+    dashed_rule,
+    // The syntax tree's branches: to a child, to the last child, and the trunk
+    // carried down past a child that has siblings below it.
+    tree_branch,
+    tree_last_branch,
+    tree_trunk,
+    // Between the parts of a line of hints or figures.
+    separator,
+    // Stands in for text left out, inside a sentence.
+    ellipsis,
+    // Sets apart a clause added to a label, and stands in for a missing label.
+    dash,
+    // The keys that move a selection or scroll a list up and down.
+    vertical_arrows,
+    // A swatch of colour the width of two cells.
+    swatch,
+    // Bookmarks the open preview, and labels the bookmarked tab.
+    bookmark_add,
+    bookmark,
 );
 
 impl Glyphs {
@@ -95,7 +119,28 @@ pub const GLYPHS: Glyphs = Glyphs {
     step_back: Glyph::new("‹", "<"),
     step_forward: Glyph::new("›", ">"),
     picker_rule: Glyph::new("─", "-"),
+    rule: Glyph::new("─", "-"),
+    dashed_rule: Glyph::new("┄", "-"),
+    tree_branch: Glyph::new("├─", "|-"),
+    tree_last_branch: Glyph::new("╰─", "`-"),
+    tree_trunk: Glyph::new("│", "|"),
+    separator: Glyph::new("·", "|"),
+    ellipsis: Glyph::new("…", "..."),
+    dash: Glyph::new("—", "-"),
+    vertical_arrows: Glyph::new("↑↓", "^v"),
+    swatch: Glyph::new("██", "##"),
+    bookmark_add: Glyph::new("☆", "+"),
+    bookmark: Glyph::new("★", "*"),
 };
+
+/// The pending-cell spinner's frames on a terminal that draws nerd-font icons.
+pub const SPINNER_FRAMES: &[&str] = &["󰋙 ", "󰫃 ", "󰫄 ", "󰫅 ", "󰫆 ", "󰫇 ", "󰫈 ", "󰋘 ", " "];
+
+/// Hints that name an M2 operator spelled beyond ASCII.
+pub const OPERATOR_HINTS: [&str; 2] = [
+    "Use the operator ⧢ for shuffle products",
+    "Use the operator ⊠ for exterior products",
+];
 
 #[cfg(test)]
 mod tests {
@@ -121,6 +166,13 @@ mod tests {
             glyphs.step_back,
             glyphs.step_forward,
             glyphs.picker_rule,
+            glyphs.rule,
+            glyphs.dashed_rule,
+            glyphs.tree_trunk,
+            glyphs.separator,
+            glyphs.dash,
+            glyphs.bookmark_add,
+            glyphs.bookmark,
         ] {
             assert_eq!(UnicodeWidthStr::width(glyph.for_basic(true)), 1);
             assert_eq!(UnicodeWidthStr::width_cjk(glyph.for_basic(true)), 1);
@@ -132,6 +184,23 @@ mod tests {
         let glyphs = GLYPHS;
         for glyph in [glyphs.prompt, glyphs.prompt_typing, glyphs.split_divider] {
             assert!(glyph.for_basic(true).is_ascii());
+        }
+    }
+
+    #[test]
+    fn basic_spellings_keep_their_glyphs_width() {
+        let glyphs = GLYPHS;
+        for glyph in [
+            glyphs.tree_branch,
+            glyphs.tree_last_branch,
+            glyphs.vertical_arrows,
+            glyphs.swatch,
+        ] {
+            assert!(glyph.for_basic(true).is_ascii());
+            assert_eq!(
+                UnicodeWidthStr::width(glyph.for_basic(true)),
+                UnicodeWidthStr::width(glyph.for_basic(false))
+            );
         }
     }
 }

@@ -792,9 +792,16 @@ impl App {
         };
         let header = Rect::new(area.x, area.y, area.width, 1);
         let theme = scheme();
+        let glyphs = UI.glyphs;
         let mut controls = vec![
-            (PreviewControl::Back, " ‹ ".to_string()),
-            (PreviewControl::Bookmark, " ☆ ".to_string()),
+            (
+                PreviewControl::Back,
+                format!(" {} ", glyphs.step_back.current()),
+            ),
+            (
+                PreviewControl::Bookmark,
+                format!(" {} ", glyphs.bookmark_add.current()),
+            ),
         ];
         controls.extend((0..RECENT_PREVIEWS).map(|index| {
             let tab = PreviewTab::Recent(index);
@@ -803,15 +810,18 @@ impl App {
                 format!(
                     " {}:{} ",
                     index + 1,
-                    self.previews.label(tab).unwrap_or("—")
+                    self.previews.label(tab).unwrap_or(glyphs.dash.current())
                 ),
             )
         }));
         controls.push((
             PreviewControl::Select(PreviewTab::Bookmark),
             format!(
-                " ★:{} ",
-                self.previews.label(PreviewTab::Bookmark).unwrap_or("—")
+                " {}:{} ",
+                glyphs.bookmark.current(),
+                self.previews
+                    .label(PreviewTab::Bookmark)
+                    .unwrap_or(glyphs.dash.current())
             ),
         ));
         let constraints = controls.iter().enumerate().map(|(index, _)| {
@@ -853,8 +863,9 @@ impl App {
                 let block = SourceBlock::new(code, page, focus).with_folds(folds);
                 let blocks: Vec<Box<dyn Block>> = vec![
                     Box::new(TextBlock::system(format!(
-                        "{} — F8 runs this file",
-                        path.display()
+                        "{} {} F8 runs this file",
+                        path.display(),
+                        UI.glyphs.dash.current()
                     ))),
                     Box::new(block),
                 ];
@@ -892,7 +903,10 @@ impl App {
         }
         self.open_preview(ViewKind::Reference, target.trim_matches('"').to_string());
         self.workspace.editor.open_reference(
-            vec![Box::new(TextBlock::system("opening documentation…"))],
+            vec![Box::new(TextBlock::system(format!(
+                "opening documentation{}",
+                UI.glyphs.ellipsis.current()
+            )))],
             None,
         );
         let request = self

@@ -3,6 +3,7 @@
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
+use crate::ui::config::UI;
 use crate::ui::theme::groups::scheme;
 
 /// A titled run of entries, drawn together in columns.
@@ -25,8 +26,12 @@ pub struct DebugEntry {
 }
 
 impl DebugEntry {
-    const SWATCH: &'static str = "██ ";
     const GAP: usize = 2;
+
+    /// The colour swatch drawn before a palette colour's name, with its gap.
+    fn swatch_cells() -> String {
+        format!("{} ", UI.glyphs.swatch.current())
+    }
 
     pub fn group(name: &str, style: Style) -> Self {
         Self {
@@ -53,7 +58,8 @@ impl DebugEntry {
     }
 
     fn swatch_width(&self) -> usize {
-        self.swatch.map_or(0, |_| Self::SWATCH.chars().count())
+        self.swatch
+            .map_or(0, |_| Self::swatch_cells().chars().count())
     }
 
     pub fn width(&self) -> usize {
@@ -68,7 +74,7 @@ impl DebugEntry {
             .saturating_sub(self.swatch_width() + self.label.chars().count() + hex.chars().count());
         let mut spans = Vec::from_iter(
             self.swatch
-                .map(|color| Span::styled(Self::SWATCH, Style::new().fg(color))),
+                .map(|color| Span::styled(Self::swatch_cells(), Style::new().fg(color))),
         );
         spans.push(Span::styled(self.label.clone(), self.style));
         if let Some(color) = self.swatch {

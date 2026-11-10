@@ -1,6 +1,6 @@
 //! Compile-time presentation configuration for the complete interface.
 
-use crate::ui::glyphs::{Glyphs, GLYPHS};
+use crate::ui::glyphs::{Glyphs, GLYPHS, SPINNER_FRAMES};
 
 /// Frames and cadence of the pending-cell spinner.
 #[derive(Clone, Copy)]
@@ -109,7 +109,7 @@ pub const UI: UiConfig = UiConfig {
     glyphs: GLYPHS,
 
     spinner: SpinnerConfig {
-        frames: &["󰋙 ", "󰫃 ", "󰫄 ", "󰫅 ", "󰫆 ", "󰫇 ", "󰫈 ", "󰋘 ", " "],
+        frames: SPINNER_FRAMES,
         // frames: &["", "", "", "", "", ""],
         basic_frames: &["<", "^", ">", "v"],
         frame_ms: 80,

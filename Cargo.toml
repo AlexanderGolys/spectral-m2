@@ -10,6 +10,7 @@ keywords = ["macaulay2", "repl", "terminal", "syntax-highlighting", "tui"]
 categories = ["command-line-utilities", "development-tools"]
 include = [
     "build.rs",
+    "build/*.rs",
     "src/**/*.rs",
     "src/backend/m2_startup.m2",
     "src/**/*.toml",

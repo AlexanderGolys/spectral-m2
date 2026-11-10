@@ -16,6 +16,7 @@ use std::{fs, mem, thread};
 use crate::cli::M2Options;
 use crate::env::ENV;
 use crate::errors::{Error, Result};
+use crate::ui::glyphs::maths::{ANGLE_BAR_DELIMITERS, CURLY_EXTENSION, LEFT_CURLY, RIGHT_CURLY};
 use crate::ui::theme::groups::HLGroup;
 use html2text::config;
 use nix::sys::signal::{killpg, Signal};
@@ -217,7 +218,7 @@ impl CollectionKind {
     /// triangle.
     pub const fn drawn_delimiters(self) -> (&'static str, &'static str) {
         match self {
-            Self::AngleBarList => ("\u{27E8}|", "|\u{27E9}"),
+            Self::AngleBarList => ANGLE_BAR_DELIMITERS,
             _ => self.delimiters(),
         }
     }
@@ -279,12 +280,10 @@ impl M2Value {
     /// A curly brace `height` rows tall. An odd one has its cusp on the middle
     /// row; an even one, having no middle row, splits the cusp across the two
     /// rows about its middle, which at height two is the whole brace.
-    // @##no_ascii
-    // @##issue non-ascii glyphs set in random place
     fn curly(height: usize, left: bool, baseline: usize) -> RenderedBlock {
-        let (single, top, cusp, bottom, upper_cusp, lower_cusp) = match left {
-            true => ("{", "⎧", "⎨", "⎩", "⎰", "⎱"),
-            false => ("}", "⎫", "⎬", "⎭", "⎱", "⎰"),
+        let (single, [top, cusp, bottom, upper_cusp, lower_cusp]) = match left {
+            true => ("{", LEFT_CURLY),
+            false => ("}", RIGHT_CURLY),
         };
         let cells = (0..height)
             .map(|row| {
@@ -295,7 +294,7 @@ impl M2Value {
                     (_, 0) => top,
                     (_, row) if row + 1 == height => bottom,
                     (1, row) if row == height / 2 => cusp,
-                    _ => "⎪",
+                    _ => CURLY_EXTENSION,
                 }
                 .to_string()]
             })

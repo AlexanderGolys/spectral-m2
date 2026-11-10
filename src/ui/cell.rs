@@ -392,7 +392,9 @@ impl SourceBlock {
     fn line_starts(rows: &[Option<SourceRow>]) -> impl Iterator<Item = (usize, &SourceRow)> {
         rows.iter().enumerate().filter_map(|(index, row)| {
             let row = row.as_ref()?;
-            let previous = index.checked_sub(1).and_then(|previous| rows[previous].as_ref());
+            let previous = index
+                .checked_sub(1)
+                .and_then(|previous| rows[previous].as_ref());
             previous
                 .is_none_or(|previous| previous.line != row.line)
                 .then_some((index, row))
@@ -415,7 +417,10 @@ impl Block for SourceBlock {
     fn focus_row(&self, context: &RenderContext) -> Option<u16> {
         let row = self.focused_cells(context).first()?.y;
         let rows = self.rows(context);
-        self.shown_rows(&rows).get(usize::from(row)).copied().flatten()
+        self.shown_rows(&rows)
+            .get(usize::from(row))
+            .copied()
+            .flatten()
     }
 
     fn render_local(&self, context: &RenderContext, buffer: &mut Buffer) {
@@ -1745,10 +1750,7 @@ impl OutputBlock {
             let head = limit.saturating_sub(1) / 2;
             let tail = limit.saturating_sub(head + 1);
             let end = lines.len().saturating_sub(tail);
-            lines.splice(
-                head..end,
-                [Line::raw("… output preview truncated (render limit) …")],
-            );
+            lines.splice(head..end, [Line::raw(truncation_notice())]);
             // Only the rows above the cut stay where they were laid out.
             links.retain(|link| link.cells.iter().all(|cells| usize::from(cells.y) < head));
         }
@@ -1839,7 +1841,11 @@ impl OutputBlock {
             UI.glyphs.fold_rule.current().repeat(usize::from(width)),
             style,
         ));
-        let label = format!("⋯ {hidden} rows hidden · double-click to expand");
+        let label = format!(
+            "{} {hidden} rows hidden {} double-click to expand",
+            UI.glyphs.folded_lines.current(),
+            UI.glyphs.separator.current()
+        );
         let padding = usize::from(width).saturating_sub(label.len()) / 2;
         [
             rule.clone(),
@@ -2365,10 +2371,17 @@ fn output_preview(text: &str) -> String {
         tail += 1;
     }
     format!(
-        "{}\n… output preview truncated (render limit) …\n{}",
+        "{}\n{}\n{}",
         &text[..head],
+        truncation_notice(),
         &text[tail..]
     )
+}
+
+/// The line that takes the place of output cut from a preview.
+fn truncation_notice() -> String {
+    let ellipsis = UI.glyphs.ellipsis.current();
+    format!("{ellipsis} output preview truncated (render limit) {ellipsis}")
 }
 
 fn word_lines(text: &str, width: u16) -> Vec<String> {
@@ -2453,7 +2466,11 @@ mod tests {
         let mut buffer = Buffer::empty(Rect::new(0, 0, context.width(), block.height(context)));
         block.render_local(context, &mut buffer);
         (0..buffer.area.height)
-            .map(|y| (0..buffer.area.width).map(|x| buffer[(x, y)].symbol()).collect())
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
             .collect()
     }
 
@@ -2486,7 +2503,9 @@ mod tests {
         let mut inclusions = Inclusions::default();
         block.local_selection_inclusions(&context, &mut inclusions);
         let below = row_of(&rows, "g = 1");
-        assert!(inclusions.layer_at(Position::new(context.width() / 2, below)).is_some());
+        assert!(inclusions
+            .layer_at(Position::new(context.width() / 2, below))
+            .is_some());
 
         assert!(block.toggle_fold(Position::new(0, first), &context));
         assert_eq!(block.height(&context), unfolded);

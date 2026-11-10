@@ -814,7 +814,7 @@ fn stacked_table_cells_fit_and_are_ruled_apart() {
     let width = 20;
     let flat = text(&spans(html, width).expect("reads"));
     assert!(!flat.contains(STACKED_CELL_BORDER), "{flat}");
-    assert!(flat.contains(STACKED_CELL_RULE), "{flat}");
+    assert!(flat.contains(UI.glyphs.dashed_rule.current()), "{flat}");
     for line in flat.lines() {
         assert!(line.width() <= width, "{line:?}");
     }

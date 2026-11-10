@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::input::InputAction;
 use crate::ui::action::Action;
+use crate::ui::config::UI;
 use crate::ui::controller::picker::{PickerInput, PickerItem, PickerMode, PickerTab, Row};
 use crate::ui::controller::EditorEvent;
 use crate::ui::key::{KeyEvent, KeyMod};
@@ -294,7 +295,7 @@ impl PickerItem for KeymapRow {
     fn cells(&self) -> Vec<Line<'static>> {
         let groups = scheme();
         let shortcut = if self.capturing {
-            "Type keybind… (Esc cancels)".to_string()
+            format!("Type keybind{} (Esc cancels)", UI.glyphs.ellipsis.current())
         } else {
             self.key.to_string()
         };
