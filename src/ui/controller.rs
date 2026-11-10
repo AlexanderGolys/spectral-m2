@@ -59,8 +59,8 @@ use crate::ui::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
 use crate::ui::theme::palette::blend;
 use crate::ui::theme::Appearance;
 
-/// How far a hovered link's colours move toward the text colour.
-const LINK_HOVER_BRIGHTENING: f32 = 0.35;
+/// How far the background under a hovered link moves toward the text colour.
+const LINK_HOVER_TINT: f32 = 0.15;
 
 /// Left clicks on one cell, each within the double-click pause of the one before.
 struct ClickRun {
@@ -2047,14 +2047,20 @@ impl Editor {
             } else {
                 HLGroup::MarkupLinkHover
             });
+            // The link keeps its own text colour; the band behind it lights up instead.
             let text = scheme().style(HLGroup::Text).fg;
+            let canvas = scheme().style(HLGroup::Canvas).bg;
             for cells in link.cells {
                 frame.buffer_mut().set_style(cells, hovered);
                 for position in cells.positions() {
                     let cell = &mut frame.buffer_mut()[position];
-                    if let (Some(text), Color::Rgb(..)) = (text, cell.fg) {
-                        if let Ok(brightened) = blend(cell.fg, text, LINK_HOVER_BRIGHTENING) {
-                            cell.set_fg(brightened);
+                    let under = match cell.bg {
+                        Color::Rgb(..) => Some(cell.bg),
+                        _ => canvas,
+                    };
+                    if let (Some(text), Some(under)) = (text, under) {
+                        if let Ok(tinted) = blend(under, text, LINK_HOVER_TINT) {
+                            cell.set_bg(tinted);
                         }
                     }
                 }
@@ -2502,5 +2508,66 @@ mod language_server_tests {
             now: "stale".into(),
         });
         assert_eq!(editor.submission(), "f = x -> x");
+    }
+}
+
+#[cfg(test)]
+mod link_hover_tests {
+    use super::*;
+    use crate::backend::M2Value;
+    use crate::code::highlight::SyntaxHighlighter;
+    use crate::ui::cell::OutputBlock;
+    use crossterm::event::{MouseEvent, MouseEventKind};
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::Terminal;
+
+    fn drawn(editor: &mut Editor) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(60, 20)).expect("test terminal");
+        terminal
+            .draw(|frame| editor.draw(frame, frame.area(), &mut SyntaxHighlighter::new(), false))
+            .expect("drawing");
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn a_hovered_link_keeps_its_text_colour_and_lights_its_background() {
+        for value in [
+            M2Value::Markup {
+                html: "<p>See <a href='&quot;isPrime&quot;'>isPrime</a>.</p>".into(),
+                fallback: "See isPrime.".into(),
+                example_width: 60,
+            },
+            M2Value::Location {
+                text: "dir/file.m2:12:0-14:3".into(),
+                target: "file:///tmp/dir/file.m2#L12:C0-L14:C3".into(),
+            },
+        ] {
+            let mut editor = Editor::new(String::new());
+            editor.feed = Feed::new(Box::new(OutputBlock::rendered(value, None)));
+            let before = drawn(&mut editor);
+            let link = (0..20)
+                .flat_map(|y| (0..60).map(move |x| Position::new(x, y)))
+                .find_map(|position| editor.feed.link_at(position))
+                .expect("a link is drawn");
+            let at = link.cells[0].as_position();
+            editor.route_mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: at.x,
+                row: at.y,
+                modifiers: KeyModifiers::NONE,
+            });
+            let after = drawn(&mut editor);
+            for cells in &link.cells {
+                for position in cells.positions() {
+                    let (was, is) = (&before[position], &after[position]);
+                    assert_eq!(was.fg, is.fg, "{position:?}: text colour unchanged");
+                    assert_ne!(was.bg, is.bg, "{position:?}: background lit");
+                    assert!(is.modifier.contains(Modifier::UNDERLINED));
+                }
+            }
+            let outside = Position::new(at.x.saturating_sub(2), at.y);
+            assert_eq!(before[outside].bg, after[outside].bg);
+        }
     }
 }

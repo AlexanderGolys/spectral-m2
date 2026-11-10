@@ -74,7 +74,7 @@ MarkupStrike = { crossed_out = true }
 # A link is drawn in the color of printed output, set apart by its slant.
 MarkupLink = { fg_from = "Printed.fg", italic = true }
 # A link to a documentation node keeps the colours of what it is made of and adds
-# only a soft underline; under the pointer the colours are brightened as well.
+# only a soft underline; under the pointer the background behind it lights up.
 MarkupDocLink = { underline = true, sp_from = "Muted.fg" }
 # A method listed in a page without documentation of its own: a link like any
 # other, on a background tinted toward the error colour.

@@ -4,6 +4,10 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- A link under the pointer keeps its text colour and lights the background behind it instead, so documentation links drawn in the text colour show the hover too.
+
 ## [1.3.0] - 2026-11-10
 
 ### Added
