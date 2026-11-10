@@ -82,10 +82,12 @@ const TABLE_COLUMN_MIN_WIDTH: usize = 24;
 const STACKED_CELL_BORDER: char = '/';
 const STACKED_CELL_RULE: &str = "┄";
 
-/// Where a documentation node was written, `Package/file.m2:line:column`: a
-/// location to read, not code.
-static SOURCE_LOCATION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\S+\.m2(:[0-9]+)*$").expect("valid source location pattern"));
+/// Where a documentation node was written, `Package/file.m2:line:column`, or
+/// the stretch of a file something spans, `file.m2:1:2-3:4`: a location to read,
+/// not code.
+static SOURCE_LOCATION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\S+\.m2(:[0-9]+)*(-[0-9]+(:[0-9]+)*)?$").expect("valid source location pattern")
+});
 
 /// The typewriter spans M2 sets locations and code in, as its HTML spells them.
 static TYPEWRITER: LazyLock<Regex> = LazyLock::new(|| {
@@ -666,7 +668,8 @@ fn escape_text(text: &str) -> String {
 }
 
 fn unescape_text(html: &str) -> String {
-    html.replace("&lt;", "<")
+    html.replace("&nbsp;", "\u{a0}")
+        .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&amp;", "&")
@@ -741,10 +744,14 @@ fn normalize(node: &Handle, in_examples: bool) -> Vec<Handle> {
                         .iter()
                         .find(|(token, _)| class(token))
                         .map(|(_, group)| *group),
+                    "span" if class("tt") => {
+                        (!reads_as_code(node)).then_some(HLGroup::MarkupTypewriter)
+                    }
                     "span" => attrs
                         .iter()
                         .find(|attr| &*attr.name.local == GROUP_ATTRIBUTE)
                         .and_then(|attr| HLGroup::named(&attr.value).ok()),
+                    "tt" => (!reads_as_code(node)).then_some(HLGroup::MarkupTypewriter),
                     _ => None,
                 },
             )
@@ -935,13 +942,14 @@ fn decorate_inline(node: &Handle, described: &mut bool, page: u64) {
     {
         return;
     }
-    if tag.as_deref() == Some("a") && is_code_link(node) {
-        let children = node.children.take();
-        node.children.replace(vec![adopt("code", children)]);
+    if tag.as_deref() == Some("a") {
+        if let Some(reference) = Reference::of(node) {
+            paint_reference(node, reference, page);
+            return;
+        }
     }
     if tag.as_deref() == Some("code") {
-        let source = inline_text(node);
-        paint_inline_code(node, &analysed_code(page, &source), &mut 0);
+        paint_code(node, page, false);
         return;
     }
     let mut local = false;
@@ -981,12 +989,146 @@ fn decorate_inline(node: &Handle, described: &mut bool, page: u64) {
     adopted_by(Rc::clone(node), decorated);
 }
 
+/// What a link leads to, which sets how its text is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reference {
+    /// A documentation node named in code: a method's signature, or the name of
+    /// the node it opens, which a page's analysis can tell the kind of.
+    Code,
+    /// A documentation node by its own name, as prose.
+    Node,
+    /// A documentation node by words of the page's own, as `TO2` links it.
+    Alias,
+    /// A position in a source file.
+    Location,
+    /// Anywhere else: a web page.
+    Elsewhere,
+}
+
+impl Reference {
+    /// What the link `node` leads to, or `None` for one that only carries a
+    /// highlight group through layout.
+    fn of(node: &Handle) -> Option<Self> {
+        let target = attribute(node, "href")?;
+        if target.starts_with(GROUP_LINK_SCHEME) || target.starts_with(MARK_LINK_SCHEME) {
+            None
+        } else if target.starts_with(FILE_LINK_SCHEME) {
+            Some(Self::Location)
+        } else if !target.starts_with('"') {
+            Some(Self::Elsewhere)
+        } else if is_code_link(node) {
+            Some(Self::Code)
+        } else if names_its_target(node) {
+            Some(Self::Node)
+        } else {
+            Some(Self::Alias)
+        }
+    }
+
+    /// The group the words of such a link are drawn in, where they are not code.
+    fn group(self) -> HLGroup {
+        match self {
+            Self::Code | Self::Node => HLGroup::MarkupReference,
+            Self::Alias => HLGroup::MarkupAlias,
+            Self::Location | Self::Elsewhere => HLGroup::MarkupLink,
+        }
+    }
+}
+
+/// Draw the text of the link `node` as what it leads to.
+fn paint_reference(node: &Handle, reference: Reference, page: u64) {
+    match reference {
+        Reference::Code => {
+            let code = adopt("code", node.children.take());
+            adopted_by(Rc::clone(node), vec![Rc::clone(&code)]);
+            paint_code(&code, page, true);
+        }
+        // A location reads as one, never as the code its typewriter wrapper
+        // would make of it.
+        Reference::Location => {
+            uncode(node);
+            paint_words(node, reference.group(), page);
+        }
+        _ => paint_words(node, reference.group(), page),
+    }
+}
+
+/// Colour inline `code` as its page's analysis reads it. Inside a link to a
+/// documentation node, what the analysis gives no colour of its own, such as a
+/// name it does not know, is drawn as a reference, so the link reads as one.
+fn paint_code(code: &Handle, page: u64, linked: bool) {
+    // Text M2 sets apart within code, a superscript say, is laid out as other
+    // text than its source, so the source's colours would fall out of place.
+    if !reads_as_written(code) {
+        return;
+    }
+    let source = inline_text(code);
+    let mut spans = analysed_code(page, &source);
+    if linked {
+        for span in &mut spans {
+            if matches!(span.kind, HLGroup::Value | HLGroup::Variable) {
+                span.kind = HLGroup::MarkupReference;
+            }
+        }
+    }
+    paint_inline_code(code, &spans, &mut 0);
+}
+
+/// Paint every word within `node` in `group`, leaving code its own colours and
+/// any group already carried.
+fn paint_words(node: &Handle, group: HLGroup, page: u64) {
+    let mut children = Vec::new();
+    for child in node.children.take() {
+        if text_leaf(&child).is_some() {
+            children.push(group_link(group, vec![child]));
+            continue;
+        }
+        match tag_of(&child).as_deref() {
+            Some("code") => paint_code(&child, page, false),
+            Some("a") if Reference::of(&child).is_none() => {}
+            _ => paint_words(&child, group, page),
+        }
+        children.push(child);
+    }
+    adopted_by(Rc::clone(node), children);
+}
+
+/// `node` with every code element within it replaced by its contents.
+fn uncode(node: &Handle) {
+    let mut children = Vec::new();
+    for child in node.children.take() {
+        uncode(&child);
+        if tag_of(&child).as_deref() == Some("code") {
+            children.extend(child.children.take());
+        } else {
+            children.push(child);
+        }
+    }
+    adopted_by(Rc::clone(node), children);
+}
+
+/// Whether `node` is laid out as the text it holds, character for character:
+/// only text and the wrappers that set it in a face.
+fn reads_as_written(node: &Handle) -> bool {
+    node.children
+        .borrow()
+        .iter()
+        .all(|child| match tag_of(child) {
+            None => true,
+            Some(tag) => {
+                matches!(tag.as_str(), "span" | "code" | "tt" | "kbd" | "samp" | "a")
+                    && reads_as_written(child)
+            }
+        })
+}
+
 /// Whether a link is set as code: a method's signature, or the name of the node
 /// it opens, which a page's analysis can tell the kind of.
 fn is_code_link(node: &Handle) -> bool {
     let text = inline_text(node);
     let text = text.trim();
     (text.contains('(') || names_its_target(node))
+        && reads_as_written(node)
         && !SOURCE_LOCATION.is_match(text)
         && parse_native(text).is_ok()
 }
@@ -1018,7 +1160,15 @@ fn collect_inline_code(node: &Handle, found: &mut Vec<String>) {
     {
         return;
     }
-    if tag.as_deref() == Some("code") || (tag.as_deref() == Some("a") && is_code_link(node)) {
+    if tag.as_deref() == Some("a") && Reference::of(node) == Some(Reference::Location) {
+        return;
+    }
+    let code = match tag.as_deref() {
+        Some("code") => reads_as_written(node),
+        Some("a") => Reference::of(node) == Some(Reference::Code),
+        _ => false,
+    };
+    if code {
         let source = inline_text(node);
         if parse_native(&source).is_ok() && !found.contains(&source) {
             found.push(source);
@@ -1078,9 +1228,9 @@ fn paint_inline_code(node: &Handle, spans: &[TextSpan], offset: &mut usize) {
             }
             *offset = end;
         } else {
-            if attribute(&child, "href").is_some_and(|target| target.starts_with(FILE_LINK_SCHEME))
-            {
+            if Reference::of(&child) == Some(Reference::Location) {
                 *offset += inline_text(&child).len();
+                paint_reference(&child, Reference::Location, 0);
             } else {
                 paint_inline_code(&child, spans, offset);
             }
@@ -1389,7 +1539,7 @@ fn row(line: &TaggedLine<Vec<RichAnnotation>>) -> SpanLine {
         // Headings and muted descriptions keep their own colour throughout.
         let mut painted = if let Some(group) = group.filter(|_| heading.is_none() && !described) {
             vec![TextSpan::new(text, group)]
-        } else if is_code && !file_link {
+        } else if is_code && !file_link && heading.is_none() {
             example(text, preformatted)
         } else {
             let group = heading.unwrap_or(if described {

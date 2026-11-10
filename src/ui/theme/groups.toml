@@ -76,6 +76,12 @@ MarkupLink = { fg_from = "Printed.fg", italic = true }
 # A link to a documentation node keeps the colours of what it is made of and adds
 # only a soft underline; under the pointer the colours are brightened as well.
 MarkupDocLink = { underline = true, sp_from = "Muted.fg" }
+# The words of a link to a documentation node that are not code: the node's own
+# name, and the words a page links it by instead.
+MarkupReference = { link = "Info" }
+MarkupAlias = { link = "Info", italic = true }
+# Typewriter text that is not code: a sentence shown as typed, a file's name.
+MarkupTypewriter = { fg_from = "String.fg" }
 # A method listed in a page without documentation of its own: a link like any
 # other, on a background tinted toward the error colour.
 MarkupMissingDoc = { link = "MarkupDocLink", bg_from = "Canvas.bg", tint_from = "Error.fg", tint = 0.2 }
