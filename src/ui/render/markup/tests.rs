@@ -430,7 +430,7 @@ fn headings_and_links_have_semantic_colours() {
     );
     for (text, group) in [
         ("det", HLGroup::MarkupHeading1),
-        ("matrix", HLGroup::Value),
+        ("matrix", HLGroup::MarkupLink),
         ("bold", HLGroup::Value),
         ("slanted", HLGroup::Value),
     ] {
@@ -532,9 +532,9 @@ fn a_source_location_is_text_not_code() {
     let html = "<p>The source is in <span class='tt'>Macaulay2Doc/ov_types.m2:495:0</span>, \
             beside <span class='tt'>ancestors x</span>.</p>";
     let painted = kinds(html);
-    assert!(painted
-        .iter()
-        .any(|(text, kind)| text.contains("ov_types.m2:495:0") && *kind == HLGroup::Value));
+    assert!(painted.iter().any(
+        |(text, kind)| text.contains("ov_types.m2:495:0") && *kind == HLGroup::MarkupTypewriter
+    ));
     assert!(
         painted
             .iter()
@@ -627,7 +627,7 @@ fn typewriter_text_is_coloured_as_code_only_when_it_is_code() {
         painted
             .iter()
             .filter(|(text, _)| text.contains("Here") || text.contains("line"))
-            .all(|(_, kind)| *kind == HLGroup::Value),
+            .all(|(_, kind)| *kind == HLGroup::MarkupTypewriter),
         "{painted:?}"
     );
 }
@@ -912,8 +912,97 @@ fn a_documentation_name_takes_the_colour_its_pages_analysis_found_for_it() {
     assert_ne!(plain, Some(HLGroup::Type));
     assert_eq!(
         kind_of("the integers"),
-        Some(HLGroup::Value),
-        "prose stays prose"
+        Some(HLGroup::MarkupAlias),
+        "prose stays prose, in the colour of a link"
     );
     forget_colors();
+}
+
+/// Each piece of `html` laid out at `width`: its text, group, mark and target.
+fn pieces(html: &str, width: usize) -> Vec<(String, HLGroup, Option<HLGroup>, Option<String>)> {
+    spans(html, width)
+        .expect("reads")
+        .into_iter()
+        .flatten()
+        .map(|span| {
+            let target = span.target.as_deref().map(str::to_string);
+            (span.content, span.kind, span.mark, target)
+        })
+        .collect()
+}
+
+#[test]
+fn a_link_reads_as_one_by_its_colour_and_not_only_its_underline() {
+    let html = "<p>See <a href='&quot;matrices&quot;'>matrices</a>, \
+        <a href='&quot;det&quot;'>the determinant</a>, \
+        <a href='&quot;det&quot;'><span class='tt'>det</span></a> and \
+        <a href='https://macaulay2.com'>the site</a>.</p>";
+    let pieces = pieces(html, 80);
+    let kind = |text: &str| {
+        pieces
+            .iter()
+            .find(|piece| piece.0 == text)
+            .unwrap_or_else(|| panic!("{text} in {pieces:?}"))
+            .1
+    };
+    assert_eq!(kind("matrices"), HLGroup::MarkupReference);
+    assert_eq!(kind("the determinant"), HLGroup::MarkupAlias);
+    assert_eq!(kind("det"), HLGroup::MarkupReference);
+    assert_eq!(kind("the site"), HLGroup::MarkupLink);
+    for (text, kind, mark, _) in &pieces {
+        if [
+            HLGroup::MarkupReference,
+            HLGroup::MarkupAlias,
+            HLGroup::MarkupLink,
+        ]
+        .contains(kind)
+        {
+            assert_eq!(*mark, Some(HLGroup::MarkupDocLink), "{text} is underlined");
+        }
+    }
+}
+
+#[test]
+fn a_source_location_link_is_a_link_and_never_code() {
+    let html = "<p>At <a href='file:///usr/Core/x.m2#L1:C2-L3:C4'><span class='tt'>Core/x.m2:1:2-3:4</span></a> \
+        and <a href='file:///usr/Core/y.m2#L5:C0'><span class='tt'>Core/y.m2:5:0</span></a> \
+        and <code>f <a href='file:///a/b.m2#L1:C2'>b.m2:1:2</a></code>.</p>";
+    let pieces = pieces(html, 120);
+    for location in ["Core/x.m2:1:2-3:4", "Core/y.m2:5:0", "b.m2:1:2"] {
+        let piece = pieces
+            .iter()
+            .find(|piece| piece.0 == location)
+            .unwrap_or_else(|| panic!("{location} whole in {pieces:?}"));
+        assert_eq!(piece.1, HLGroup::MarkupLink, "{location}");
+        assert!(piece
+            .3
+            .as_deref()
+            .is_some_and(|target| target.starts_with("file://")));
+    }
+}
+
+#[test]
+fn a_heading_keeps_its_colour_over_the_code_it_names() {
+    let pieces = pieces("<h2>Ways to use <span class='tt'>det</span>:</h2>", 60);
+    assert!(
+        pieces
+            .iter()
+            .all(|piece| piece.1 == HLGroup::MarkupHeading2),
+        "{pieces:?}"
+    );
+}
+
+#[test]
+fn code_set_apart_inside_does_not_take_colours_out_of_place() {
+    let html =
+        "<p><a href='&quot;Ext&quot;'>Ext<sup>i</sup>(M,N)</a> and <code>a&nbsp;b</code></p>";
+    let pieces = pieces(html, 60);
+    let text: String = pieces.iter().map(|piece| piece.0.as_str()).collect();
+    assert!(!text.contains("nbsp"), "{text}");
+    assert!(
+        !pieces
+            .iter()
+            .any(|piece| piece.0.contains("Ext") && piece.1 == HLGroup::Function),
+        "Ext is not read as the call Exti(M,N): {pieces:?}"
+    );
 }
