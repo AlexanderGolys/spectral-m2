@@ -1,5 +1,9 @@
 //! The process environment: every variable the shell reads, and the directories
-//! it derives from them, asked for through [`ENV`].
+//! it derives from them, asked for through [`ENV`], together with the variables
+//! Cargo fixes at build time, as named constants.
+//!
+//! Nothing else in the shell names an environment variable. The one exception is
+//! `OUT_DIR`, which `include!` needs as a literal inside `concat!`.
 
 #[cfg(test)]
 use std::env::temp_dir;
@@ -24,6 +28,15 @@ const DUMB_TERMINAL: &str = "dumb";
 /// Set to [`ENABLED`] to draw with plain Unicode characters only.
 const BASIC_GLYPHS: &str = "SPECTRAL_M2_BASIC_GLYPHS";
 const ENABLED: &str = "1";
+
+/// The shell's version, from `CARGO_PKG_VERSION` at build time.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The package name, from `CARGO_PKG_NAME` at build time; it names the shell's
+/// configuration and state directories.
+#[cfg_attr(test, allow(dead_code))]
+pub const PACKAGE_NAME: &str = env!("CARGO_PKG_NAME");
+/// The executable's name, from `CARGO_BIN_NAME` at build time.
+pub const BINARY_NAME: &str = env!("CARGO_BIN_NAME");
 
 /// The one way into the process environment.
 pub static ENV: Environment = Environment;

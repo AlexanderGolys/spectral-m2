@@ -1,6 +1,7 @@
 //! Configurable content at fixed, evenly spaced statusline anchors.
 
 use crate::code::semantic::SERVER_EXECUTABLE;
+use crate::env::VERSION;
 use lsp_types::ServerInfo;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -136,7 +137,7 @@ impl StatusComponent {
                 HLGroup::StatuslineState,
             ),
             Self::M2Version => version("M2", context.runtime.m2_version.as_deref()),
-            Self::Sp2Version => version("sp2", Some(env!("CARGO_PKG_VERSION"))),
+            Self::Sp2Version => version("sp2", Some(VERSION)),
             Self::LanguageServerVersion => match &context.runtime.language_server {
                 LanguageServerState::Running(server) => {
                     version(&server.name, server.version.as_deref())
@@ -148,11 +149,7 @@ impl StatusComponent {
                 let memory = |bytes: Option<u64>| bytes.map_or_else(|| "n/a".into(), mebibytes);
                 let separator = TextSpan::new(" / ", HLGroup::StatuslineSeparator);
                 [
-                    format!(
-                        "sp2 {} {}",
-                        env!("CARGO_PKG_VERSION"),
-                        memory(diagnostics.sp2_memory)
-                    ),
+                    format!("sp2 {VERSION} {}", memory(diagnostics.sp2_memory)),
                     format!("M2 {}", memory(diagnostics.m2_memory)),
                     format!(
                         "pictures {} ({})",
@@ -456,7 +453,7 @@ mod tests {
         let debug = StatusComponent::Debug.content(&context, None);
 
         let shown: String = debug.iter().map(|span| span.content.as_str()).collect();
-        assert!(shown.contains(env!("CARGO_PKG_VERSION")), "{shown}");
+        assert!(shown.contains(VERSION), "{shown}");
         assert!(shown.contains("48.0 MiB"), "{shown}");
         assert!(shown.contains("M2 n/a"), "{shown}");
         assert!(shown.contains("pictures 3 (2.0 MiB)"), "{shown}");

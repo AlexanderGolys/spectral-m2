@@ -35,6 +35,7 @@ use crate::code::location::{SourcePoint, SourceRange};
 use crate::code::semantic::query::{Answer, Place, QueryId, Question};
 use crate::code::semantic::SemanticHighlighter;
 use crate::code::semantic::SourceId;
+use crate::env::VERSION;
 use crate::errors::Result;
 use crate::ui::action::Action;
 use crate::ui::block::Block;
@@ -1202,10 +1203,7 @@ fn read_code(path: &Path) -> std::result::Result<String, EditorUpdate> {
 
 /// The versions of the shell, its Macaulay2, and the language server once it runs.
 fn welcome_message(m2_version: &str, server: Option<&ServerInfo>) -> String {
-    let mut message = format!(
-        "spectral-m2 v{}\nMacaulay2 v{m2_version}",
-        env!("CARGO_PKG_VERSION")
-    );
+    let mut message = format!("spectral-m2 v{VERSION}\nMacaulay2 v{m2_version}");
     if let Some(server) = server {
         message.push('\n');
         message.push_str(&server.name);

@@ -49,7 +49,7 @@ use crate::code::highlight::Highlighter;
 use crate::code::semantic::query::Finding;
 use crate::code::semantic::SourceId;
 use crate::code::semantic::SEMANTIC_GROUPS;
-use crate::env::ENV;
+use crate::env::{ENV, VERSION};
 use crate::input::{InputCode, InputContext};
 use crate::ui::floating::{Anchor, Floating};
 use crate::ui::settings::selection::CopyFormat;
@@ -1679,7 +1679,7 @@ impl Editor {
             Line::from(Span::styled(
                 format!(
                     "sp2 {}  {}  {}",
-                    env!("CARGO_PKG_VERSION"),
+                    VERSION,
                     self.frame_stats.label(),
                     crate::ui::graphics::usage()
                 ),
