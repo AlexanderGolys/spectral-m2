@@ -40,8 +40,9 @@ impl Pane {
 
     /// Interpret unbound navigation as private input for the current preview:
     /// `Left` and `Right` step to the neighbouring view, `Up` and `Down` scroll.
+    /// The shell and the reference pane keep their keys.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
-        if self.view == ViewKind::Shell {
+        if !self.view.is_preview() {
             return false;
         }
         match key.code {
@@ -188,6 +189,18 @@ mod tests {
         assert_eq!(preview.viewport.scroll, 10);
         assert!(preview.handle_action(Action::Quit) == Some(Action::Quit));
         assert!(shell.handle_action(Action::ScrollFeedDown) == Some(Action::ScrollFeedDown));
+    }
+
+    #[test]
+    fn control_page_keys_leave_a_reference_pane_in_place() {
+        let mut panes = Panes::new();
+        panes.open_view(ViewKind::Reference);
+        assert!(!panes.step_split_view(KeyCode::PageDown + KeyMod::Ctrl));
+        assert!(!panes.step_split_view(KeyCode::PageUp + KeyMod::Ctrl));
+        assert_eq!(panes.list[Panes::SPLIT].view, ViewKind::Reference);
+        let reference = &mut panes.list[Panes::SPLIT];
+        assert!(!reference.handle_key(KeyCode::Left.into()));
+        assert!(!reference.handle_key(KeyCode::Right.into()));
     }
 
     fn views(panes: &Panes) -> Vec<ViewKind> {

@@ -4,6 +4,10 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- `Ctrl+PageUp`, `Ctrl+PageDown`, `Left` and `Right` no longer crash the shell while a documentation or source page is open beside the session; the page stays where it is.
+
 ## [1.3.0] - 2026-11-10
 
 ### Added

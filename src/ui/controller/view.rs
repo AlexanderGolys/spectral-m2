@@ -56,7 +56,12 @@ impl ViewKind {
         Self::SyntaxTree,
     ];
 
-    /// The view `delta` steps away from this one, wrapping around the previews.
+    pub fn is_preview(self) -> bool {
+        Self::PREVIEWS.contains(&self)
+    }
+
+    /// The view `delta` steps away from this one, wrapping around the previews;
+    /// only a preview steps.
     pub fn cycle(self, delta: i8) -> Self {
         cycled(&Self::PREVIEWS, self, delta)
     }
@@ -270,7 +275,7 @@ impl Editor {
     /// highlighted; otherwise it names the view alone.
     fn preview_status(&self, view: ViewKind, focused: bool) -> StatusLineContext {
         let shown: &[ViewKind] = match focused {
-            true if view != ViewKind::Reference => &ViewKind::PREVIEWS,
+            true if view.is_preview() => &ViewKind::PREVIEWS,
             true => &[view],
             false => &[view],
         };
