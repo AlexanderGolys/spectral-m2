@@ -2,6 +2,9 @@
 
 use std::{env, fs, path::PathBuf};
 
+/// Where Cargo asks build scripts to write what they generate.
+const OUT_DIR: &str = "OUT_DIR";
+
 fn main() {
     let path = "src/ui/theme/groups.toml";
     println!("cargo:rerun-if-changed={path}");
@@ -14,7 +17,7 @@ fn main() {
         );
     }
     let names = groups.keys().cloned().collect::<Vec<_>>().join(",\n");
-    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let out = PathBuf::from(env::var_os(OUT_DIR).unwrap());
     fs::write(
         out.join("highlight_groups.rs"),
         format!("highlight_groups! {{ {names} }}"),

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser};
 
 use crate::code::file as code_file;
+use crate::env::BINARY_NAME;
 
 /// Where the rest of the shell is configured, shown beneath the options.
 const INSIDE_THE_SHELL: &str = "Settings, keymaps and themes live inside the shell:\n\
@@ -14,7 +15,7 @@ Ctrl+O opens the settings and Ctrl+/ lists every command.";
 
 /// What the shell is started with.
 #[derive(Debug, Parser)]
-#[command(name = env!("CARGO_BIN_NAME"), version, about, after_help = INSIDE_THE_SHELL)]
+#[command(name = BINARY_NAME, version, about, after_help = INSIDE_THE_SHELL)]
 pub struct Options {
     /// Run the Macaulay2 code in FILE as the session starts, cell by cell
     #[arg(value_name = "FILE", conflicts_with = "resume")]

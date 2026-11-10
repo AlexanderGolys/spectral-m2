@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 #[cfg(not(test))]
-use crate::env::ENV;
+use crate::env::{ENV, PACKAGE_NAME};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -42,7 +42,7 @@ pub trait Persisted: Serialize + DeserializeOwned + Default {
 #[cfg(not(test))]
 pub fn config_file(name: &str) -> Option<PathBuf> {
     let config = ENV.config_home()?;
-    Some(config.join(env!("CARGO_PKG_NAME")).join(name))
+    Some(config.join(PACKAGE_NAME).join(name))
 }
 
 /// Tests have no configuration directory, so a developer's saved settings neither
