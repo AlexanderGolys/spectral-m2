@@ -163,7 +163,7 @@ impl SettingRow for StatusLineSetting {
     fn description(self, _: Settings) -> &'static str {
         match self {
             Self::Position => "where the statusline sits",
-            _ => "0 disables; 1–5 choose L, left centre, centre, right centre, R; shared content follows list order",
+            _ => "0 disables; 1-5 choose L, left centre, centre, right centre, R; shared content follows list order",
         }
     }
 

@@ -126,7 +126,7 @@ fn compact_source(text: &str, width: usize) -> String {
     } else {
         text.chars()
             .take(width.saturating_sub(1))
-            .chain(['…'])
+            .chain(UI.glyphs.ellipsis.current().chars())
             .collect()
     }
 }
@@ -292,8 +292,19 @@ impl SyntaxTreeBlock {
             context: &RenderContext,
             lines: &mut Vec<Row>,
         ) {
-            let branch = if last { "╰─" } else { "├─" };
-            let nested = format!("{prefix}{}", if last { "  " } else { "│ " });
+            let glyphs = UI.glyphs;
+            let branch = if last {
+                glyphs.tree_last_branch
+            } else {
+                glyphs.tree_branch
+            }
+            .current();
+            let trunk = if last {
+                " "
+            } else {
+                glyphs.tree_trunk.current()
+            };
+            let nested = format!("{prefix}{trunk} ");
             match item {
                 TreeItem::Row(entry) => {
                     lines.push(line(
@@ -314,7 +325,14 @@ impl SyntaxTreeBlock {
                     lines.push(line(opening.node, None, prefix, branch, true, context));
                     walk_items(contents, &nested, closing.is_none(), context, lines);
                     if let Some(closing) = closing {
-                        lines.push(line(closing.node, None, &nested, "╰─", true, context));
+                        lines.push(line(
+                            closing.node,
+                            None,
+                            &nested,
+                            glyphs.tree_last_branch.current(),
+                            true,
+                            context,
+                        ));
                     }
                 }
             }
@@ -382,7 +400,7 @@ impl Block for SyntaxTreeBlock {
         let inner_width = area.width - margin;
         let mut rule = |row: u16| {
             Paragraph::new(Line::from(Span::styled(
-                "─".repeat(area.width.into()),
+                UI.glyphs.rule.current().repeat(area.width.into()),
                 groups.syntax_tree_border(),
             )))
             .style(groups.code())

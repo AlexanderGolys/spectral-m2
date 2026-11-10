@@ -2,6 +2,8 @@ use std::fmt::{self, Display, Formatter};
 
 use rand::seq::IteratorRandom;
 
+use crate::ui::glyphs::OPERATOR_HINTS;
+
 /// A randomly selected Macaulay2 editing or language hint.
 #[derive(Clone, Copy)]
 pub struct Hint(&'static str);
@@ -15,8 +17,6 @@ impl Hint {
         "Separately created polynomial rings are not strictly equal",
         "The operator == checks for mathematical equality",
         "Use the postfix (*) to make graded objects",
-        "Use the operator ⧢ for shuffle products",
-        "Use the operator ⊠ for exterior products",
         "Use the operator ** for tensor/monoidal product",
         "Use the operator ^** for tensor/monoidal power",
         "Use the operator ++ for direct sums",
@@ -45,6 +45,7 @@ impl Default for Hint {
         Self(
             Self::ITEMS
                 .iter()
+                .chain(&OPERATOR_HINTS)
                 .copied()
                 .choose(&mut rand::thread_rng())
                 .unwrap_or("Type M2 code..."),

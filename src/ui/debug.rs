@@ -1,5 +1,6 @@
 //! Runtime rendering diagnostics.
 
+use crate::ui::config::UI;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -64,7 +65,10 @@ impl FrameStats {
 
     fn format(current: f64, min: f64, average: f64) -> String {
         let [current, min, average] = [current, min, average].map(|fps| fps.clamp(0.0, 9999.9));
-        format!("FPS {current:6.1} current · {min:6.1} min · {average:6.1} avg / 10s")
+        let separator = UI.glyphs.separator.current();
+        format!(
+            "FPS {current:6.1} current {separator} {min:6.1} min {separator} {average:6.1} avg / 10s"
+        )
     }
 }
 

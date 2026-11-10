@@ -1628,9 +1628,10 @@ impl Editor {
         }
         let sections = self.highlight_debug_sections();
         let title = format!(
-            " {} {} · debug ",
+            " {} {} {} debug ",
             self.settings.appearance.scheme().label(),
-            self.settings.appearance.variant().label()
+            self.settings.appearance.variant().label(),
+            UI.glyphs.separator.current()
         );
         let entry_widths = sections
             .iter()
@@ -1734,7 +1735,10 @@ impl Editor {
             let first = self.highlight_debug_scroll + 1;
             let last = self.highlight_debug_scroll + shown_rows;
             block.title_bottom(Span::styled(
-                format!(" ↑↓ {first}–{last} of {rows} "),
+                format!(
+                    " {} {first}-{last} of {rows} ",
+                    UI.glyphs.vertical_arrows.current()
+                ),
                 scheme().highlight_inspector_title(),
             ))
         } else {
@@ -1780,15 +1784,21 @@ impl Editor {
     /// commands picker's key.
     fn idle_hints(&self) -> Vec<TextSpan> {
         if self.feed.has_selection() {
-            return [("↑↓ ", "move · "), ("y ", "yank · "), ("Esc ", "deselect")]
-                .into_iter()
-                .flat_map(|(key, label)| {
-                    [
-                        TextSpan::new(key, HLGroup::KeymapHint),
-                        TextSpan::new(label, HLGroup::StatuslineHintLabel),
-                    ]
-                })
-                .collect();
+            let separator = UI.glyphs.separator.current();
+            let arrows = UI.glyphs.vertical_arrows.current();
+            return [
+                (format!("{arrows} "), format!("move {separator} ")),
+                ("y ".into(), format!("yank {separator} ")),
+                ("Esc ".into(), "deselect".into()),
+            ]
+            .into_iter()
+            .flat_map(|(key, label)| {
+                [
+                    TextSpan::new(key, HLGroup::KeymapHint),
+                    TextSpan::new(label, HLGroup::StatuslineHintLabel),
+                ]
+            })
+            .collect();
         }
         let settings_key = self
             .keymaps
@@ -1806,7 +1816,10 @@ impl Editor {
                     .unwrap_or_default();
                 let mut hints = vec![
                     TextSpan::new(format!("{commands_key} "), HLGroup::KeymapHint),
-                    TextSpan::new("commands · ", HLGroup::StatuslineHintLabel),
+                    TextSpan::new(
+                        format!("commands {} ", UI.glyphs.separator.current()),
+                        HLGroup::StatuslineHintLabel,
+                    ),
                 ];
                 hints.extend(settings);
                 hints

@@ -36,6 +36,7 @@ mod examples;
 pub use self::examples::highlighted as source_highlights;
 pub use self::examples::ArchivedExample;
 use crate::backend::M2Response;
+use crate::ui::config::UI;
 use crate::ui::theme::groups::Groups;
 
 /// A private prefix supplied by our decorator, never inferred from prose or code.
@@ -78,9 +79,8 @@ const UNCOLOURED_WITHIN: [&str; 3] = ["a", "pre", "sub"];
 /// type's name stays whole beside a long value. Text longer than this may wrap.
 const TABLE_COLUMN_MIN_WIDTH: usize = 24;
 /// What a table too wide to fit draws between the cells it stacks in a row,
-/// and what is drawn in its place.
+/// replaced by the glyphs' dashed rule when drawn.
 const STACKED_CELL_BORDER: char = '/';
-const STACKED_CELL_RULE: &str = "┄";
 
 /// Where a documentation node was written, `Package/file.m2:line:column`: a
 /// location to read, not code.
@@ -597,7 +597,7 @@ fn prose(tagged: &[HtmlLine], index: usize, width: usize) -> Vec<SpanLine> {
     let title_ends = is_title(&tagged[index]) && !tagged.get(index + 1).is_some_and(is_title);
     if title_ends {
         rows.push(vec![TextSpan::new(
-            "─".repeat(width),
+            UI.glyphs.rule.current().repeat(width),
             HLGroup::MarkupHeading1,
         )]);
     }
@@ -612,7 +612,7 @@ fn stacked_cell_rule(line: &HtmlLine, width: usize) -> Option<String> {
     (text.width() == width
         && !border.is_empty()
         && border.chars().all(|ch| ch == STACKED_CELL_BORDER))
-    .then(|| text.replace(STACKED_CELL_BORDER, STACKED_CELL_RULE))
+    .then(|| text.replace(STACKED_CELL_BORDER, UI.glyphs.dashed_rule.current()))
 }
 
 fn fitted_row(line: &HtmlLine, width: usize) -> Vec<SpanLine> {

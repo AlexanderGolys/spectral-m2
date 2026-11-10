@@ -20,8 +20,6 @@ use crate::ui::wrap::{WordWrap, WrapPolicy};
 const SELECTED_MARKER: &str = " > ";
 /// Gutter in front of every other row, as wide as [`SELECTED_MARKER`].
 const MARKER: &str = "   ";
-/// Between the key hints a picker gives the status line.
-const HINT_SEPARATOR: &str = " · ";
 
 /// Input delivered to the selected picker row after command lookup.
 #[derive(Clone, Copy)]
@@ -866,8 +864,12 @@ impl PickerController {
             .into_iter()
             .enumerate()
             .flat_map(|(index, (keys, label))| {
-                let separator = (index > 0)
-                    .then(|| TextSpan::new(HINT_SEPARATOR, HLGroup::StatuslineSeparator));
+                let separator = (index > 0).then(|| {
+                    TextSpan::new(
+                        format!(" {} ", UI.glyphs.separator.current()),
+                        HLGroup::StatuslineSeparator,
+                    )
+                });
                 separator.into_iter().chain([
                     TextSpan::new(format!("{keys} "), HLGroup::KeymapHint),
                     TextSpan::new(label, HLGroup::StatuslineHintLabel),
