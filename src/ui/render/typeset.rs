@@ -11,7 +11,7 @@ use crate::ui::graphics::{self, ratex::Rgb, Pictured, Typesetting};
 use crate::ui::theme::groups::{Groups, HLGroup};
 use crate::ui::wrap::WrappedText;
 
-use super::maths::{self, MathBlock, MathInk, MathStyle};
+use super::maths::{self, MathBlock, MathDisplay, MathInk, MathStyle};
 
 /// What M2 sets between the items of a collection.
 const COLLECTION_TEX_SEPARATOR: &str = r",\,";
@@ -20,6 +20,11 @@ const COLLECTION_SEPARATOR: &str = ", ";
 
 /// The image backend, returning terminal-cell rows for one formula.
 type Picture = fn(Typesetting, Rgb, u16) -> Option<Pictured>;
+
+/// The backend for maths not drawn as pictures, which never typesets one.
+fn unpictured(_: Typesetting, _: Rgb, _: u16) -> Option<Pictured> {
+    None
+}
 
 /// How a piece of TeX was drawn, the least faithful first so that `min` finds the
 /// weakest piece of a value.
@@ -50,8 +55,10 @@ pub struct Drawn {
 }
 
 /// Render each value in its own representation, without converting text into TeX.
+/// Nothing is typeset as a picture unless `style` draws maths as pictures.
 pub fn drawn(value: &M2Value, width: usize, groups: &Groups, style: MathStyle) -> Drawn {
     let picture: Picture = match value {
+        _ if style.display != MathDisplay::Typeset => unpictured,
         M2Value::Tex { .. } => graphics::typeset_alone,
         _ => graphics::typeset,
     };
@@ -72,8 +79,11 @@ pub fn annotation(
     style: MathStyle,
 ) -> Vec<Line<'static>> {
     let ink = Some(groups.style(HLGroup::Type));
-    let block =
-        |part: &M2Value| Block::value(part, width.max(1), groups, style, ink, graphics::typeset);
+    let picture: Picture = match style.display {
+        MathDisplay::Typeset => graphics::typeset,
+        _ => unpictured,
+    };
+    let block = |part: &M2Value| Block::value(part, width.max(1), groups, style, ink, picture);
     let blocks = match formula(parts) {
         Some(formula) => vec![block(&formula)],
         None => parts.iter().map(block).collect(),

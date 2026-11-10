@@ -1466,13 +1466,14 @@ impl ValueRenderer {
         }
     }
 
-    /// `style` set so that the paths that pick a renderer pick this one.
+    /// `style` set so that the paths that pick a renderer pick this one. Pictures
+    /// are never imposed: a value is typeset only while all maths is, so picking
+    /// pictures for one value draws nothing with RaTeX in another maths mode.
     fn imposed(self, style: maths::MathStyle) -> maths::MathStyle {
         let display = match self {
-            Self::Typeset => MathDisplay::Typeset,
             Self::Ascii => MathDisplay::Ascii,
             Self::Unicode => MathDisplay::Unicode,
-            Self::Markup | Self::Plain => style.display,
+            Self::Typeset | Self::Markup | Self::Plain => style.display,
         };
         maths::MathStyle {
             original_text: self == Self::Plain,
@@ -3038,6 +3039,23 @@ mod tests {
         assert_eq!(output[(border + 1, 1)].symbol(), "3");
         assert_eq!(output[(border, 2)].symbol(), "│");
         assert_eq!(output[(border, 3)].symbol(), "╰");
+    }
+
+    #[test]
+    fn a_value_is_typeset_only_while_maths_is_drawn_as_pictures() {
+        let style = |display| RenderContext::new(40, 0).with_display(display).math();
+        for display in [MathDisplay::Unicode, MathDisplay::Ascii] {
+            assert_eq!(
+                ValueRenderer::Typeset.imposed(style(display)).display,
+                display
+            );
+        }
+        assert_eq!(
+            ValueRenderer::Typeset
+                .imposed(style(MathDisplay::Typeset))
+                .display,
+            MathDisplay::Typeset
+        );
     }
 
     #[test]

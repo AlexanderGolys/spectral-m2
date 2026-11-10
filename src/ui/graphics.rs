@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
 use std::thread;
@@ -315,6 +316,13 @@ pub fn send_encoded() -> String {
     gallery().send_encoded(canvas.passthrough)
 }
 
+/// Stop or resume drawing pictures, as maths stops or starts being typeset: while
+/// suspended nothing is rasterised or sent, and the terminal is told to drop every
+/// picture it holds, so another way of drawing maths costs the terminal nothing.
+pub fn suspend(suspended: bool) {
+    gallery().suspended.store(suspended, Ordering::Relaxed);
+}
+
 /// Whether pictures are still being encoded, so their sequences are yet to come.
 pub fn encoding() -> bool {
     !gallery().encoding.is_empty()
@@ -397,6 +405,9 @@ struct Gallery {
     resident: HashMap<ImageId, Resident>,
     jobs: Sender<Encoding>,
     encoded: Receiver<Encoded>,
+    /// Whether maths is drawn some other way than as pictures, shared with the
+    /// worker so that what it has queued is skipped rather than rasterised.
+    suspended: Arc<AtomicBool>,
     /// Pictures on the worker's queue, which are not queued again.
     encoding: HashSet<ImageId>,
     /// Pictures the worker could not encode, which are not tried again.
@@ -440,13 +451,19 @@ struct Encoding {
     raster: Raster,
 }
 
-/// A picture the worker has encoded, none when it could not be.
-type Encoded = (ImageId, Option<Vec<u8>>);
+/// What the worker made of a picture.
+enum Encoded {
+    Png(ImageId, Vec<u8>),
+    /// The picture could not be encoded, so is not tried again.
+    Failed(ImageId),
+    /// Pictures were suspended when the worker came to it, so it was left undrawn.
+    Skipped(ImageId),
+}
 
 /// The worker encoding pictures one at a time, off the thread that draws frames:
-/// the queue to send it pictures on, and the pictures it has encoded, none when a
-/// picture could not be.
-fn encoder() -> (Sender<Encoding>, Receiver<Encoded>) {
+/// the queue to send it pictures on, and what it made of each. A picture reached
+/// while `suspended` holds is skipped.
+fn encoder(suspended: Arc<AtomicBool>) -> (Sender<Encoding>, Receiver<Encoded>) {
     let (jobs, queue) = channel::<Encoding>();
     let (encoded, results) = channel();
     thread::spawn(move || {
@@ -456,7 +473,14 @@ fn encoder() -> (Sender<Encoding>, Receiver<Encoded>) {
             raster,
         } in queue
         {
-            if encoded.send((id, raster.png(&formula.tree))).is_err() {
+            let outcome = match suspended.load(Ordering::Relaxed) {
+                true => Encoded::Skipped(id),
+                false => match raster.png(&formula.tree) {
+                    Some(png) => Encoded::Png(id, png),
+                    None => Encoded::Failed(id),
+                },
+            };
+            if encoded.send(outcome).is_err() {
                 break;
             }
         }
@@ -472,7 +496,8 @@ struct Resident {
 
 impl Default for Gallery {
     fn default() -> Self {
-        let (jobs, encoded) = encoder();
+        let suspended = Arc::new(AtomicBool::new(false));
+        let (jobs, encoded) = encoder(suspended.clone());
         Self {
             formulas: Default::default(),
             images: Default::default(),
@@ -481,6 +506,7 @@ impl Default for Gallery {
             resident: Default::default(),
             jobs,
             encoded,
+            suspended,
             encoding: Default::default(),
             unencodable: Default::default(),
             distances: Default::default(),
@@ -553,11 +579,27 @@ impl Gallery {
     }
 
     /// The sequences sending each picture the worker has finished.
+    /// None are sent while pictures are suspended.
     fn send_encoded(&mut self, passthrough: Passthrough) -> String {
         let mut sequences = String::new();
-        while let Ok((id, png)) = self.encoded.try_recv() {
+        while let Ok(outcome) = self.encoded.try_recv() {
+            let (id, png) = match outcome {
+                Encoded::Png(id, png) => (id, png),
+                Encoded::Failed(id) => {
+                    self.encoding.remove(&id);
+                    self.unencodable.insert(id);
+                    continue;
+                }
+                Encoded::Skipped(id) => {
+                    self.encoding.remove(&id);
+                    continue;
+                }
+            };
             self.encoding.remove(&id);
-            let (Some(png), Some(recipe)) = (png, self.recipes.get(&id)) else {
+            if self.is_suspended() {
+                continue;
+            }
+            let Some(recipe) = self.recipes.get(&id) else {
                 self.unencodable.insert(id);
                 continue;
             };
@@ -573,9 +615,21 @@ impl Gallery {
         sequences
     }
 
+    fn is_suspended(&self) -> bool {
+        self.suspended.load(Ordering::Relaxed)
+    }
+
     fn synchronise(&mut self, shown: &HashSet<ImageId>, passthrough: Passthrough) -> String {
         self.frame += 1;
         let mut sequences = self.send_encoded(passthrough);
+        if self.is_suspended() {
+            for (id, _) in self.resident.drain() {
+                sequences.push_str(&id.deletion(passthrough));
+            }
+            self.resend = false;
+            self.distances.clear();
+            return sequences;
+        }
         if mem::take(&mut self.resend) {
             for (id, _) in self.resident.drain() {
                 if !shown.contains(&id) {
@@ -1091,6 +1145,42 @@ mod tests {
     fn settled(gallery: &mut Gallery, ids: &[ImageId]) -> String {
         settled_near(gallery, ids, &[])
     }
+    #[test]
+    fn suspended_pictures_are_dropped_from_the_terminal_and_never_sent() {
+        let mut gallery = Gallery::default();
+        let held = picture(&mut gallery, "x^2");
+        settled(&mut gallery, &[held]);
+        let fresh = picture(&mut gallery, "y^3");
+        gallery.suspended.store(true, Ordering::Relaxed);
+
+        let dropped = gallery.synchronise(&shown(&[held, fresh]), Passthrough::Direct);
+
+        assert!(dropped.contains(&held.deletion(Passthrough::Direct)));
+        assert!(!dropped.contains("a=T"));
+        assert!(gallery.encoding.is_empty());
+        assert_eq!(gallery.usage().resident, 0);
+    }
+
+    #[test]
+    fn a_picture_queued_before_suspending_is_skipped_not_sent() {
+        let mut gallery = Gallery::default();
+        let id = picture(&mut gallery, "x^2");
+        gallery.synchronise(&shown(&[id]), Passthrough::Direct);
+        gallery.suspended.store(true, Ordering::Relaxed);
+
+        let mut sent = String::new();
+        while !gallery.encoding.is_empty() {
+            thread::sleep(Duration::from_millis(1));
+            sent.push_str(&gallery.send_encoded(Passthrough::Direct));
+        }
+
+        assert_eq!(sent, "");
+        assert!(!gallery.resident.contains_key(&id));
+        assert!(!gallery.unencodable.contains(&id));
+        gallery.suspended.store(false, Ordering::Relaxed);
+        assert!(settled(&mut gallery, &[id]).contains("a=T"));
+    }
+
     #[test]
     fn a_picture_is_queued_for_encoding_when_first_shown_and_sent_once_encoded() {
         let mut gallery = Gallery::default();
