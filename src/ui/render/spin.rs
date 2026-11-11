@@ -13,30 +13,36 @@ use std::time::{Duration, Instant};
 /// an animation reading it would stall or leap when the clock is corrected.
 static EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
 
-/// A looping animation of glyphs, each held for the same span.
+/// A looping animation of glyphs, each held for the same duration.
 ///
 /// Spinners are stateless: every spinner shares one epoch, so two of them with the same
-/// frames turn in step, and asking twice within a span answers the same frame.
+/// frames turn in step, and asking twice within one frame answers the same frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Spinner {
     frames: &'static [&'static str],
-    span: Duration,
+    frame_duration: Duration,
 }
 
 impl Spinner {
-    /// Needs at least one frame and a nonzero span.
-    pub const fn new(frames: &'static [&'static str], span: Duration) -> Self {
+    /// Needs at least one frame and a nonzero frame duration.
+    pub const fn new(frames: &'static [&'static str], frame_duration: Duration) -> Self {
         assert!(!frames.is_empty(), "a spinner needs at least one frame");
-        assert!(!span.is_zero(), "a spinner frame must last some time");
-        Self { frames, span }
+        assert!(
+            !frame_duration.is_zero(),
+            "a spinner frame must last some time"
+        );
+        Self {
+            frames,
+            frame_duration,
+        }
     }
 
     pub fn frames(self) -> &'static [&'static str] {
         self.frames
     }
 
-    pub fn span(self) -> Duration {
-        self.span
+    pub fn frame_duration(self) -> Duration {
+        self.frame_duration
     }
 
     pub fn current_frame(self) -> &'static str {
@@ -45,7 +51,7 @@ impl Spinner {
 
     /// The frame shown `elapsed` after the first, the frames repeating in order.
     pub fn frame_at(self, elapsed: Duration) -> &'static str {
-        let turns = elapsed.as_nanos() / self.span.as_nanos();
+        let turns = elapsed.as_nanos() / self.frame_duration.as_nanos();
         let frame_count = self.frames.len() as u128;
         self.frames[(turns % frame_count) as usize]
     }
@@ -55,13 +61,13 @@ impl Spinner {
 mod tests {
     use super::*;
 
-    const SPAN: Duration = Duration::from_millis(10);
-    const SPINNER: Spinner = Spinner::new(&["a", "b", "c"], SPAN);
+    const FRAME_DURATION: Duration = Duration::from_millis(10);
+    const SPINNER: Spinner = Spinner::new(&["a", "b", "c"], FRAME_DURATION);
 
     #[test]
     fn the_frame_advances_with_the_clock_and_wraps() {
         let frames = SPINNER.frames();
-        let at = |turn: u32| SPINNER.frame_at(SPAN * turn);
+        let at = |turn: u32| SPINNER.frame_at(FRAME_DURATION * turn);
         assert_eq!(at(0), frames[0]);
         assert_eq!(at(1), frames[1]);
         assert_eq!(at(frames.len() as u32), frames[0]);
@@ -69,12 +75,15 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_holds_for_its_whole_span() {
-        let just_before = SPAN - Duration::from_nanos(1);
+    fn a_frame_holds_for_its_whole_duration() {
+        let just_before = FRAME_DURATION - Duration::from_nanos(1);
         assert_eq!(
             SPINNER.frame_at(Duration::ZERO),
             SPINNER.frame_at(just_before)
         );
-        assert_ne!(SPINNER.frame_at(just_before), SPINNER.frame_at(SPAN));
+        assert_ne!(
+            SPINNER.frame_at(just_before),
+            SPINNER.frame_at(FRAME_DURATION)
+        );
     }
 }
