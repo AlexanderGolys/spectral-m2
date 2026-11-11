@@ -1299,9 +1299,7 @@ mod tests {
         };
         let before = marker(&target);
 
-        std::thread::sleep(std::time::Duration::from_millis(
-            UI.spinner.frame_ms * 3 / 2,
-        ));
+        std::thread::sleep(UI.spinner.active().span() * 3 / 2);
         feed.on_event(&Ticked);
         feed.render(&context, area, &mut target, Style::default());
 

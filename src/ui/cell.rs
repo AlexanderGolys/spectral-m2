@@ -27,7 +27,6 @@ use super::item::{Item, ItemKind};
 use super::present;
 use super::render::maths::MathDisplay;
 use super::render::selection::Inclusions;
-use super::render::spin::busy_frame;
 use super::render::{markup, maths, typeset};
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::wrap::WrappedText;
@@ -191,7 +190,10 @@ impl CellMarker {
                     CellState::Value | CellState::Muted | CellState::Null => groups.cell_number(),
                 },
             ),
-            Self::Pending => (busy_frame().into(), groups.pending_cell_marker()),
+            Self::Pending => (
+                UI.spinner.active().current_frame().into(),
+                groups.pending_cell_marker(),
+            ),
             Self::Queued => (
                 UI.glyphs.unevaluated_cell.current().into(),
                 groups.queued_cell_marker(),

@@ -1,22 +1,24 @@
 //! Compile-time presentation configuration for the complete interface.
 
-use crate::ui::glyphs::{Glyphs, GLYPHS};
+use std::time::Duration;
 
-/// Frames and cadence of the pending-cell spinner.
-#[derive(Clone, Copy)]
+use crate::ui::glyphs::{Glyphs, GLYPHS};
+use crate::ui::render::spin::Spinner;
+
+/// The pending-cell spinner, with its fallback for terminals without rich glyphs.
+#[derive(Clone, Copy, Debug)]
 pub struct SpinnerConfig {
-    pub frames: &'static [&'static str],
-    pub basic_frames: &'static [&'static str],
-    pub frame_ms: u64,
+    pub rich: Spinner,
+    pub basic: Spinner,
 }
 
 impl SpinnerConfig {
-    /// Spinner symbols chosen for the terminal.
-    pub fn active_frames(self) -> &'static [&'static str] {
+    /// The spinner chosen for the terminal.
+    pub fn active(self) -> Spinner {
         if Glyphs::basic_terminal() {
-            self.basic_frames
+            self.basic
         } else {
-            self.frames
+            self.rich
         }
     }
 }
@@ -109,10 +111,12 @@ pub const UI: UiConfig = UiConfig {
     glyphs: GLYPHS,
 
     spinner: SpinnerConfig {
-        frames: &["󰋙 ", "󰫃 ", "󰫄 ", "󰫅 ", "󰫆 ", "󰫇 ", "󰫈 ", "󰋘 ", " "],
-        // frames: &["", "", "", "", "", ""],
-        basic_frames: &["<", "^", ">", "v"],
-        frame_ms: 80,
+        rich: Spinner::new(
+            &["󰋙 ", "󰫃 ", "󰫄 ", "󰫅 ", "󰫆 ", "󰫇 ", "󰫈 ", "󰋘 ", " "],
+            // &["", "", "", "", "", ""],
+            Duration::from_millis(80),
+        ),
+        basic: Spinner::new(&["<", "^", ">", "v"], Duration::from_millis(80)),
     },
 
     typing_prompt_ms: 200,
@@ -176,9 +180,7 @@ mod tests {
 
     #[test]
     fn basic_spinner_frames_fit_one_cell() {
-        assert!(!UI.spinner.frames.is_empty());
-        assert!(!UI.spinner.basic_frames.is_empty());
-        assert!(UI.spinner.basic_frames.iter().all(|frame| {
+        assert!(UI.spinner.basic.frames().iter().all(|frame| {
             UnicodeWidthStr::width(*frame) == 1 && UnicodeWidthStr::width_cjk(*frame) == 1
         }));
     }
