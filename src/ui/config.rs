@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use crate::spinner_frames;
 use crate::ui::glyphs::{Glyphs, GLYPHS};
 use crate::ui::render::spin::Spinner;
 
@@ -112,11 +113,14 @@ pub const UI: UiConfig = UiConfig {
 
     spinner: SpinnerConfig {
         rich: Spinner::new(
-            &["󰋙 ", "󰫃 ", "󰫄 ", "󰫅 ", "󰫆 ", "󰫇 ", "󰫈 ", "󰋘 ", " "],
-            // &["", "", "", "", "", ""],
+            spinner_frames![PendingCellMarker: "󰋙 ", "󰫃 ", "󰫄 ", "󰫅 ", "󰫆 ", "󰫇 ", "󰫈 ", "󰋘 ", " "],
+            // spinner_frames![PendingCellMarker: "", "", "", "", "", ""],
             Duration::from_millis(80),
         ),
-        basic: Spinner::new(&["<", "^", ">", "v"], Duration::from_millis(80)),
+        basic: Spinner::new(
+            spinner_frames![PendingCellMarker: "<", "^", ">", "v"],
+            Duration::from_millis(80),
+        ),
     },
 
     typing_prompt_ms: 200,
@@ -181,7 +185,8 @@ mod tests {
     #[test]
     fn basic_spinner_frames_fit_one_cell() {
         assert!(UI.spinner.basic.frames().iter().all(|frame| {
-            UnicodeWidthStr::width(*frame) == 1 && UnicodeWidthStr::width_cjk(*frame) == 1
+            UnicodeWidthStr::width(frame.content) == 1
+                && UnicodeWidthStr::width_cjk(frame.content) == 1
         }));
     }
 }

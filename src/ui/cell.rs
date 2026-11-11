@@ -190,10 +190,10 @@ impl CellMarker {
                     CellState::Value | CellState::Muted | CellState::Null => groups.cell_number(),
                 },
             ),
-            Self::Pending => (
-                UI.spinner.active().current_frame().into(),
-                groups.pending_cell_marker(),
-            ),
+            Self::Pending => {
+                let frame = UI.spinner.active().current_frame();
+                (frame.content.into(), frame.style(groups))
+            }
             Self::Queued => (
                 UI.glyphs.unevaluated_cell.current().into(),
                 groups.queued_cell_marker(),
