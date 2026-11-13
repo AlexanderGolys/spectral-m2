@@ -1754,7 +1754,7 @@ impl OutputBlock {
             }
             match preview.as_ref() {
                 Some(value) if style.display == MathDisplay::Typeset => {
-                    let drawn = typeset::drawn(value, cell.ty.as_deref(), width, theme, style);
+                    let drawn = typeset::drawn(value, width, theme, style);
                     links = drawn.links;
                     drawn.lines
                 }

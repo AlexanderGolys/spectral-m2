@@ -70,6 +70,13 @@ Other types use a bounded fold of their expression components. Set `Array.typeDe
 
 An explicit `specType'(depth, value)` overrides the configured depth: `specType'(2, [1, 1.])` expands one layer to `Array[ZZ, RR]`; `specType'(3, [[1, 1.], ["a"]])` gives `Array[Array[ZZ, RR], Array[String]]`. Repeated components remain present at explicitly requested depths. Install `specType'` for `(ZZ, YourType)` to customize which parameters a type exposes.
 
+A type's `typeset` setting chooses whether its values are set as typeset maths. The nearest setting in the type's ancestry applies, and everything inside a typeset part is typeset with it. `Thing.typeset` is `false`; `RingElement`, `Ring`, `Module`, `Matrix` and the expressions `Divide`, `Power`, `Subscript` and `MatrixExpression` are `true`. Turn it on for a type of your own, or off for one you prefer as text:
+
+```m2
+Pair.typeset = true;     -- draw pairs as typeset maths
+Ring.typeset = false;    -- spell rings such as QQ as text
+```
+
 ### How deep values unfold
 
 A value is drawn from its `expression`, and unfolding stops at names: a ring, module or variety bound to a symbol is shown by that symbol. Unnamed structures inside a value, such as the quotient ring of a resolution computed from `coker vars (S/I)`, are unfolded only up to the nearest `valueDepth` setting in the value's type ancestry. Past that depth they keep a conventional placeholder: `R` for a ring, `I` for an ideal, `M` for a module, `X` for a variety, `F` for a sheaf and `C` for a complex. `Thing.valueDepth = 1` spells out the outer value and shows the structures it is built over by placeholder. Ring elements, numbers and the items of lists are always drawn in full.

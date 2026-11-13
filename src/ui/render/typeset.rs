@@ -22,9 +22,6 @@ pub struct Drawn {
 
 type Picture = fn(Typesetting, Rgb, u16) -> Option<Pictured>;
 
-/// M2's class of a value that is nothing but a name, spelled as terminal text.
-const NAME_CLASS: &str = "Symbol";
-
 fn paint(text: String, kind: HLGroup, groups: Option<&Groups>) -> String {
     match groups.and_then(|groups| groups.style(kind).fg) {
         Some(Color::Rgb(r, g, b)) => format!(r"{{\color{{#{r:02x}{g:02x}{b:02x}}}{text}}}"),
@@ -193,17 +190,8 @@ fn draw(
     picture: Picture,
 ) -> Drawn {
     let width = width.max(1);
-    let math = Math::from_spec_net(value, style);
-    if value.html.is_none()
-        && !has_links(value)
-        && !matches!(
-            math,
-            Math::Atom {
-                kind: HLGroup::Package,
-                ..
-            }
-        )
-    {
+    if value.wants_typesetting() && value.html.is_none() && !has_links(value) {
+        let math = Math::from_spec_net(&typewritten_where_unmarked(value), style);
         let layout_groups = groups.map_styles(|_, mut style| {
             style.fg = None;
             style
@@ -246,6 +234,25 @@ fn draw(
         .map(|row| Line::from(row.spans(groups)))
         .collect();
     Drawn { lines, links }
+}
+
+/// `value` with each text M2 did not ask to typeset, which a picture holds only
+/// for sitting beside what it did, spelled in a typewriter face as the text it is.
+fn typewritten_where_unmarked(value: &SpecNet) -> SpecNet {
+    let mut value = value.clone();
+    match &value.text {
+        Some(text) if !value.typeset && value.tex.is_none() => {
+            value.tex = Some(maths::typewriter(text));
+        }
+        _ => {
+            value.children = value
+                .children
+                .iter()
+                .map(typewritten_where_unmarked)
+                .collect();
+        }
+    }
+    value
 }
 
 fn has_links(value: &SpecNet) -> bool {
@@ -306,40 +313,10 @@ pub fn tex_preview(source: &str, width: usize, groups: &Groups, style: MathStyle
     }
 }
 
-/// Draw the supplied expression directly, without classifying formatted text.
-/// `value_class` is the class of the value itself, which its expression's
-/// classes do not show: a ring variable and a bare symbol share one tree.
-pub fn drawn(
-    value: &SpecNet,
-    value_class: Option<&str>,
-    width: usize,
-    groups: &Groups,
-    style: MathStyle,
-) -> Drawn {
-    drawn_with(
-        value,
-        value_class,
-        width,
-        groups,
-        style,
-        graphics::typeset_alone,
-    )
-}
-
-fn drawn_with(
-    value: &SpecNet,
-    value_class: Option<&str>,
-    width: usize,
-    groups: &Groups,
-    style: MathStyle,
-    picture: Picture,
-) -> Drawn {
-    let picture: Picture = if value_class == Some(NAME_CLASS) {
-        |_, _, _| None
-    } else {
-        picture
-    };
-    draw(value, width, groups, style, picture)
+/// Draw the supplied expression directly, without classifying formatted text: as a
+/// picture when M2 asks for some part of it to be typeset, else as terminal text.
+pub fn drawn(value: &SpecNet, width: usize, groups: &Groups, style: MathStyle) -> Drawn {
+    draw(value, width, groups, style, graphics::typeset_alone)
 }
 
 /// Render the type method's output with each component's supplied highlight class.
@@ -620,7 +597,7 @@ mod tests {
                 baseline: 0,
             })
         };
-        let symbol = SpecNet::leaf("Symbol", "sss");
+        let symbol = SpecNet::leaf("Symbol", "sss").typeset();
         for sibling in [SpecNet::leaf("String", "1"), SpecNet::leaf("ZZ", "1")] {
             let value = SpecNet::branch("Sequence", vec![symbol.clone(), sibling]);
             let drawing = draw(
@@ -654,11 +631,13 @@ mod tests {
                     SpecNet::leaf("ZZ", "1"),
                 ],
             )],
-        );
+        )
+        .typeset();
         let sum = SpecNet::branch(
             "Sum",
             vec![SpecNet::leaf("Symbol", "a"), SpecNet::leaf("Symbol", "b")],
-        );
+        )
+        .typeset();
         let whole: Picture = |formula, _, _| {
             assert_eq!(formula.slicing, Slicing::Whole);
             Some(Pictured {
@@ -681,29 +660,32 @@ mod tests {
     }
 
     #[test]
-    fn bare_symbols_are_names_while_ring_variables_stay_typeset() {
+    fn values_m2_does_not_ask_to_typeset_are_terminal_text() {
         let symbol = SpecNet::leaf("Symbol", "sss");
-        let groups = Groups::default();
-        let drawn = drawn_with(
-            &symbol,
-            Some(NAME_CLASS),
-            80,
-            &groups,
-            MathStyle::default(),
-            |_, _, _| panic!("a bare symbol should render as terminal text"),
+        let packages = SpecNet::branch(
+            "List",
+            vec![SpecNet::leaf("Package", "Core"), symbol.clone()],
         );
-        let text = drawn
-            .lines
-            .iter()
-            .flat_map(|line| &line.spans)
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-        assert_eq!(text, "sss");
-        let typeset = drawn_with(
-            &symbol,
-            Some("R"),
+        for value in [&symbol, &packages] {
+            let drawn = draw(
+                value,
+                80,
+                &Groups::default(),
+                MathStyle::default(),
+                |_, _, _| panic!("nothing asked to be typeset"),
+            );
+            let text = drawn
+                .lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            assert!(text.contains("sss"), "{text}");
+        }
+        let typeset = draw(
+            &symbol.typeset(),
             80,
-            &groups,
+            &Groups::default(),
             MathStyle::default(),
             |_, _, _| {
                 Some(Pictured {
@@ -715,12 +697,47 @@ mod tests {
         assert_eq!(typeset.lines, vec![Line::raw("typeset")]);
     }
 
+    /// What sits in a picture only beside what M2 asked to typeset keeps a
+    /// typewriter face, never a maths or serif one, whatever its role's slant.
+    #[test]
+    fn untypeset_parts_of_a_picture_are_typewriter_text() {
+        let value = SpecNet::branch(
+            "List",
+            vec![
+                SpecNet::branch(
+                    "Power",
+                    vec![SpecNet::leaf("Symbol", "x"), SpecNet::leaf("ZZ", "2")],
+                )
+                .typeset(),
+                SpecNet::leaf("Symbol", "name"),
+                SpecNet::leaf("Package", "Core"),
+            ],
+        );
+        let groups = Groups {
+            Package: Style::default().add_modifier(Modifier::ITALIC),
+            ..Groups::default()
+        };
+        let picture: Picture = |formula, _, _| {
+            assert!(formula.tex.contains(r"\mathit{x}"), "{}", formula.tex);
+            assert!(formula.tex.contains(r"\texttt{name}"), "{}", formula.tex);
+            assert!(formula.tex.contains(r"\texttt{Core}"), "{}", formula.tex);
+            assert!(!formula.tex.contains(r"\textit"), "{}", formula.tex);
+            Some(Pictured {
+                lines: vec![Line::raw("picture")],
+                baseline: 0,
+            })
+        };
+        let drawing = draw(&value, 80, &groups, MathStyle::default(), picture);
+        assert_eq!(drawing.lines, vec![Line::raw("picture")]);
+    }
+
     #[test]
     fn picture_colours_are_taken_from_component_classes() {
         let value = SpecNet::branch(
             "Power",
             vec![SpecNet::leaf("String", "a"), SpecNet::leaf("Symbol", "a")],
-        );
+        )
+        .typeset();
         let picture: Picture = |formula, _, _| {
             assert!(formula.tex.contains(r"\texttt{a}"));
             assert!(formula.tex.contains(r"\mathit{a}"));

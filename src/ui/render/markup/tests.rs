@@ -508,7 +508,10 @@ fn a_column_of_code_takes_only_the_width_its_code_needs() {
         .unwrap_or_else(|| panic!("the command is drawn: {rows:?}"));
     assert!(row.ends_with(comment), "{rows:?}");
     let groups = groups_of(&html, width);
-    assert_ne!(group_of(&groups, "headlines"), group_of(&groups, "\"Yoneda\""));
+    assert_ne!(
+        group_of(&groups, "headlines"),
+        group_of(&groups, "\"Yoneda\"")
+    );
 }
 
 fn drawn(html: &str, width: u16) -> Vec<String> {

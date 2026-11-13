@@ -24,6 +24,7 @@ export {
 	"AlignedExpression",
 	"typeDepth",
 	"valueDepth",
+	"typeset",
 	"specNet'"
 }
 
@@ -64,6 +65,8 @@ placeholder = method(Dispatch => Thing)
 parameters = method(Dispatch => Thing, TypicalValue => List)
 spelledShape = method()
 optionKey = method(Dispatch => Thing, TypicalValue => SpecNet)
+typesetting = method(TypicalValue => Boolean)
+typesetMarked = method(TypicalValue => SpecNet)
 
 Thing.typeDepth = 1
 Module.typeDepth = 2
@@ -74,6 +77,35 @@ SheafMap.typeDepth = 3
 Thing.valueDepth = 1
 -- A complex shows its modules and differentials rather than only their names.
 Complex.valueDepth = 2
+
+-- Whether a drawing is set as typeset maths: values of a mathematical type,
+-- and the shapes only typesetting draws well. Whatever such a drawing holds
+-- is typeset with it; anything typeset only to sit beside it, a name or a
+-- string in the same list, keeps a typewriter face.
+Thing.typeset = false
+scan({RingElement, Ring, RingFamily, Ideal, Module, Matrix, RingMap, Complex,
+	ComplexMap, Variety, SheafOfRings, CoherentSheaf, SheafMap, Divide, Power,
+	Superscript, Subscript, MatrixExpression, VectorExpression, MapExpression,
+	UnderExpression}, type -> type.typeset = true)
+
+-- The nearest typeset setting in the ancestry of `type`.
+typesetting Type := type -> (
+	owner := first select(ancestors type, ancestor -> ancestor#?typeset);
+	if not instance(owner.typeset, Boolean) then
+		error "typeset must be true or false";
+	owner.typeset
+)
+typesetting Thing := x -> false
+
+-- Mark each part of a drawing whether it is typeset: by its own class or the
+-- class of the value it stands for, or for being part of a typeset drawing.
+typesetMarked (SpecNet, Boolean) := (drawn, within) -> (
+	marked := within or typesetting drawn.Classes or typesetting valueClass drawn;
+	drawn ++ {
+		Typeset => marked,
+		Children => apply(drawn.Children, child -> typesetMarked(child, marked))
+	}
+)
 
 -- The nearest setting of `depth` in the ancestry of x's class.
 configuredDepth (Symbol, Thing) := (depth, x) -> (
@@ -441,11 +473,11 @@ scan({Ideal, Module, Complex, Matrix, SheafOfRings, CoherentSheaf, SheafMap}, ty
 		))
 
 -- Presentation metadata is attached only at the transport boundary.
-drawnAs = x -> try specNet x ++ {
+drawnAs = x -> try typesetMarked(specNet x, false) ++ {
 	Fallback => (try toString net x),
 	Code => (try toString x)
 } else opaque x
-typedAs = x -> try specType x else opaque class x
+typedAs = x -> try typesetMarked(specType x, false) else opaque class x
 
 speek' (ZZ, Thing) := (depth, x) -> speek'(depth, specNet x)
 speek' (ZZ, SpecNet) := Option => (depth, drawn) -> valueClass drawn => (
@@ -558,6 +590,22 @@ Node
       further level substitutes one more name.
       Thing.valueDepth is 1 and Complex.valueDepth is 2. Explicit specNet'
       calls use their supplied depth.
+Node
+  Key
+    typeset
+  Headline
+    choose which values are set as typeset maths
+  Description
+    Text
+      Assign true or false to a type's typeset field. A value is drawn as a
+      typeset picture only when some part of it is typeset: a part whose class,
+      or the class of the value it stands for, has the nearest typeset setting
+      true. Everything inside a typeset part is typeset with it; the rest of
+      the value is drawn in the picture in a typewriter face, or, when no part
+      is typeset, as text.
+      Thing.typeset is false; mathematical types such as RingElement, Ring,
+      Module and Matrix, and the expressions Divide, Power, Subscript and
+      MatrixExpression, are true.
 Node
   Key
     typeDepth

@@ -31,6 +31,8 @@ pub struct SpecNet {
     pub example_width: usize,
     /// Names resolved by M2 as types in this documentation page's environment.
     pub type_names: Vec<String>,
+    /// Whether M2 asks for this part to be set as typeset maths.
+    pub typeset: bool,
 }
 
 impl Default for SpecNet {
@@ -47,6 +49,7 @@ impl Default for SpecNet {
             html: None,
             example_width: 0,
             type_names: Vec::new(),
+            typeset: false,
         }
     }
 }
@@ -67,6 +70,8 @@ struct NodeData {
     example_width: usize,
     #[serde(default)]
     type_names: Vec<String>,
+    #[serde(default)]
+    typeset: bool,
 }
 
 impl TryFrom<NodeData> for SpecNet {
@@ -91,6 +96,7 @@ impl TryFrom<NodeData> for SpecNet {
             html: node.html,
             example_width: node.example_width,
             type_names: node.type_names,
+            typeset: node.typeset,
         })
     }
 }
@@ -112,6 +118,20 @@ impl SpecNet {
             children,
             ..Self::default()
         }
+    }
+
+    /// Whether M2 asks for any part of this to be set as typeset maths.
+    pub fn wants_typesetting(&self) -> bool {
+        self.typeset || self.children.iter().any(Self::wants_typesetting)
+    }
+
+    /// The same drawing with this part and everything in it marked typeset, as M2
+    /// marks what a typeset part holds.
+    #[cfg(test)]
+    pub fn typeset(mut self) -> Self {
+        self.typeset = true;
+        self.children = self.children.into_iter().map(Self::typeset).collect();
+        self
     }
 
     /// Whether the node belongs to an M2 class, including through inheritance.
