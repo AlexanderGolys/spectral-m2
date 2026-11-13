@@ -35,9 +35,9 @@ use crate::ui::config::UI;
 use crate::ui::graphics::kitty::PLACEHOLDER;
 use crate::ui::key::KeyEvent;
 use crate::ui::render::{Highlights, Prompt, RenderContext};
+use crate::ui::settings::editor::EditorSettings;
 #[cfg(test)]
 use crate::ui::settings::keymap::Keymaps;
-use crate::ui::settings::layout::LayoutSettings;
 use crate::ui::text_object::{Bracket, CharClass};
 use crate::ui::wrap::{offset_at_column, CaretWrap, TextLayout, WrapPolicy};
 
@@ -683,7 +683,7 @@ pub struct InputCode {
     /// The revision and cursor the completion was offered for; once either
     /// moves it no longer applies.
     completed_for: Option<(u64, usize)>,
-    settings: LayoutSettings,
+    settings: EditorSettings,
     diagnostic: Option<String>,
     diagnostic_range: Option<Range<usize>>,
     /// What the language server found in the input as it last saw it.
@@ -728,7 +728,7 @@ impl InputCode {
             hint: Hint::default(),
             completion: None,
             completed_for: None,
-            settings: LayoutSettings::default(),
+            settings: EditorSettings::default(),
             diagnostic: None,
             diagnostic_range: None,
             findings: Vec::new(),
@@ -784,12 +784,12 @@ impl InputCode {
 
     /// Return the component's adjustable layout policy.
     #[cfg(test)]
-    pub const fn settings(&self) -> LayoutSettings {
+    pub const fn settings(&self) -> EditorSettings {
         self.settings
     }
 
     /// Replace the component's adjustable layout policy.
-    pub fn set_settings(&mut self, settings: LayoutSettings) {
+    pub fn set_settings(&mut self, settings: EditorSettings) {
         self.settings = settings;
     }
 
@@ -820,6 +820,9 @@ impl InputCode {
     fn current_findings(&self) -> impl Iterator<Item = &Finding> {
         let text = self.field.text();
         self.findings.iter().filter(move |finding| {
+            if !self.settings.diagnostics {
+                return false;
+            }
             finding.range.end <= text.len()
                 && text.is_char_boundary(finding.range.start)
                 && text.is_char_boundary(finding.range.end)
@@ -1110,7 +1113,7 @@ impl InputCode {
             hint: Hint::default(),
             completion: None,
             completed_for: None,
-            settings: LayoutSettings::default(),
+            settings: EditorSettings::default(),
             diagnostic: None,
             diagnostic_range: None,
             findings: Vec::new(),
@@ -1505,6 +1508,19 @@ mod tests {
     use crate::ui::key::KeyMod::{self, Alt, Ctrl, Shift};
     use crate::ui::theme::groups::Groups;
     use ratatui::style::Modifier;
+
+    #[test]
+    fn disabling_automatic_diagnostics_preserves_input_height() {
+        let mut input = InputCode::new();
+        input.settings.diagnostics = false;
+        input.insert("fixture");
+        let height = input.height(80, 3, 30);
+        input.set_findings(vec![finding(0..7, Severity::Error, "unresolved fixture")]);
+        assert!(input.shown_diagnostic().is_none());
+        assert_eq!(input.height(80, 3, 30), height);
+        input.settings.diagnostics = true;
+        assert!(input.shown_diagnostic().is_some());
+    }
 
     #[test]
     fn editor_owns_modified_newlines_and_tabs() {
@@ -2069,6 +2085,7 @@ mod tests {
     #[test]
     fn server_findings_underline_their_range_and_tell_the_one_under_the_cursor() {
         let mut input = InputCode::new_in_memory();
+        input.settings.diagnostics = true;
         input.field_mut().insert_str("abcd");
         input.set_findings(vec![
             finding(0..1, Severity::Hint, "a hint"),

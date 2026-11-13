@@ -905,6 +905,16 @@ impl PickerController {
                 _ => {}
             }
         }
+        let input = match input {
+            PickerInput::Key(key)
+                if self.mode == PickerMode::Settings
+                    && key.code == KeyCode::Char(' ')
+                    && key.is_text() =>
+            {
+                PickerInput::Key(KeyEvent::from(KeyCode::Right))
+            }
+            input => input,
+        };
         let (handled, event) = self.picker.handle(input);
         if handled {
             return event;
@@ -963,6 +973,24 @@ mod tests {
             controller.handle_key(KeyCode::Esc.into()),
             Some(EditorEvent::ClosePickers)
         ));
+    }
+
+    #[test]
+    fn space_steps_settings_and_tabs_like_the_right_arrow() {
+        let controller = || PickerController {
+            mode: PickerMode::Settings,
+            picker: tabbed(false),
+        };
+        let mut space = controller();
+        let mut right = controller();
+        for code in [KeyCode::Char(' '), KeyCode::Up, KeyCode::Char(' ')] {
+            space.handle_key(code.into());
+            right.handle_key(match code {
+                KeyCode::Char(' ') => KeyCode::Right.into(),
+                code => code.into(),
+            });
+            assert_eq!(rendered(&space.picker, 60), rendered(&right.picker, 60));
+        }
     }
 
     /// A mutable row used to exercise the picker trait boundary.

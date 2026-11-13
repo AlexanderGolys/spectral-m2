@@ -384,13 +384,13 @@ impl VariantIndex {
 /// A selected scheme variant and its terminal-background treatment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "StoredAppearance", into = "StoredAppearance")]
-pub struct Appearance {
+pub struct AppearanceSettings {
     scheme: SchemeIndex,
     variant: VariantIndex,
     pub transparent_background: bool,
 }
 
-impl Default for Appearance {
+impl Default for AppearanceSettings {
     fn default() -> Self {
         let scheme = SCHEMES
             .iter()
@@ -409,11 +409,11 @@ impl Default for Appearance {
     }
 }
 
-impl Persisted for Appearance {
+impl Persisted for AppearanceSettings {
     const FILE: &'static str = "appearance.json";
 }
 
-impl Appearance {
+impl AppearanceSettings {
     pub fn scheme(self) -> &'static Scheme {
         &SCHEMES[self.scheme.get()]
     }
@@ -550,8 +550,8 @@ struct StoredAppearance {
     transparent_background: bool,
 }
 
-impl From<Appearance> for StoredAppearance {
-    fn from(appearance: Appearance) -> Self {
+impl From<AppearanceSettings> for StoredAppearance {
+    fn from(appearance: AppearanceSettings) -> Self {
         Self {
             scheme: appearance.scheme().label().into(),
             variant: appearance.variant().label().into(),
@@ -561,7 +561,7 @@ impl From<Appearance> for StoredAppearance {
     }
 }
 
-impl TryFrom<StoredAppearance> for Appearance {
+impl TryFrom<StoredAppearance> for AppearanceSettings {
     type Error = String;
 
     /// The appearance a stored one names, unless its scheme or variant is gone.
@@ -671,16 +671,18 @@ mod tests {
             "spectral-m2-appearance-{}-{nonce}.json",
             std::process::id()
         ));
-        let appearance = Appearance::default().cycle_theme(1).cycle_background();
+        let appearance = AppearanceSettings::default()
+            .cycle_theme(1)
+            .cycle_background();
         appearance.write(&path).unwrap();
 
-        assert_eq!(Appearance::read(&path), Some(appearance));
+        assert_eq!(AppearanceSettings::read(&path), Some(appearance));
         let _ = fs::remove_file(path);
     }
 
     #[test]
     fn transparent_background_only_clears_the_canvas() {
-        let opaque = Appearance::default();
+        let opaque = AppearanceSettings::default();
         let transparent = opaque.cycle_background();
         let groups = opaque.groups();
 

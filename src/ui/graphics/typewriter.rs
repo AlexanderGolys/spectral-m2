@@ -7,7 +7,8 @@ use std::sync::LazyLock;
 
 use crate::env::ENV;
 use fontdb::{Database, Family, Query};
-use ttf_parser::{Face, OutlineBuilder};
+use rustybuzz::{shape, Face as ShapingFace, UnicodeBuffer};
+use ttf_parser::{Face, GlyphId, OutlineBuilder};
 
 /// Where each terminal that shows pictures keeps its configuration, under the
 /// configuration directory, and the key naming its font there.
@@ -48,34 +49,45 @@ impl TerminalFont {
         Some(Self { data, index })
     }
 
-    /// SVG path data for `character` with its baseline origin at (`x`, `y`) and
-    /// `em` units to the em, centred in a cell `advance` ems wide and shrunk
-    /// evenly when its own advance is wider, so it keeps its shape; none when
-    /// the font has no outline for it.
-    pub fn outline(
-        &self,
-        character: char,
-        x: f64,
-        y: f64,
-        em: f64,
-        advance: f64,
-    ) -> Option<String> {
+    /// Shape `text` with the font's ligatures and draw its outlines within the
+    /// typesetter's `advance` ems, preserving the run's baseline and allocation.
+    pub fn outline(&self, text: &str, x: f64, y: f64, em: f64, advance: f64) -> Option<String> {
         let face = Face::parse(&self.data, self.index).ok()?;
-        let glyph = face.glyph_index(character)?;
+        let shaping_face = ShapingFace::from_slice(&self.data, self.index)?;
+        let mut buffer = UnicodeBuffer::new();
+        buffer.push_str(text);
+        buffer.guess_segment_properties();
+        let shaped = shape(&shaping_face, &[], buffer);
+        if shaped.glyph_infos().iter().any(|glyph| glyph.glyph_id == 0) {
+            return None;
+        }
         let natural = em / f64::from(face.units_per_em());
-        let own = face
-            .glyph_hor_advance(glyph)
-            .filter(|&own| own > 0)
-            .map(f64::from);
+        let own: f64 = shaped
+            .glyph_positions()
+            .iter()
+            .map(|position| f64::from(position.x_advance))
+            .sum();
         let cell = em * advance;
-        let scale = own.map_or(natural, |own| natural.min(cell / own));
-        let inset = own.map_or(0.0, |own| (cell - own * scale) / 2.0);
+        let scale = if own > 0.0 {
+            natural.min(cell / own)
+        } else {
+            natural
+        };
+        let inset = (cell - own * scale) / 2.0;
         let mut path = SvgPath {
             data: String::new(),
             origin: (x + inset, y),
             scale,
         };
-        face.outline_glyph(glyph, &mut path)?;
+        let mut offset = 0.0;
+        for (glyph, position) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
+            path.origin = (
+                x + inset + (offset + f64::from(position.x_offset)) * scale,
+                y - f64::from(position.y_offset) * scale,
+            );
+            face.outline_glyph(GlyphId(u16::try_from(glyph.glyph_id).ok()?), &mut path);
+            offset += f64::from(position.x_advance);
+        }
         Some(path.data)
     }
 }

@@ -124,28 +124,31 @@ Attribute = { fg = "purple" }
 Bg0 = { bg = "bg0" }
 Bg1 = { bg = "bg_dim" }
 Bg2 = { bg = "bg1" }
-Bg3 = { bg = "bg_visual" }
-Bg4 = { bg = "bg2" }
+Bg3 = { bg = "bg2" }
+Bg4 = { bg = "bg3" }
 Boolean = { fg = "purple" }
 Builtin = { fg = "purple" }
-Comment = { fg = "grey1", italic = true }
+Comment = { fg = "grey2", italic = true }
 CompiledFunction = { fg = "green" }
 Conditional = { fg = "red" }
 Constant = { fg = "purple" }
 Debug = { fg = "orange" }
 Delimiter = { fg = "grey1" }
-Documentation = { fg = "fg" }
+Documentation = { fg = "grey1" }
+
 EnumVariant = { fg = "blue" }
+
 Error = { fg = "red" }
 ErrorMessage = { fg = "red" }
 ErrorTitle = { fg = "red", bold = true }
 Exception = { fg = "red" }
+
 Faint = { fg = "grey0" }
 Float = { fg = "purple" }
 Function = { fg = "green" }
 Hint = { fg = "green" }
 Info = { fg = "blue" }
-Installation = { fg = "green" , italic=true}
+Installation = { fg = "green"}
 KeymapActionLabel = { fg = "fg" }
 Keyword = { fg = "red" }
 Macro = { fg = "green" }
@@ -158,7 +161,7 @@ Namespace = { fg = "yellow", italic = true }
 Number = { fg = "purple" }
 Operator = { fg = "orange" }
 Package = { fg = "yellow", italic = true }
-Parameter = { fg = "fg", italic=true }
+Parameter = { fg = "fg" }
 TypeParameter = { fg = "yellow", italic=true }
 Picker = { bg = "bg1", fg = "fg" }
 # Preserve the picker's independently styled text and key hints on selection.
@@ -166,7 +169,7 @@ PickerSelected = { bg = "bg3" }
 PickerSelectedLabel = { fg = "fg", bold = true }
 PickerSelectedMarker = { fg = "aqua", bold=true}
 Property = { fg = "blue" }
-Punctuation = { fg = "grey2" }
+Punctuation = { fg = "grey1" }
 Quote = { fg = "yellow" }
 Regex = { fg = "green" }
 Repeat = { fg = "red" }

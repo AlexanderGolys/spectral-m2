@@ -1,7 +1,7 @@
 //! Documentation markup, as M2 sends it in HTML, drawn as coloured rows.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -198,13 +198,26 @@ struct Document {
     groups: &'static Groups,
     numbers_printed: bool,
     code_style: Style,
+    renderer_position: crate::ui::settings::rendering::RendererPosition,
+    controls: Vec<examples::EmbeddedControl>,
     links: Vec<Vec<(Rect, Rc<Link>)>>,
     lines: Rc<Vec<Line<'static>>>,
     inclusions: Inclusions,
 }
 
 thread_local! {
+    static REVISION: Cell<u64> = const { Cell::new(0) };
     static DOCUMENTS: RefCell<VecDeque<Rc<Document>>> = RefCell::default();
+}
+
+/// Revision of embedded formatter choices and semantic document layout.
+pub fn revision() -> u64 {
+    REVISION.get()
+}
+
+fn invalidate_documents() {
+    DOCUMENTS.with_borrow_mut(VecDeque::clear);
+    REVISION.set(REVISION.get().wrapping_add(1));
 }
 
 fn document(html: &str, example_width: usize, context: &RenderContext) -> Option<Rc<Document>> {
@@ -215,6 +228,7 @@ fn document(html: &str, example_width: usize, context: &RenderContext) -> Option
                 && entry.math == context.math()
                 && entry.numbers_printed == context.numbers_printed()
                 && entry.code_style == context.code_style()
+                && entry.renderer_position == context.renderer_position()
                 && ptr::eq(entry.groups, context.groups())
                 && entry.html == html
         })?;
@@ -227,7 +241,12 @@ fn document(html: &str, example_width: usize, context: &RenderContext) -> Option
     }
     // Rendering examples can recursively render markup. Do not borrow the cache
     // while constructing the page.
-    let (rows, inclusions, nested_links) = rows(html, example_width, context)?;
+    let DocumentRows {
+        rows,
+        inclusions,
+        links: nested_links,
+        controls,
+    } = rows(html, example_width, context)?;
     let mut links = placed_links(&rows);
     for link in nested_links {
         let link = Rc::new(link);
@@ -253,6 +272,8 @@ fn document(html: &str, example_width: usize, context: &RenderContext) -> Option
         groups: context.groups(),
         numbers_printed: context.numbers_printed(),
         code_style: context.code_style(),
+        renderer_position: context.renderer_position(),
+        controls,
         links,
         lines,
         inclusions,
@@ -264,10 +285,37 @@ fn document(html: &str, example_width: usize, context: &RenderContext) -> Option
     Some(entry)
 }
 
+/// Select a formatter inside a documentation example at its rendered position.
+pub fn cycle_renderer(
+    html: &str,
+    example_width: usize,
+    context: &RenderContext,
+    position: Position,
+) -> bool {
+    let changed = document(html, example_width, context).is_some_and(|document| {
+        document
+            .controls
+            .iter()
+            .any(|control| control.cycle(position))
+    });
+    if changed {
+        invalidate_documents();
+    }
+    changed
+}
+
 /// Update a page's examples and discard only layouts containing its old answers.
 pub fn remember_example(page_id: u64, number: u32, response: M2Response) {
     examples::remember(page_id, number, response);
+    REVISION.set(REVISION.get().wrapping_add(1));
     DOCUMENTS.with_borrow_mut(|documents| documents.retain(|entry| page(&entry.html) != page_id));
+}
+
+/// Retain the types M2 resolved for a documentation page, independently of syntax guesses.
+pub fn remember_types(html: &str, types: &[String]) {
+    if examples::remember_types(page(html), types) {
+        invalidate_documents();
+    }
 }
 
 /// Colour a page's code by what its analysis found.
@@ -275,13 +323,13 @@ pub fn remember_colors(colors: PageColors) {
     examples::remember_colors(colors);
     // An example's computed answer can embed another page's code. Its semantic
     // colours affect every enclosing document that retained those rendered rows.
-    DOCUMENTS.with_borrow_mut(VecDeque::clear);
+    invalidate_documents();
 }
 
 /// Return every page's code to its syntax colours.
 pub fn forget_colors() {
     examples::forget_colors();
-    DOCUMENTS.with_borrow_mut(VecDeque::clear);
+    invalidate_documents();
 }
 
 /// The documentation link drawn at `position` among [`lines`], with every cell
@@ -481,17 +529,21 @@ impl Preformatted {
     }
 }
 
-fn rows(
-    html: &str,
-    example_width: usize,
-    context: &RenderContext,
-) -> Option<(Vec<Row>, Inclusions, Vec<Link>)> {
+struct DocumentRows {
+    rows: Vec<Row>,
+    inclusions: Inclusions,
+    links: Vec<Link>,
+    controls: Vec<examples::EmbeddedControl>,
+}
+
+fn rows(html: &str, example_width: usize, context: &RenderContext) -> Option<DocumentRows> {
     let width = usize::from(context.width().max(1));
     let tagged = layout(html, width, context.math().blackboard)?;
     let page = page(html);
     let mut result = Vec::new();
     let mut inclusions = Inclusions::default();
     let mut links = Vec::new();
+    let mut controls = Vec::new();
     let push_prose =
         |result: &mut Vec<Row>, inclusions: &mut Inclusions, rows: Vec<SpanLine>, indent: u16| {
             for row in rows {
@@ -530,6 +582,10 @@ fn rows(
                 .flatten()
             {
                 let top = i32::try_from(result.len()).unwrap_or(i32::MAX);
+                controls.extend(example.controls.into_iter().map(|mut control| {
+                    control.area = control.area.offset(Offset::new(i32::from(indent), top));
+                    control
+                }));
                 inclusions.merge(example.inclusions + Offset::new(i32::from(indent), top));
                 links.extend(
                     example
@@ -567,7 +623,12 @@ fn rows(
             index += 1;
         }
     }
-    Some((result, inclusions, links))
+    Some(DocumentRows {
+        rows: result,
+        inclusions,
+        links,
+        controls,
+    })
 }
 
 fn is_blank(line: &HtmlLine) -> bool {

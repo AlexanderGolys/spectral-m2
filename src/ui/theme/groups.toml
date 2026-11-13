@@ -90,6 +90,7 @@ NameOccurrence = { bg_from = "Raised.bg" }
 # The parameter a call's signature is at.
 SignatureActiveParameter = { link = "Parameter", bold = true, underline = true }
 Value = { link = "Text" }
+MapArrow = { link = "Text" }
 FractionRule = { sp_from = "Operator.fg", underline = true }
 Printed = { link = "String", bg_from = "Raised.bg", saturation = 55.0, lightening = 15.0 }
 Picker = { link = "Raised" }

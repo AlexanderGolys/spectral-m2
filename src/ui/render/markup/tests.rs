@@ -189,9 +189,10 @@ fn a_computed_example_invalidates_only_its_own_page() {
             number: 1,
             is_error: false,
             transcript: String::new(),
-            value: Some(crate::backend::M2Value::Net("updated answer".into())),
+            value: Some(crate::backend::SpecNet::plain("updated answer".into())),
             type_info: None,
             type_parts: Vec::new(),
+            previews: Vec::new(),
             has_value: true,
             depth: 1,
             names: Vec::new(),
@@ -234,8 +235,8 @@ fn long_help_pages_reuse_layout_for_repeated_hover_checks() {
     let context = RenderContext::new(80, 0);
     for source in ["help ZZ", "help \"arithmetic with complex maps\""] {
         let response = backend.evaluate(source, Some(1)).unwrap();
-        let Some(crate::backend::M2Value::Markup {
-            html,
+        let Some(crate::backend::SpecNet {
+            html: Some(html),
             example_width,
             ..
         }) = response.value
@@ -860,13 +861,14 @@ fn semantic_colours_of_computed_source_refresh_the_enclosing_example() {
             number: 1,
             is_error: false,
             transcript: String::new(),
-            value: Some(crate::backend::M2Value::Markup {
-                html: child.into(),
-                fallback: String::new(),
-                example_width: 60,
-            }),
+            value: Some(crate::backend::SpecNet::document(
+                child.into(),
+                String::new(),
+                60,
+            )),
             type_info: None,
             type_parts: Vec::new(),
+            previews: Vec::new(),
             has_value: true,
             depth: 1,
             names: Vec::new(),
@@ -916,4 +918,73 @@ fn a_documentation_name_takes_the_colour_its_pages_analysis_found_for_it() {
         "prose stays prose"
     );
     forget_colors();
+}
+
+#[test]
+fn embedded_formatter_clicks_survive_relayout_and_can_be_hidden() {
+    use crate::ui::settings::rendering::RendererPosition;
+    let html = "<p>Formatter interaction fixture</p><pre>i1 : example\n\no1 = archived</pre>";
+    let mut backend = crate::backend::M2Backend::spawn().unwrap();
+    remember_example(
+        page(html),
+        1,
+        backend.evaluate("symbol example", None).unwrap(),
+    );
+    let context = RenderContext::new(90, 0).with_renderer_position(RendererPosition::LowerRight);
+    let first = document(html, 77, &context).unwrap();
+    let (y, label) = first
+        .lines
+        .iter()
+        .enumerate()
+        .find_map(|(y, line)| {
+            let text = line.to_string();
+            text.find("specNet")
+                .map(|offset| (y, text[..offset].width()))
+        })
+        .unwrap();
+    assert!(cycle_renderer(
+        html,
+        77,
+        &context,
+        Position::new(label as u16, y as u16)
+    ));
+    let second = document(html, 77, &context).unwrap();
+    assert!(second
+        .lines
+        .iter()
+        .any(|line| line.to_string().contains("net")));
+    assert!(!second
+        .lines
+        .iter()
+        .any(|line| line.to_string().contains("specNet")));
+    let hidden = context.with_renderer_position(RendererPosition::Off);
+    let hidden = document(html, 77, &hidden).unwrap();
+    assert!(!hidden
+        .lines
+        .iter()
+        .any(|line| line.to_string().contains("net")));
+    assert!(!Rc::ptr_eq(&second.lines, &hidden.lines));
+}
+
+#[test]
+fn runtime_types_override_call_syntax_in_signatures_and_examples() {
+    let html = "<p><code>DomainOne DomainTwo</code></p><pre>R = DomainOne[x]</pre>";
+    remember_types(html, &["DomainOne".into(), "DomainTwo".into()]);
+    let rows = spans(html, 80).unwrap();
+    let domains = rows[0]
+        .iter()
+        .filter(|span| span.content.contains("Domain"));
+    for span in domains {
+        assert_eq!(span.kind, HLGroup::Type);
+    }
+    let source = "R = DomainOne[x]";
+    let highlights = source_highlights(page(html), source);
+    let name = source.find("DomainOne").unwrap();
+    assert!(highlights
+        .iter()
+        .any(|span| span.content.contains(&name) && span.flattened_kind() == HLGroup::Type));
+    let source = "\"DomainOne\"";
+    assert!(source_highlights(page(html), source)
+        .iter()
+        .all(|span| span.flattened_kind() != HLGroup::Type));
 }

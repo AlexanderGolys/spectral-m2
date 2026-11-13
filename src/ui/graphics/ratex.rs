@@ -21,7 +21,7 @@ pub const PADDING: f32 = EM * 0.1;
 /// Where an SVG document ends, before which further shapes are drawn on top.
 const SVG_END: &str = "</svg>";
 /// Separators after which a formula's rows may break, as a list breaks after its commas.
-const BREAK_AFTER: [char; 1] = [','];
+const BREAK_AFTER: [char; 4] = [',', '+', '=', ';'];
 /// How far, in ems, an item may start before a separator ends and still follow it.
 const BREAK_TOLERANCE: f64 = 1e-6;
 /// The percentage of row spacing that TeX's `\arraystretch` calls one.
@@ -191,7 +191,8 @@ fn typewriter_paths(list: &mut DisplayList, font: &TerminalFont) -> String {
     let em = f64::from(EM);
     let padding = f64::from(PADDING);
     let mut paths = String::new();
-    list.items.retain(|item| {
+    let mut items = std::mem::take(&mut list.items).into_iter().peekable();
+    while let Some(item) = items.next() {
         let DisplayItem::GlyphPath {
             x,
             y,
@@ -199,25 +200,64 @@ fn typewriter_paths(list: &mut DisplayList, font: &TerminalFont) -> String {
             font: face,
             char_code,
             color,
-        } = item
+        } = &item
         else {
-            return true;
+            list.items.push(item);
+            continue;
         };
-        let outline = (face == typewriter)
+        let metrics = (face == typewriter)
             .then(|| {
-                let character = char::from_u32(*char_code)?;
-                let advance = get_char_metrics(FontId::TypewriterRegular, *char_code)?.width;
-                font.outline(
-                    character,
-                    x * em + padding,
-                    y * em + padding,
-                    scale * em,
-                    advance,
-                )
+                Some((
+                    char::from_u32(*char_code)?,
+                    get_char_metrics(FontId::TypewriterRegular, *char_code)?.width,
+                ))
             })
             .flatten();
+        let Some((character, advance)) = metrics else {
+            list.items.push(item);
+            continue;
+        };
+        let mut text = character.to_string();
+        let mut width = advance * scale;
+        let mut run = Vec::new();
+        while let Some(DisplayItem::GlyphPath {
+            x: next_x,
+            y: next_y,
+            scale: next_scale,
+            font: next_face,
+            char_code: next_code,
+            color: next_color,
+        }) = items.peek()
+        {
+            if next_face != face
+                || next_y != y
+                || next_scale != scale
+                || next_color != color
+                || (next_x - (x + width)).abs() > BREAK_TOLERANCE
+            {
+                break;
+            }
+            let Some((character, advance)) = char::from_u32(*next_code).zip(
+                get_char_metrics(FontId::TypewriterRegular, *next_code)
+                    .map(|metrics| metrics.width),
+            ) else {
+                break;
+            };
+            text.push(character);
+            width += advance * scale;
+            run.push(items.next().expect("the next glyph was inspected"));
+        }
+        let outline = font.outline(
+            &text,
+            x * em + padding,
+            y * em + padding,
+            scale * em,
+            width / scale,
+        );
         let Some(outline) = outline else {
-            return true;
+            list.items.push(item);
+            list.items.extend(run);
+            continue;
         };
         let channel = |value: f32| (value.clamp(0.0, 1.0) * f32::from(u8::MAX)).round();
         let _ = write!(
@@ -228,8 +268,7 @@ fn typewriter_paths(list: &mut DisplayList, font: &TerminalFont) -> String {
             channel(color.b),
             color.a,
         );
-        false
-    });
+    }
     paths
 }
 
@@ -322,7 +361,6 @@ mod tests {
 
     #[test]
     fn theme_colors_preserve_every_glyph_and_its_geometry() {
-        let groups = crate::ui::theme::groups::Groups::default();
         let colors = regex::Regex::new(r"rgba?\([^)]*\)").unwrap();
         for tex in [
             r"x+2=y",
@@ -333,7 +371,7 @@ mod tests {
             r"\left(\begin{matrix}x&2\\3&y\end{matrix}\right)",
             r"\texttt{MdCode}\left\{\texttt{ring R}\right\},\,\texttt{ -- get the ring}",
         ] {
-            let painted = crate::ui::render::maths::colored_tex(tex, &groups, Default::default());
+            let painted = format!(r"{{\color{{#abcdef}}{tex}}}");
             let original = svg(tex, INK).unwrap();
             let colored = svg_colored(tex, &painted, INK, PERCENT_PER_ARRAYSTRETCH)
                 .unwrap()
@@ -377,7 +415,11 @@ mod tests {
 
         let typeset = svg_colored(tex, tex, INK, PERCENT_PER_ARRAYSTRETCH).unwrap();
 
-        assert!(typeset.svg.contains("rgba(17,34,51"), "{}", typeset.svg);
+        assert!(
+            typeset.svg.contains("rgba(17,34,51") || typeset.svg.contains("rgb(17,34,51)"),
+            "{}",
+            typeset.svg
+        );
     }
 
     #[test]
@@ -412,6 +454,32 @@ mod tests {
     }
 
     #[test]
+    fn operator_ligatures_are_shaped_together_without_joining_other_colours() {
+        let font = TerminalFont::load(fontdb::Family::Monospace).expect("a monospace font");
+        let mut list = display(
+            r"\texttt{=>}\textcolor{#abcdef}{\texttt{=>}}x",
+            INK,
+            PERCENT_PER_ARRAYSTRETCH,
+        )
+        .unwrap();
+        let original = list.clone();
+        let paths = typewriter_paths(&mut list, &font);
+        assert_eq!(
+            paths.matches("<path").count(),
+            2,
+            "one shaped run per colour"
+        );
+        assert_eq!(
+            list.items.len(),
+            1,
+            "the mathematical variable retains its font"
+        );
+        assert_eq!(list.width, original.width);
+        assert_eq!(list.height, original.height);
+        assert_eq!(list.depth, original.depth);
+    }
+
+    #[test]
     fn typewriter_glyphs_are_drawn_from_another_font_in_their_cells() {
         let Some(font) = TerminalFont::load(fontdb::Family::Monospace) else {
             return;
@@ -419,7 +487,7 @@ mod tests {
         let mut list = display(r"\texttt{ideal}\,x", INK, PERCENT_PER_ARRAYSTRETCH).unwrap();
         let glyphs = list.items.len();
         let paths = typewriter_paths(&mut list, &font);
-        assert_eq!(paths.matches("<path").count(), "ideal".len());
+        assert_eq!(paths.matches("<path").count(), 1);
         assert_eq!(list.items.len(), glyphs - "ideal".len(), "x stays KaTeX's");
         assert!(paths.contains("fill=\"rgb(18,52,86)\""), "{paths}");
     }

@@ -13,7 +13,7 @@ use std::{iter, ptr};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Offset, Position, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
@@ -31,7 +31,7 @@ use super::render::{markup, maths, typeset};
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::wrap::WrappedText;
 use crate::backend::transcript::{captured_output, strip_m2_location};
-use crate::backend::{M2Response, M2Value};
+use crate::backend::{M2Response, PreviewMode, SpecNet, ValuePreview};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::SourceId;
 use crate::ui::config::UI;
@@ -89,7 +89,9 @@ pub fn response_blocks(
     let printed = (!output.printed.is_empty()).then(|| TextBlock::printed(output.printed));
     let value = match (response.value.clone(), output.value, response.has_value) {
         (Some(value), Some(rendered), true) => Some(
-            OutputBlock::rendered(value, rendered.type_info).annotated(response.type_parts.clone()),
+            OutputBlock::rendered(value, rendered.type_info)
+                .with_previews(response.previews.clone())
+                .annotated(response.type_parts.clone()),
         ),
         _ => None,
     };
@@ -1058,6 +1060,17 @@ impl EvaluationBlock {
 }
 
 impl EvaluationBlock {
+    /// Share a retained formatter choice with the results of an embedded example.
+    pub fn share_formatter(&mut self, chosen: Rc<Cell<Option<PreviewMode>>>) {
+        for output in &mut self.outputs {
+            if let EvaluationOutput::Value(block) = output {
+                for cell in &mut block.cells {
+                    cell.chosen = chosen.clone();
+                }
+            }
+        }
+    }
+
     /// Draw the returned value whose renderer icon is at local `position` by its
     /// next renderer; false when no icon is there.
     pub fn cycle_renderer(&mut self, position: Position, context: &RenderContext) -> bool {
@@ -1426,83 +1439,77 @@ impl Block for TextBlock {
 /// One result inside a possibly shared value border.
 struct OutputCell {
     layout: RefCell<Option<ValueLayout>>,
+    previews: Vec<ValuePreview>,
     /// The pictures the rows last laid out for this cell hold.
     pictures: RefCell<Vec<ImageId>>,
     number: Option<u32>,
     text: String,
-    value: Option<M2Value>,
+    value: Option<SpecNet>,
     ty: Option<String>,
     /// The annotation's pieces, set from their structure when M2 sent them.
-    type_parts: Vec<M2Value>,
-    /// The renderer the reader chose for this value over the one settings pick.
-    chosen: Cell<Option<ValueRenderer>>,
+    type_parts: Vec<SpecNet>,
+    /// The formatter choice shared by every value in the enclosing block.
+    chosen: Rc<Cell<Option<PreviewMode>>>,
 }
 
-/// The path that turned a value into the rows of its output cell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ValueRenderer {
-    /// A documentation page laid out from its HTML.
-    Markup,
-    /// Typeset pictures.
-    Typeset,
-    /// Macaulay2's own plain-text spelling of the value.
-    Ascii,
-    /// Maths laid out in Unicode characters.
-    Unicode,
-    /// The value's text, only wrapped.
-    Plain,
-}
-
-impl ValueRenderer {
-    /// Every renderer, in the order a click on the icon steps through them.
-    const ALL: [Self; 5] = [
-        Self::Markup,
-        Self::Typeset,
-        Self::Unicode,
-        Self::Ascii,
-        Self::Plain,
-    ];
-
-    /// The renderer that laid out TeX the typesetter could draw as `form`: a
-    /// picture, else the maths it falls back to, else M2's own net.
-    fn drawing(form: Option<typeset::Form>) -> Self {
-        match form {
-            Some(typeset::Form::Net) => Self::Ascii,
-            Some(typeset::Form::Unicode) => Self::Unicode,
-            Some(typeset::Form::Picture) | None => Self::Typeset,
-        }
-    }
-
-    /// `style` set so that the paths that pick a renderer pick this one.
-    fn imposed(self, style: maths::MathStyle) -> maths::MathStyle {
-        let display = match self {
-            Self::Typeset => MathDisplay::Typeset,
-            Self::Ascii => MathDisplay::Ascii,
-            Self::Unicode => MathDisplay::Unicode,
-            Self::Markup | Self::Plain => style.display,
-        };
-        maths::MathStyle {
-            original_text: self == Self::Plain,
-            display,
-            ..style
-        }
-    }
-
+impl PreviewMode {
     fn glyph(self) -> Glyph {
         let glyphs = UI.glyphs;
         match self {
+            Self::SpecNet => glyphs.renderer_spec_net,
+            Self::Net => glyphs.renderer_net,
+            Self::String => glyphs.renderer_string,
+            Self::Tex => glyphs.renderer_tex,
             Self::Markup => glyphs.renderer_markup,
-            Self::Typeset => glyphs.renderer_typeset,
-            Self::Ascii => glyphs.renderer_ascii,
-            Self::Unicode => glyphs.renderer_unicode,
-            Self::Plain => glyphs.renderer_plain,
+            Self::Html => glyphs.renderer_html,
+        }
+    }
+}
+
+impl OutputCell {
+    fn default_preview(&self) -> PreviewMode {
+        match self.value.as_ref() {
+            Some(value) if value.html.is_some() => PreviewMode::Markup,
+            Some(value) if maths::Math::supports_spec_net(value) => PreviewMode::SpecNet,
+            Some(_) => PreviewMode::Net,
+            None => PreviewMode::Net,
+        }
+    }
+
+    fn preview_mode(&self) -> PreviewMode {
+        self.chosen.get().unwrap_or_else(|| self.default_preview())
+    }
+
+    fn preview_text(&self, mode: PreviewMode) -> Option<&str> {
+        self.previews
+            .iter()
+            .find(|preview| preview.mode == mode)
+            .map(|preview| preview.text.as_str())
+    }
+
+    fn markup(&self) -> Option<(&str, usize)> {
+        match self.preview_mode() {
+            PreviewMode::Markup => self
+                .value
+                .as_ref()?
+                .markup()
+                .map(|(html, width)| (html, *width)),
+            PreviewMode::Html => self.preview_text(PreviewMode::Html).map(|html| (html, 0)),
+            PreviewMode::SpecNet => self
+                .value
+                .as_ref()?
+                .markup()
+                .map(|(html, width)| (html, *width)),
+            _ => None,
         }
     }
 }
 
 /// Retained ordinary value rows, independent of folding and output labels.
 struct ValueLayout {
-    renderer: ValueRenderer,
+    renderer: PreviewMode,
+    markup_revision: u64,
+    renderer_position: super::settings::rendering::RendererPosition,
     width: u16,
     pixel_cell: Option<ratatui::layout::Size>,
     math: maths::MathStyle,
@@ -1510,6 +1517,12 @@ struct ValueLayout {
     lines: Rc<Vec<Line<'static>>>,
     /// The links drawn among `lines`, placed from their top left corner.
     links: Rc<Vec<Link>>,
+}
+
+struct RendererTitle {
+    area: Rect,
+    line: Line<'static>,
+    icons: Vec<(Rect, PreviewMode)>,
 }
 
 /// Consecutive values returned by M2 inside one border.
@@ -1522,18 +1535,21 @@ pub struct OutputBlock {
 
 impl OutputBlock {
     /// Create a rendered value and its optional type.
-    #[cfg(test)]
     pub fn value(text: String, ty: Option<String>) -> Self {
         Self {
             cells: vec![OutputCell {
                 layout: RefCell::default(),
+                previews: vec![ValuePreview {
+                    mode: PreviewMode::Net,
+                    text: text.trim_end().to_string(),
+                }],
                 pictures: RefCell::default(),
                 number: None,
                 text: text.trim_end().to_string(),
                 value: None,
                 ty: ty.map(|ty| ty.trim_end().to_string()),
                 type_parts: Vec::new(),
-                chosen: Cell::default(),
+                chosen: Rc::default(),
             }],
             expanded: false,
             framed: true,
@@ -1541,10 +1557,23 @@ impl OutputBlock {
     }
 
     /// Retain a structured M2 value for width-aware terminal rendering.
-    pub fn rendered(value: M2Value, ty: Option<String>) -> Self {
+    pub fn rendered(value: SpecNet, ty: Option<String>) -> Self {
+        if let Some(html) = &value.html {
+            markup::remember_types(html, &value.type_names);
+        }
         Self {
             cells: vec![OutputCell {
                 layout: RefCell::default(),
+                previews: value
+                    .fallback
+                    .as_ref()
+                    .or(value.text.as_ref())
+                    .map(|text| ValuePreview {
+                        mode: PreviewMode::Net,
+                        text: output_preview(text),
+                    })
+                    .into_iter()
+                    .collect(),
                 pictures: RefCell::default(),
                 number: None,
                 text: value
@@ -1553,11 +1582,25 @@ impl OutputBlock {
                 value: Some(value),
                 ty,
                 type_parts: Vec::new(),
-                chosen: Cell::default(),
+                chosen: Rc::default(),
             }],
             expanded: false,
             framed: true,
         }
+    }
+
+    /// Attach the M2 formatter results offered by this output's preview selector.
+    pub fn with_previews(mut self, previews: Vec<ValuePreview>) -> Self {
+        self.cells[0].previews = previews
+            .into_iter()
+            .map(|mut preview| {
+                if matches!(preview.mode, PreviewMode::Net | PreviewMode::String) {
+                    preview.text = output_preview(&preview.text);
+                }
+                preview
+            })
+            .collect();
+        self
     }
 
     /// Present this value without its enclosing output border.
@@ -1567,7 +1610,7 @@ impl OutputBlock {
     }
 
     /// Set the type annotation from its pieces rather than its text.
-    pub fn annotated(mut self, parts: Vec<M2Value>) -> Self {
+    pub fn annotated(mut self, parts: Vec<SpecNet>) -> Self {
         self.cells[0].type_parts = parts;
         self
     }
@@ -1579,7 +1622,14 @@ impl OutputBlock {
     }
 
     fn append(&mut self, other: Self) {
-        self.cells.extend(other.cells);
+        let chosen = self.cells[0].chosen.clone();
+        if chosen.get().is_none() {
+            chosen.set(Some(self.cells[0].default_preview()));
+        }
+        for mut cell in other.cells {
+            cell.chosen = chosen.clone();
+            self.cells.push(cell);
+        }
     }
 
     /// The frame of a code cell carrying the largest number here, so a result's
@@ -1614,139 +1664,96 @@ impl OutputBlock {
 
     fn layout(&self, cell: &OutputCell, context: &RenderContext) -> Vec<String> {
         let width = self.value_width(cell, context);
-        let text = match &cell.value {
-            // Chosen by the reader, the page is shown as M2 printed it.
-            Some(M2Value::Markup { fallback, .. })
-                if cell.chosen.get() == Some(ValueRenderer::Plain) =>
-            {
-                fallback.clone()
-            }
-            Some(value @ M2Value::Markup { .. }) => value.render_at(width.into()),
-            _ => cell.text.clone(),
-        };
-        if text.is_empty() {
-            Vec::new()
-        } else {
-            match cell.value.as_ref() {
-                Some(
-                    M2Value::HashTable(_)
-                    | M2Value::Option { .. }
-                    | M2Value::Collection { .. }
-                    | M2Value::Markup { .. },
-                ) => text.lines().map(str::to_string).collect(),
-                _ => word_lines(&text, width),
-            }
+        let text = match cell.preview_mode() {
+            PreviewMode::Net => cell
+                .preview_text(PreviewMode::Net)
+                .map(str::to_owned)
+                .or_else(|| cell.value.as_ref().map(SpecNet::ascii)),
+            PreviewMode::String => cell.preview_text(PreviewMode::String).map(str::to_owned),
+            _ => None,
         }
+        .unwrap_or_else(|| cell.text.clone());
+        word_lines(&text, width)
     }
 
     fn unfolded_lines(&self, cell: &OutputCell, context: &RenderContext) -> Rc<Vec<Line<'static>>> {
         let theme = context.groups();
-        // A value whose TeX parses is drawn from its own structure, so a numeral, a
-        // name and an operator each take their own colour. Anything else is flat text
-        // and keeps the single value colour it always had.
+        // Component classes arrive with the expression tree and remain attached
+        // through layout, wrapping and renderer changes.
         let width = usize::from(self.value_width(cell, context));
-        let style = cell
-            .chosen
-            .get()
-            .map_or_else(|| context.math(), |chosen| chosen.imposed(context.math()));
-        let remember = |renderer, lines: Rc<Vec<Line<'static>>>, links, pixel_cell| {
-            cell.layout.replace(Some(ValueLayout {
-                renderer,
-                width: width as u16,
-                pixel_cell,
-                math: style,
-                groups: theme,
-                lines: lines.clone(),
-                links: Rc::new(links),
-            }));
-            lines
-        };
-        if let Some(M2Value::Markup {
-            html,
-            example_width,
-            ..
-        }) = cell.value.as_ref().filter(|_| !style.original_text)
-        {
-            if let Some(lines) =
-                markup::lines(html, *example_width, &context.with_width(width as u16))
-            {
-                return remember(ValueRenderer::Markup, lines, Vec::new(), None);
-            }
-        }
+        let style = context.math();
+        let renderer = cell.preview_mode();
         let pixel_cell = (style.display == MathDisplay::Typeset)
             .then(cell_size)
             .flatten();
         if let Some(layout) = cell.layout.borrow().as_ref().filter(|layout| {
-            layout.width == width as u16
+            layout.renderer == renderer
+                && (cell.markup().is_none() || layout.markup_revision == markup::revision())
+                && layout.renderer_position == context.renderer_position()
+                && layout.width == width as u16
                 && layout.pixel_cell == pixel_cell
                 && layout.math == style
                 && ptr::eq(layout.groups, theme)
         }) {
             return layout.lines.clone();
         }
-        // Tokens carry semantic colours, but their strings use the same bounded
-        // source as the plain fallback rather than wrapping the original value.
-        let token = match &cell.value {
-            Some(M2Value::Token { role, .. }) => Some(M2Value::Token {
-                text: cell.text.clone(),
-                role: *role,
-            }),
-            _ => None,
-        };
-        let value = token
-            .as_ref()
-            .or(cell.value.as_ref())
-            .filter(|_| !style.original_text);
         let mut links = Vec::new();
-        let (renderer, mut lines): (_, Vec<Line<'static>>) = match (style.display, value) {
-            (MathDisplay::Typeset, Some(value)) => {
-                let drawn = typeset::drawn(value, width, theme, style);
-                links = drawn.links;
-                (ValueRenderer::drawing(drawn.form), drawn.lines)
-            }
-            (MathDisplay::Ascii, Some(M2Value::Type(value))) => (
-                ValueRenderer::Ascii,
-                value
-                    .ascii()
-                    .lines()
-                    .map(|line| Line::from(Span::styled(line.to_string(), theme.type_info())))
-                    .collect(),
-            ),
-            (
-                MathDisplay::Ascii,
-                Some(
-                    value @ (M2Value::Tex { .. }
-                    | M2Value::Collection { .. }
-                    | M2Value::Option { .. }
-                    | M2Value::HashTable(_)),
-                ),
-            ) => (
-                ValueRenderer::Ascii,
-                value
-                    .ascii()
-                    .lines()
-                    .map(|line| Line::from(Span::styled(line.to_string(), theme.value())))
-                    .collect(),
-            ),
-            _ => match value.map(|value| maths::spans(value, width, style)) {
-                Some(Ok(rows)) => {
-                    links = present::links(&rows);
-                    (
-                        ValueRenderer::Unicode,
-                        rows.into_iter()
-                            .map(|row| Line::from(row.spans(theme)))
-                            .collect(),
-                    )
-                }
-                _ => (
-                    ValueRenderer::Plain,
+        let mut lines: Vec<Line<'static>> = if let Some((html, example_width)) = cell.markup() {
+            markup::lines(html, example_width, &context.with_width(width as u16))
+                .map(|lines| lines.as_ref().clone())
+                .unwrap_or_else(|| {
                     self.layout(cell, context)
                         .into_iter()
+                        .map(Line::raw)
+                        .collect()
+                })
+        } else if renderer == PreviewMode::Tex {
+            let drawn = typeset::tex_preview(
+                cell.preview_text(PreviewMode::Tex).unwrap_or(""),
+                width,
+                theme,
+                style,
+            );
+            links = drawn.links;
+            drawn.lines
+        } else if renderer == PreviewMode::SpecNet {
+            let mut preview = cell.value.clone();
+            if let Some(value) = preview.as_mut().filter(|value| value.text.is_some()) {
+                value.text = Some(cell.text.clone());
+            }
+            match preview.as_ref() {
+                Some(value) if style.display == MathDisplay::Typeset => {
+                    let drawn = typeset::drawn(value, width, theme, style);
+                    links = drawn.links;
+                    drawn.lines
+                }
+                Some(value) if style.display == MathDisplay::Ascii => {
+                    word_lines(&value.ascii(), width as u16)
+                        .into_iter()
                         .map(|line| Line::from(Span::styled(line, theme.value())))
-                        .collect(),
-                ),
-            },
+                        .collect()
+                }
+                Some(value) => maths::spans(value, width, style)
+                    .map(|rows| {
+                        links = present::links(&rows);
+                        rows.into_iter()
+                            .map(|row| Line::from(row.spans(theme)))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            }
+        } else {
+            self.layout(cell, context)
+                .into_iter()
+                .map(|line| Line::from(Span::styled(line, theme.value())))
+                .collect()
         };
+        if cell.markup().is_none() {
+            for span in lines.iter_mut().flat_map(|line| &mut line.spans) {
+                span.style.bg = None;
+            }
+        }
         let limit = (UI.max_output_preview_cells / usize::from(context.width().max(1))).max(1);
         if lines.len() > limit {
             let head = limit.saturating_sub(1) / 2;
@@ -1759,16 +1766,25 @@ impl OutputBlock {
             // Only the rows above the cut stay where they were laid out.
             links.retain(|link| link.cells.iter().all(|cells| usize::from(cells.y) < head));
         }
-        remember(renderer, Rc::new(lines), links, pixel_cell)
+        let lines = Rc::new(lines);
+        cell.layout.replace(Some(ValueLayout {
+            renderer,
+            markup_revision: markup::revision(),
+            renderer_position: context.renderer_position(),
+            width: width as u16,
+            pixel_cell,
+            math: style,
+            groups: theme,
+            lines: lines.clone(),
+            links: Rc::new(links),
+        }));
+        lines
     }
 
     /// The path that laid out `cell`'s value rows.
-    fn renderer(&self, cell: &OutputCell, context: &RenderContext) -> ValueRenderer {
-        self.unfolded_lines(cell, context);
-        cell.layout
-            .borrow()
-            .as_ref()
-            .map_or(ValueRenderer::Plain, |layout| layout.renderer)
+    fn renderer(&self, cell: &OutputCell, context: &RenderContext) -> PreviewMode {
+        let _ = context;
+        cell.preview_mode()
     }
 
     /// Value rows kept above the fold and rows hidden by it, when `rows` exceed
@@ -1792,17 +1808,13 @@ impl OutputBlock {
         width: u16,
         context: &RenderContext,
     ) -> Inclusions {
-        let page = match &cell.value {
-            Some(M2Value::Markup {
+        let page = cell.markup().and_then(|(html, example_width)| {
+            markup::inclusions(
                 html,
                 example_width,
-                ..
-            }) => {
-                let width = self.value_width(cell, context);
-                markup::inclusions(html, *example_width, &context.with_width(width))
-            }
-            _ => None,
-        };
+                &context.with_width(self.value_width(cell, context)),
+            )
+        });
         page.unwrap_or_else(|| {
             let rows = row_count!(self.unfolded_lines(cell, context).len());
             [Rect::new(0, 0, width, rows)].into()
@@ -1811,17 +1823,10 @@ impl OutputBlock {
 
     /// What `cell`'s value reads as on one row, before any wrapping.
     fn unwrapped_text(cell: &OutputCell, context: &RenderContext) -> String {
-        let spans = match &cell.value {
-            Some(M2Value::Tex { source, .. }) => source
-                .strip_prefix('$')
-                .and_then(|tex| tex.strip_suffix('$'))
-                .and_then(|tex| maths::inline(tex, context.math().blackboard)),
-            _ => None,
-        };
-        spans.map_or_else(
-            || cell.text.clone(),
-            |spans| spans.iter().map(|span| span.content.as_str()).collect(),
-        )
+        let _ = context;
+        cell.preview_text(cell.preview_mode())
+            .unwrap_or(&cell.text)
+            .to_string()
     }
 
     /// Value rows with three rows for the fold control.
@@ -1873,54 +1878,156 @@ impl OutputBlock {
         toggled
     }
 
-    /// The column of the renderer's icon: the label's last character crosses the
-    /// border, so labels of one length line up, and the icon takes the column the
-    /// label would start in.
-    fn icon_column(&self, number: u32) -> u16 {
-        let width = format!("o{number}").chars().count() as u16;
-        (self.border_layout().inset() + 1).saturating_sub(width)
+    /// Mode controls share the border geometry used for painting and clicking.
+    fn renderer_title(&self, index: usize, context: &RenderContext) -> Option<RendererTitle> {
+        if !self.framed
+            || index != 0
+            || context.renderer_position() == super::settings::rendering::RendererPosition::Off
+        {
+            return None;
+        }
+        let cell = &self.cells[index];
+        let current = self.renderer(cell, context);
+        let mut modes = self.renderers(cell, context);
+        modes.retain(|mode| {
+            self.cells
+                .iter()
+                .all(|cell| self.renderers(cell, context).contains(mode))
+        });
+        if !modes.contains(&current) {
+            modes.push(current);
+        }
+        let frame = Bordered::area(
+            Rect::new(0, 0, context.width(), self.height(context)),
+            self.border_layout(),
+        );
+        let segment = frame;
+        loop {
+            let mut spans = vec![Span::raw(" ")];
+            for mode in &modes {
+                let style = if *mode == current {
+                    context.groups().value().add_modifier(Modifier::BOLD)
+                } else {
+                    context.groups().muted().add_modifier(Modifier::DIM)
+                };
+                spans.push(Span::styled(mode.glyph().current().to_string(), style));
+                spans.push(Span::raw(" "));
+            }
+            let label_width = modes
+                .iter()
+                .map(|mode| mode.name().width())
+                .max()
+                .unwrap_or_default();
+            spans.push(Span::styled(
+                format!("{:<label_width$} ", current.name()),
+                context.groups().value(),
+            ));
+            let line = Line::from(spans);
+            if line.width() <= usize::from(frame.width.saturating_sub(2)) || modes.len() <= 1 {
+                let area = context
+                    .renderer_position()
+                    .area(segment, row_count!(line.width()));
+                let mut column = area.x + 1;
+                let icons = modes
+                    .iter()
+                    .map(|mode| {
+                        let width = row_count!(mode.glyph().current().width());
+                        let rect = Rect::new(column, area.y, width, 1).intersection(area);
+                        column += width + 1;
+                        (rect, *mode)
+                    })
+                    .collect();
+                return Some(RendererTitle { area, line, icons });
+            }
+            if let Some(remove) = modes.len().checked_sub(1) {
+                modes.remove(remove);
+            }
+        }
     }
 
     /// The renderers `cell`'s value can be drawn by, the ones that would be
     /// ignored for its kind of value left out.
-    fn renderers(&self, cell: &OutputCell, context: &RenderContext) -> Vec<ValueRenderer> {
-        let chosen = cell.chosen.get();
-        let drawn = ValueRenderer::ALL
-            .into_iter()
-            .filter(|&renderer| {
-                cell.chosen.set(Some(renderer));
-                self.renderer(cell, context) == renderer
+    fn renderers(&self, cell: &OutputCell, context: &RenderContext) -> Vec<PreviewMode> {
+        let _ = context;
+        PreviewMode::CHOICES
+            .iter()
+            .copied()
+            .filter(|mode| match mode {
+                PreviewMode::SpecNet => cell
+                    .value
+                    .as_ref()
+                    .is_some_and(maths::Math::supports_spec_net),
+                PreviewMode::Net => cell.preview_text(PreviewMode::Net).is_some(),
+                PreviewMode::Markup => cell
+                    .value
+                    .as_ref()
+                    .is_some_and(|value| value.html.is_some()),
+                _ => cell.preview_text(*mode).is_some(),
             })
-            .collect();
-        cell.chosen.set(chosen);
-        drawn
+            .collect()
     }
 
     /// Draw the value whose renderer icon is at local `position` by its next
     /// renderer, so what an author wrote can be told from what it was drawn as.
     fn cycle_renderer(&mut self, position: Position, context: &RenderContext) -> bool {
         let area = Rect::new(0, 0, context.width(), self.height(context));
-        let mut row = Bordered::inner(area, self.border_layout()).y;
+        let inner = Bordered::inner(area, self.border_layout());
+        let mut row = inner.y;
         for (index, cell) in self.cells.iter().enumerate() {
-            row = row.saturating_add(Self::gap(index));
-            let icon = cell
-                .number
-                .map(|number| Position::new(self.icon_column(number), row));
-            if icon == Some(position) {
-                let current = self.renderer(cell, context);
-                let options = self.renderers(cell, context);
-                if !options.contains(&current) {
-                    return false;
+            row += Self::gap(index);
+            if let Some((html, example_width)) = cell.markup() {
+                if position.y >= row && position.x >= inner.x {
+                    let mut y = position.y - row;
+                    if let Some((head, hidden)) = self.cell_fold(cell, context) {
+                        if usize::from(y) >= head + usize::from(FOLD_ROWS) {
+                            y = y
+                                .saturating_add(row_count!(hidden))
+                                .saturating_sub(FOLD_ROWS);
+                        }
+                    }
+                    if markup::cycle_renderer(
+                        html,
+                        example_width,
+                        &context.with_width(self.value_width(cell, context)),
+                        Position::new(position.x - inner.x, y),
+                    ) {
+                        cell.layout.take();
+                        return true;
+                    }
                 }
-                let next = options
+            }
+            row += row_count!(self.lines(cell, context).len());
+        }
+        for (index, cell) in self.cells.iter().enumerate() {
+            let Some(title) = self.renderer_title(index, context) else {
+                continue;
+            };
+            if !title.area.contains(position) {
+                continue;
+            }
+            let current = self.renderer(cell, context);
+            let clicked = title
+                .icons
+                .iter()
+                .find(|(area, _)| area.contains(position))
+                .map(|(_, mode)| *mode);
+            let mut options = self.renderers(cell, context);
+            options.retain(|mode| {
+                self.cells
+                    .iter()
+                    .all(|cell| self.renderers(cell, context).contains(mode))
+            });
+            let next = match clicked.filter(|mode| *mode != current) {
+                Some(mode) => Some(mode),
+                None => options
                     .iter()
                     .cycle()
-                    .skip_while(|&&it| it != current)
-                    .nth(1);
-                cell.chosen.set(next.copied());
-                return next.is_some_and(|&next| next != current);
-            }
-            row = row.saturating_add(row_count!(self.lines(cell, context).len()));
+                    .skip_while(|&&mode| mode != current)
+                    .nth(1)
+                    .copied(),
+            };
+            cell.chosen.set(next);
+            return next.is_some_and(|next| next != current);
         }
         false
     }
@@ -1933,10 +2040,16 @@ impl OutputBlock {
         if math.display == MathDisplay::Typeset && rendered {
             return typeset::annotation(&cell.type_parts, width, theme, context.math());
         }
-        if rendered && math.display != MathDisplay::Ascii {
+        if rendered {
             return maths::annotation(&cell.type_parts, width, context.math())
                 .into_iter()
-                .map(|row| Line::from(row.spans(theme)))
+                .map(|row| {
+                    let mut spans = row.spans(theme);
+                    for span in &mut spans {
+                        span.style.bg = None;
+                    }
+                    Line::from(spans)
+                })
                 .collect();
         }
         cell.ty.as_deref().map_or_else(Vec::new, |ty| {
@@ -2037,9 +2150,13 @@ impl OutputBlock {
 
     /// The link a source location draws: every row it wraps onto, before any fold.
     fn location_link(&self, cell: &OutputCell, context: &RenderContext) -> Option<Link> {
-        let Some(M2Value::Location { target, .. }) = &cell.value else {
-            return None;
-        };
+        let target = cell
+            .value
+            .as_ref()
+            .filter(|_| {
+                context.math().display == MathDisplay::Ascii || context.math().original_text
+            })
+            .and_then(|value| value.target.as_ref())?;
         let cells = self
             .unfolded_lines(cell, context)
             .iter()
@@ -2129,19 +2246,16 @@ impl Block for OutputBlock {
             if let Some(number) = cell.number {
                 let label = format!("o{number}");
                 let width = label.chars().count() as u16;
-                // The label's last character crosses the border, so labels of one
-                // length line up; the renderer's icon takes the column the label
-                // would start in, and the label sits one column after it.
-                let icon = self.icon_column(number);
+                let column = (layout.inset() + 2).saturating_sub(width);
                 let style = match context.is_recent_output(number) {
                     true => theme.recent_output(),
                     false => theme.output_number(),
                 };
-                let renderer = self.renderer(cell, context).glyph().current();
-                Paragraph::new(Span::styled(renderer, style))
-                    .render(Rect::new(area.x + icon, row, 1, 1), buf);
                 Paragraph::new(Span::styled(label, style))
-                    .render(Rect::new(area.x + icon + 1, row, width, 1), buf);
+                    .render(Rect::new(area.x + column, row, width, 1), buf);
+            }
+            if let Some(title) = self.renderer_title(index, context) {
+                title.line.render(title.area, buf);
             }
             if let Some((head, hidden)) = self.cell_fold(cell, context) {
                 for (offset, line) in Self::fold_lines(hidden, area.width, context)
@@ -2178,7 +2292,13 @@ impl Block for OutputBlock {
                     cell.number,
                     cell.text.clone(),
                 )
-                .with_type(cell.ty.clone()),
+                .with_type(
+                    if cell.type_parts.is_empty() || context.math().original_text {
+                        cell.ty.clone()
+                    } else {
+                        Some(cell.type_parts.iter().map(SpecNet::render).collect())
+                    },
+                ),
             );
             row = row.saturating_add(shown);
         }
@@ -2192,16 +2312,11 @@ impl Block for OutputBlock {
         let mut links = Vec::new();
         for (index, cell) in self.cells.iter().enumerate() {
             row = row.saturating_add(Self::gap(index));
-            if let Some(M2Value::Markup {
-                html,
-                example_width,
-                ..
-            }) = &cell.value
-            {
+            if let Some((html, example_width)) = cell.markup() {
                 links.extend(
                     markup::links(
                         html,
-                        *example_width,
+                        example_width,
                         &context.with_width(self.value_width(cell, context)),
                     )
                     .into_iter()
@@ -2232,14 +2347,7 @@ impl Block for OutputBlock {
             if under.is_some() {
                 return under;
             }
-            let Some(M2Value::Markup {
-                html,
-                example_width,
-                ..
-            }) = &cell.value
-            else {
-                return None;
-            };
+            let (html, example_width) = cell.markup()?;
             // A folded value shows its head, three fold rows, then its tail.
             let fold = self.cell_fold(cell, context);
             let unfolded = |shown: usize| match fold {
@@ -2249,7 +2357,7 @@ impl Block for OutputBlock {
             };
             let link = markup::link_at(
                 html,
-                *example_width,
+                example_width,
                 &context.with_width(self.value_width(cell, context)),
                 Position::new(
                     position.x.checked_sub(inner.x)?,
@@ -2469,6 +2577,63 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_values_keep_their_terminal_layout_and_omit_spec_net() {
+        let mut value = SpecNet::leaf("UnsupportedFixture", "flattened spelling");
+        value.fallback = Some("top row\n  bottom row".into());
+        let output = OutputBlock::rendered(value, None);
+        let context = RenderContext::new(90, 0);
+        assert_eq!(output.cells[0].preview_mode(), PreviewMode::Net);
+        assert!(!output
+            .renderers(&output.cells[0], &context)
+            .contains(&PreviewMode::SpecNet));
+        assert_eq!(
+            output
+                .unfolded_lines(&output.cells[0], &context)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["top row", "  bottom row"]
+        );
+    }
+
+    #[test]
+    fn formatter_labels_do_not_move_the_icon_hit_boxes() {
+        let context = RenderContext::new(90, 0);
+        let output = OutputBlock::rendered(SpecNet::leaf("Symbol", "x"), None).with_previews(vec![
+            ValuePreview {
+                mode: PreviewMode::Net,
+                text: "x".into(),
+            },
+            ValuePreview {
+                mode: PreviewMode::Tex,
+                text: "$x$".into(),
+            },
+        ]);
+        let title = output.renderer_title(0, &context).unwrap();
+        for mode in [PreviewMode::SpecNet, PreviewMode::Net, PreviewMode::Tex] {
+            output.cells[0].chosen.set(Some(mode));
+            let next = output.renderer_title(0, &context).unwrap();
+            assert_eq!(next.area, title.area);
+            assert_eq!(next.icons, title.icons);
+        }
+    }
+
+    #[test]
+    fn formula_spans_inherit_the_containing_surface_background() {
+        let value = SpecNet::branch(
+            "List",
+            vec![SpecNet::leaf("Symbol", "a"), SpecNet::leaf("ZZ", "7")],
+        );
+        let output = OutputBlock::rendered(value, None);
+        let context = RenderContext::new(90, 0);
+        assert!(output
+            .unfolded_lines(&output.cells[0], &context)
+            .iter()
+            .flat_map(|line| &line.spans)
+            .all(|span| span.style.bg.is_none()));
+    }
+
+    #[test]
     fn a_source_folds_a_stretch_to_its_first_line_by_a_double_click_beside_it() {
         let source = "f = x -> (\n    y := x;\n    y\n    )\ng = 1".to_string();
         let ranges = FoldRanges::default();
@@ -2508,7 +2673,7 @@ mod tests {
     #[test]
     fn oversized_plain_output_has_a_bounded_preview_even_when_expanded() {
         let text = format!("begin\n{}\nend", "α\n".repeat(UI.max_output_preview_bytes));
-        let block = OutputBlock::rendered(M2Value::Net(text), None);
+        let block = OutputBlock::rendered(SpecNet::plain(text), None);
         let context = RenderContext::new(80, 0).full_output();
         let cell = &block.cells[0];
         assert!(cell.text.len() <= UI.max_output_preview_bytes + 128);
@@ -2530,7 +2695,10 @@ mod tests {
         let mut backend = crate::backend::M2Backend::spawn_for_examples(None).unwrap();
         let source = "net help \"arithmetic with complex maps\"";
         let response = backend.evaluate(source, Some(1)).unwrap();
-        assert!(!matches!(response.value, Some(M2Value::Markup { .. })));
+        assert!(!matches!(
+            response.value,
+            Some(SpecNet { html: Some(_), .. })
+        ));
         let start = std::time::Instant::now();
         let (_, _, block) = response_blocks(&response, source);
         let block = block.unwrap();
@@ -2566,14 +2734,7 @@ mod tests {
     #[test]
     fn folded_help_reuses_layout_across_measurement_painting_and_selection() {
         let html = "<p><a href='ZZ'>integers</a></p>".repeat(80);
-        let mut block = OutputBlock::rendered(
-            M2Value::Markup {
-                html,
-                fallback: String::new(),
-                example_width: 77,
-            },
-            None,
-        );
+        let mut block = OutputBlock::rendered(SpecNet::document(html, String::new(), 77), None);
         let context = RenderContext::new(80, 0).with_output_limit(10);
         let first = block.unfolded_lines(&block.cells[0], &context);
         assert!(first.len() > 10);
@@ -2598,11 +2759,12 @@ mod tests {
     fn markup_output_embeds_the_usual_input_and_result_blocks() {
         let context = RenderContext::new(60, 0);
         let block = OutputBlock::rendered(
-            M2Value::Markup {
-                html: "<div><h2>Example</h2><pre><code>i1 : 2+2\n\no1 = 4\n\no1 : ZZ</code></pre></div>".into(),
-                fallback: "example".into(),
-                example_width: 77,
-            },
+            SpecNet::document(
+                "<div><h2>Example</h2><pre><code>i1 : 2+2\n\no1 = 4\n\no1 : ZZ</code></pre></div>"
+                    .into(),
+                "example".into(),
+                77,
+            ),
             None,
         );
         let lines = block.unfolded_lines(&block.cells[0], &context);
@@ -2627,10 +2789,10 @@ mod tests {
     fn a_source_location_value_is_a_link_over_every_row_it_wraps_onto() {
         let context = RenderContext::new(40, 0);
         let block = OutputBlock::rendered(
-            M2Value::Location {
-                text: "[...]/directory/file.m2:12:0-14:3 and more words".into(),
-                target: "file:///tmp/directory/file.m2#L12:C0-L14:C3".into(),
-            },
+            SpecNet::location_fixture(
+                "[...]/directory/file.m2:12:0-14:3 and more words".into(),
+                "file:///tmp/directory/file.m2#L12:C0-L14:C3".into(),
+            ),
             None,
         );
         let mut buffer = Buffer::empty(Rect::new(0, 0, 40, block.height(&context)));
@@ -2658,20 +2820,12 @@ mod tests {
 
     #[test]
     fn a_linked_function_inside_a_value_is_a_link_where_its_name_is_drawn() {
-        use crate::backend::Role;
-
         let target = "file:///tmp/directory/file.m2#L60:C36-L60:C48";
-        let word = |text: &str| M2Value::Token {
-            text: text.into(),
-            role: Role::Function,
-        };
-        let value = M2Value::HashTable(vec![
+        let word = |text: &str| SpecNet::token_fixture(text.into(), "Function");
+        let value = SpecNet::table_fixture(vec![
             [
                 word("lift"),
-                M2Value::Linked {
-                    value: Box::new(word("FunctionClosure")),
-                    target: target.into(),
-                },
+                SpecNet::linked_fixture(Box::new(word("FunctionClosure")), target.into()),
             ],
             [word("random"), word("FunctionClosure")],
         ]);
@@ -2709,11 +2863,11 @@ mod tests {
     fn a_documentation_link_is_found_where_the_output_draws_it() {
         let context = RenderContext::new(60, 0);
         let block = OutputBlock::rendered(
-            M2Value::Markup {
-                html: "<p>See <a href='&quot;ancestor(Type,Type)&quot;'>ancestor</a>.</p>".into(),
-                fallback: "See ancestor.".into(),
-                example_width: 77,
-            },
+            SpecNet::document(
+                "<p>See <a href='&quot;ancestor(Type,Type)&quot;'>ancestor</a>.</p>".into(),
+                "See ancestor.".into(),
+                77,
+            ),
             None,
         );
         let mut buffer = Buffer::empty(Rect::new(0, 0, 60, block.height(&context)));
@@ -3034,17 +3188,15 @@ mod tests {
     }
 
     #[test]
-    fn a_full_width_label_follows_its_renderer_icon() {
+    fn output_numbers_stay_in_the_gutter_and_mode_names_move_to_the_border() {
         let output = OutputBlock::value("a\nb".into(), None).numbered(123);
-        let icon = output
-            .renderer(&output.cells[0], &RenderContext::new(20, 0))
-            .glyph()
-            .current();
         let output = rendered_buffer(&output, 20);
         let border = inset();
 
         assert_eq!(output[(border, 0)].symbol(), "╭");
-        assert_eq!(output[(border - 3, 1)].symbol(), icon);
+        assert_eq!(output[(border - 3, 1)].symbol(), " ");
+        let title: String = (border + 1..20).map(|x| output[(x, 0)].symbol()).collect();
+        assert!(title.contains("net"), "{title}");
         assert_eq!(output[(border - 2, 1)].symbol(), "o");
         assert_eq!(output[(border - 1, 1)].symbol(), "1");
         assert_eq!(output[(border, 1)].symbol(), "2");
@@ -3056,13 +3208,19 @@ mod tests {
     #[test]
     fn clicking_the_renderer_icon_steps_through_the_ways_to_draw_the_value() {
         let context = RenderContext::new(40, 0);
-        let page = M2Value::Markup {
-            html: "<p>rendered words</p>".into(),
-            fallback: "original words".into(),
-            example_width: 80,
-        };
+        let page = SpecNet::document("<p>rendered words</p>".into(), "original words".into(), 80);
         let mut output = OutputBlock::rendered(page, None).numbered(1);
-        let icon = Position::new(output.icon_column(1), 1);
+        let active_icon = |output: &OutputBlock| {
+            let current = output.renderer(&output.cells[0], &context);
+            let title = output.renderer_title(0, &context).unwrap();
+            let area = title
+                .icons
+                .iter()
+                .find(|(_, mode)| *mode == current)
+                .unwrap()
+                .0;
+            Position::new(area.x, area.y)
+        };
         let drawn = |output: &OutputBlock| output.renderer(&output.cells[0], &context);
         let shown = |output: &OutputBlock| {
             output
@@ -3071,16 +3229,162 @@ mod tests {
                 .map(ToString::to_string)
                 .collect::<String>()
         };
-        assert_eq!(drawn(&output), ValueRenderer::Markup);
+        assert_eq!(drawn(&output), PreviewMode::Markup);
         assert!(shown(&output).contains("rendered words"));
 
-        assert!(output.cycle_renderer(icon, &context));
-        assert_eq!(drawn(&output), ValueRenderer::Plain);
+        let net = output
+            .renderer_title(0, &context)
+            .unwrap()
+            .icons
+            .into_iter()
+            .find(|(_, mode)| *mode == PreviewMode::Net)
+            .unwrap()
+            .0;
+        assert!(output.cycle_renderer(Position::new(net.x, net.y), &context));
+        assert_eq!(drawn(&output), PreviewMode::Net);
         assert!(shown(&output).contains("original words"));
 
-        assert!(!output.cycle_renderer(Position::new(icon.x + 4, 1), &context));
-        assert!(output.cycle_renderer(icon, &context));
-        assert_eq!(drawn(&output), ValueRenderer::Markup);
+        assert!(!output.cycle_renderer(Position::new(0, 1), &context));
+        assert!(output.cycle_renderer(active_icon(&output), &context));
+        assert_eq!(drawn(&output), PreviewMode::Markup);
+    }
+
+    #[test]
+    fn preview_modes_and_icons_are_independent_of_math_display() {
+        let previews = vec![
+            ValuePreview {
+                mode: PreviewMode::Net,
+                text: "net spelling".into(),
+            },
+            ValuePreview {
+                mode: PreviewMode::String,
+                text: "string spelling".into(),
+            },
+            ValuePreview {
+                mode: PreviewMode::Tex,
+                text: "$x^2$".into(),
+            },
+            ValuePreview {
+                mode: PreviewMode::Html,
+                text: "<p>html spelling</p>".into(),
+            },
+        ];
+        let output =
+            OutputBlock::rendered(SpecNet::leaf("Symbol", "x"), None).with_previews(previews);
+        let base = RenderContext::new(100, 0);
+        let expected = [
+            PreviewMode::SpecNet,
+            PreviewMode::Net,
+            PreviewMode::String,
+            PreviewMode::Tex,
+            PreviewMode::Html,
+        ];
+        for mode in expected {
+            output.cells[0].chosen.set(Some(mode));
+            let original = output.renderer_title(0, &base).unwrap().line.to_string();
+            for display in [
+                MathDisplay::Unicode,
+                MathDisplay::Ascii,
+                MathDisplay::Typeset,
+            ] {
+                let context = base.with_display(display);
+                output.unfolded_lines(&output.cells[0], &context);
+                assert_eq!(output.renderers(&output.cells[0], &context), expected);
+                assert_eq!(output.renderer(&output.cells[0], &context), mode);
+                assert_eq!(
+                    output.renderer_title(0, &context).unwrap().line.to_string(),
+                    original
+                );
+            }
+        }
+        for (mode, expected) in [
+            (PreviewMode::Net, "net spelling"),
+            (PreviewMode::String, "string spelling"),
+            (PreviewMode::Html, "html spelling"),
+        ] {
+            output.cells[0].chosen.set(Some(mode));
+            let lines = output.unfolded_lines(&output.cells[0], &base);
+            assert!(lines
+                .iter()
+                .map(ToString::to_string)
+                .collect::<String>()
+                .contains(expected));
+        }
+    }
+
+    #[test]
+    fn merged_outputs_share_one_formatter_control_on_the_outer_border() {
+        let context = RenderContext::new(100, 0);
+        let mut output = OutputBlock::value("first".into(), None);
+        output.append(OutputBlock::value("second".into(), None));
+        assert!(output.renderer_title(1, &context).is_none());
+        assert!(Rc::ptr_eq(&output.cells[0].chosen, &output.cells[1].chosen));
+        let title = output.renderer_title(0, &context).unwrap();
+        let frame = Bordered::area(
+            Rect::new(0, 0, context.width(), output.height(&context)),
+            output.border_layout(),
+        );
+        assert!(title.area.y == frame.y || title.area.y == frame.bottom() - 1);
+        let mut buffer = Buffer::empty(Rect::new(0, 0, context.width(), output.height(&context)));
+        output.render_local(&context, &mut buffer);
+        for y in frame.y + 1..frame.bottom() - 1 {
+            assert_ne!(buffer[(frame.x + 1, y)].symbol(), "─");
+        }
+    }
+
+    #[test]
+    fn border_mode_buttons_follow_their_position_and_select_the_clicked_mode() {
+        use crate::ui::settings::rendering::RendererPosition;
+        for position in [
+            RendererPosition::UpperLeft,
+            RendererPosition::UpperCenter,
+            RendererPosition::UpperRight,
+            RendererPosition::LowerLeft,
+            RendererPosition::LowerCenter,
+            RendererPosition::LowerRight,
+        ] {
+            let context = RenderContext::new(60, 0).with_renderer_position(position);
+            let mut output = OutputBlock::rendered(
+                SpecNet::document("<p>rendered</p>".into(), "original".into(), 80),
+                None,
+            )
+            .numbered(1);
+            let title = output.renderer_title(0, &context).unwrap();
+            let frame = Bordered::area(
+                Rect::new(0, 0, context.width(), output.height(&context)),
+                output.border_layout(),
+            );
+            assert!(frame.contains(Position::new(title.area.x, title.area.y)));
+            assert!(title.area.y == frame.y || title.area.y == frame.bottom() - 1);
+            assert!(title
+                .line
+                .spans
+                .iter()
+                .any(|span| span.style.add_modifier.contains(Modifier::DIM)));
+            let plain = title
+                .icons
+                .iter()
+                .find(|(_, mode)| *mode == PreviewMode::Net)
+                .unwrap()
+                .0;
+            assert!(output.cycle_renderer(Position::new(plain.x, plain.y), &context));
+            assert_eq!(
+                output.renderer(&output.cells[0], &context),
+                PreviewMode::Net
+            );
+            let rendered = output.unfolded_lines(&output.cells[0], &context);
+            assert!(rendered
+                .iter()
+                .any(|line| line.to_string().contains("original")));
+            let mut buffer =
+                Buffer::empty(Rect::new(0, 0, context.width(), output.height(&context)));
+            output.render_local(&context, &mut buffer);
+            let title = output.renderer_title(0, &context).unwrap();
+            let line: String = (title.area.x..title.area.right())
+                .map(|x| buffer[(x, title.area.y)].symbol())
+                .collect();
+            assert!(line.contains("net"), "{line}");
+        }
     }
 
     #[test]
@@ -3375,6 +3679,7 @@ mod tests {
             groups.code().bg.unwrap()
         );
         assert!(rows[5].contains('1'), "{rows:?}");
+        assert!(rows[4].contains("net"), "{rows:?}");
         assert!(rows[6]
             .chars()
             .all(|character| character == ' ' || character == '│'));
@@ -3708,11 +4013,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join(",\\:");
         let block = OutputBlock::rendered(
-            M2Value::Tex {
-                source: format!("${tex}$"),
-                fallback: names.join(", "),
-                code: names.join(", "),
-            },
+            SpecNet::tex_fixture(format!("${tex}$"), names.join(", "), names.join(", ")),
             None,
         );
         let context = RenderContext::new(30, 0);

@@ -1,6 +1,6 @@
 //! Syntax-tree preview element.
 
-use m2_syn::{PrettyDetailRole, PrettyNode, PrettyNodeRole};
+use m2_syn::{PrettyDetail, PrettyDetailRole, PrettyNode, PrettyNodeRole};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -11,6 +11,7 @@ use super::cell::{CodeBlock, M2CodeCell};
 use super::config::UI;
 use super::render::selection::Inclusions;
 use super::render::RenderContext;
+use crate::span;
 use crate::ui::theme::groups::HLGroup;
 
 /// One committed cell followed by its typed syntax presentation.
@@ -171,7 +172,7 @@ fn close<'a>(
 }
 
 fn delimiter_text(node: &PrettyNode) -> &str {
-    node.detail().map_or("", m2_syn::PrettyDetail::text)
+    node.detail().map_or("", PrettyDetail::text)
 }
 
 impl SyntaxTreeBlock {
@@ -261,7 +262,7 @@ impl SyntaxTreeBlock {
                     .map(|text| compact_source(text, width))
                     .filter(|text| !text.is_empty())
                 {
-                    spans.push(Span::styled(format!(" {text}"), groups.tree_code()));
+                    spans.push(span!(format!(" {text}"), groups.tree_code()));
                 }
             }
             (Line::from(spans), location)

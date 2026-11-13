@@ -28,7 +28,7 @@ use self::panes::{pane_layout, ratio_for_width, Pane, Panes, MIN_PANE_WIDTH};
 use self::previews::{PreviewTab, PreviewTabs, RECENT_PREVIEWS};
 use self::session::Session;
 use crate::backend::M2Backend;
-use crate::backend::M2Value;
+use crate::backend::SpecNet;
 use crate::code::file as code_file;
 use crate::code::location::SourceLink;
 use crate::code::location::{SourcePoint, SourceRange};
@@ -666,7 +666,7 @@ impl App {
             }
         };
         ask(Question::Highlights, Asked::Occurrences(revision));
-        if edited {
+        if edited && workspace.editor.signature_hints() {
             ask(Question::Signature, Asked::Signature(revision));
         }
     }
@@ -685,15 +685,8 @@ impl App {
                 let html = markdown::html(&text);
                 let width = usize::from(self.pane_areas.last().map_or(0, |area| area.width));
                 self.show_transient(vec![Box::new(
-                    OutputBlock::rendered(
-                        M2Value::Markup {
-                            html,
-                            fallback: text,
-                            example_width: width,
-                        },
-                        None,
-                    )
-                    .without_frame(),
+                    OutputBlock::rendered(SpecNet::document(html, text, width), None)
+                        .without_frame(),
                 )]);
                 true
             }
@@ -714,14 +707,14 @@ impl App {
                 editor.apply(EditorUpdate::InputOccurrences { revision, ranges })
             }
             (Asked::Signature(revision), Answer::Signature(signatures))
-                if revision == editor.analysis_input().2 =>
+                if revision == editor.analysis_input().2 && editor.signature_hints() =>
             {
-                match signatures.into_iter().next() {
-                    Some(signature) => editor.apply(EditorUpdate::Float(Floating::new(
-                        signature,
+                match signatures.is_empty() {
+                    false => editor.apply(EditorUpdate::Float(Floating::new(
+                        signatures,
                         Anchor::InputCursor,
                     ))),
-                    None => true,
+                    true => true,
                 }
             }
             (Asked::Folds(folds), Answer::Folds(ranges)) => {

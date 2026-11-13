@@ -13,10 +13,17 @@ pub trait Persisted: Serialize + DeserializeOwned + Default {
 
     /// The saved record, or the defaults when none was saved or it no longer reads.
     fn load() -> Self {
-        config_file(Self::FILE)
-            .as_deref()
-            .and_then(Self::read)
-            .unwrap_or_default()
+        let Some(path) = config_file(Self::FILE) else {
+            return Self::default();
+        };
+        if let Some(saved) = Self::read(&path) {
+            return saved;
+        }
+        let defaults = Self::default();
+        if !path.exists() {
+            let _ = defaults.write(&path);
+        }
+        defaults
     }
 
     /// Keep this record for the next session.

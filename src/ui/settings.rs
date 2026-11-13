@@ -8,9 +8,11 @@
 
 pub mod appearance;
 pub mod config;
+pub mod editor;
 pub mod keymap;
-pub mod layout;
+pub mod lsp;
 pub mod rendering;
+pub mod row;
 pub mod selection;
 pub mod statusline;
 pub mod tabs;
@@ -20,19 +22,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub use self::config::*;
+use self::editor::EditorSettings;
 pub use self::keymap::*;
-use self::layout::LayoutSettings;
 use self::rendering::RenderingSettings;
 use self::selection::SelectionSettings;
 use self::statusline::StatusLineSettings;
 use crate::ui::key::KeyEvent;
-use crate::ui::theme::Appearance;
+use crate::ui::theme::AppearanceSettings;
 
 /// Everything the settings picker adjusts, a section for each of its tabs.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Settings {
-    pub appearance: Appearance,
-    pub layout: LayoutSettings,
+    pub appearance: AppearanceSettings,
+    pub editor: EditorSettings,
     pub statusline: StatusLineSettings,
     pub rendering: RenderingSettings,
     pub selection: SelectionSettings,
@@ -41,7 +43,7 @@ pub struct Settings {
 impl Settings {
     /// Whether returned values lay out differently, moving their heights.
     pub fn reformats(&self, other: &Self) -> bool {
-        self.layout.output_rows != other.layout.output_rows
+        self.editor.output_rows != other.editor.output_rows
             || self.rendering.reformats(&other.rendering)
     }
 }
@@ -51,7 +53,7 @@ impl Settings {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(from = "StoredSettings")]
 pub struct SavedSettings {
-    pub layout: LayoutSettings,
+    pub layout: EditorSettings,
     pub statusline: StatusLineSettings,
     pub rendering: RenderingSettings,
     pub selection: SelectionSettings,
@@ -69,7 +71,7 @@ impl Persisted for SavedSettings {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct StoredSettings {
-    layout: LayoutSettings,
+    layout: EditorSettings,
     statusline: StatusLineSettings,
     rendering: RenderingSettings,
     selection: SelectionSettings,
@@ -170,7 +172,7 @@ mod tests {
             serde_json::from_str(r#"{"rendering":{"fractions":"underlined"}}"#).expect("parses");
 
         assert_eq!(saved.rendering.fractions, FractionStyle::Underlined);
-        assert_eq!(saved.layout, LayoutSettings::default());
+        assert_eq!(saved.layout, EditorSettings::default());
         assert!(saved.rebinds.is_empty());
         assert_eq!(saved.selection, SelectionSettings::default());
     }

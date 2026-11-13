@@ -57,7 +57,7 @@ use crate::ui::settings::statusline::{StatusComponent, StatusLinePosition, Statu
 use crate::ui::settings::{tabs as settings_tabs, *};
 use crate::ui::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
 use crate::ui::theme::palette::blend;
-use crate::ui::theme::Appearance;
+use crate::ui::theme::AppearanceSettings;
 
 /// How far a hovered link's colours move toward the text colour.
 const LINK_HOVER_BRIGHTENING: f32 = 0.35;
@@ -311,7 +311,7 @@ pub struct Editor {
 
 impl Editor {
     pub fn new(welcome: String) -> Self {
-        let appearance = Appearance::load();
+        let appearance = AppearanceSettings::load();
         publish(appearance.groups());
         let saved = SavedSettings::load();
         let mut input = InputCode::new();
@@ -323,7 +323,7 @@ impl Editor {
             input,
             settings: Settings {
                 appearance,
-                layout: saved.layout,
+                editor: saved.layout,
                 statusline: saved.statusline,
                 rendering: saved.rendering,
                 selection: saved.selection,
@@ -455,6 +455,11 @@ impl Editor {
     /// Whether the persisted settings run the language server.
     pub fn language_server(&self) -> bool {
         self.settings.rendering.language_server
+    }
+
+    /// Whether automatic signature-help popups are enabled.
+    pub fn signature_hints(&self) -> bool {
+        self.settings.rendering.language_server && self.settings.rendering.signature_hints
     }
 
     /// Whether source takes semantic colors from the language server.
@@ -1305,7 +1310,7 @@ impl Editor {
             pending: self.feed.incomplete_source(),
             picked: self.picked_command(),
             names: &self.names,
-            complete_after: usize::from(self.settings.layout.complete_after),
+            complete_after: usize::from(self.settings.editor.complete_after),
         });
         self.input.offer(completion);
     }
@@ -1510,9 +1515,12 @@ impl Editor {
             self.feed.on_event(&Reformatted);
             self.reference.on_event(&Reformatted);
         }
+        if !settings.rendering.signature_hints {
+            self.floating = None;
+        }
         self.apply_appearance(settings.appearance);
         self.settings = settings;
-        self.input.set_settings(settings.layout);
+        self.input.set_settings(settings.editor);
         self.save_settings();
         self.refresh_settings_picker();
     }
@@ -1520,7 +1528,7 @@ impl Editor {
     /// Keep what the settings and keymap pickers changed for the next session.
     fn save_settings(&self) {
         SavedSettings {
-            layout: self.settings.layout,
+            layout: self.settings.editor,
             statusline: self.settings.statusline,
             rendering: self.settings.rendering,
             selection: self.settings.selection,
@@ -1529,7 +1537,7 @@ impl Editor {
         .save();
     }
 
-    fn apply_appearance(&mut self, appearance: Appearance) {
+    fn apply_appearance(&mut self, appearance: AppearanceSettings) {
         if self.settings.appearance == appearance {
             return;
         }
@@ -1866,15 +1874,16 @@ impl Editor {
             .with_fractions(self.settings.rendering.fractions)
             .with_blackboard(self.settings.rendering.math_fonts)
             .with_matrix_row_spacing(self.settings.rendering.matrix_row_spacing_percent)
+            .with_math_size(self.settings.rendering.math_size_percent)
             .with_display(self.settings.rendering.maths)
             .with_ink(self.settings.rendering.math_ink)
             .with_script_colors(
                 self.settings.rendering.index_color,
                 self.settings.rendering.exponent_color,
             )
-            .with_original_text(self.settings.rendering.original_output)
+            .with_renderer_position(self.settings.rendering.renderer_position)
             .with_recent_outputs(self.feed.recent_outputs())
-            .with_output_limit(self.settings.layout.output_rows)
+            .with_output_limit(self.settings.editor.output_rows)
     }
 
     /// Tell the pictures how far their blocks stand from the viewport, for both feeds
@@ -2093,7 +2102,7 @@ mod mouse_tests {
     use ratatui::style::Style;
 
     use super::{Editor, Reaction};
-    use crate::backend::M2Value;
+    use crate::backend::SpecNet;
     use crate::ui::cell::OutputBlock;
     use crate::ui::feed::Feed;
     use crate::ui::render::RenderContext;
@@ -2104,11 +2113,11 @@ mod mouse_tests {
     fn editor_with_link() -> (Editor, Position) {
         let mut editor = Editor::new(String::new());
         editor.feed = Feed::new(Box::new(OutputBlock::rendered(
-            M2Value::Markup {
-                html: "<p>See <a href='&quot;isPrime&quot;'>isPrime</a>.</p>".into(),
-                fallback: "See isPrime.".into(),
-                example_width: 60,
-            },
+            SpecNet::document(
+                "<p>See <a href='&quot;isPrime&quot;'>isPrime</a>.</p>".into(),
+                "See isPrime.".into(),
+                60,
+            ),
             None,
         )));
         editor.feed.render(

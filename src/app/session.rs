@@ -9,11 +9,14 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use nix::sys::signal::{killpg, Signal};
+use nix::unistd::Pid;
+
 use m2_syn::{NativeCellParser, NativeCellState, PrettyNode, PrettyTree};
 
 use super::examples::{ExamplePage, ExampleRunner};
 use crate::backend::transcript::captured_error;
-use crate::backend::{M2Backend, M2Response, M2Value};
+use crate::backend::{M2Backend, M2Response, SpecNet};
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::{Document, SourceId};
 use crate::errors::Error;
@@ -73,7 +76,7 @@ enum WorkerEvent {
         id: u64,
         index: usize,
         number: u32,
-        result: Result<M2Response, String>,
+        result: Box<Result<M2Response, String>>,
     },
     /// The fresh process's version and every name it started with.
     Restarted(Result<(String, Vec<String>, String), String>),
@@ -85,6 +88,7 @@ pub struct Session {
     events: Receiver<WorkerEvent>,
     /// The id of the M2 process the worker runs, replaced when it restarts.
     m2_process: Arc<AtomicU32>,
+    restart_requested: Arc<AtomicBool>,
     version: String,
     in_debugger: bool,
     next_input_number: u32,
@@ -117,11 +121,22 @@ impl Session {
         let (event_tx, event_rx) = mpsc::channel();
         let m2_process = Arc::new(AtomicU32::new(backend.process_id()));
         let worker_process = m2_process.clone();
-        thread::spawn(move || worker(backend, request_rx, event_tx, worker_process));
+        let restart_requested = Arc::new(AtomicBool::new(false));
+        let worker_restart = Arc::clone(&restart_requested);
+        thread::spawn(move || {
+            worker(
+                backend,
+                request_rx,
+                event_tx,
+                worker_process,
+                worker_restart,
+            )
+        });
         Self {
             requests: request_tx,
             events: event_rx,
             m2_process,
+            restart_requested,
             version,
             in_debugger: false,
             next_input_number: 1,
@@ -149,18 +164,13 @@ impl Session {
     }
 
     /// Prepare a page for the same example rendering and semantic analysis as session output.
-    pub fn prepare_documentation(&mut self, value: Option<&M2Value>) {
+    pub fn prepare_documentation(&mut self, value: Option<&SpecNet>) {
         self.compute_examples(value);
         self.analyse_page(value);
     }
 
-    fn analyse_page(&mut self, value: Option<&M2Value>) {
-        let Some(M2Value::Markup {
-            html,
-            example_width,
-            ..
-        }) = value
-        else {
+    fn analyse_page(&mut self, value: Option<&SpecNet>) {
+        let Some((html, example_width)) = value.and_then(SpecNet::markup) else {
             return;
         };
         let page = markup::page(html);
@@ -180,13 +190,8 @@ impl Session {
 
     /// Compute the examples of the documentation `value` shows, once per page.
     // @##issue should take either a code block or a sequence of blocks
-    fn compute_examples(&mut self, value: Option<&M2Value>) {
-        let Some(M2Value::Markup {
-            html,
-            example_width,
-            ..
-        }) = value
-        else {
+    fn compute_examples(&mut self, value: Option<&SpecNet>) {
+        let Some((html, example_width)) = value.and_then(SpecNet::markup) else {
             return;
         };
         let page = markup::page(html);
@@ -335,15 +340,32 @@ impl Session {
     }
 
     pub fn restart(&mut self) -> EditorUpdate {
-        if self.busy() {
-            return EditorUpdate::Diagnostic("workspace is still evaluating".to_string());
+        if self.restarting {
+            return EditorUpdate::Ignore;
         }
+        self.restart_requested.store(true, Ordering::Release);
+        let pending = self
+            .evaluations
+            .drain(..)
+            .map(|evaluation| {
+                evaluation.cancelled.store(true, Ordering::Release);
+                EditorUpdate::CellFailed {
+                    id: evaluation.id,
+                    index: 0,
+                    number: self.next_input_number,
+                    printed: None,
+                    message: "Computation stopped for restart".to_string(),
+                }
+            })
+            .collect();
+        // Wake the worker even when the interpreter no longer handles interrupts.
+        let _ = killpg(Pid::from_raw(self.m2_process() as i32), Signal::SIGKILL);
         if self.requests.send(WorkerRequest::Restart).is_err() {
             // @##magic hardcoded diagnostic 3 separate times
             return EditorUpdate::Diagnostic("Macaulay2 worker stopped".to_string());
         }
         self.restarting = true;
-        EditorUpdate::Ignore
+        Self::batch(pending)
     }
 
     /// Restart, keeping `code` to run in the fresh session once the restart
@@ -557,6 +579,7 @@ impl Session {
         while let Ok(event) = self.events.try_recv() {
             self.source_revision = self.source_revision.wrapping_add(1);
             match event {
+                WorkerEvent::Exited if self.restarting => {}
                 WorkerEvent::Exited => {
                     self.evaluations.clear();
                     self.restarting = false;
@@ -567,7 +590,7 @@ impl Session {
                     index,
                     number,
                     result,
-                } => updates.push(self.resolve_cell(id, index, number, result)),
+                } => updates.push(self.resolve_cell(id, index, number, *result)),
                 WorkerEvent::Restarted(result) => updates.push(self.resolve_restart(result)),
             }
         }
@@ -785,6 +808,7 @@ fn worker(
     requests: Receiver<WorkerRequest>,
     events: Sender<WorkerEvent>,
     process: Arc<AtomicU32>,
+    restart_requested: Arc<AtomicBool>,
 ) {
     while let Ok(request) = requests.recv() {
         match request {
@@ -796,6 +820,9 @@ fn worker(
                 cancelled,
             } => {
                 for (offset, code) in cells.iter().enumerate() {
+                    if restart_requested.load(Ordering::Acquire) {
+                        break;
+                    }
                     let index = first_index + offset;
                     let number = first_number + offset as u32;
                     let result =
@@ -808,6 +835,9 @@ fn worker(
                                 }
                                 response
                             });
+                    if restart_requested.load(Ordering::Acquire) {
+                        break;
+                    }
                     if matches!(result, Err(Error::Exited(_))) {
                         let _ = events.send(WorkerEvent::Exited);
                         return;
@@ -823,7 +853,7 @@ fn worker(
                             id,
                             index,
                             number,
-                            result,
+                            result: Box::new(result),
                         })
                         .is_err()
                     {
@@ -845,6 +875,7 @@ fn worker(
                     process.store(backend.process_id(), Ordering::Relaxed);
                     Ok(started)
                 });
+                restart_requested.store(false, Ordering::Release);
                 if events
                     .send(WorkerEvent::Restarted(
                         result.map_err(|error| error.to_string()),
@@ -890,11 +921,11 @@ mod tests {
     fn browsed_pages_queue_the_same_example_work_and_semantic_sources_as_evaluated_pages() {
         let mut session = Session::new(M2Backend::spawn().expect("spawn M2"));
         session.set_example_timeout(Duration::from_secs(2));
-        let value = M2Value::Markup {
-            html: "<p>reference enrichment probe</p><pre>i1 : 1/2\n\no1 = 1/2</pre>".into(),
-            fallback: String::new(),
-            example_width: 60,
-        };
+        let value = SpecNet::document(
+            "<p>reference enrichment probe</p><pre>i1 : 1/2\n\no1 = 1/2</pre>".into(),
+            String::new(),
+            60,
+        );
         session.prepare_documentation(Some(&value));
         let sources = session.take_pages_to_analyse();
         assert!(sources
@@ -1015,6 +1046,24 @@ mod tests {
     }
 
     #[test]
+    fn restart_stops_active_work_and_accepts_new_submissions() {
+        let mut session = Session::new(M2Backend::spawn().expect("spawn M2"));
+        let original_process = session.m2_process();
+        let mut highlighter = SyntaxHighlighter::new();
+        session.submit("while true do null", &mut highlighter);
+        thread::sleep(Duration::from_millis(150));
+        session.restart();
+        updates_until_idle(&mut session);
+        assert_ne!(session.m2_process(), original_process);
+        session.submit("assert(6 * 7 == 42);", &mut highlighter);
+        let updates = updates_until_idle(&mut session);
+        assert!(!updates
+            .iter()
+            .any(|update| matches!(update, EditorUpdate::CellFailed { .. } | EditorUpdate::Exit)));
+        assert_eq!(session.committed().len(), 1);
+    }
+
+    #[test]
     fn immediate_interrupt_does_not_run_the_submission() {
         let mut session = Session::new(M2Backend::spawn().expect("spawn M2"));
         let mut highlighter = SyntaxHighlighter::new();
@@ -1036,7 +1085,8 @@ mod tests {
                 number: 1,
                 is_error: false,
                 transcript: "x\n\n".into(),
-                value: value.map(M2Value::Net),
+                value: value.map(SpecNet::plain),
+                previews: Vec::new(),
                 type_info,
                 type_parts: Vec::new(),
                 has_value,

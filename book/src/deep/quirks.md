@@ -15,7 +15,7 @@ The terminal chooses the fonts
 : With *math fonts* on, `ℤ` is a character; how it looks depends on which font your terminal takes it from. See [Troubleshooting](../troubleshooting.md#blackboard).
 
 Not every value has a picture
-: Strings, names, `null` and nets stay terminal text even with typeset maths, and a formula RaTeX cannot set is drawn in Unicode. The icon before the output's label says what actually drew it.
+: The `net` and `string` formatters retain terminal text. Structured values use consistent typefaces regardless of neighbouring components; a formula RaTeX cannot set is drawn in Unicode. Output icons identify the selected representation, which stays the same when a picture falls back to Unicode.
 
 Big values are previewed
 : Plain-text values beyond 256 KiB or 262,144 cells show their beginning and end only. The whole value is still in M2.

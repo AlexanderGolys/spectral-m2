@@ -1,26 +1,16 @@
-//! Macaulay2's TeX, parsed into a tree that knows what each piece *is*.
-//!
-//! M2 emits machine-generated TeX from a small fixed vocabulary — polynomials,
-//! fractions, cases and matrices — so this parses that subset rather than LaTeX at
-//! large. Anything outside it is refused, and the caller falls back to M2's own Net
-//! spelling.
-//!
-//! The point of parsing at all is colour. A rendered value that arrives as a `String`
-//! can only be painted one shade, because by then a numeral, a variable and a bracket
-//! are the same thing: characters. Every node here carries the [`HLGroup`] its role
-//! implies, so the scheme paints output the way it paints code — from parsed
-//! structure, never from matching text.
+//! Structured expression layout and explicit TeX rendering for documentation.
+
+mod expression;
 
 use super::markup;
-use crate::backend::{CollectionKind, M2Value, OPTION_ARROW, SPACED_OPTION_ARROW};
+use crate::backend::{CollectionKind, SpecNet, OPTION_ARROW};
 use crate::ui::block::TextSpan;
 use crate::ui::config::UI;
 use crate::ui::cycle::cyclic;
 use crate::ui::graphics;
 use crate::ui::present::{wrap, SpanLine};
-use crate::ui::theme::groups::{Groups, HLGroup};
+use crate::ui::theme::groups::HLGroup;
 use crate::ui::wrap::WordWrap;
-use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use std::sync::Arc;
@@ -31,7 +21,24 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Math {
     /// One indivisible run of text: a numeral, a name, an operator, a delimiter.
-    Atom { text: String, kind: HLGroup },
+    Atom {
+        text: String,
+        kind: HLGroup,
+        color: Option<HLGroup>,
+    },
+    /// An opaque mathematical leaf whose class and native TeX are supplied by M2.
+    Native {
+        text: String,
+        tex: String,
+        kind: HLGroup,
+        color: Option<HLGroup>,
+    },
+    /// A component whose rendered cells open a supplied target.
+    Linked { body: Box<Math>, target: String },
+    /// A label aligned above an expression without changing its baseline.
+    Over { base: Box<Math>, label: Box<Math> },
+    /// A label centered beneath a base, retaining the base's baseline.
+    Under { base: Box<Math>, label: Box<Math> },
     /// The thin space M2 sets between factors. Factors are juxtaposed, so it takes no
     /// column; it only marks where a long line may break.
     Space,
@@ -58,6 +65,11 @@ pub enum Math {
         right: char,
         body: Box<Math>,
     },
+    /// A matrix with degree labels aligned outside its left delimiter.
+    AnnotatedMatrix {
+        rows: Vec<Vec<Math>>,
+        degrees: Vec<Math>,
+    },
     /// Rows of aligned entries: a matrix, or the branches of a `cases`.
     Grid {
         rows: Vec<Vec<Math>>,
@@ -74,6 +86,8 @@ pub enum Math {
 pub enum GridKind {
     /// Aligned columns and nothing around them; the source says what fences them.
     Bare,
+    /// Unfenced columns with each entry aligned to its left edge.
+    LeftAligned,
     /// Entries the environment itself parenthesises, as `pmatrix` does.
     Matrix,
     /// Branches after a single opening brace.
@@ -179,6 +193,9 @@ impl ScriptColor {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MathStyle {
     pub ink: MathInk,
+    /// Preferred typeset size as a percentage of the terminal text size.
+    pub scale_percent: u16,
+
     /// The colour of subscripts.
     pub index_color: ScriptColor,
     /// The colour of superscripts.
@@ -198,6 +215,7 @@ impl Default for MathStyle {
     fn default() -> Self {
         Self {
             ink: MathInk::default(),
+            scale_percent: UI.math_size_percent,
             index_color: ScriptColor::default(),
             exponent_color: ScriptColor::default(),
             original_text: false,
@@ -224,17 +242,14 @@ impl From<FractionStyle> for MathStyle {
 /// token by its role. A value M2 drew as plain text carries nothing to colour, and
 /// the caller's flat path renders it unchanged.
 pub fn spans(
-    value: &M2Value,
+    value: &SpecNet,
     width: usize,
     style: impl Into<MathStyle>,
 ) -> Result<Vec<SpanLine>, UnsupportedTeX> {
     let style = style.into();
     let mut rows = role_spans(value, width, style)?;
     if style.ink == MathInk::Monochrome {
-        let ink = match value {
-            M2Value::Type(_) => HLGroup::Type,
-            _ => HLGroup::Value,
-        };
+        let ink = HLGroup::Value;
         for span in rows.iter_mut().flatten() {
             if span.kind != HLGroup::Canvas {
                 span.kind = ink;
@@ -246,39 +261,28 @@ pub fn spans(
 
 /// [`spans`], each span in the colour of its role.
 fn role_spans(
-    value: &M2Value,
+    value: &SpecNet,
     width: usize,
     style: MathStyle,
 ) -> Result<Vec<SpanLine>, UnsupportedTeX> {
-    match value {
-        M2Value::Linked { value, target } => {
-            let mut rows = role_spans(value, width, style)?;
-            link(rows.iter_mut().flatten(), target);
-            Ok(rows)
-        }
-        M2Value::Type(inner) => {
-            let mut rows = role_spans(inner, width, style)
-                .unwrap_or_else(|_| MathBlock::fitted(vec![MathBlock::value(inner, style)], width));
-            for span in rows.iter_mut().flatten() {
-                span.kind = HLGroup::Type;
-            }
-            Ok(rows)
-        }
-        M2Value::Tex { source, .. } => {
-            Ok(Math::from_tex(source, style)?.wrapped(width, style.fractions))
-        }
-        M2Value::Collection { kind, items } if *kind != CollectionKind::VerticalList => Ok(
-            MathBlock::fitted(MathBlock::listed(*kind, items, width, style), width),
-        ),
-        M2Value::Collection { .. } | M2Value::HashTable(_) | M2Value::Option { .. } => Ok(
-            MathBlock::fitted(vec![MathBlock::value(value, style)], width),
-        ),
-        M2Value::Token { text, role } => Ok(prose(text, role.group(), width)),
-        M2Value::Location { text, .. } => Ok(prose(text, HLGroup::MarkupLink, width)),
-        M2Value::Net(text) => Ok(prose(text, HLGroup::String, width)),
-        M2Value::Markup { html, .. } => markup::spans(html, width)
-            .ok_or_else(|| UnsupportedTeX("markup that does not read as HTML".into())),
+    if let Some(html) = &value.html {
+        return markup::spans(html, width)
+            .ok_or_else(|| UnsupportedTeX("markup that does not read as HTML".into()));
     }
+    let mut rows = if let Some(text) = &value.text {
+        prose(text, value.group(), width)
+    } else if let Some(kind) = value.collection_kind() {
+        MathBlock::fitted(
+            MathBlock::listed(kind, &value.children, width, style),
+            width,
+        )
+    } else {
+        Math::from_spec_net(value, style).wrapped(width, style.fractions)
+    };
+    if let Some(target) = &value.target {
+        link(rows.iter_mut().flatten(), target);
+    }
+    Ok(rows)
 }
 
 /// Make every one of `spans` link to `target`.
@@ -299,10 +303,20 @@ fn prose(text: &str, group: HLGroup, width: usize) -> Vec<SpanLine> {
 
 /// A value's type annotation as rows no wider than `width`, its pieces set side by
 /// side in the type colour.
-pub fn annotation(parts: &[M2Value], width: usize, style: impl Into<MathStyle>) -> Vec<SpanLine> {
+pub fn annotation(parts: &[SpecNet], width: usize, style: impl Into<MathStyle>) -> Vec<SpanLine> {
     let style = style.into();
     let line = MathBlock::row(parts.iter().map(|part| MathBlock::value(part, style)));
-    MathBlock::fitted(vec![line.retag(HLGroup::Type)], width)
+    let mut rows = MathBlock::fitted(vec![line], width);
+    for span in rows.iter_mut().flatten() {
+        if !matches!(
+            span.kind,
+            HLGroup::Canvas | HLGroup::MapArrow | HLGroup::Punctuation | HLGroup::Delimiter
+        ) {
+            span.kind = HLGroup::Type;
+            span.mark = None;
+        }
+    }
+    rows
 }
 
 /// The TeX between a pair of `$` set on a single row, as running text sets maths:
@@ -343,62 +357,6 @@ pub fn typewriter(text: &str) -> String {
     }
     tex.push('}');
     tex
-}
-
-/// `tex` as a picture sets it.
-pub fn pictured_tex(tex: &str) -> String {
-    PICTURED_FORMS
-        .iter()
-        .fold(tex.to_string(), |tex, (set, drawn)| tex.replace(set, drawn))
-}
-
-/// Add theme colours to complete TeX atoms, preserving the original typesetting commands.
-/// Unsupported input is left to the typesetter unchanged.
-pub fn colored_tex(source: &str, groups: &Groups, style: MathStyle) -> String {
-    let mut input = Input::new(
-        source,
-        MathStyle {
-            blackboard: true,
-            ..style
-        },
-    );
-    if input.expression(&[]).is_err() || !input.rest().is_empty() {
-        return source.to_string();
-    }
-    let source = input.source;
-    let mut ranges = input.highlights;
-    ranges.sort_by_key(|(range, _)| (range.start, std::cmp::Reverse(range.end)));
-    let mut result = String::new();
-    let mut ends = Vec::new();
-    let mut at = 0;
-    for (range, kind) in ranges {
-        while ends.last().is_some_and(|end| *end <= range.start) {
-            let end = ends.pop().expect("an end was checked");
-            result.push_str(&source[at..end]);
-            result.push('}');
-            at = end;
-        }
-        let ink = groups.style(kind);
-        let color = if kind == HLGroup::FractionRule {
-            ink.underline_color.or(ink.fg)
-        } else {
-            ink.fg
-        };
-        let Some(Color::Rgb(r, g, b)) = color else {
-            continue;
-        };
-        result.push_str(&source[at..range.start]);
-        result.push_str(&format!("{{\\color{{#{r:02x}{g:02x}{b:02x}}}"));
-        ends.push(range.end);
-        at = range.start;
-    }
-    while let Some(end) = ends.pop() {
-        result.push_str(&source[at..end]);
-        result.push('}');
-        at = end;
-    }
-    result.push_str(&source[at..]);
-    result
 }
 
 /// A cursor over TeX source, retaining the source ranges of semantic atoms.
@@ -594,7 +552,7 @@ impl<'a> Input<'a> {
                 Some(*kind)
             }
             Math::Fraction { .. } => Some(HLGroup::FractionRule),
-            Math::Delimited { .. } | Math::Grid { .. } => Some(HLGroup::Delimiter),
+            Math::Delimited { .. } | Math::Grid { .. } => Some(HLGroup::Punctuation),
             _ => None,
         };
         if let Some(kind) = kind {
@@ -635,11 +593,11 @@ impl<'a> Input<'a> {
                 while self.eat(THIN_SPACE) {
                     self.skip_trivia();
                 }
-                Ok(Math::atom(", ", HLGroup::Punctuation))
+                Ok(Math::atom(", ", HLGroup::Delimiter))
             }
             _ if DELIMITERS.contains(next) => {
                 self.at += next.len_utf8();
-                Ok(Math::atom(next, HLGroup::Delimiter))
+                Ok(Math::atom(next, HLGroup::Punctuation))
             }
             _ => Err(UnsupportedTeX(format!("unexpected character {next:?}"))),
         }
@@ -693,9 +651,10 @@ impl<'a> Input<'a> {
                 if !self.style.blackboard && self.rest().trim_start().starts_with(BLACKBOARD) =>
             {
                 match self.atom()? {
-                    Math::Atom { text, kind } => Ok(Math::Atom {
+                    Math::Atom { text, kind, color } => Ok(Math::Atom {
                         text: text + INTERVAL_SUFFIX,
                         kind,
+                        color,
                     }),
                     _ => Err(UnsupportedTeX("\\mathbb without a letter".into())),
                 }
@@ -714,7 +673,7 @@ impl<'a> Input<'a> {
             // rather than a character, since a bare backslash starts one.
             "backslash" => Ok(Math::atom("\\", HLGroup::Operator)),
             "setminus" => Ok(Math::atom("\u{2216}", HLGroup::Operator)),
-            brace @ ("{" | "}") => Ok(Math::atom(brace, HLGroup::Delimiter)),
+            brace @ ("{" | "}") => Ok(Math::atom(brace, HLGroup::Punctuation)),
             "left" => self.fences(),
             // A colour already chosen for what it wraps, which the colours inferred from
             // the words inside must not replace: the typesetter paints it as written.
@@ -916,9 +875,6 @@ const CONSTANT_COMMANDS: [(&str, &str); 3] = [
 /// M2's constants TeX spells as one letter in a font: `ii`, as M2 sets it and as it
 /// is drawn, and `CatalanConstant`.
 const CONSTANT_LETTERS: [(&str, &str); 3] = [("mathbf", "i"), ("mathrm", "i"), ("mathrm", "G")];
-/// How a picture redraws what M2 sets: the bold imaginary unit stands out among italic
-/// letters, so it is upright.
-const PICTURED_FORMS: [(&str, &str); 1] = [(r"\mathbf{i}", r"\mathrm{i}")];
 /// The words code paints as Booleans.
 const BOOLEAN_WORDS: [&str; 2] = ["true", "false"];
 /// The word code paints as a builtin among those M2 sets in typewriter face.
@@ -1067,6 +1023,7 @@ impl Math {
         Self::Atom {
             text: text.into(),
             kind,
+            color: None,
         }
     }
 
@@ -1074,14 +1031,14 @@ impl Math {
     /// spells it.
     fn lettered(self, alphabet: &Alphabet, glyphs: bool) -> Self {
         match self {
-            Self::Atom { text, kind } if text.chars().count() == 1 => {
+            Self::Atom { text, kind, color } if text.chars().count() == 1 => {
                 let letter = text.chars().next().expect("one character");
                 let text = match alphabet.glyph(letter).filter(|_| glyphs) {
                     Some(glyph) => glyph.to_string(),
                     None if alphabet.doubled_in_code => text.repeat(2),
                     None => text,
                 };
-                Self::Atom { text, kind }
+                Self::Atom { text, kind, color }
             }
             other => other,
         }
@@ -1122,9 +1079,34 @@ impl Math {
     /// that structure it.
     fn tinted(self, role: HLGroup) -> Self {
         match self {
-            Self::Atom { text, kind } => Self::Atom {
+            Self::Native {
                 text,
-                kind: kind.scripted(role),
+                tex,
+                kind,
+                color: _,
+            } => Self::Native {
+                text,
+                tex,
+                kind,
+                color: Some(kind.scripted(role)),
+            },
+
+            Self::Over { base, label } => Self::Over {
+                base: Box::new(base.tinted(role)),
+                label: Box::new(label.tinted(role)),
+            },
+            Self::Under { base, label } => Self::Under {
+                base: Box::new(base.tinted(role)),
+                label: Box::new(label.tinted(role)),
+            },
+            Self::Linked { body, target } => Self::Linked {
+                body: Box::new(body.tinted(role)),
+                target,
+            },
+            Self::Atom { text, kind, .. } => Self::Atom {
+                text,
+                kind,
+                color: Some(kind.scripted(role)),
             },
             Self::Row(pieces) => {
                 Self::Row(pieces.into_iter().map(|piece| piece.tinted(role)).collect())
@@ -1149,6 +1131,16 @@ impl Math {
                 right,
                 body: Box::new(body.tinted(role)),
             },
+            Self::AnnotatedMatrix { rows, degrees } => Self::AnnotatedMatrix {
+                rows: rows
+                    .into_iter()
+                    .map(|row| row.into_iter().map(|entry| entry.tinted(role)).collect())
+                    .collect(),
+                degrees: degrees
+                    .into_iter()
+                    .map(|entry| entry.tinted(role))
+                    .collect(),
+            },
             Self::Grid { rows, kind } => Self::Grid {
                 rows: rows
                     .into_iter()
@@ -1163,7 +1155,7 @@ impl Math {
     /// Give every atom in a subtree a different role.
     fn retag(self, kind: HLGroup) -> Self {
         match self {
-            Self::Atom { text, .. } => Self::Atom { text, kind },
+            Self::Atom { text, color, .. } => Self::Atom { text, kind, color },
             Self::Row(pieces) => {
                 Self::Row(pieces.into_iter().map(|piece| piece.retag(kind)).collect())
             }
@@ -1174,7 +1166,22 @@ impl Math {
     /// Lay out as rows of spans around a baseline, fractions set in `fractions`.
     pub fn layout(&self, fractions: FractionStyle) -> MathBlock {
         match self {
-            Self::Atom { text, kind } => MathBlock::atom(text, *kind),
+            Self::Native {
+                text, kind, color, ..
+            } => MathBlock::text(text, color.unwrap_or(*kind)),
+            Self::Atom { text, kind, color } => MathBlock::text(text, color.unwrap_or(*kind)),
+            Self::Over { base, label } => {
+                let base = base.layout(fractions);
+                let label = label.layout(fractions);
+                let baseline = label.height() + base.baseline;
+                MathBlock::stack(vec![label, base], baseline, Align::Centre)
+            }
+            Self::Under { base, label } => {
+                let base = base.layout(fractions);
+                let baseline = base.baseline;
+                MathBlock::stack(vec![base, label.layout(fractions)], baseline, Align::Centre)
+            }
+            Self::Linked { body, target } => body.layout(fractions).linked(target),
             Self::Space => MathBlock::empty(),
             Self::Row(pieces) => MathBlock::row(Self::chunks(pieces, fractions)),
             Self::Fraction {
@@ -1231,6 +1238,9 @@ impl Math {
                     }
                 }
             }
+            Self::AnnotatedMatrix { rows, degrees } => {
+                MathBlock::grid_with_degrees(rows, GridKind::Matrix, fractions, Some(degrees))
+            }
             Self::Grid { rows, kind } => MathBlock::grid(rows, *kind, fractions),
         }
     }
@@ -1261,7 +1271,7 @@ impl Math {
     ///
     /// For a String, a Net or null M2 answers `tex` with the raw text instead, which
     /// is not maths -- read as TeX, `hello world` would set as the name `helloworld`.
-    fn from_tex(source: &str, style: MathStyle) -> Result<Self, UnsupportedTeX> {
+    pub fn from_tex(source: &str, style: MathStyle) -> Result<Self, UnsupportedTeX> {
         let maths = source
             .strip_prefix('$')
             .and_then(|tex| tex.strip_suffix('$'))
@@ -1345,9 +1355,12 @@ impl Math {
 
     /// Whether this separates its neighbours rather than binding to one.
     fn is_binary(&self) -> bool {
+        if let Self::Over { base, .. } = self {
+            return base.is_binary();
+        }
         matches!(
             self,
-            Self::Atom { text, kind: HLGroup::Operator }
+            Self::Atom { text, kind: HLGroup::Operator, .. }
                 if matches!(
                     text.as_str(),
                     "+" | "-"
@@ -1365,10 +1378,12 @@ impl Math {
 
     /// This script set on its base's own row, when every character of it can shift.
     fn inline_script(&self, shift: Shift) -> Option<MathBlock> {
-        let Self::Atom { text, kind } = self else {
+        let Self::Atom { text, kind, color } = self else {
             return None;
         };
-        shift.form(text).map(|text| MathBlock::atom(&text, *kind))
+        shift
+            .form(text)
+            .map(|text| MathBlock::atom(&text, color.unwrap_or(*kind)))
     }
 }
 
@@ -1430,14 +1445,6 @@ pub struct MathBlock {
 }
 
 impl MathBlock {
-    /// Paint a complete semantic value without changing its layout.
-    fn retag(mut self, kind: HLGroup) -> Self {
-        for span in self.rows.iter_mut().flatten() {
-            span.kind = kind;
-        }
-        self
-    }
-
     /// The same block, every span of it linking to `target`.
     fn linked(mut self, target: &str) -> Self {
         link(self.rows.iter_mut().flatten(), target);
@@ -1473,6 +1480,7 @@ impl MathBlock {
     }
 
     /// The row that aligns with neighbouring blocks.
+    #[cfg(test)]
     pub const fn baseline(&self) -> usize {
         self.baseline
     }
@@ -1569,45 +1577,15 @@ impl MathBlock {
     /// A value M2 sent, laid out whole: TeX from its structure, a container from its
     /// entries, a token in its role's colour, and whatever M2 drew as plain text as
     /// a string.
-    fn value(value: &M2Value, style: MathStyle) -> Self {
-        match value {
-            M2Value::Type(value) => Self::value(value, style).retag(HLGroup::Type),
-            M2Value::Linked { value, target } => Self::value(value, style).linked(target),
-            M2Value::Tex {
-                source, fallback, ..
-            } => Math::from_tex(source, style).map_or_else(
-                |_| Self::text(fallback, HLGroup::Value),
-                |math| math.layout(style.fractions),
-            ),
-            M2Value::Net(text) => Self::text(text, HLGroup::String),
-            M2Value::Markup { fallback, .. } => Self::text(fallback, HLGroup::Value),
-            M2Value::Token { text, role } => Self::text(text, role.group()),
-            M2Value::Location { text, .. } => Self::text(text, HLGroup::MarkupLink),
-            M2Value::Collection {
-                kind: CollectionKind::VerticalList,
-                items,
-            } => Self::braced(items.iter().map(|item| Self::value(item, style)).collect()),
-            M2Value::Collection { kind, items } => Self::listed(*kind, items, usize::MAX, style)
-                .into_iter()
-                .next()
-                .expect("an unbounded width takes a collection on one line"),
-            M2Value::Option { key, value } => Self::row([
-                Self::value(key, style),
-                Self::atom(SPACED_OPTION_ARROW, HLGroup::Operator),
-                Self::value(value, style),
-            ]),
-            M2Value::HashTable(entries) => Self::braced(
-                entries
-                    .iter()
-                    .map(|[key, value]| {
-                        Self::row([
-                            Self::value(key, style),
-                            Self::atom(SPACED_OPTION_ARROW, HLGroup::Operator),
-                            Self::value(value, style),
-                        ])
-                    })
-                    .collect(),
-            ),
+    fn value(value: &SpecNet, style: MathStyle) -> Self {
+        let block = if let Some(text) = &value.text {
+            Self::text(text, value.group())
+        } else {
+            Math::from_spec_net(value, style).layout(style.fractions)
+        };
+        match &value.target {
+            Some(target) => block.linked(target),
+            None => block,
         }
     }
 
@@ -1619,7 +1597,7 @@ impl MathBlock {
     /// the first entry.
     fn listed(
         kind: CollectionKind,
-        items: &[M2Value],
+        items: &[SpecNet],
         width: usize,
         style: MathStyle,
     ) -> Vec<Self> {
@@ -1632,7 +1610,7 @@ impl MathBlock {
                 let entry = Self::value(item, style);
                 match index == last {
                     true => entry,
-                    false => Self::row([entry, Self::atom(",", HLGroup::Punctuation), Self::gap()]),
+                    false => Self::row([entry, Self::atom(",", HLGroup::Delimiter), Self::gap()]),
                 }
             })
             .collect();
@@ -1656,17 +1634,6 @@ impl MathBlock {
                 Self::row([lead, line].into_iter().chain(tail))
             })
             .collect()
-    }
-
-    /// Rows set one under another between braces, as M2 sets a vertical list and a
-    /// hash table.
-    fn braced(rows: Vec<Self>) -> Self {
-        if rows.is_empty() {
-            return Self::atom("{}", HLGroup::Delimiter);
-        }
-        let height: usize = rows.iter().map(Self::height).sum();
-        let body = Self::stack(rows, height.saturating_sub(1) / 2, Align::Left);
-        Self::row([Self::gap(), body, Self::gap()]).fenced("{", "}")
     }
 
     /// Text M2 drew itself, row for row, all in one group.
@@ -1806,7 +1773,7 @@ impl MathBlock {
             .find(|(family, _)| *family == fence)
             .filter(|_| height > 1)
         else {
-            return Self::atom(fence, HLGroup::Delimiter);
+            return Self::atom(fence, HLGroup::Punctuation);
         };
         let pointed = baseline.clamp(1, height.saturating_sub(2).max(1));
         Self {
@@ -1818,7 +1785,7 @@ impl MathBlock {
                         _ if row == pointed => tip,
                         _ => extension,
                     };
-                    vec![TextSpan::new(glyph, HLGroup::Delimiter)]
+                    vec![TextSpan::new(glyph, HLGroup::Punctuation)]
                 })
                 .collect(),
             baseline,
@@ -1827,6 +1794,15 @@ impl MathBlock {
 
     /// Entries aligned into columns, fenced by whatever the grid's kind calls for.
     fn grid(rows: &[Vec<Math>], kind: GridKind, fractions: FractionStyle) -> Self {
+        Self::grid_with_degrees(rows, kind, fractions, None)
+    }
+
+    fn grid_with_degrees(
+        rows: &[Vec<Math>],
+        kind: GridKind,
+        fractions: FractionStyle,
+        degrees: Option<&[Math]>,
+    ) -> Self {
         let laid: Vec<Vec<Self>> = rows
             .iter()
             .map(|row| row.iter().map(|entry| entry.layout(fractions)).collect())
@@ -1848,16 +1824,48 @@ impl MathBlock {
             .map(|row| {
                 row.into_iter()
                     .enumerate()
-                    .map(|(column, entry)| entry.pad(widths[column], Align::Centre))
+                    .map(|(column, entry)| {
+                        let alignment = if kind == GridKind::LeftAligned {
+                            Align::Left
+                        } else {
+                            Align::Centre
+                        };
+                        entry.pad(widths[column], alignment)
+                    })
                     .reduce(|left, right| left.beside(column_gap()).beside(right))
                     .unwrap_or_else(Self::empty)
             })
             .collect();
 
+        if let Some(degrees) = degrees {
+            let mut labels = Vec::new();
+            let mut entries = Vec::new();
+            for (index, row) in stacked.into_iter().enumerate() {
+                let degree = degrees
+                    .get(index)
+                    .map(|degree| degree.layout(fractions))
+                    .unwrap_or_else(Self::empty);
+                let baseline = degree.baseline.max(row.baseline);
+                let below = (degree.height() - degree.baseline).max(row.height() - row.baseline);
+                let align = |block: Self| {
+                    let mut rows = vec![Vec::new(); baseline - block.baseline];
+                    rows.extend(block.rows);
+                    rows.resize(baseline + below, Vec::new());
+                    Self { rows, baseline }
+                };
+                labels.push(align(degree));
+                entries.push(align(row));
+            }
+            let height: usize = entries.iter().map(Self::height).sum();
+            let baseline = height.saturating_sub(1) / 2;
+            let labels = Self::stack(labels, baseline, Align::Left);
+            let body = Self::stack(entries, baseline, Align::Left).fenced("(", ")");
+            return labels.beside(Self::atom(" ", HLGroup::Canvas)).beside(body);
+        }
         let height: usize = stacked.iter().map(Self::height).sum();
         let body = Self::stack(stacked, height.saturating_sub(1) / 2, Align::Left);
         match kind {
-            GridKind::Bare => body,
+            GridKind::Bare | GridKind::LeftAligned => body,
             GridKind::Matrix => body.fenced("(", ")"),
             GridKind::Cases => Self::fence("{", body.height(), body.baseline).beside(body),
         }
@@ -1924,7 +1932,6 @@ enum Align {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::Role;
 
     fn with_blackboard(blackboard: bool) -> MathStyle {
         MathStyle {
@@ -2031,39 +2038,13 @@ mod tests {
     }
 
     #[test]
-    fn an_explicit_text_colour_keeps_its_own_colour_inside_a_coloured_formula() {
-        let groups = Groups::default();
-        let tex = r"\left\{\textcolor{#112233}{\texttt{Z}},\,1\right\}";
-
-        let painted = colored_tex(tex, &groups, MathStyle::default());
-
-        assert!(
-            painted.contains(r"\textcolor{#112233}{\texttt{Z}}"),
-            "{painted}"
-        );
-        assert_ne!(painted, tex);
-        assert!(Math::from_tex(&format!("${tex}$"), with_blackboard(true)).is_ok());
-    }
-
-    #[test]
     fn a_rings_precision_subscript_shares_its_type_colour() {
-        let groups = Groups::default();
         for precision in ["53", "p"] {
             let source = format!(r"{{\mathbb R}}_{{{precision}}}");
             let rows = Math::parse(&source)
                 .unwrap()
                 .wrapped(80, FractionStyle::Stacked);
             assert!(rows.iter().flatten().all(|span| span.kind == HLGroup::Type));
-            let painted = colored_tex(&source, &groups, MathStyle::default());
-            let Color::Rgb(r, g, b) = groups.style(HLGroup::Type).fg.unwrap() else {
-                panic!("the theme has an RGB type colour");
-            };
-            assert!(
-                painted.contains(&format!(
-                    r"_{{\color{{#{r:02x}{g:02x}{b:02x}}}{{{precision}}}}}"
-                )),
-                "{painted}"
-            );
         }
         let rows = Math::parse("x_{2}")
             .unwrap()
@@ -2076,7 +2057,6 @@ mod tests {
 
     #[test]
     fn interval_fields_keep_their_type_highlights() {
-        let groups = crate::ui::theme::groups::scheme();
         for (source, name) in [(r"\square\mathbb R", "RRi"), (r"\square\mathbb C", "CCi")] {
             assert_eq!(
                 Math::parse(source).expect("an interval field parses"),
@@ -2090,7 +2070,6 @@ mod tests {
                 input.highlights,
                 [(0..7, HLGroup::Type), (7..source.len(), HLGroup::Type)]
             );
-            assert_ne!(colored_tex(source, groups, MathStyle::default()), source);
         }
     }
 
@@ -2273,16 +2252,12 @@ mod tests {
     }
 
     /// A value as M2 sends it for anything with a TeX form.
-    fn tex(maths: &str) -> M2Value {
-        M2Value::Tex {
-            source: format!("${maths}$"),
-            fallback: maths.into(),
-            code: String::new(),
-        }
+    fn tex(maths: &str) -> SpecNet {
+        SpecNet::tex_fixture(format!("${maths}$"), maths.into(), String::new())
     }
 
-    fn collection(kind: CollectionKind, items: Vec<M2Value>) -> M2Value {
-        M2Value::Collection { kind, items }
+    fn collection(kind: CollectionKind, items: Vec<SpecNet>) -> SpecNet {
+        SpecNet::collection_fixture(kind, items)
     }
 
     /// Inside a container a number is still a number: entries are rendered one by
@@ -2298,7 +2273,7 @@ mod tests {
             .map(|span| (span.content.as_str(), span.kind))
             .collect();
         for role in [
-            ("{", HLGroup::Delimiter),
+            ("{", HLGroup::Punctuation),
             ("1", HLGroup::Number),
             ("x", HLGroup::Variable),
         ] {
@@ -2326,16 +2301,10 @@ mod tests {
     /// M2 answers `tex` for a String with the raw string, which is not maths.
     #[test]
     fn a_string_is_never_read_as_maths() {
-        let string = M2Value::Tex {
-            source: "hello world".into(),
-            fallback: "hello world".into(),
-            code: String::new(),
-        };
+        let string = SpecNet::leaf("String", "hello world");
 
-        assert!(
-            spans(&string, 80, FractionStyle::Stacked).is_err(),
-            "left to the plain text path"
-        );
+        let rendered = spans(&string, 80, FractionStyle::Stacked).expect("opaque text renders");
+        assert_eq!(text(&rendered), ["hello world"]);
         let rows = spans(
             &collection(CollectionKind::List, vec![string]),
             80,
@@ -2345,7 +2314,7 @@ mod tests {
         assert_eq!(text(&rows), ["{hello world}"]);
         assert!(rows[0]
             .iter()
-            .any(|span| span.content == "hello world" && span.kind == HLGroup::Value));
+            .any(|span| span.content == "hello world" && span.kind == HLGroup::String));
     }
 
     /// A long list breaks between entries, each line ending on its comma.
@@ -2391,11 +2360,8 @@ mod tests {
         );
     }
 
-    fn token(text: &str, role: Role) -> M2Value {
-        M2Value::Token {
-            text: text.into(),
-            role,
-        }
+    fn token(text: &str, role: &str) -> SpecNet {
+        SpecNet::token_fixture(text.into(), role)
     }
 
     /// The group each span of a single-row rendering was given, by its text.
@@ -2412,11 +2378,11 @@ mod tests {
         let list = collection(
             CollectionKind::List,
             vec![
-                token("null", Role::Null),
-                token("true", Role::Boolean),
-                token("hi", Role::String),
-                token("print", Role::Function),
-                token("Type", Role::Type),
+                token("null", "Nothing"),
+                token("true", "Boolean"),
+                token("hi", "String"),
+                token("print", "Function"),
+                token("Type", "Type"),
             ],
         );
         let roles = roles(&spans(&list, 80, FractionStyle::Stacked).expect("renders"));
@@ -2804,12 +2770,8 @@ mod tests {
         .is_ok());
     }
 
-    fn tex_value(source: &str) -> M2Value {
-        M2Value::Tex {
-            source: source.into(),
-            fallback: source.into(),
-            code: source.into(),
-        }
+    fn tex_value(source: &str) -> SpecNet {
+        SpecNet::tex_fixture(source.into(), source.into(), source.into())
     }
 
     #[test]
@@ -2831,8 +2793,8 @@ mod tests {
         assert_eq!(of(&own, "1"), Some(HLGroup::Number));
         let symbol = kinds(ScriptColor::Symbol);
         assert_eq!(of(&symbol, "1"), Some(HLGroup::Variable));
-        assert_eq!(of(&symbol, ","), Some(HLGroup::Punctuation));
-        assert_eq!(of(&symbol, "{"), Some(HLGroup::Delimiter));
+        assert_eq!(of(&symbol, ","), Some(HLGroup::Delimiter));
+        assert_eq!(of(&symbol, "{"), Some(HLGroup::Punctuation));
         assert_eq!(
             of(&symbol, "³"),
             Some(HLGroup::Number),
@@ -2870,8 +2832,11 @@ mod tests {
             .flatten()
             .filter(|span| span.kind != HLGroup::Canvas)
             .all(|span| span.kind == HLGroup::Value));
-        let ring = M2Value::Type(Box::new(tex_value("$R$")));
+        let ring = SpecNet::leaf("Type", "R");
         let ring = spans(&ring, 80, style).expect("parses");
-        assert!(ring.iter().flatten().all(|span| span.kind == HLGroup::Type));
+        assert!(ring
+            .iter()
+            .flatten()
+            .all(|span| span.kind == HLGroup::Value));
     }
 }

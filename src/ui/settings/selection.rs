@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use these_macros_should_be_illegal::discriminated_str;
 
 use super::rendering::switch;
-use super::tabs::SettingRow;
+use super::row::SettingRow;
 use super::Settings;
 use crate::ui::controller::picker::PickerValue;
 use crate::ui::cycle::cyclic;

@@ -2,11 +2,11 @@
 
 use these_macros_should_be_illegal::discriminated_str;
 
-use super::tabs::SettingRow;
+use super::row::SettingRow;
 use super::Settings;
 use crate::ui::controller::picker::PickerValue;
 use crate::ui::cycle::{cycled, cyclic};
-use crate::ui::theme::Appearance;
+use crate::ui::theme::AppearanceSettings;
 
 cyclic! {
     /// One independently cyclic axis of a colour appearance.
@@ -22,7 +22,7 @@ cyclic! {
 
 impl AppearanceSetting {
     /// Every appearance this axis steps `appearance` through.
-    fn choices(self, appearance: Appearance) -> Vec<Appearance> {
+    fn choices(self, appearance: AppearanceSettings) -> Vec<AppearanceSettings> {
         match self {
             Self::Theme => appearance.themes(),
             Self::Contrast => appearance.contrasts(),
@@ -32,7 +32,7 @@ impl AppearanceSetting {
     }
 
     /// How `appearance` reads along this axis.
-    fn shown(self, appearance: Appearance) -> String {
+    fn shown(self, appearance: AppearanceSettings) -> String {
         match self {
             Self::Theme => appearance.scheme().label().to_string(),
             Self::Contrast => appearance.variant().label().to_string(),

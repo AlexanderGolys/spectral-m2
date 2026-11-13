@@ -4,7 +4,32 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Complexes compose labelled map expressions, with differential matrices above arrows and homological degrees beneath modules, in structured Unicode and typeset previews.
+
+- Output mode controls sit in the value border, with dimmed alternative icons and the current mode name. Their position is configurable. The controls select M2 representations (`specNet`, `net`, `string`, `tex`, `markup` and `html`), independently of the display capabilities chosen in settings. Select `net` for M2's own terminal spelling.
+
+- Values retain M2 expression structure and component classes through `specNet`, with independent `specType` formatting for type annotations. Type descriptions default to the outer type; `specType'(depth, value)` controls the number of constructor layers, with `specType value` defaulting to one. Custom types compose existing expression constructors without shell changes; unsupported constructors retain their class and children.
+- Mathematical output uses the transmitted classes for highlighting in Unicode and typeset rendering, without recovering roles from TeX. Type annotations use a uniform type colour; map arrows have their own theme group.
+
 ### Fixed
+
+- Italic package names retain their semantic colour in typeset output.
+
+- Hash tables retain structured rendering around opaque nested values. Numbered vertical lists show zero-based indices and left-aligned entries. Typeset package names respect the theme's italic styling.
+
+- Structured brackets and matrix parentheses follow `Punctuation`, matching brackets in code. Commas follow `Delimiter`; arrows use `MapArrow`, inheriting the normal text colour.
+
+- Embedded formatter controls respond to clicks, mode labels keep their icon positions, and output mode position accepts `off`. Unsupported structures and archived terminal examples use `net` instead of a generic structured preview.
+- Documentation signatures and examples use M2's resolved type names for highlighting. Matrix degrees remain outside the matrix body, map labels use stretched arrows, and tuple subscripts follow M2's TeX spelling. Formula spans inherit their containing background.
+- Typeset maths size is adjustable, with wrapping at separators and suitable operators. Type annotations retain copyable text. Automatic diagnostics and signature hints have separate settings, both off by default; enabled signature hints retain all returned overloads.
+
+- Output blocks share one formatter selector on the outer border, without internal separators. Typeset symbols retain their typeface when neighbouring numbers or strings change.
+
+- Plain TeX previews use a single foreground colour; semantic highlighting comes from the component classes in `specNet`.
+- Changing exponent or index colours preserves the original mathematical typefaces.
+- Typeset typewriter text uses the terminal font’s contextual shaping, including operator ligatures such as `=>`.
 
 - `Ctrl+PageUp`, `Ctrl+PageDown`, `Left` and `Right` no longer crash the shell while a documentation or source page is open beside the session; the page stays where it is.
 

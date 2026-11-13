@@ -10,6 +10,8 @@ mod errors;
 mod input;
 mod ui;
 
+pub(crate) mod macros;
+
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::process::exit;
 

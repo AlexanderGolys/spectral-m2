@@ -119,11 +119,7 @@ impl Link {
     /// The same link drawn `offset` away.
     pub fn moved(self, offset: Offset) -> Self {
         Self {
-            cells: self
-                .cells
-                .into_iter()
-                .map(|cells| cells + offset)
-                .collect(),
+            cells: self.cells.into_iter().map(|cells| cells + offset).collect(),
             ..self
         }
     }

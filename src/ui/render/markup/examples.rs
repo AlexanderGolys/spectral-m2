@@ -1,23 +1,23 @@
 //! Archived M2 example transcripts presented through the session's own blocks,
 //! with the values of any computed again drawn from their structure instead.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::iter;
 use std::rc::Rc;
 use std::sync::LazyLock;
 
 use m2_syn::native::parse_native;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Offset, Rect};
+use ratatui::layout::{Offset, Position, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use regex::Regex;
 use unicode_width::UnicodeWidthStr;
 
 use crate::backend::transcript::{captured_error, strip_m2_location};
-use crate::backend::{M2Response, M2Value};
+use crate::backend::{M2Response, PreviewMode};
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::{merge, PageColors};
 use crate::ui::block::{Block, HLSpan, Link};
@@ -25,6 +25,7 @@ use crate::ui::cell::{response_blocks, CellState, EvaluationBlock, OutputBlock, 
 use crate::ui::config::UI;
 use crate::ui::render::selection::Inclusions;
 use crate::ui::render::{RenderContext, RECENT_OUTPUTS};
+use crate::ui::theme::groups::HLGroup;
 
 use super::CODE;
 
@@ -34,11 +35,26 @@ static OUTPUT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^o+([1-9][0-9]*) ([=:]) ?").expect("valid example output prompt")
 });
 
+type ExampleFormatters = HashMap<(u64, u32), Rc<Cell<Option<PreviewMode>>>>;
+
 thread_local! {
     /// What examples answered when computed again, by page and input number.
     static COMPUTED: RefCell<HashMap<(u64, u32), Rc<M2Response>>> = RefCell::default();
     /// What a page's analysis found in its code, by page and source.
+    static TYPES: RefCell<HashMap<u64, HashSet<String>>> = RefCell::default();
+    static MODES: RefCell<ExampleFormatters> = RefCell::default();
     static COLORS: RefCell<HashMap<u64, HashMap<String, Vec<HLSpan>>>> = RefCell::default();
+}
+
+pub fn remember_types(page: u64, types: &[String]) -> bool {
+    TYPES.with_borrow_mut(|known| {
+        let types = types.iter().cloned().collect::<HashSet<_>>();
+        if known.get(&page) == Some(&types) {
+            return false;
+        }
+        known.insert(page, types);
+        true
+    })
 }
 
 pub fn remember_colors(colors: PageColors) {
@@ -54,12 +70,36 @@ pub fn forget_colors() {
 /// `source` of `page` in its syntax colours, under what analysis found in it.
 pub fn highlighted(page: u64, source: &str) -> Vec<HLSpan> {
     let lexical = CODE.with_borrow_mut(|highlighter| highlighter.highlight(source));
-    COLORS.with_borrow(
-        |known| match known.get(&page).and_then(|code| code.get(source)) {
-            Some(semantic) => merge(lexical, semantic),
-            None => lexical,
-        },
-    )
+    let marked =
+        COLORS.with_borrow(
+            |known| match known.get(&page).and_then(|code| code.get(source)) {
+                Some(semantic) => merge(lexical.clone(), semantic),
+                None => lexical.clone(),
+            },
+        );
+    let types = TYPES.with_borrow(|known| {
+        let Some(types) = known.get(&page) else {
+            return Vec::new();
+        };
+        let mut overlays = Vec::new();
+        let mut start = None;
+        for (offset, character) in source.char_indices().chain(iter::once((source.len(), ' '))) {
+            if character.is_alphanumeric() || character == '_' {
+                start.get_or_insert(offset);
+            } else if let Some(from) = start.take() {
+                if types.contains(&source[from..offset])
+                    && !lexical.iter().any(|span| {
+                        span.content.contains(&from)
+                            && matches!(span.kind, HLGroup::String | HLGroup::Comment)
+                    })
+                {
+                    overlays.push(HLSpan::new(from..offset, HLGroup::Type));
+                }
+            }
+        }
+        overlays
+    });
+    merge(marked, &types)
 }
 
 /// Keep what example `number` of `page` answered when computed again, to draw
@@ -281,9 +321,9 @@ impl Example {
             } else {
                 CellState::Null
             };
-            let value = self.value.map(|value| {
-                OutputBlock::rendered(M2Value::Net(value), self.ty).numbered(self.number)
-            });
+            let value = self
+                .value
+                .map(|value| OutputBlock::value(value, self.ty).numbered(self.number));
             block.succeed(0, self.number, state, Vec::new(), printed, value);
         }
         block
@@ -388,7 +428,24 @@ impl Slice {
 }
 
 /// Blocks painted into lines, and where among those lines their text lies.
+pub(super) struct EmbeddedControl {
+    pub area: Rect,
+    pub block: Rc<RefCell<EvaluationBlock>>,
+    pub context: RenderContext,
+}
+
+impl EmbeddedControl {
+    pub fn cycle(&self, position: Position) -> bool {
+        self.area.contains(position)
+            && self.block.borrow_mut().cycle_renderer(
+                Position::new(position.x - self.area.x, position.y - self.area.y),
+                &self.context,
+            )
+    }
+}
+
 pub(super) struct Painted {
+    pub controls: Vec<EmbeddedControl>,
     pub lines: Vec<Line<'static>>,
     pub inclusions: Inclusions,
     pub links: Vec<Link>,
@@ -413,17 +470,29 @@ pub fn render(
         lines: Vec::new(),
         inclusions: Inclusions::default(),
         links: Vec::new(),
+        controls: Vec::new(),
     };
     for example in transcript(source, example_width)? {
-        let block = match computed(page, example.number) {
+        let number = example.number;
+        let mut block = match computed(page, example.number) {
             Some(response) => example.computed(page, &response),
             None => example.block(page),
         };
+        let choice =
+            MODES.with_borrow_mut(|modes| modes.entry((page, number)).or_default().clone());
+        block.share_formatter(choice);
         let next = painted(&block, context);
         let top = i32::try_from(rendered.lines.len()).unwrap_or(i32::MAX);
         rendered
             .inclusions
             .merge(next.inclusions + Offset::new(0, top));
+        rendered.controls.push(EmbeddedControl {
+            area: Rect::new(0, top as u16, context.width(), next.lines.len() as u16),
+            block: Rc::new(RefCell::new(block)),
+            context: context
+                .full_output()
+                .with_recent_outputs([None; RECENT_OUTPUTS]),
+        });
         rendered.lines.extend(next.lines);
         rendered.links.extend(
             next.links
@@ -470,6 +539,7 @@ fn painted(block: &EvaluationBlock, context: &RenderContext) -> Painted {
     block.local_selection_inclusions(&context, &mut inclusions);
     let links = block.links(&context);
     Painted {
+        controls: Vec::new(),
         lines: buffer_lines(&buffer),
         inclusions,
         links,
@@ -509,6 +579,7 @@ fn buffer_lines(buffer: &Buffer) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::SpecNet;
     use crate::ui::theme::groups::HLGroup;
 
     /// The print width M2 runs documentation examples at.
@@ -542,9 +613,10 @@ mod tests {
                 number: 1,
                 is_error: false,
                 transcript: String::new(),
-                value: Some(M2Value::Net("four".into())),
+                value: Some(SpecNet::plain("four".into())),
                 type_info: Some("ZZ".into()),
                 type_parts: Vec::new(),
+                previews: Vec::new(),
                 has_value: true,
                 depth: 1,
                 names: Vec::new(),

@@ -535,18 +535,14 @@ mod tests {
 
     #[test]
     fn reference_values_obey_the_same_selected_math_renderer_as_the_feed() {
-        use crate::backend::M2Value;
+        use crate::backend::SpecNet;
         use crate::ui::cell::OutputBlock;
         use crate::ui::render::maths::MathDisplay;
         let mut editor = Editor::new(String::new());
         editor.settings.rendering.maths = MathDisplay::Ascii;
         editor.set_reference(vec![Box::new(
             OutputBlock::rendered(
-                M2Value::Tex {
-                    source: "$\\frac{1}{2}$".into(),
-                    fallback: "1/2".into(),
-                    code: "1/2".into(),
-                },
+                SpecNet::tex_fixture("$\\frac{1}{2}$".into(), "1/2".into(), "1/2".into()),
                 None,
             )
             .without_frame(),
@@ -557,17 +553,17 @@ mod tests {
 
     #[test]
     fn reference_code_background_keeps_the_panel_canvas_and_text_colours() {
-        use crate::backend::M2Value;
+        use crate::backend::SpecNet;
         use crate::ui::cell::OutputBlock;
         let mut editor = Editor::new(String::new());
         editor.set_context(true, true, true);
         editor.set_reference(vec![Box::new(
             OutputBlock::rendered(
-                M2Value::Markup {
-                    html: "<p>CanvasProbe</p><pre>codeProbe = 1</pre>".into(),
-                    fallback: String::new(),
-                    example_width: 60,
-                },
+                SpecNet::document(
+                    "<p>CanvasProbe</p><pre>codeProbe = 1</pre>".into(),
+                    String::new(),
+                    60,
+                ),
                 None,
             )
             .without_frame(),

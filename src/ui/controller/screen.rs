@@ -745,7 +745,7 @@ mod tests {
     use ratatui::Terminal;
 
     use super::*;
-    use crate::backend::M2Value;
+    use crate::backend::SpecNet;
     use crate::code::highlight::SyntaxHighlighter;
     use crate::ui::action::Action;
     use crate::ui::block::Block;
@@ -1202,11 +1202,7 @@ mod tests {
 
     fn page(html: &str) -> Box<dyn Block> {
         Box::new(OutputBlock::rendered(
-            M2Value::Markup {
-                html: html.into(),
-                fallback: String::new(),
-                example_width: 77,
-            },
+            SpecNet::document(html.into(), String::new(), 77),
             None,
         ))
     }

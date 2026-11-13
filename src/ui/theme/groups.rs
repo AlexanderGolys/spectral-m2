@@ -187,7 +187,6 @@ macro_rules! highlight_groups {
         #[enum_fn(pub const description -> &'static str)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub enum HLGroup {$(
-            #[doc = concat!("The `", stringify!($group), "` highlight group.")]
             $group = stringify!($group),
         )+}
 
@@ -204,7 +203,6 @@ macro_rules! highlight_groups {
         #[allow(non_snake_case)]
         #[derive(Clone, Copy)]
         pub struct Groups {$(
-            #[doc = concat!("Resolved style for `", stringify!($group), "`.")]
             pub $group: Style,
         )+}
 
@@ -245,6 +243,11 @@ macro_rules! highlight_groups {
         }
 
         impl Groups {
+            /// Transform resolved styles without changing the group declarations.
+            pub fn map_styles(&self, map: impl Fn(HLGroup, Style) -> Style) -> Self {
+                Self { $($group: map(HLGroup::$group, self.$group),)+ }
+            }
+
             /// Every group with its resolved style, in declaration order.
             pub fn styled_groups(&self) -> Vec<(HLGroup, Style)> {
                 vec![$((HLGroup::$group, self.$group),)+]
@@ -571,10 +574,12 @@ accessors! {
     name_occurrence: NameOccurrence,
     signature_active_parameter: SignatureActiveParameter,
     view_divider: ViewDivider,
+
     syntax_tree_branch: SyntaxTreeBranch,
     syntax_tree_token_marker: SyntaxTreeTokenMarker,
     syntax_tree_label_separator: SyntaxTreeLabelSeparator,
     syntax_tree_border: SyntaxTreeBorder,
+
     error_border: ErrorBorder,
     error_message: ErrorMessage,
     error_title: ErrorTitle,
@@ -587,7 +592,7 @@ accessors! {
 /// The default appearance's resolved scheme, used before any theme is published.
 impl Default for Groups {
     fn default() -> Self {
-        Appearance::default().groups()
+        AppearanceSettings::default().groups()
     }
 }
 

@@ -259,7 +259,7 @@ pub fn settings_tab(keymaps: &Keymaps) -> PickerTab {
     items.push(restore_defaults());
     PickerTab {
         mode: Some(PickerMode::Keymaps),
-        label: "keymaps",
+        label: "keymap",
         items,
     }
 }

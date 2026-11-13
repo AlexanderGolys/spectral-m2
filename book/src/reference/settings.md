@@ -2,7 +2,7 @@
 
 Open the settings with `Ctrl+O` or `/settings`. They are kept between sessions: the appearance in `appearance.json`, everything else, keys included, in `settings.json`, both in the [configuration directory](files.md).
 
-The picker has six tabs along its top; `Tab` and `Shift+Tab` switch them, or move onto the row of tabs and use `Left` and `Right`. `Up` and `Down` pick a row, `Left` and `Right` change it, and the selected row describes itself under the list. *Restore defaults*, beneath the rows, resets everything: settings, keys and appearance.
+The picker has six tabs along its top; `Tab` and `Shift+Tab` switch them, or move onto the row of tabs and use `Left` and `Right`. `Up` and `Down` pick a row, `Left` and `Right` change it (`Space` also steps right), and the selected row describes itself under the list. *Restore defaults*, beneath the rows, resets everything: settings, keys and appearance.
 
 ## Appearance
 
@@ -18,47 +18,19 @@ mode
 background
 : An opaque canvas, or a transparent one that lets the terminal show through.
 
-## Layout
-
-max input height
-: How much of the pane a growing multiline input may take, in 5% steps. Default: 75%.
-
-max output height
-: Rows a value shows before its middle folds away. Default: 40 rows, at least 5.
-
-scrolloff
-: Rows kept visible above and below the input cursor. Default: 2.
-
-complete after
-: Characters of a name, or of a file name in a string, typed before it completes. Default: 1.
-
-hint below
-: Show the inline completion hint only when there are fewer candidates than this; 0 turns hints off. Default: 10. Saved as `hintCompletionBelow`, from 0 to 65535.
-
-## Statusline
-
-position
-: Below the input, above it, or off. Default: below input.
-
-One row per component
-: Its segment: `off`, `L`, `LC`, `C`, `RC` or `R`. `Left` and `Right` move it; `0` hides it and `1` to `5` choose a segment. See [Status line](../custom/statusline.md) for every component and the defaults.
-
 ## Rendering { #rendering }
-
-language server
-: Run an installed `m2-ls` alongside the session. Default: on.
-
-semantic highlighting
-: Colour code by what the language server knows. Default: on; greyed out while the server is off.
 
 maths
 : `unicode`, `ascii` or `typeset`. Default: `unicode`. See [Read results](../shell/results.md#renderers).
 
-original output text
-: Show every value as the text Macaulay2 printed, unrendered; the rows that shape rendered maths are locked meanwhile. Default: off.
+output mode position
+: Place the output mode controls in the border: `upper left`, `upper center`, `upper right`, `lower left`, `lower center` or `lower right`; `off` hides them. Default: `upper right`. The icons select the output representation (`specNet`, `net`, `string`, `tex`, `markup` or `html`). The maths setting controls display within that preview.
+
+maths size
+: Preferred typeset size relative to terminal text, from 50% to 200% in 10% steps. Default: 100%. Long formulas wrap at available break points before shrinking to fit the pane.
 
 maths colours
-: `syntax` colours maths by role; `monochrome` draws it in the value colour, with types in the type colour. Default: `syntax`.
+: `syntax` colours maths by role; `monochrome` draws it in the value colour. Default: `syntax`.
 
 index colours, exponent colours
 : `original`, the indexed symbol's colour (`symbol`), or the `operator` colour, for subscripts and exponents. Delimiters and punctuation keep their own. Default: `original`.
@@ -81,7 +53,38 @@ compute examples
 swap reference backgrounds
 : Use the feed background for code in the reference pane. Default: off.
 
-## Selection { #selection }
+## LSP
+
+language server
+: Run an installed `m2-ls` alongside the session. Default: on.
+
+semantic highlighting
+: Colour code by what the language server knows. Default: on; greyed out while the server is off.
+
+diagnostics
+: Show automatic diagnostic messages and source underlines. Default: off. Saved as `layout.diagnostics`.
+
+signature hints
+: Show the overloads returned for the current call. Default: off. Saved as `rendering.signature_hints`.
+
+## Editor
+
+max input height
+: How much of the pane a growing multiline input may take, in 5% steps. Default: 75%.
+
+max output height
+: Rows a value shows before its middle folds away. Default: 40 rows, at least 5.
+
+scrolloff
+: Rows kept visible above and below the input cursor. Default: 2.
+
+complete after
+: Characters of a name, or of a file name in a string, typed before it completes. Default: 1.
+
+hint below
+: Show the inline completion hint only when there are fewer candidates than this; 0 turns hints off. Default: 10. Saved as `hintCompletionBelow`, from 0 to 65535.
+
+### Selection { #selection }
 
 copy on select
 : Copy a mouse selection when it finishes. Off leaves it marked for `Ctrl+Y`. Default: on.
@@ -92,6 +95,16 @@ copy cells as
 raw selection
 : Select every character as drawn: cell numbers, frames, types beside values, and each wrapped row as its own line. Typeset pictures still copy as code. Default: off.
 
-## Keymaps
+## Statusline
+
+position
+: Below the input, above it, or off. Default: below input.
+
+One row per component
+: Its segment: `off`, `L`, `LC`, `C`, `RC` or `R`. `Left` and `Right` move it; `0` hides it and `1` to `5` choose a segment. See [Status line](../custom/statusline.md) for every component and the defaults.
+
+## Keymap
 
 Every rebindable key, by context. See [Keymaps](../custom/keymaps.md).
+
+Edit `settings.json` and `appearance.json` in your configuration directory to change values directly, then restart the shell. Both files are created on first launch. Settings changed in the picker are saved immediately; close the shell before editing the files so later picker changes do not overwrite your edits. Missing fields use their defaults.

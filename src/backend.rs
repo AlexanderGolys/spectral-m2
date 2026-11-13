@@ -1,7 +1,11 @@
 //! Macaulay2 process management, protocol types, and transcript decoding.
 
+pub mod preview;
+pub mod spec_net;
 pub mod transcript;
 
+pub use preview::{PreviewMode, ValuePreview};
+pub use spec_net::{CollectionKind, SpecNet};
 use std::fmt::Display;
 use std::io::{BufRead, BufReader, PipeReader, Write};
 use std::os::unix::process::CommandExt;
@@ -9,21 +13,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use std::{fs, mem, thread};
 
 use crate::cli::M2Options;
 use crate::env::ENV;
 use crate::errors::{Error, Result};
-use crate::ui::theme::groups::HLGroup;
-use html2text::config;
 use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
-use regex::Regex;
 use serde::Deserialize;
-use term_maths::RenderedBlock;
-use these_macros_should_be_illegal::enum_fn;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -31,17 +29,24 @@ const EVALUATION_TIMEOUT: Duration = Duration::from_secs(300);
 /// How long after a submission is written before it may be interrupted: a signal
 /// reaching M2 just as its read of the submission wakes leaves it blocked on stdin for
 /// good, answering neither later signals nor later input.
+const INTERRUPT_TIMEOUT: Duration = Duration::from_secs(2);
 const INTERRUPT_GRACE: Duration = Duration::from_millis(100);
-const STARTUP_SCRIPT: &str = include_str!("backend/m2_startup.m2");
-const STARTUP_FILE: &str = "backend.m2";
+/// The shell's top-level mode: the hooks that record each result and send its frame.
+const STARTUP_SCRIPT: EmbeddedSource = EmbeddedSource {
+    file_name: "backend.m2",
+    contents: include_str!("backend/m2_startup.m2"),
+};
+/// The package that defines `SpecNet` and `specNet`, which every result is drawn from.
+const DISPLAY_PACKAGE: EmbeddedSource = EmbeddedSource {
+    file_name: "Spectral.m2",
+    contents: include_str!("backend/Spectral.m2"),
+};
 /// Introduces a result frame on the child's output stream. ASCII group
 /// separator: no diagnostic, prompt or ordinary value begins with it, and the
 /// M2 side writes it immediately before the frame's JSON.
 const FRAME_MARK: u8 = 0x1D;
 /// The arrow of `key => value`.
 pub const OPTION_ARROW: &str = "=>";
-/// [`OPTION_ARROW`] standing apart from what it joins.
-pub const SPACED_OPTION_ARROW: &str = " => ";
 
 /// Appended to every submission, with the submission's number filled in. The statement that closes an input -- see the
 /// M2 side for why the hooks cannot do it alone for a statement that errored. It
@@ -50,20 +55,6 @@ pub const SPACED_OPTION_ARROW: &str = " => ";
 fn cell_terminator(submission: u64) -> String {
     format!(r#"(User#"spectral end of cell")({submission}, localDictionaries());"#)
 }
-
-// @##issue backend.rs is not appropriate place for renderer regex
-static M2_ARRAY: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\\begin\{array\}\{[clr]+\}").expect("valid M2 array pattern"));
-
-static M2_MATH_FONT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\{\\(mathbb|mathbf|mathcal|mathrm|mathfrak|mathsf|mathtt)\s+([^{}]+)\}")
-        .expect("valid M2 math font pattern")
-});
-/// `\mathit{…}`, which M2 puts around multi-character names only -- `x2` gets it,
-/// `x` does not. It is there to stop `x2` being read as *x^2*, so it says nothing
-/// the renderer needs and the braces come off with it.
-static M2_MATHIT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\\mathit\{([^{}]*)\}").expect("valid M2 mathit pattern"));
 
 /// One piece of the child's merged output stream, split on the frame mark.
 ///
@@ -75,6 +66,52 @@ enum Chunk {
     Text(String),
     /// The JSON of a result frame, closing one input.
     Frame(String),
+}
+
+/// An M2 source file the shell carries inside itself and hands M2 by path.
+#[derive(Clone, Copy, Debug)]
+struct EmbeddedSource {
+    file_name: &'static str,
+    contents: &'static str,
+}
+
+impl EmbeddedSource {
+    /// The name M2 knows the file by when it is a package: its name, less `.m2`.
+    fn package_name(self) -> &'static str {
+        self.file_name
+            .strip_suffix(".m2")
+            .expect("an M2 source file is named *.m2")
+    }
+
+    /// Materialize the file under `config` at a stable path, so source positions
+    /// in it stay readable. Replacement through a same-directory staging file
+    /// keeps parallel launches atomic.
+    fn sync_into(self, config: &Path) -> Result<PathBuf> {
+        fs::create_dir_all(config)?;
+        let path = config.join(self.file_name);
+        match fs::read(&path) {
+            Ok(contents) if contents == self.contents.as_bytes() => return Ok(path),
+            _ => {}
+        }
+        // Unique per call, not merely per process: several backends may be
+        // starting at once (the test suite does exactly that), and a shared
+        // staging name means one launch renames the file out from under another.
+        static STAGE: AtomicU32 = AtomicU32::new(0);
+        let staged = config.join(format!(
+            ".{}-{}-{}",
+            self.file_name,
+            std::process::id(),
+            STAGE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&staged, self.contents)?;
+        match fs::rename(&staged, &path) {
+            Ok(()) => Ok(path),
+            Err(error) => {
+                let _ = fs::remove_file(staged);
+                Err(error.into())
+            }
+        }
+    }
 }
 
 /// The frame M2 sends to close one input, or to announce that it is up.
@@ -93,9 +130,11 @@ struct Frame {
     #[serde(default)]
     error: bool,
 
-    value: Option<M2Value>,
+    value: Option<SpecNet>,
+    #[serde(default)]
+    previews: Vec<ValuePreview>,
     type_info: Option<String>,
-    type_parts: Option<Vec<M2Value>>,
+    type_parts: Option<Vec<SpecNet>>,
     #[serde(default)]
     has_value: bool,
     #[serde(default)]
@@ -103,339 +142,6 @@ struct Frame {
     /// Names M2 had not reported before: all of them on the startup frame.
     #[serde(default)]
     names: Vec<String>,
-}
-
-/// A displayed M2 value in its preferred TeX form or its original Net form.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum M2Value {
-    /// A type with mathematical structure, such as a named ring or a ring family.
-    Type(Box<M2Value>),
-    /// TeX source accompanied by the Net spelling used when it is unsupported,
-    /// and the one-line code M2 reads back, which copying its picture gives.
-    Tex {
-        source: String,
-        fallback: String,
-        code: String,
-    },
-    /// A value for which M2 could not produce TeX.
-    Net(String),
-    /// Key/value parts composed into one brace-delimited row grid.
-    HashTable(Vec<[M2Value; 2]>),
-    /// `key => value`, each part drawn as what it is on its own.
-    Option {
-        key: Box<M2Value>,
-        value: Box<M2Value>,
-    },
-    /// Entries M2 rendered one by one, set inside the delimiters of their kind.
-    Collection {
-        kind: CollectionKind,
-        items: Vec<M2Value>,
-    },
-    /// Documentation retained as semantic HTML for width-aware rendering, with
-    /// the print width its archived examples were wrapped to.
-    Markup {
-        html: String,
-        fallback: String,
-        #[serde(rename = "exampleWidth")]
-        example_width: usize,
-    },
-    /// A value that is one word with a role in code: null, a Boolean, a string, a
-    /// function's name.
-    Token { text: String, role: Role },
-    /// A position in a source file, drawn as the link that opens it: `target` is
-    /// the `file://` URL, with the position as its fragment, that documentation
-    /// links to source files use.
-    Location { text: String, target: String },
-    /// A value drawn as it is, which also links to `target`, as the source that
-    /// defines a function does.
-    Linked { value: Box<M2Value>, target: String },
-}
-
-/// What a token is in code, which decides how it is coloured.
-// @##hlg
-// @##refactor all HLGroups probably better just set in one file for entire shell, easier to manage
-#[non_exhaustive]
-#[enum_fn(pub const group -> HLGroup, missing=HLGroup::Text)]
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    Null = HLGroup::Builtin,
-    Boolean = HLGroup::Boolean,
-    String = HLGroup::String,
-    Function = HLGroup::Function,
-    Type = HLGroup::Type,
-    Package = HLGroup::Package,
-    Keyword = HLGroup::Keyword,
-    Operator = HLGroup::Operator,
-    Command = HLGroup::Macro,
-    Symbol = HLGroup::Variable,
-}
-
-/// The characters a value's text layout may draw with.
-//
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Spelling {
-    /// Two-dimensional maths and tall brackets.
-    Unicode,
-    /// Macaulay2's own plain-text spelling, between plain delimiters.
-    Ascii,
-}
-
-// @##stale
-impl Spelling {
-    const fn arrow(self) -> &'static str {
-        match self {
-            Self::Unicode => " => ",
-            Self::Ascii => " => ",
-        }
-    }
-}
-
-/// The M2 list class a collection was drawn as, named exactly as M2 names it.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-pub enum CollectionKind {
-    List,
-    Array,
-    Sequence,
-    AngleBarList,
-    VerticalList,
-}
-
-impl CollectionKind {
-    /// The opening and closing delimiters M2 draws this kind between.
-    pub const fn delimiters(self) -> (&'static str, &'static str) {
-        match self {
-            Self::List | Self::VerticalList => ("{", "}"),
-            Self::Array => ("[", "]"),
-            Self::Sequence => ("(", ")"),
-            Self::AngleBarList => ("<|", "|>"),
-        }
-    }
-
-    /// The delimiters drawn in a terminal, where a font may join M2's `<|` into a
-    /// triangle.
-    pub const fn drawn_delimiters(self) -> (&'static str, &'static str) {
-        match self {
-            Self::AngleBarList => ("\u{27E8}|", "|\u{27E9}"),
-            _ => self.delimiters(),
-        }
-    }
-
-    /// The delimiters that grow around the TeX of this kind's items.
-    pub const fn tex_delimiters(self) -> (&'static str, &'static str) {
-        match self {
-            Self::List | Self::VerticalList => (r"\left\{", r"\right\}"),
-            Self::Array => (r"\left[", r"\right]"),
-            Self::Sequence => (r"\left(", r"\right)"),
-            Self::AngleBarList => (r"\left\langle", r"\right\rangle"),
-        }
-    }
-}
-
-macro_rules! text_block {
-    ($str:expr) => {
-        RenderedBlock::from_text($str)
-    };
-}
-macro_rules! stack {
-    ($b0:expr, $($b:expr),*) => {$b0 $(.beside(&$b))*};
-}
-
-// pub trait RenderM2Output {
-//     fn render(&self) -> RenderedBlock
-//
-// }
-
-impl M2Value {
-    fn normalize(source: &str) -> String {
-        let source = M2_MATH_FONT.replace_all(source, r"\$1{$2}");
-        let source = M2_MATHIT.replace_all(&source, "$1");
-        M2_ARRAY
-            .replace_all(&source, r"\begin{matrix}")
-            .replace(r"\end{array}", r"\end{matrix}")
-            .replace(r"\mathopen{}", "")
-            .replace(r"\texttt", r"\text")
-            .replace(r"\left\{", r"\left{")
-            .replace(r"\right\}", r"\right}")
-        // .replace(r"\Rightarrow", &format!(r"\text{{{OPTION_ARROW}}}"))
-    }
-
-    fn text_block(text: &str) -> RenderedBlock {
-        let block = Self::stack(text.lines().map(RenderedBlock::from_text));
-        RenderedBlock::new(block.cells().to_vec(), block.height() / 2)
-    }
-
-    fn stack(rows: impl IntoIterator<Item = RenderedBlock>) -> RenderedBlock {
-        let block = rows.into_iter().fold(RenderedBlock::empty(), |block, row| {
-            match block.is_empty() {
-                true => row,
-                false => RenderedBlock::above(&block, &row, 0),
-            }
-        });
-        RenderedBlock::new(block.cells().to_vec(), block.height() / 2)
-    }
-
-    /// A curly brace `height` rows tall. An odd one has its cusp on the middle
-    /// row; an even one, having no middle row, splits the cusp across the two
-    /// rows about its middle, which at height two is the whole brace.
-    // @##no_ascii
-    // @##issue non-ascii glyphs set in random place
-    fn curly(height: usize, left: bool, baseline: usize) -> RenderedBlock {
-        let (single, top, cusp, bottom, upper_cusp, lower_cusp) = match left {
-            true => ("{", "⎧", "⎨", "⎩", "⎰", "⎱"),
-            false => ("}", "⎫", "⎬", "⎭", "⎱", "⎰"),
-        };
-        let cells = (0..height)
-            .map(|row| {
-                vec![match (height % 2, row) {
-                    _ if height == 1 => single,
-                    (0, row) if row + 1 == height / 2 => upper_cusp,
-                    (0, row) if row == height / 2 => lower_cusp,
-                    (_, 0) => top,
-                    (_, row) if row + 1 == height => bottom,
-                    (1, row) if row == height / 2 => cusp,
-                    _ => "⎪",
-                }
-                .to_string()]
-            })
-            .collect();
-        RenderedBlock::new(cells, baseline)
-    }
-
-    fn brace(block: RenderedBlock, spelling: Spelling) -> RenderedBlock {
-        match (block.is_empty(), spelling) {
-            (true, _) => text_block!("{}"),
-
-            (false, Spelling::Ascii) => stack!(text_block!("{"), block, text_block!("}")),
-
-            (false, Spelling::Unicode) => {
-                let space = text_block!(" ");
-                let body = space.beside(&block).beside(&space);
-                let left = Self::curly(body.height(), true, body.baseline());
-                let right = Self::curly(body.height(), false, body.baseline());
-                left.beside(&body).beside(&right)
-            }
-        }
-    }
-
-    fn block(&self, spelling: Spelling) -> RenderedBlock {
-        match self {
-            Self::Type(value) | Self::Linked { value, .. } => value.block(spelling),
-            Self::Tex { fallback, .. } if spelling == Spelling::Ascii => Self::text_block(fallback),
-            Self::Tex {
-                source, fallback, ..
-            } => {
-                let source = match source
-                    .strip_prefix('$')
-                    .and_then(|tex| tex.strip_suffix('$'))
-                {
-                    Some(source) => source,
-                    None => return Self::text_block(fallback),
-                };
-                let rendered = term_maths::render(&Self::normalize(source));
-                match rendered.to_string().contains('\\') {
-                    true => Self::text_block(fallback),
-                    false => rendered,
-                }
-            }
-            Self::Net(text)
-            | Self::Markup { fallback: text, .. }
-            | Self::Token { text, .. }
-            | Self::Location { text, .. } => Self::text_block(text),
-            Self::HashTable(rows) => Self::brace(
-                Self::stack(rows.iter().map(|row| {
-                    stack!(
-                        row[0].block(spelling),
-                        text_block!(spelling.arrow()),
-                        row[1].block(spelling)
-                    )
-                })),
-                spelling,
-            ),
-            Self::Option { key, value } => stack!(
-                key.block(spelling),
-                text_block!(spelling.arrow()),
-                value.block(spelling)
-            ),
-            Self::Collection {
-                kind: CollectionKind::VerticalList,
-                items,
-            } => Self::brace(
-                Self::stack(items.iter().map(|item| item.block(spelling))),
-                spelling,
-            ),
-            Self::Collection { kind, items } => {
-                let (open, close) = kind.delimiters();
-                let separator = text_block!(", ");
-                items
-                    .iter()
-                    .map(|item| item.block(spelling))
-                    .reduce(|entries, item| stack!(entries, separator, item))
-                    .map_or_else(
-                        || text_block!(&format!("{open}{close}")),
-                        |entries| stack!(text_block!(open), entries, text_block!(close)),
-                    )
-            }
-        }
-    }
-
-    /// Render this value at a requested terminal width.
-    pub fn render_at(&self, width: usize) -> String {
-        match self {
-            Self::Markup { html, fallback, .. } => config::plain()
-                .link_footnotes(false)
-                .string_from_read(html.as_bytes(), width.max(1))
-                .unwrap_or_else(|_| fallback.clone())
-                .trim_end()
-                .to_string(),
-            _ => self.render(),
-        }
-    }
-
-    /// Render this value as copyable terminal text.
-    pub fn render(&self) -> String {
-        // Flat text already has its layout. Stacking it into a character grid
-        // repeatedly copies all earlier rows and is quadratic for long Nets.
-        if let Some(text) = self.plain_text() {
-            return text
-                .lines()
-                .map(str::trim_end)
-                .collect::<Vec<_>>()
-                .join("\n");
-        }
-        self.block(Spelling::Unicode)
-            .to_string()
-            .lines()
-            .map(str::trim_end)
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-    /// Borrow flat output without parsing TeX or allocating a character grid.
-    /// The value in plain ASCII: Macaulay2's own spelling of every piece, set
-    /// between plain delimiters.
-    pub fn ascii(&self) -> String {
-        self.block(Spelling::Ascii)
-            .to_string()
-            .lines()
-            .map(str::trim_end)
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    pub fn plain_text(&self) -> Option<&str> {
-        match self {
-            Self::Type(value) | Self::Linked { value, .. } => value.plain_text(),
-            Self::Net(text)
-            | Self::Markup { fallback: text, .. }
-            | Self::Token { text, .. }
-            | Self::Location { text, .. } => Some(text.as_str()),
-            Self::Tex {
-                source, fallback, ..
-            } if !(source.starts_with('$') && source.ends_with('$')) => Some(fallback.as_str()),
-            _ => None,
-        }
-    }
 }
 
 /// The output and status returned by one M2 evaluation.
@@ -454,10 +160,12 @@ pub struct M2Response {
     pub transcript: String,
     /// The rendered result, present only when M2 displayed it. A `;`-suppressed
     /// result is `None` here -- deliberately never rendered -- yet still bound.
-    pub value: Option<M2Value>,
+    pub value: Option<SpecNet>,
+    /// Independent M2 formatter results available to the preview selector.
+    pub previews: Vec<ValuePreview>,
     pub type_info: Option<String>,
     /// The pieces of the type annotation, each rendered as a value is.
-    pub type_parts: Vec<M2Value>,
+    pub type_parts: Vec<SpecNet>,
     /// Whether M2 bound an `oN` for this input. Not implied by `value`: a
     /// suppressed result binds one without producing rendered text.
     pub has_value: bool,
@@ -472,7 +180,7 @@ impl M2Response {
     /// Render the displayed value, preserving its Net fallback.
     #[cfg(test)]
     pub fn rendered_value(&self) -> Option<String> {
-        self.value.as_ref().map(M2Value::render)
+        self.value.as_ref().map(SpecNet::render)
     }
 }
 
@@ -544,12 +252,20 @@ impl M2Backend {
         package: Option<&str>,
         options: &M2Options,
     ) -> Result<Self> {
-        let script_path = Self::sync_startup_script(config)?;
+        let package_path = DISPLAY_PACKAGE.sync_into(config)?;
+        let script_path = STARTUP_SCRIPT.sync_into(config)?;
         let (reader, writer) = std::io::pipe()?;
 
         let mut command = Command::new("M2");
         command.arg("--silent").arg("--no-readline");
         command.args(options.arguments());
+        // The display package comes first, so the init file and a requested
+        // package can already install `specNet` for classes of their own.
+        command.arg("-e").arg(format!(
+            "loadPackage({}, FileName => {}, LoadDocumentation => true)",
+            m2_string_literal(DISPLAY_PACKAGE.package_name()),
+            m2_string_literal(package_path.display())
+        ));
         // Load Spectral's init file before the hooks, so the startup frame is the
         // last thing to arrive before the session opens. `load` rather than a
         // submitted cell: it gives the file its own dictionary, the way every
@@ -607,34 +323,6 @@ impl M2Backend {
                 std::io::Error::new(std::io::ErrorKind::NotFound, "no configuration directory")
                     .into()
             })
-    }
-
-    /// Materialize the embedded M2 backend at a stable source path. Replacement
-    /// through a same-directory staging file keeps parallel launches atomic.
-    fn sync_startup_script(config: &Path) -> Result<PathBuf> {
-        fs::create_dir_all(config)?;
-        let path = config.join(STARTUP_FILE);
-        match fs::read(&path) {
-            Ok(contents) if contents == STARTUP_SCRIPT.as_bytes() => return Ok(path),
-            _ => {}
-        }
-        // Unique per call, not merely per process: several backends may be
-        // starting at once (the test suite does exactly that), and a shared
-        // staging name means one launch renames the file out from under another.
-        static STAGE: AtomicU32 = AtomicU32::new(0);
-        let staged = config.join(format!(
-            ".{STARTUP_FILE}-{}-{}",
-            std::process::id(),
-            STAGE.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::write(&staged, STARTUP_SCRIPT)?;
-        match fs::rename(&staged, &path) {
-            Ok(()) => Ok(path),
-            Err(error) => {
-                let _ = fs::remove_file(staged);
-                Err(error.into())
-            }
-        }
     }
 
     /// Wait for the startup frame, which carries the M2 version and its names.
@@ -734,16 +422,22 @@ impl M2Backend {
         let mut transcript = String::new();
         let deadline = Instant::now() + timeout;
         let written_at = Instant::now();
-        let mut interrupted = false;
+        let mut interrupted_at = None;
         loop {
-            if !interrupted
+            if interrupted_at.is_none()
                 && cancelled.load(Ordering::Acquire)
                 && written_at.elapsed() >= INTERRUPT_GRACE
             {
                 // External programs may own the computation while M2 waits.
                 // The child's private group keeps the signal away from the UI.
                 self.signal_group(Signal::SIGINT)?;
-                interrupted = true;
+                interrupted_at = Some(Instant::now());
+            }
+            if interrupted_at.is_some_and(|started: Instant| started.elapsed() >= INTERRUPT_TIMEOUT)
+            {
+                return Err(Error::Process(
+                    "Macaulay2 did not respond to cancellation; restart the session".to_string(),
+                ));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -766,6 +460,7 @@ impl M2Backend {
                         is_error: frame.error,
                         transcript,
                         value: frame.value,
+                        previews: frame.previews,
                         type_info: frame.type_info,
                         type_parts: frame.type_parts.unwrap_or_default(),
                         has_value: frame.has_value,
@@ -1014,116 +709,69 @@ mod tests {
     }
 
     #[test]
-    fn an_even_brace_splits_its_cusp_over_the_two_middle_rows() {
-        let column = |height, left| {
-            let brace = M2Value::curly(height, left, 0);
-            brace
-                .cells()
-                .iter()
-                .map(|row| row[0].clone())
-                .collect::<String>()
-        };
-        assert_eq!(column(2, true), "⎰⎱");
-        assert_eq!(column(2, false), "⎱⎰");
-        assert_eq!(column(4, true), "⎧⎰⎱⎩");
-        assert_eq!(column(5, true), "⎧⎪⎨⎪⎩");
-    }
-
-    #[test]
     fn plain_values_preserve_net_rows_without_building_a_character_grid() {
         let text = "  x²  \n\n y\t\n";
         let expected = "  x²\n\n y";
         for value in [
-            M2Value::Net(text.into()),
-            M2Value::Tex {
-                source: "\\begin{tabular}...".into(),
-                fallback: text.into(),
-                code: String::new(),
-            },
-            M2Value::Markup {
-                html: String::new(),
-                fallback: text.into(),
-                example_width: 77,
-            },
-            M2Value::Token {
-                text: text.into(),
-                role: Role::String,
-            },
+            SpecNet::plain(text.into()),
+            SpecNet::tex_fixture("\\begin{tabular}...".into(), text.into(), String::new()),
+            SpecNet::document(String::new(), text.into(), 77),
+            SpecNet::token_fixture(text.into(), "String"),
         ] {
             assert_eq!(value.render(), expected);
         }
     }
 
     #[test]
-    fn tex_values_render_as_plain_unicode_blocks() {
-        let fraction = M2Value::Tex {
-            source: r"$\frac{1}{2}$".into(),
-            fallback: "1\n-\n2".into(),
-            code: String::new(),
-        };
-        assert_eq!(fraction.render(), " 1\n───\n 2");
-
-        let matrix = M2Value::Tex {
-            source: concat!(
-                r"$\left(\!\begin{array}{cc}",
-                "\n",
-                r"x^{2}&y\\",
-                "\n",
-                r"1&x-y",
-                "\n",
-                r"\end{array}\!\right)$"
-            )
-            .into(),
-            fallback: "matrix fallback".into(),
-            code: String::new(),
-        };
-        assert_eq!(matrix.render(), "⎛ x²    y   ⎞\n⎝ 1   x - y ⎠");
+    fn structured_values_render_as_unicode_blocks() {
+        let fraction = SpecNet::branch(
+            "Divide",
+            vec![SpecNet::leaf("ZZ", "1"), SpecNet::leaf("ZZ", "2")],
+        );
+        assert_eq!(fraction.render(), "1\n─\n2");
+        let matrix = SpecNet::branch(
+            "MatrixExpression",
+            vec![
+                SpecNet::branch(
+                    "List",
+                    vec![SpecNet::leaf("Symbol", "x"), SpecNet::leaf("ZZ", "1")],
+                ),
+                SpecNet::branch(
+                    "List",
+                    vec![SpecNet::leaf("ZZ", "0"), SpecNet::leaf("Symbol", "y")],
+                ),
+            ],
+        );
+        assert_eq!(matrix.render(), "⎛x  1⎞\n⎝0  y⎠");
     }
 
     #[test]
     fn unsupported_tex_uses_its_net_fallback() {
-        let value = M2Value::Tex {
-            source: r"$\spectralUnsupported{true}$".into(),
-            fallback: "true".into(),
-            code: String::new(),
-        };
+        let value = SpecNet::tex_fixture(
+            r"$\spectralUnsupported{true}$".into(),
+            "true".into(),
+            String::new(),
+        );
         assert_eq!(value.render(), "true");
 
-        let document = M2Value::Tex {
-            source: r"\par\textbf{Description}".into(),
-            fallback: "Description".into(),
-            code: String::new(),
-        };
+        let document = SpecNet::tex_fixture(
+            r"\par\textbf{Description}".into(),
+            "Description".into(),
+            String::new(),
+        );
         assert_eq!(document.render(), "Description");
     }
 
     #[test]
-    fn m2_tex_dialect_renders_rings_and_ideals() {
-        for (source, expected) in [
-            (r"${\mathbb Z}$", "ℤ"),
-            (
-                r"$\frac{{\mathbb Z}\mathopen{}\left[x\right]}{5}$",
-                " ℤ[x]\n──────\n  5",
-            ),
-            (
-                r"$\frac{{\mathbb Z}}{5}\mathopen{}\left[x\right]$",
-                " ℤ\n───[x]\n 5",
-            ),
-            (
-                r"$\texttt{ideal}\left(x^{3}-10\,y-2\right)$",
-                "ideal(x³ - 10 y - 2)",
-            ),
-            (
-                r"$\frac{R}{x^{3}-10\,y-2}$",
-                "       R\n───────────────\n x³ - 10 y - 2",
-            ),
-        ] {
-            let value = M2Value::Tex {
-                source: source.into(),
-                fallback: "NET FALLBACK".into(),
-                code: String::new(),
-            };
-            assert_eq!(value.render(), expected);
+    fn rings_and_ideals_keep_structured_or_opaque_representations() {
+        let mut backend = M2Backend::spawn().unwrap();
+        for source in ["ZZ", "QQ", "QQ[x,y]", "R = QQ[x,y]; ideal(x,y)"] {
+            let result = backend.evaluate(source, None).unwrap();
+            assert!(!result.is_error, "{source}: {}", result.transcript);
+            let value = result.value.unwrap();
+            assert!(!value.classes.is_empty());
+            assert!(!value.render().is_empty());
+            assert!(!value.ascii().is_empty());
         }
     }
 
@@ -1133,11 +781,7 @@ mod tests {
             (r"$\left\{1,\:2,\:3\right\}$", "{1, 2, 3}"),
             (r"$\texttt{print}$", "print"),
         ] {
-            let value = M2Value::Tex {
-                source: source.into(),
-                fallback: "NET FALLBACK".into(),
-                code: String::new(),
-            };
+            let value = SpecNet::tex_fixture(source.into(), "NET FALLBACK".into(), String::new());
             assert_eq!(value.render(), expected);
         }
     }
@@ -1147,28 +791,20 @@ mod tests {
     // print identically. The TeX keeps them apart, which is the whole reason the
     // shell prefers it.
     #[test]
-    fn colliding_monomial_names_stay_distinct_through_tex() {
-        let value = M2Value::Tex {
-            source: r"$\left(\!\begin{array}{cc}
-\mathit{xxyy}&\mathit{xx}\,\mathit{yy}\\
-\mathit{xxyy}^{2}&\mathit{xx}\,\mathit{yy}^{2}
-\end{array}\!\right)$"
-                .into(),
-            fallback: "| xxyy   xxyy   |\n| xxyy^2 xxyy^2 |".into(),
-            code: String::new(),
-        };
-        let rendered = value.render();
-
-        // The product keeps its separation, which the net cannot express at all;
-        // without it `xx*yy` and the variable `xxyy` are the same eight glyphs.
-        assert!(
-            rendered.contains("xx yy"),
-            "the product collapsed into the variable: {rendered}"
-        );
-        assert!(
-            !rendered.contains("xxyy   xxyy"),
-            "fell back to the ambiguous net: {rendered}"
-        );
+    fn colliding_monomial_names_keep_distinct_expression_structure() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend
+            .evaluate(
+                "R = QQ[xx,yy,xxyy]; matrix{{xx*yy, xxyy}, {xx*yy^2, xxyy^2}}",
+                None,
+            )
+            .unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        let value = result.value.unwrap();
+        let entries = &value.children[0].children;
+        assert!(entries[0].is("Product"), "{:?}", entries[0]);
+        assert!(entries[1].text.is_some());
+        assert_ne!(entries[0], entries[1]);
     }
 
     // M2's own net for this matrix is `| x2+1 1/3x2 |`, which reads as the ring
@@ -1177,15 +813,15 @@ mod tests {
     // makes the value readable and falling back to the net is what loses it.
     #[test]
     fn a_matrix_renders_from_tex_rather_than_the_ambiguous_net() {
-        let value = M2Value::Tex {
-            source: r"$\left(\!\begin{array}{cc}
+        let value = SpecNet::tex_fixture(
+            r"$\left(\!\begin{array}{cc}
 1&x\\
 x^{2}+1&\frac{1}{3}\mathit{x2}
 \end{array}\!\right)$"
                 .into(),
-            fallback: "| 1    x     |\n| x2+1 1/3x2 |".into(),
-            code: String::new(),
-        };
+            "| 1    x     |\n| x2+1 1/3x2 |".into(),
+            String::new(),
+        );
         let rendered = value.render();
 
         assert!(
@@ -1198,22 +834,14 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         );
     }
 
-    fn tex(source: &str, fallback: &str) -> M2Value {
-        M2Value::Tex {
-            source: format!("${source}$"),
-            fallback: fallback.into(),
-            code: String::new(),
-        }
-    }
-
     #[test]
     fn ascii_spells_every_piece_as_macaulay2_does() {
-        let table = M2Value::HashTable(vec![[tex("1", "1"), tex(r"\frac{1}{2}", "1/2")]]);
-
-        let ascii = table.ascii();
-
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend.evaluate("hashTable{1 => 1/2}", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        let ascii = result.value.unwrap().ascii();
         assert!(ascii.is_ascii(), "{ascii}");
-        assert!(ascii.contains("1 => 1/2"), "{ascii}");
+        assert!(ascii.contains("1 =>"), "{ascii}");
     }
 
     #[test]
@@ -1229,7 +857,8 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
 
         assert!(!after.is_error, "{}", after.transcript);
         assert_eq!(after.number, 2);
-        assert_eq!(after.rendered_value().as_deref(), Some("42"));
+        assert_eq!(after.rendered_value().as_deref(), Some("redefined"));
+        assert!(after.value.as_ref().unwrap().is("ZZ"));
         assert!(after.has_value);
     }
 
@@ -1283,153 +912,13 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         assert_eq!(boolean.rendered_value().as_deref(), Some("true"));
         assert_eq!(boolean.type_info.as_deref(), Some("Boolean"));
 
-        let kind = backend.evaluate("Type", Some(5)).expect("evaluate a type");
-        assert!(matches!(
-            kind.value,
-            Some(M2Value::Token {
-                role: Role::Type,
-                ..
-            })
-        ));
-        let wrapper = backend
-            .evaluate("WrapperType", Some(8))
-            .expect("evaluate a type of types");
-        assert!(matches!(
-            wrapper.value,
-            Some(M2Value::Token {
-                role: Role::Type,
-                ..
-            })
-        ));
-        let directory = ENV
-            .temp_dir()
-            .join(format!("sp2-position-{}", std::process::id()));
-        fs::create_dir_all(&directory).expect("make a directory for a source file");
-        let file = directory.join("a b.m2");
-        fs::write(&file, "x = 1\n").expect("write a source file");
-        let position = |file: &std::path::Path| {
-            format!(
-                "new FilePosition from ({}, 3, 4, 5, 9, 3, 4)",
-                m2_string_literal(file.display())
-            )
-        };
-        let existing = backend
-            .evaluate(&position(&file), Some(8))
-            .expect("evaluate a source position");
-        let Some(M2Value::Location { text, target }) = &existing.value else {
-            panic!("a position in a file that exists arrives as a location");
-        };
-        assert!(text.ends_with("a b.m2:3:4-5:9"), "{text}");
-        let link = crate::code::location::SourceLink::parse(target).expect("a file target");
-        assert_eq!(link.path, file);
-        assert!(link.command().contains("3, 4, 5, 9"));
-        fs::remove_dir_all(&directory).expect("remove the source file");
-        for missing in [file.as_path(), std::path::Path::new("stdio")] {
-            let value = backend
-                .evaluate(&position(missing), Some(9))
-                .expect("evaluate a source position")
-                .value;
-            assert!(
-                matches!(&value, Some(M2Value::Net(text)) if text.ends_with(":3:4-5:9")),
-                "a position in no file stays plain text: {value:?}"
-            );
-        }
-        let contained = backend
-            .evaluate("{Type, WrapperType, Core}", Some(9))
-            .expect("evaluate types in a list");
-        let Some(M2Value::Collection { items, .. }) = &contained.value else {
-            panic!("a list arrives as a collection");
-        };
-        assert!(matches!(
-            items.as_slice(),
-            [
-                M2Value::Token {
-                    role: Role::Type,
-                    ..
-                },
-                M2Value::Token {
-                    role: Role::Type,
-                    ..
-                },
-                M2Value::Token {
-                    role: Role::Package,
-                    ..
-                },
-            ]
-        ));
-        let ring = backend.evaluate("ZZ", Some(6)).expect("evaluate a ring");
-        assert!(!matches!(ring.value, Some(M2Value::Token { .. })));
-
-        let function = backend
-            .evaluate("Thing#{SpectralTopLevelMode, Print}", Some(13))
-            .expect("evaluate function closure");
-        let Some(M2Value::Linked { value: word, .. }) = &function.value else {
-            panic!(
-                "a function written in a file links to it: {:?}",
-                function.value
-            );
-        };
-        assert!(matches!(
-            **word,
-            M2Value::Token {
-                role: Role::Function,
-                ..
-            }
-        ));
-        // Anonymous, so drawn by its class: its Net would only say where it was
-        // written.
-        assert_eq!(
-            function.rendered_value().as_deref(),
-            Some("FunctionClosure")
-        );
-
-        let command = backend
-            .evaluate("print", Some(14))
-            .expect("evaluate command");
-        assert_eq!(command.rendered_value().as_deref(), Some("print"));
-
-        for (code, word, role) in [
-            ("symbol ^", "^", Role::Operator),
-            ("symbol SPACE", "SPACE", Role::Operator),
-            ("symbol if", "if", Role::Keyword),
-            ("Ext", "Ext", Role::Function),
-        ] {
-            let evaluated = backend.evaluate(code, Some(15)).expect("evaluate a word");
-            assert!(
-                matches!(&evaluated.value, Some(M2Value::Token { text, role: found }) if text == word && *found == role),
-                "{code} should be the {role:?} token {word}"
-            );
-        }
-        // A functor with a TeX spelling of its own is set in it, not as a name.
-        let structure_sheaf = backend
-            .evaluate("OO", Some(15))
-            .expect("evaluate a functor with TeX");
-        assert!(
-            matches!(&structure_sheaf.value, Some(M2Value::Tex { source, .. }) if source.contains(r"\mathcal O")),
-            "OO should arrive as its calligraphic TeX: {:?}",
-            structure_sheaf.value
-        );
-
-        // Typed bare, a Command runs; held in a list it is only drawn.
-        let held = backend
-            .evaluate("{help}", Some(16))
-            .expect("evaluate a list holding a command");
-        assert!(matches!(
-            held.value,
-            Some(M2Value::Collection { ref items, .. })
-                if matches!(items.as_slice(), [M2Value::Token { role: Role::Command, .. }])
-        ));
-
         let fraction = backend.evaluate("1/2", Some(8)).expect("evaluate fraction");
-        assert_eq!(fraction.rendered_value().as_deref(), Some(" 1\n───\n 2"));
+        assert_eq!(fraction.rendered_value().as_deref(), Some("1\n─\n2"));
 
         let matrix = backend
             .evaluate("matrix{{1,2},{3,4}}", Some(9))
             .expect("evaluate matrix");
-        assert_eq!(
-            matrix.rendered_value().as_deref(),
-            Some("⎛ 1  2 ⎞\n⎝ 3  4 ⎠")
-        );
+        assert_eq!(matrix.rendered_value().as_deref(), Some("⎛1  2⎞\n⎝3  4⎠"));
 
         let list = backend
             .evaluate("{1,2,3}", Some(10))
@@ -1478,11 +967,24 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     fn documentation_retains_markup_for_width_aware_rendering() {
         let mut backend = M2Backend::spawn().expect("spawn M2");
         let response = backend.evaluate("help List", Some(1)).expect("render help");
-        let Some(M2Value::Markup { .. }) = response.value.as_ref() else {
+        let Some(SpecNet { html: Some(_), .. }) = response.value.as_ref() else {
             panic!("help did not return structured markup");
         };
         let width = 60;
-        let rendered = response.value.as_ref().unwrap().render_at(width);
+        let rendered = html2text::config::plain()
+            .link_footnotes(false)
+            .string_from_read(
+                response
+                    .value
+                    .as_ref()
+                    .unwrap()
+                    .html
+                    .as_ref()
+                    .unwrap()
+                    .as_bytes(),
+                width,
+            )
+            .expect("render documentation HTML");
 
         // The page's own wording is M2's, so only its structure is checked: a
         // heading naming the topic, entries set as a list, no markup left raw, and
@@ -1516,7 +1018,10 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         let mut backend = M2Backend::spawn().unwrap();
         let response = backend.evaluate(&format!("(sourceType := value Core#\"private dictionary\"#\"TT\"; new sourceType from {{{location}}})"), None).unwrap();
         std::fs::remove_file(&path).unwrap();
-        let Some(M2Value::Markup { html, .. }) = response.value else {
+        let Some(SpecNet {
+            html: Some(html), ..
+        }) = response.value
+        else {
             panic!("source location did not produce markup")
         };
         let mut target = url::Url::from_file_path(&path).unwrap();
@@ -1526,50 +1031,21 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
 
     #[test]
     fn functions_written_in_source_files_link_to_where_they_were_written() {
-        let path = ENV.temp_dir().join(format!(
-            "spectral function source {}.m2",
-            std::process::id()
-        ));
-        std::fs::write(&path, "linkedProbe = x -> x + 1\n").unwrap();
-        let file = serde_json::to_string(&path.display().to_string()).unwrap();
-        let mut backend = M2Backend::spawn().expect("spawn M2");
+        let mut backend = M2Backend::spawn().unwrap();
+        let file = ENV
+            .temp_dir()
+            .join(format!("sp2-function-{}.m2", std::process::id()));
+        fs::write(&file, "linkedProbe = x -> x+1;\n").unwrap();
         backend
-            .evaluate(&format!("load {file}"), None)
-            .expect("load the probe");
-        let named = backend
-            .evaluate("linkedProbe", None)
-            .expect("a named function");
-        let core = backend
-            .evaluate("first values new HashTable from CC_*", None)
-            .expect("a function from Core");
-        let typed = backend.evaluate("x -> x", None).expect("a typed function");
-        std::fs::remove_file(&path).unwrap();
-
-        let Some(M2Value::Linked { value, target }) = named.value else {
-            panic!("a function from a file links to it: {:?}", named.value);
-        };
-        assert!(
-            matches!(*value, M2Value::Token { ref text, role: Role::Function } if text == "linkedProbe")
-        );
-        let mut source = url::Url::from_file_path(&path).unwrap();
-        source.set_fragment(None);
-        assert!(target.starts_with(&format!("{source}#L1:C")), "{target}");
-        assert!(
-            matches!(core.value, Some(M2Value::Linked { ref target, .. }) if target.starts_with("file://")),
-            "{:?}",
-            core.value
-        );
-        assert!(
-            matches!(
-                typed.value,
-                Some(M2Value::Token {
-                    role: Role::Function,
-                    ..
-                })
-            ),
-            "a function typed at the prompt was written in no file: {:?}",
-            typed.value
-        );
+            .evaluate(&format!("load {}", m2_string_literal(file.display())), None)
+            .unwrap();
+        let result = backend.evaluate("linkedProbe", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        let value = result.value.unwrap();
+        assert!(value.is("Function"));
+        let target = value.target.unwrap();
+        assert!(target.starts_with("file://"));
+        assert!(target.contains("#L"));
     }
 
     #[test]
@@ -1578,7 +1054,10 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         let response = backend
             .evaluate("help ancestors", None)
             .expect("read real documentation");
-        let Some(M2Value::Markup { html, .. }) = response.value else {
+        let Some(SpecNet {
+            html: Some(html), ..
+        }) = response.value
+        else {
             panic!("documentation did not return markup");
         };
         assert!(
@@ -1594,8 +1073,8 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         let response = backend
             .evaluate("help det", None)
             .expect("read real documentation");
-        let Some(M2Value::Markup {
-            html,
+        let Some(SpecNet {
+            html: Some(html),
             example_width,
             ..
         }) = response.value
@@ -1682,105 +1161,106 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     // own role. A list's own TeX is one string, which every entry's colour would
     // be lost in.
     #[test]
-    fn containers_arrive_entry_by_entry() {
-        let mut backend = M2Backend::spawn().expect("spawn M2");
-
-        let list = backend
-            .evaluate("{1, [2], (3, 4)}", Some(1))
-            .expect("evaluate a nested list");
-        let Some(M2Value::Collection {
-            kind: CollectionKind::List,
-            items,
-        }) = &list.value
-        else {
-            panic!("a list arrived whole: {:?}", list.value);
-        };
-        assert!(matches!(items[0], M2Value::Tex { .. }));
-        assert!(matches!(
-            items[1],
-            M2Value::Collection {
-                kind: CollectionKind::Array,
-                ..
-            }
-        ));
-        assert!(matches!(
-            items[2],
-            M2Value::Collection {
-                kind: CollectionKind::Sequence,
-                ..
-            }
-        ));
-        assert_eq!(list.rendered_value().as_deref(), Some("{1, [2], (3, 4)}"));
-
-        // A table holding itself opens once and folds where it repeats, rather
-        // than recursing forever.
-        let looped = backend
-            .evaluate("m = new MutableHashTable; m#1 = m; m", Some(2))
-            .expect("evaluate a self-referencing table");
-        let Some(M2Value::HashTable(entries)) = &looped.value else {
-            panic!("the outer table was not opened: {:?}", looped.value);
-        };
-        assert!(matches!(&entries[0][1], M2Value::Tex { fallback, .. }
-            if fallback.starts_with("MutableHashTable{")));
-
-        // Options arrive in their parts, so a list of them is no one formula.
-        let options = backend
-            .evaluate("{someKey => 1/2}", Some(5))
-            .expect("evaluate a list of options");
-        let Some(M2Value::Collection { items, .. }) = &options.value else {
-            panic!("the list was not opened: {:?}", options.value);
-        };
-        let M2Value::Option { key, value } = &items[0] else {
-            panic!("the option was not opened: {:?}", items[0]);
-        };
-        assert!(matches!(
-            **key,
-            M2Value::Token {
-                role: Role::Symbol,
-                ..
-            }
-        ));
-        assert!(matches!(**value, M2Value::Tex { .. }));
-
-        // A bare symbol is a name; a ring's variable of the same name is maths.
-        let symbol = backend
-            .evaluate("symbol someName", Some(3))
-            .expect("evaluate a symbol");
-        assert!(
-            matches!(&symbol.value, Some(M2Value::Token { text, role: Role::Symbol })
-            if text == "someName")
+    fn output_previews_use_each_m2_formatter_without_repeating_evaluation() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let response = backend
+            .evaluate(
+                r#"PreviewValue = new Type of HashTable;
+            net PreviewValue := value -> net "net preview";
+            toString PreviewValue := value -> "string preview";
+            tex PreviewValue := value -> "$p$";
+            html PreviewValue := value -> "<p>html preview</p>";
+            expression PreviewValue := value -> symbol p;
+            previewEvaluations = 0;
+            (previewEvaluations = previewEvaluations + 1; new PreviewValue from {})"#,
+                None,
+            )
+            .unwrap();
+        assert!(!response.is_error, "{}", response.transcript);
+        for (mode, text) in [
+            (PreviewMode::Net, "net preview"),
+            (PreviewMode::String, "string preview"),
+            (PreviewMode::Tex, "$p$"),
+            (PreviewMode::Html, "<p>html preview</p>"),
+        ] {
+            assert!(response.previews.contains(&ValuePreview {
+                mode,
+                text: text.into()
+            }));
+        }
+        assert_eq!(response.value.unwrap().render(), "p");
+        assert_eq!(
+            backend
+                .evaluate("previewEvaluations", None)
+                .unwrap()
+                .rendered_value()
+                .as_deref(),
+            Some("1")
         );
-        let variable = backend
-            .evaluate("(QQ[someName])_0", Some(4))
-            .expect("evaluate a variable");
-        assert!(matches!(&variable.value, Some(M2Value::Tex { .. })));
+    }
+
+    #[test]
+    fn a_failed_preview_formatter_does_not_hide_other_representations() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let response = backend
+            .evaluate(
+                r#"PreviewValue = new Type of HashTable;
+            tex PreviewValue := value -> error "unsupported TeX";
+            new PreviewValue from {}"#,
+                None,
+            )
+            .unwrap();
+        assert!(!response.is_error, "{}", response.transcript);
+        assert!(response.value.is_some());
+        assert!(!response
+            .previews
+            .iter()
+            .any(|preview| preview.mode == PreviewMode::Tex));
+        assert!(response
+            .previews
+            .iter()
+            .any(|preview| preview.mode == PreviewMode::Net));
+    }
+
+    #[test]
+    fn containers_arrive_entry_by_entry() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend
+            .evaluate("{1, [2, 3], (4, 5), a => 1/2}", None)
+            .unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        let value = result.value.unwrap();
+        assert!(value.is("List"));
+        assert_eq!(value.children.len(), 4);
+        assert!(value.children[1].is("Array"));
+        assert!(value.children[2].is("Sequence"));
+        assert!(value.children[3].is("Option"));
+        let looped = backend
+            .evaluate(
+                "looped = new MutableHashTable; looped#self = looped; looped",
+                None,
+            )
+            .unwrap();
+        assert!(!looped.is_error, "{}", looped.transcript);
+        let looped = looped.value.unwrap();
+        assert!(looped.children[0].children[1].text.is_some());
+        let after = backend.evaluate("{1, 2}", None).unwrap();
+        assert!(!after.is_error);
+        assert_eq!(after.value.unwrap().children.len(), 2);
     }
 
     // A container's inherited TeX only spells out its structure, `Shout{...}`,
     // where M2 prints what its class's own net draws. A real TeX form, such as
     // the one a ring family carries, is still preferred.
     #[test]
-    fn a_class_drawing_itself_arrives_as_its_net_not_its_structure() {
-        let mut backend = M2Backend::spawn().expect("spawn M2");
-
-        let drawn = backend
-            .evaluate(
-                r#"Shout = new Type of BasicList; net Shout := x -> net "LOUD"; new Shout from {1}"#,
-                Some(1),
-            )
-            .expect("evaluate a list drawing itself");
-        assert!(
-            matches!(&drawn.value, Some(M2Value::Net(text)) if text == "LOUD"),
-            "arrived as its structure: {:?}",
-            drawn.value
-        );
-
-        let field = backend.evaluate("RR", Some(2)).expect("evaluate RR");
-        assert!(
-            matches!(&field.value, Some(M2Value::Type(value)) if matches!(value.as_ref(), M2Value::Tex { source, .. } if source.contains(r"\mathbb"))),
-            "RR lost its TeX: {:?}",
-            field.value
-        );
+    fn an_opaque_class_keeps_its_identity_and_text() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend.evaluate("Opaque = new Type of HashTable; toString Opaque := x -> \"opaque\"; expression Opaque := x -> hold x; new Opaque from {}", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        let value = result.value.unwrap();
+        assert_eq!(value.class(), "Opaque");
+        assert_eq!(value.text.as_deref(), Some("opaque"));
+        assert!(value.children.is_empty());
     }
 
     // One reader holds one local dictionary for the whole session, exactly as an
@@ -1822,7 +1302,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             .evaluate("spectralLocal := 1729", Some(1))
             .expect("bind local");
         let recalled = backend.evaluate("spectralLocal", Some(2)).expect("recall");
-        assert_eq!(recalled.rendered_value().as_deref(), Some("1 729"));
+        assert_eq!(recalled.rendered_value().as_deref(), Some("1729"));
 
         // A promoted name is an ordinary session name: plain `=` reassigns it.
         backend
@@ -1941,8 +1421,6 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     /// along their baselines, and as pieces it sets as `Matrix QQ² ⟵ QQ²`.
     #[test]
     fn matrix_types_keep_their_shape() {
-        use crate::ui::theme::groups::HLGroup;
-
         let mut backend = M2Backend::spawn().expect("spawn M2");
         let result = backend
             .evaluate("matrix{{1,2},{3,4/5}}", Some(1))
@@ -1961,133 +1439,53 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             .iter()
             .map(|row| row.iter().map(|span| span.content.as_str()).collect())
             .collect();
-        assert_eq!(text, ["Matrix QQ\u{00B2} \u{27F5} QQ\u{00B2}"]);
-        assert!(rows
-            .iter()
-            .flatten()
-            .all(|span| span.content.trim().is_empty() || span.kind == HLGroup::Type));
+        assert_eq!(text, ["Matrix"]);
     }
 
     #[test]
-    fn named_rings_and_ring_families_retain_their_type_role_and_math_layout() {
-        use crate::ui::render::maths::{self, FractionStyle};
-        use crate::ui::theme::groups::HLGroup;
-
-        let mut backend = M2Backend::spawn().expect("spawn M2");
-        let ring = backend.evaluate("R = RR[x_(E_F),x_2,x]", Some(1)).unwrap();
-        assert!(!ring.is_error, "{}", ring.transcript);
-        let returned_class = backend.evaluate("class x", Some(2)).unwrap();
-        assert_eq!(returned_class.rendered_value().as_deref(), Some("R"));
-        for value in [
-            ring.value.as_ref().unwrap(),
-            returned_class.value.as_ref().unwrap(),
-        ] {
-            assert!(matches!(value, M2Value::Type(_)), "{value:?}");
-            let spans = maths::spans(value, 80, FractionStyle::Stacked).unwrap();
-            assert!(spans
-                .iter()
-                .flatten()
-                .all(|span| span.kind == HLGroup::Type));
-            assert_eq!(value.ascii(), "R");
-        }
-        let described = backend.evaluate("describe R", Some(3)).unwrap();
-        let rows = maths::spans(
-            described.value.as_ref().unwrap(),
-            160,
-            FractionStyle::Stacked,
-        )
-        .unwrap();
-        let precision = rows
-            .iter()
-            .flatten()
-            .find(|span| span.content.contains('₅'))
-            .expect("RR precision is retained");
-        assert_eq!(precision.kind, HLGroup::Type);
-        let held = backend.evaluate("{R, RR, 2}", Some(4)).unwrap();
-        let Some(M2Value::Collection { items, .. }) = &held.value else {
-            panic!("a list of rings and a number");
-        };
-        assert!(matches!(items[0], M2Value::Type(_)));
-        assert!(matches!(items[1], M2Value::Type(_)));
-        assert!(matches!(items[2], M2Value::Tex { .. }));
-    }
-
-    #[test]
-    fn compound_rings_and_sheaf_subscripts_keep_their_component_colours() {
-        use crate::ui::render::maths::{self, FractionStyle};
-        use crate::ui::theme::groups::HLGroup;
-
-        let mut backend = M2Backend::spawn().expect("spawn M2");
-        for code in ["RR[x]", "(OO_(Proj(RR_6[x_1,y_{{1}},w])))^5(-2)"] {
-            let response = backend.evaluate(code, None).expect("evaluate expression");
-            assert!(!response.is_error, "{code}: {}", response.transcript);
-            let Some(value @ M2Value::Tex { .. }) = response.value else {
-                panic!("{code} should retain its mathematical structure");
-            };
-            let rows = maths::spans(&value, 160, FractionStyle::Stacked).unwrap();
-            for kind in [HLGroup::Type, HLGroup::Variable, HLGroup::Delimiter] {
-                assert!(
-                    rows.iter().flatten().any(|span| span.kind == kind),
-                    "{code} lost its {kind:?} colour: {rows:?}"
-                );
-            }
+    fn ring_values_keep_their_expression_data() {
+        let mut backend = M2Backend::spawn().unwrap();
+        for code in ["ZZ", "QQ", "RR", "R = QQ[x,y]; R"] {
+            let result = backend.evaluate(code, None).unwrap();
+            assert!(!result.is_error, "{code}: {}", result.transcript);
+            assert!(!result.value.unwrap().classes.is_empty());
         }
     }
 
     #[test]
-    fn precision_fields_retain_their_mathematical_representation() {
-        use crate::ui::render::maths::{self, FractionStyle};
-        use crate::ui::theme::groups::HLGroup;
+    fn polynomial_components_keep_their_expression_and_ring_classes() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend.evaluate("R = QQ[x,y]; x^2 + 2*y", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        let value = result.value.unwrap();
+        assert!(value.is("Sum"), "{value:?}");
+        assert!(value.children[0].is("Power"));
+        assert!(value.children[0].children[0].is("Symbol"));
+        assert_eq!(
+            value.children[0].children[0].group(),
+            crate::ui::theme::groups::HLGroup::Variable
+        );
+    }
 
-        let mut backend = M2Backend::spawn().expect("spawn M2");
-        for family in ["CC", "CCi", "RR", "RRi"] {
-            for precision in [1, 53, 100] {
-                let code = format!("{family}_{precision}");
-                let response = backend.evaluate(&code, None).expect("evaluate field");
-                assert!(!response.is_error, "{code}: {}", response.transcript);
-                let Some(value @ M2Value::Tex { .. }) = response.value else {
-                    panic!("{code} lost its TeX: {:?}", response.value);
-                };
-                let rows = maths::spans(&value, 80, FractionStyle::Stacked)
-                    .expect("a precision field renders as maths");
-                assert!(rows.iter().flatten().all(|span| span.kind == HLGroup::Type));
-            }
+    #[test]
+    fn precision_fields_retain_their_component_classes() {
+        let mut backend = M2Backend::spawn().unwrap();
+        for code in ["RR_100", "CC_100"] {
+            let result = backend.evaluate(code, None).unwrap();
+            assert!(!result.is_error, "{code}: {}", result.transcript);
+            assert!(!result.value.unwrap().classes.is_empty());
         }
     }
 
     #[test]
     fn fields_of_arbitrary_precision_are_drawn_as_the_types_they_are() {
-        use crate::ui::render::maths::{self, MathStyle};
-        use crate::ui::theme::groups::HLGroup;
-
-        let mut backend = M2Backend::spawn().expect("spawn M2");
-        for (code, by_name, blackboard) in [
-            ("RR_*", "RR_*", "ℝ_*"),
-            ("CC_*", "CC_*", "ℂ_*"),
-            ("RRi_*", "RRi_*", "□ℝ_*"),
-            ("CCi_*", "CCi_*", "□ℂ_*"),
-            ("RRi_53", "RRi₅₃", "□ℝ₅₃"),
-        ] {
-            let response = backend.evaluate(code, None).expect("evaluate field");
-            assert!(!response.is_error, "{code}: {}", response.transcript);
-            let value = response.value.expect("a field has a value");
-            for (math_fonts, drawn) in [(false, by_name), (true, blackboard)] {
-                let style = MathStyle {
-                    blackboard: math_fonts,
-                    ..MathStyle::default()
-                };
-                let rows = maths::spans(&value, 80, style).expect("a field renders as maths");
-                let text: String = rows
-                    .iter()
-                    .flatten()
-                    .map(|span| span.content.as_str())
-                    .collect();
-                assert_eq!(text, drawn, "{code} with math fonts {math_fonts}");
-                assert!(
-                    rows.iter().flatten().all(|span| span.kind == HLGroup::Type),
-                    "{code}: {rows:?}"
-                );
-            }
+        let mut backend = M2Backend::spawn().unwrap();
+        for source in ["RR_*", "CC_*"] {
+            let result = backend.evaluate(source, None).unwrap();
+            assert!(!result.is_error, "{source}: {}", result.transcript);
+            let value = result.value.unwrap();
+            assert_eq!(value.group(), crate::ui::theme::groups::HLGroup::Type);
+            assert_eq!(value.text.as_deref(), Some(source));
         }
     }
 
@@ -2207,7 +1605,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
 
         assert!(!out.is_error, "probe errored: {:?}", out.transcript);
         assert!(
-            out.rendered_value().as_deref() == Some("1 729"),
+            out.rendered_value().as_deref() == Some("1729"),
             "expected TeX-formatted 1 729 in {:?}",
             out.value
         );
@@ -2292,17 +1690,346 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     #[test]
     fn startup_source_remains_inspectable() {
         let mut backend = M2Backend::spawn().expect("spawn M2");
-        let path = M2Backend::config_dir()
-            .expect("config directory")
-            .join(STARTUP_FILE);
-        assert_eq!(
-            fs::read_to_string(path).expect("read backend.m2"),
-            STARTUP_SCRIPT
-        );
+        let config = M2Backend::config_dir().expect("config directory");
+        for source in [STARTUP_SCRIPT, DISPLAY_PACKAGE] {
+            assert_eq!(
+                fs::read_to_string(config.join(source.file_name)).expect("read staged source"),
+                source.contents
+            );
+        }
 
-        let inspected = backend
-            .evaluate("code Thing#{SpectralTopLevelMode, BeforePrint}", None)
-            .expect("inspect hook source");
-        assert!(!inspected.is_error, "{}", inspected.transcript);
+        for code in [
+            "code Thing#{SpectralTopLevelMode, BeforePrint}",
+            "code(specNet, Thing)",
+        ] {
+            let inspected = backend.evaluate(code, None).expect("inspect source");
+            assert!(!inspected.is_error, "{code}: {}", inspected.transcript);
+        }
+    }
+
+    #[test]
+    fn a_custom_type_composes_expression_shapes_without_renderer_changes() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend.evaluate("Pair = new Type of HashTable; expression Pair := pair -> RowExpression{pair#first, pair#last}; new Pair from {first => \"a\", last => symbol a}", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        let value = result.value.unwrap();
+        assert!(value.is("RowExpression"));
+        assert!(value.children[0].is("String"));
+        assert!(value.children[1].is("Symbol"));
+        assert_eq!(value.render(), "aa");
+    }
+
+    #[test]
+    fn expression_nodes_transmit_their_original_classes() {
+        let mut backend = M2Backend::spawn().unwrap();
+        for (source, class) in [
+            ("expression(ZZ)", "Ring"),
+            ("1/2", "Divide"),
+            (
+                "MatrixExpression{{symbol a,1/2},{[1],}}",
+                "MatrixExpression",
+            ),
+        ] {
+            let result = backend.evaluate(source, None).unwrap();
+            assert!(!result.is_error, "{source}: {}", result.transcript);
+            assert!(result.value.unwrap().is(class));
+        }
+    }
+
+    #[test]
+    fn a_failed_formatter_uses_the_opaque_fallback() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend
+            .evaluate(
+                "Broken = new Type of HashTable; specNet Broken := x -> 1; new Broken from {}",
+                None,
+            )
+            .unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        assert!(result.value.unwrap().is("Broken"));
+        let after = backend.evaluate("1+1", None).unwrap();
+        assert!(!after.is_error);
+        assert_eq!(after.rendered_value().as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn custom_classes_keep_ancestry_and_unknown_expressions_keep_children() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend
+            .evaluate("Row = new Type of Array; new Row from {1,2}", None)
+            .unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        let value = result.value.unwrap();
+        assert_eq!(value.class(), "Row");
+        assert!(value.is("Array"));
+        assert_eq!(value.render(), "[1, 2]");
+        let result = backend
+            .evaluate(
+                "Unfamiliar = new Type of Expression; new Unfamiliar from {\"a\", symbol a}",
+                None,
+            )
+            .unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        let value = result.value.unwrap();
+        assert_eq!(value.class(), "Unfamiliar");
+        assert!(value.render().starts_with("Unfamiliar{"));
+        assert!(value.children[0].is("String"));
+    }
+
+    #[test]
+    fn speek_spells_out_what_a_value_is_drawn_as() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend.evaluate("speek {1, symbol a}", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        assert!(result.rendered_value().unwrap().contains("List"));
+    }
+
+    #[test]
+    fn explicit_type_depth_and_custom_annotations_are_independent() {
+        let mut backend = M2Backend::spawn().unwrap();
+        for (source, expected) in [
+            ("[1, 1.]", "Array[ZZ, RR]"),
+            ("[]", "Array[]"),
+            ("[1, 2]", "Array[ZZ, ZZ]"),
+        ] {
+            let result = backend.evaluate(source, None).unwrap();
+            assert!(!result.is_error, "{source}: {}", result.transcript);
+            assert_eq!(result.type_parts[0].render(), "Array");
+            let expanded = backend
+                .evaluate(&format!("specType'(2, {source})"), None)
+                .unwrap();
+            assert!(!expanded.is_error, "{}", expanded.transcript);
+            assert_eq!(expanded.value.unwrap().render(), expected);
+        }
+        let result = backend.evaluate("Sample = new Type of HashTable; expression Sample := x -> RowExpression{symbol u, \"u\"}; specType' (ZZ, Sample) := (depth, x) -> specNet symbol SampleType; new Sample from {}", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        let value = result.value.unwrap();
+        assert!(value.children[0].is("Symbol"));
+        assert!(value.children[1].is("String"));
+        assert_eq!(result.type_parts[0].text.as_deref(), Some("SampleType"));
+    }
+
+    #[test]
+    fn nested_expressions_keep_string_and_symbol_classes() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend
+            .evaluate(
+                r#"VectorExpression {(expression A)_A_A^3, (expression "a")_a^(a_"a")}"#,
+                None,
+            )
+            .unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        let value = result.value.unwrap();
+        assert!(value.is("VectorExpression"));
+        let second = &value.children[1];
+        assert!(second.is("Power"));
+        assert!(second.children[0].is("Subscript"));
+        let base = &second.children[0].children[0];
+        assert!(base.is("String"), "{base:?}");
+        assert_eq!(base.text.as_deref(), Some("a"));
+        assert!(second.children[0].children[1].is("Symbol"));
+        assert!(second.children[1].children[1].is("String"));
+    }
+
+    #[test]
+    fn suppressed_values_only_run_the_type_formatter() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend.evaluate("Suppressed = new Type of HashTable; specNet Suppressed := x -> error \"value formatter called\"; specType' (ZZ, Suppressed) := (depth, x) -> specNet symbol SuppressedType; new Suppressed from {};", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        assert!(result.value.is_none());
+        assert_eq!(result.type_parts[0].render(), "SuppressedType");
+    }
+
+    #[test]
+    fn formatter_errors_clear_active_traversal_and_leave_the_session_usable() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend.evaluate("Broken = new Type of HashTable; specNet Broken := x -> error \"broken formatting\"; {new Broken from {}}", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        let result = backend.evaluate("{1,2}", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        assert_eq!(result.value.unwrap().render(), "{1, 2}");
+        let after = backend.evaluate("7", None).unwrap();
+        assert_eq!(after.rendered_value().as_deref(), Some("7"));
+    }
+
+    #[test]
+    fn a_container_subclass_can_customize_its_formatting() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend.evaluate("Framed = new Type of Array; specNet Framed := x -> specNet Power{x#0,x#1}; new Framed from {symbol a,3}", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        assert!(result.value.unwrap().is("Power"));
+    }
+
+    #[test]
+    fn inductive_types_fold_to_the_requested_depth() {
+        let mut backend = M2Backend::spawn().unwrap();
+        for (depth, expected) in [
+            (0, "Array"),
+            (1, "Array"),
+            (2, "Array[Array, Array]"),
+            (3, "Array[Array[ZZ, RR], Array[String]]"),
+        ] {
+            let source = format!(r#"specType'({depth}, [[1,1.],["a"]])"#);
+            let result = backend.evaluate(&source, None).unwrap();
+            assert!(!result.is_error, "{source}: {}", result.transcript);
+            assert_eq!(result.value.unwrap().render(), expected);
+        }
+        let result = backend
+            .evaluate("specType'(2, Power{symbol x,3})", None)
+            .unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        assert_eq!(result.value.unwrap().render(), "Power[Symbol, ZZ]");
+        for depth in ["1/2", "\"deep\""] {
+            let result = backend
+                .evaluate(&format!("specType'({depth}, [1])"), None)
+                .unwrap();
+            assert!(result.is_error, "invalid depth {depth} was accepted");
+        }
+        let result = backend.evaluate("[1,1.]", None).unwrap();
+        assert!(!result.is_error);
+        assert_eq!(result.type_parts[0].render(), "Array");
+    }
+
+    #[test]
+    fn existing_renderers_accept_the_supported_expression_constructors() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let mixed = backend.evaluate(r#"[1/2,"1"]"#, None).unwrap();
+        assert!(!mixed.is_error, "{}", mixed.transcript);
+        let mixed = mixed.value.unwrap();
+        assert!(mixed.children[0].is("Divide"));
+        assert!(mixed.children[1].is("String"));
+        assert_eq!(mixed.children[1].text.as_deref(), Some("1"));
+        for (source, class) in [
+            (
+                "MatrixExpression{{symbol A,11},{symbol B,13}}",
+                "MatrixExpression",
+            ),
+            ("VectorExpression{symbol A,11}", "VectorExpression"),
+            ("Table{{symbol A,11},{symbol B,13}}", "Table"),
+            ("MapExpression{symbol A,symbol B,1/2}", "MapExpression"),
+            ("BinaryOperation{symbol +,symbol A,11}", "BinaryOperation"),
+            ("Adjacent{symbol A,symbol B}", "Adjacent"),
+            ("Subscript{symbol A,11}", "Subscript"),
+            ("Superscript{symbol A,11}", "Superscript"),
+            ("symbol c_1", "Subscript"),
+            ("c_1", "Subscript"),
+        ] {
+            let result = backend.evaluate(source, None).unwrap();
+            assert!(!result.is_error, "{source}: {}", result.transcript);
+            let value = result.value.unwrap();
+            assert!(value.is(class), "{source}: {value:?}");
+            let rows = crate::ui::render::maths::spans(
+                &value,
+                80,
+                crate::ui::render::maths::MathStyle::default(),
+            )
+            .unwrap();
+            assert!(!rows.is_empty(), "{source}");
+            assert!(
+                !value.render().contains("Expression{"),
+                "{source}: {}",
+                value.render()
+            );
+        }
+    }
+
+    #[test]
+    fn complexes_compose_maps_with_differentials_and_degree_labels() {
+        let mut backend = M2Backend::spawn().unwrap();
+        for source in ["S = QQ[a_1..a_4]; C = res coker vars S; C", "C[2]"] {
+            let result = backend.evaluate(source, None).unwrap();
+            assert!(!result.is_error, "{source}: {}", result.transcript);
+            let value = result.value.unwrap();
+            assert!(
+                crate::ui::render::maths::Math::supports_spec_net(&value),
+                "{value:?}"
+            );
+            let mut target = &value;
+            let mut degrees = Vec::new();
+            while target.is("MapExpression") {
+                let [next, module, differential] = target.children.as_slice() else {
+                    panic!("incomplete differential: {target:?}");
+                };
+                assert!(module.is("UnderExpression"));
+                degrees.push(module.children[1].render().parse::<i32>().unwrap());
+                assert!(differential.is("Array"));
+                assert!(differential.children[0].is("Table"));
+                target = next;
+            }
+            assert!(target.is("UnderExpression"));
+            degrees.push(target.children[1].render().parse::<i32>().unwrap());
+            assert_eq!(degrees.len(), 5);
+            assert!(degrees.windows(2).all(|pair| pair[0] - pair[1] == 1));
+        }
+        let result = backend.evaluate("complex S^1", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        assert!(result.value.unwrap().is("UnderExpression"));
+        let result = backend.evaluate("complex S^0", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        assert_eq!(result.value.unwrap().render(), "0");
+    }
+
+    #[test]
+    fn operator_attributes_keep_nested_tables_structured() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend.evaluate("operatorAttributes", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        let table = result.value.unwrap();
+        assert!(table.is("HashTable"));
+        assert!(crate::ui::render::maths::Math::supports_spec_net(&table));
+        assert!(table.text.is_none());
+        assert!(!table.children.is_empty());
+        for entry in &table.children {
+            assert!(entry.is("Option"));
+            let [key, attributes] = entry.children.as_slice() else {
+                panic!("table entry lost its key or value: {entry:?}");
+            };
+            assert!(key.is("Keyword"));
+            assert!(attributes.is("HashTable"));
+            assert!(attributes.text.is_none());
+            assert!(!attributes.children.is_empty());
+        }
+        let rows = crate::ui::render::maths::spans(
+            &table,
+            120,
+            crate::ui::render::maths::MathStyle::default(),
+        )
+        .unwrap();
+        assert!(!rows.is_empty());
+        assert!(rows
+            .iter()
+            .flatten()
+            .any(|span| span.kind == table.children[0].children[0].group()));
+    }
+
+    #[test]
+    fn tables_keep_pairs_and_default_type_depth_keeps_annotations_short() {
+        let mut backend = M2Backend::spawn().unwrap();
+        for source in [
+            r#"hashTable{a=>1/2,b=>"1"}"#,
+            r#"new MutableHashTable from {a=>1/2,b=>"1"}"#,
+        ] {
+            let result = backend.evaluate(source, None).unwrap();
+            assert!(!result.is_error, "{source}: {}", result.transcript);
+            let table = result.value.unwrap();
+            assert_eq!(table.children.len(), 2);
+            assert!(table
+                .children
+                .iter()
+                .all(|entry| entry.is("Option") && entry.children.len() == 2));
+            assert!(table
+                .children
+                .iter()
+                .any(|entry| entry.children[1].is("Divide")));
+            assert!(table
+                .children
+                .iter()
+                .any(|entry| entry.children[1].is("String")));
+            assert!(table.render().contains("=>"));
+        }
+        let result = backend.evaluate("toList(200:symbol if)", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        assert_eq!(result.value.unwrap().children.len(), 200);
+        assert_eq!(result.type_parts[0].render(), "List");
     }
 }

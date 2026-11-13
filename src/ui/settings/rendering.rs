@@ -1,18 +1,64 @@
 //! The *rendering* tab: what colours source and how returned maths is drawn.
 
+use ratatui::layout::Rect;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use these_macros_should_be_illegal::discriminated_str;
 
-use super::tabs::SettingRow;
+use super::row::SettingRow;
 use super::Settings;
-use crate::code::semantic::SERVER_EXECUTABLE;
 use crate::ui::config::UI;
 use crate::ui::controller::picker::{PickerOption, PickerValue};
 use crate::ui::cycle::cyclic;
 use crate::ui::graphics;
 use crate::ui::render::maths::{FractionStyle, MathDisplay, MathInk, ScriptColor};
+
+cyclic! {
+    /// Position of output mode controls on the value border.
+    #[non_exhaustive]
+    #[discriminated_str(label)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum RendererPosition {
+        Off = "off",
+        UpperLeft = "upper left",
+        UpperCenter = "upper center",
+        #[default]
+        UpperRight = "upper right",
+        LowerLeft = "lower left",
+        LowerCenter = "lower center",
+        LowerRight = "lower right",
+    }
+}
+
+impl RendererPosition {
+    /// Place a title between the corners of its output frame.
+    pub fn area(self, frame: Rect, width: u16) -> Rect {
+        if self == Self::Off {
+            return Rect::default();
+        }
+        let available = frame.width.saturating_sub(2);
+        let width = width.min(available);
+        let offset = match self {
+            Self::Off | Self::UpperLeft | Self::LowerLeft => 0,
+            Self::UpperCenter | Self::LowerCenter => (available - width) / 2,
+            Self::UpperRight | Self::LowerRight => available - width,
+        };
+        let row = match self {
+            Self::Off | Self::UpperLeft | Self::UpperCenter | Self::UpperRight => frame.y,
+            Self::LowerLeft | Self::LowerCenter | Self::LowerRight => {
+                frame.bottom().saturating_sub(1)
+            }
+        };
+        Rect::new(
+            frame.x.saturating_add(1) + offset,
+            row,
+            width,
+            u16::from(frame.height > 0),
+        )
+    }
+}
 
 /// The values of the *rendering* tab.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -20,20 +66,24 @@ use crate::ui::render::maths::{FractionStyle, MathDisplay, MathInk, ScriptColor}
 pub struct RenderingSettings {
     /// Whether an installed language server analyses the session's source.
     pub language_server: bool,
+    /// Show automatic signature-help popups while typing.
+    pub signature_hints: bool,
     /// Whether the language server enriches source colors, which it can only do
     /// while it runs.
     pub semantic_highlighting: bool,
     /// Swap code and canvas backgrounds in the reference pane.
     pub reference_code_background: bool,
     pub maths: MathDisplay,
+    /// Preferred typeset formula size relative to terminal text.
+    pub math_size_percent: u16,
     /// Whether returned maths takes a colour per role or one colour throughout.
     pub math_ink: MathInk,
     /// The colour of subscripts in returned maths.
     pub index_color: ScriptColor,
     /// The colour of superscripts in returned maths.
     pub exponent_color: ScriptColor,
-    /// Whether returned values are drawn as the text Macaulay2 printed for them.
-    pub original_output: bool,
+    /// Position of per-output renderer controls within the border.
+    pub renderer_position: RendererPosition,
     /// Whether text may be drawn in italics.
     pub italics: bool,
     pub fractions: FractionStyle,
@@ -50,13 +100,15 @@ impl Default for RenderingSettings {
     fn default() -> Self {
         Self {
             language_server: true,
+            signature_hints: false,
             semantic_highlighting: true,
             reference_code_background: false,
             maths: MathDisplay::default(),
+            math_size_percent: UI.math_size_percent,
             math_ink: MathInk::default(),
             index_color: ScriptColor::default(),
             exponent_color: ScriptColor::default(),
-            original_output: false,
+            renderer_position: RendererPosition::default(),
             italics: true,
             fractions: FractionStyle::default(),
             math_fonts: false,
@@ -83,20 +135,22 @@ impl RenderingSettings {
         (
             self.reference_code_background,
             self.maths,
+            self.math_size_percent,
             self.math_ink,
             self.index_color,
             self.exponent_color,
-            self.original_output,
+            self.renderer_position,
             self.fractions,
             self.math_fonts,
             self.matrix_row_spacing_percent,
         ) != (
             other.reference_code_background,
             other.maths,
+            other.math_size_percent,
             other.math_ink,
             other.index_color,
             other.exponent_color,
-            other.original_output,
+            other.renderer_position,
             other.fractions,
             other.math_fonts,
             other.matrix_row_spacing_percent,
@@ -114,10 +168,9 @@ cyclic! {
     #[discriminated_str(label)]
     #[derive(Clone, Copy, PartialEq)]
     pub enum RenderingSetting {
-        LanguageServer = "language server",
-        SemanticHighlighting = "semantic highlighting",
         Maths = "maths",
-        OriginalOutput = "original output text",
+        MathSize = "maths size",
+        RendererPosition = "output mode position",
         MathInk = "maths colours",
         IndexColor = "index colours",
         ExponentColor = "exponent colours",
@@ -149,10 +202,9 @@ impl SettingRow for RenderingSetting {
                 "this terminal shows no pictures: kitty and Ghostty do, inside tmux too; drawn as unicode meanwhile"
             }
             Self::ReferenceCodeBackground => "exchange the reference pane canvas and code backgrounds",
-            Self::LanguageServer => "analyse the session's source with m2-ls when it is installed",
-            Self::SemanticHighlighting => "enrich source colors using the language server",
+            Self::MathSize => "preferred formula size; formulas wrap at the available width",
             Self::Maths => "draw returned maths as Unicode text, plain ASCII, or typeset pictures",
-            Self::OriginalOutput => "show every returned value as the text Macaulay2 printed, unrendered",
+            Self::RendererPosition => "place the available output modes and current mode name in the value border",
             Self::MathInk => "colour returned maths by role, or in the value colour with types in the type colour",
             Self::IndexColor => "colour of subscripts: their own, their symbol's, or the operator colour; delimiters and punctuation keep theirs",
             Self::ExponentColor => "colour of exponents: their own, their symbol's, or the operator colour; delimiters and punctuation keep theirs",
@@ -172,8 +224,6 @@ impl SettingRow for RenderingSetting {
         let rendering = settings.rendering;
         match self {
             Self::ReferenceCodeBackground => switch(rendering.reference_code_background, "on"),
-            Self::LanguageServer => switch(rendering.language_server, SERVER_EXECUTABLE),
-            Self::SemanticHighlighting => switch(rendering.semantic_colors(), "on"),
             Self::Maths => PickerValue::among(MathDisplay::CHOICES, &rendering.maths, |&display| {
                 PickerOption {
                     label: display.label().to_string(),
@@ -183,7 +233,11 @@ impl SettingRow for RenderingSetting {
                     }),
                 }
             }),
-            Self::OriginalOutput => switch(rendering.original_output, "on"),
+            Self::RendererPosition => PickerValue::among(
+                RendererPosition::CHOICES,
+                &rendering.renderer_position,
+                |position| position.label().into(),
+            ),
             Self::MathInk => PickerValue::among(MathInk::CHOICES, &rendering.math_ink, |&ink| {
                 ink.label().into()
             }),
@@ -197,6 +251,7 @@ impl SettingRow for RenderingSetting {
                     color.label().into()
                 })
             }
+            Self::MathSize => PickerValue::Stepped(format!("{}%", rendering.math_size_percent)),
             Self::Italics => switch(rendering.italics, "on"),
             Self::Fractions => {
                 PickerValue::among(FractionStyle::CHOICES, &rendering.fractions, |&style| {
@@ -220,12 +275,19 @@ impl SettingRow for RenderingSetting {
             Self::ReferenceCodeBackground => {
                 rendering.reference_code_background = !rendering.reference_code_background
             }
-            Self::LanguageServer => rendering.language_server = !rendering.language_server,
-            Self::SemanticHighlighting => {
-                rendering.semantic_highlighting = !rendering.semantic_highlighting
-            }
             Self::Maths => rendering.maths = rendering.maths.cycle(delta),
-            Self::OriginalOutput => rendering.original_output = !rendering.original_output,
+            Self::RendererPosition => {
+                rendering.renderer_position = rendering.renderer_position.cycle(delta)
+            }
+            Self::MathSize => {
+                let step = u16::from(delta.unsigned_abs()) * UI.math_size_step;
+                rendering.math_size_percent = if delta > 0 {
+                    rendering.math_size_percent.saturating_add(step)
+                } else {
+                    rendering.math_size_percent.saturating_sub(step)
+                }
+                .clamp(UI.min_math_size_percent, UI.max_math_size_percent);
+            }
             Self::MathInk => rendering.math_ink = rendering.math_ink.cycle(delta),
             Self::IndexColor => rendering.index_color = rendering.index_color.cycle(delta),
             Self::ExponentColor => rendering.exponent_color = rendering.exponent_color.cycle(delta),
@@ -256,14 +318,8 @@ impl SettingRow for RenderingSetting {
     fn applies(self, settings: Settings) -> bool {
         let rendering = settings.rendering;
         match self {
-            Self::SemanticHighlighting => rendering.language_server,
-            Self::Fractions | Self::MathFonts => {
-                !rendering.pictured() && !rendering.original_output
-            }
-            Self::MatrixRowSpacing => rendering.pictured(),
-            Self::Maths | Self::MathInk | Self::IndexColor | Self::ExponentColor => {
-                !rendering.original_output
-            }
+            Self::Fractions | Self::MathFonts => !rendering.pictured(),
+            Self::MathSize | Self::MatrixRowSpacing => rendering.pictured(),
             _ => true,
         }
     }
@@ -272,23 +328,6 @@ impl SettingRow for RenderingSetting {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn semantic_highlighting_reads_off_and_locks_without_the_language_server() {
-        let mut settings = Settings::default();
-        settings.rendering.semantic_highlighting = true;
-        settings.rendering.language_server = false;
-        let row = RenderingSetting::SemanticHighlighting.row(settings);
-        assert!(!row.selectable());
-        assert!(matches!(
-            row.value(),
-            Some(PickerValue::Choice { options, chosen }) if options[*chosen].label == "off"
-        ));
-        settings.rendering.language_server = true;
-        assert!(RenderingSetting::SemanticHighlighting
-            .row(settings)
-            .selectable());
-    }
 
     #[test]
     fn typeset_maths_locks_fractions_and_math_fonts_where_it_is_drawn() {
@@ -368,26 +407,6 @@ mod tests {
     }
 
     #[test]
-    fn original_output_text_locks_the_rows_that_shape_rendered_maths() {
-        let mut settings = Settings::default();
-        let shaping = [
-            RenderingSetting::Maths,
-            RenderingSetting::MathInk,
-            RenderingSetting::IndexColor,
-            RenderingSetting::ExponentColor,
-            RenderingSetting::Fractions,
-        ];
-        for setting in shaping {
-            assert!(setting.row(settings).selectable(), "{}", setting.label());
-        }
-        RenderingSetting::OriginalOutput.adjust(&mut settings, 1);
-        assert!(settings.rendering.original_output);
-        for setting in shaping {
-            assert!(!setting.row(settings).selectable(), "{}", setting.label());
-        }
-    }
-
-    #[test]
     fn every_new_rendering_choice_cycles_and_asks_for_a_reformat() {
         let mut settings = Settings::default();
         let before = settings.rendering;
@@ -395,7 +414,7 @@ mod tests {
             RenderingSetting::MathInk,
             RenderingSetting::IndexColor,
             RenderingSetting::ExponentColor,
-            RenderingSetting::OriginalOutput,
+            RenderingSetting::RendererPosition,
         ] {
             let mut changed = settings;
             setting.adjust(&mut changed, 1);
@@ -403,5 +422,21 @@ mod tests {
         }
         RenderingSetting::Italics.adjust(&mut settings, 1);
         assert!(!settings.rendering.italics);
+    }
+    #[test]
+    fn mode_positions_use_the_selected_border_and_alignment() {
+        let frame = Rect::new(4, 3, 40, 10);
+        for (position, x, y) in [
+            (RendererPosition::UpperLeft, 5, 3),
+            (RendererPosition::UpperCenter, 18, 3),
+            (RendererPosition::UpperRight, 31, 3),
+            (RendererPosition::LowerLeft, 5, 12),
+            (RendererPosition::LowerCenter, 18, 12),
+            (RendererPosition::LowerRight, 31, 12),
+        ] {
+            assert_eq!(position.area(frame, 12), Rect::new(x, y, 12, 1));
+            let clipped = position.area(frame, 100);
+            assert!(clipped.x > frame.x && clipped.right() < frame.right());
+        }
     }
 }

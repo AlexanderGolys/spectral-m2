@@ -160,6 +160,14 @@ impl FloatingContent for Signature {
     }
 }
 
+impl FloatingContent for Vec<Signature> {
+    fn lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.iter()
+            .flat_map(|signature| signature.lines(width))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

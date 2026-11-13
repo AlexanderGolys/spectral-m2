@@ -200,6 +200,8 @@ pub struct Typesetting<'a> {
     pub painted: &'a str,
     pub code: &'a str,
     pub matrix_row_spacing_percent: u16,
+    /// Preferred size relative to terminal text.
+    pub scale_percent: u16,
 }
 
 /// A formula's placeholder lines and the one its baseline runs through.
@@ -373,7 +375,7 @@ fn gallery() -> MutexGuard<'static, Gallery> {
 type FormulaKey = (String, Rgb, u16);
 /// A formula's picture at a column count and cell pixel size, for its copied code.
 /// Values sharing TeX but not code each get their own picture to copy from.
-type ImageKey = (FormulaKey, u16, Size, String, Placement);
+type ImageKey = (FormulaKey, u16, Size, String, Placement, u16);
 
 /// A formula's vector picture and the places it may be cut into rows.
 struct Formula {
@@ -500,6 +502,7 @@ impl Gallery {
             painted,
             code,
             matrix_row_spacing_percent,
+            scale_percent,
         }: Typesetting,
         colour: Rgb,
         canvas: Canvas,
@@ -521,7 +524,7 @@ impl Gallery {
                 }))
             })
             .clone()?;
-        let raster = Raster::fitted(&formula, canvas, width, placement)?;
+        let raster = Raster::fitted_at_scale(&formula, canvas, width, placement, scale_percent)?;
         let baseline = raster.baseline_row();
         let image_key = (
             key,
@@ -529,6 +532,7 @@ impl Gallery {
             canvas.cell,
             code.to_string(),
             placement,
+            scale_percent,
         );
         if let Some(image) = self.images.get(&image_key) {
             return image.clone().map(|image| (image, baseline));
@@ -667,7 +671,18 @@ impl Raster {
     /// The picture at the terminal's text size, broken into rows of at most
     /// `width` columns where it may break, and shrunk to `width` when a row it
     /// cannot break is wider; none when shrinking would make it too small to read.
+    #[cfg(test)]
     fn fitted(formula: &Formula, canvas: Canvas, width: u16, placement: Placement) -> Option<Self> {
+        Self::fitted_at_scale(formula, canvas, width, placement, UI.math_size_percent)
+    }
+
+    fn fitted_at_scale(
+        formula: &Formula,
+        canvas: Canvas,
+        width: u16,
+        placement: Placement,
+        scale_percent: u16,
+    ) -> Option<Self> {
         let tree = &formula.tree;
         // Font ascender/descender metrics can reserve more space than the ink,
         // particularly for delimiters. Only visible bounds determine occupied rows.
@@ -676,7 +691,8 @@ impl Raster {
         let height = bounds.height() + 2.0 * PADDING;
         let cell_width = f32::from(canvas.cell.width);
         let cell_height = f32::from(canvas.cell.height);
-        let natural = cell_height * UI.typeset.em_per_cell_height / EM;
+        let natural =
+            cell_height * UI.typeset.em_per_cell_height / EM * f32::from(scale_percent) / 100.0;
         let room = f32::from(width) * cell_width / natural;
         let across = tree.size().width();
         let breaks = formula
@@ -811,6 +827,17 @@ mod tests {
     };
 
     #[test]
+    fn preferred_formula_size_wraps_before_shrinking() {
+        let formula = formula("a+b+c+d+e+f+g+h+i+j+k+l");
+        let small = Raster::fitted_at_scale(&formula, CANVAS, 12, Placement::Alone, 80).unwrap();
+        let large = Raster::fitted_at_scale(&formula, CANVAS, 12, Placement::Alone, 120).unwrap();
+        assert!(small.rows.len() > 1);
+        assert!(large.rows.len() >= small.rows.len());
+        assert!(large.scale > small.scale);
+        assert!(large.cells.width <= 12);
+    }
+
+    #[test]
     fn terminals_are_named_without_versions_or_families() {
         assert_eq!(printable_name("ghostty 1.3.1").as_deref(), Some("ghostty"));
         assert_eq!(printable_name("kitty(0.36.4)").as_deref(), Some("kitty"));
@@ -850,6 +877,8 @@ mod tests {
             r"\left(1\right)",
             r"\left[1\right]",
             r"\left\{1\right\}",
+            r"{\mathit{y}}_{{\mathrm{1}},\mathit{d}}",
+            r"{\mathit{y}}_{{\mathrm{1}}\texttt{,}\mathit{d}}",
         ] {
             let formula = formula(tex);
             let raster = Raster::fitted(&formula, CANVAS, 80, Placement::AmongText).unwrap();
@@ -963,6 +992,7 @@ mod tests {
             painted: tex,
             code: "{{x/3}, {Z, 1/2}, {1, \"1\"}}",
             matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
+            scale_percent: UI.math_size_percent,
         };
 
         let picture = gallery.formula(formula, Rgb([1, 2, 3]), CANVAS, 80, Placement::Alone);
@@ -1004,6 +1034,7 @@ mod tests {
             painted: tex,
             code: tex,
             matrix_row_spacing_percent,
+            scale_percent: UI.math_size_percent,
         };
         let ink = Rgb([1, 2, 3]);
         let placement = Placement::Alone;
@@ -1025,6 +1056,7 @@ mod tests {
             painted: r"\textcolor{red}{x^2}",
             code: "x^2",
             matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
+            scale_percent: UI.math_size_percent,
         };
 
         let placement = Placement::AmongText;
@@ -1062,6 +1094,7 @@ mod tests {
             painted: tex,
             code: tex,
             matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
+            scale_percent: UI.math_size_percent,
         };
         let (image, _) = gallery
             .formula(formula, Rgb([1, 2, 3]), CANVAS, 80, Placement::Alone)

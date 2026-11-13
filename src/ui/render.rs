@@ -49,6 +49,7 @@ pub struct RenderContext {
     recent_outputs: [Option<u32>; RECENT_OUTPUTS],
     numbers_printed: bool,
     swapped_code_background: bool,
+    renderer_position: crate::ui::settings::rendering::RendererPosition,
 }
 
 impl RenderContext {
@@ -61,6 +62,7 @@ impl RenderContext {
             recent_outputs: [None; RECENT_OUTPUTS],
             numbers_printed: false,
             swapped_code_background: false,
+            renderer_position: Default::default(),
         }
     }
 
@@ -85,6 +87,17 @@ impl RenderContext {
     pub fn with_output_limit(self, rows: usize) -> Self {
         Self {
             output_limit: Some(rows.max(UI.min_output_rows)),
+            ..self
+        }
+    }
+
+    /// Prefer typeset maths at a percentage of the terminal text size.
+    pub fn with_math_size(self, percent: u16) -> Self {
+        Self {
+            math: MathStyle {
+                scale_percent: percent.clamp(UI.min_math_size_percent, UI.max_math_size_percent),
+                ..self.math
+            },
             ..self
         }
     }
@@ -172,14 +185,18 @@ impl RenderContext {
         }
     }
 
-    pub fn with_original_text(self, original_text: bool) -> Self {
+    pub fn with_renderer_position(
+        self,
+        renderer_position: crate::ui::settings::rendering::RendererPosition,
+    ) -> Self {
         Self {
-            math: MathStyle {
-                original_text,
-                ..self.math
-            },
+            renderer_position,
             ..self
         }
+    }
+
+    pub fn renderer_position(&self) -> crate::ui::settings::rendering::RendererPosition {
+        self.renderer_position
     }
 
     /// Label printed text with the number of the cell that printed it, as the

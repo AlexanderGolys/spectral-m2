@@ -1,14 +1,15 @@
-//! The *layout* tab: how much room the input and returned values take, and how
+//! The *editor* tab: how much room the input and returned values take, and how
 //! completion offers itself in the input.
 
+use crate::ui::cycle::cyclic;
 use serde::{Deserialize, Serialize};
 use these_macros_should_be_illegal::discriminated_str;
 
-use super::tabs::SettingRow;
+use super::row::SettingRow;
+use super::selection::SelectionSetting;
 use super::Settings;
 use crate::ui::config::UI;
-use crate::ui::controller::picker::PickerValue;
-use crate::ui::cycle::cyclic;
+use crate::ui::controller::picker::{PickerItem, PickerValue};
 
 // @@@settings.layout
 // @##issue.magic
@@ -16,10 +17,12 @@ const MAX_INPUT_HEIGHT_PERCENT: u8 = 100;
 const INPUT_HEIGHT_STEP_PERCENT: i8 = 5;
 const MIN_COMPLETE_AFTER: u8 = 1;
 
-/// The values of the *layout* tab.
+/// The values of the *editor* tab.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct LayoutSettings {
+pub struct EditorSettings {
+    /// Show automatic language-server diagnostics and their underlines.
+    pub diagnostics: bool,
     /// Maximum editor-height percentage occupied by the input.
     #[serde(alias = "max_height_percent")]
     pub max_input_height_percent: u8,
@@ -34,9 +37,10 @@ pub struct LayoutSettings {
     pub hint_completion_below: u16,
 }
 
-impl Default for LayoutSettings {
+impl Default for EditorSettings {
     fn default() -> Self {
         Self {
+            diagnostics: false,
             max_input_height_percent: 75,
             output_rows: UI.max_output_rows,
             scrolloff: 2,
@@ -47,21 +51,23 @@ impl Default for LayoutSettings {
 }
 
 cyclic! {
-    /// One row of the *layout* tab.
-    #[discriminated_str(label)]
-    #[derive(Clone, Copy, PartialEq)]
-    pub enum LayoutSetting {
-        MaxInputHeight = "max input height",
-        OutputRows = "max output height",
-        Scrolloff = "scrolloff",
-        CompleteAfter = "complete after",
-        HintCompletionBelow = "hint below",
-    }
+/// One row of the *editor* tab.
+#[discriminated_str(label)]
+#[non_exhaustive]
+#[derive(Clone, Copy, PartialEq)]
+pub enum EditorSetting {
+    MaxInputHeight = "max input height",
+    OutputRows = "max output height",
+    Scrolloff = "scrolloff",
+    CompleteAfter = "complete after",
+    HintCompletionBelow = "hint below",
 }
 
-impl SettingRow for LayoutSetting {
+}
+
+impl SettingRow for EditorSetting {
     fn label(self) -> &'static str {
-        LayoutSetting::label(&self)
+        EditorSetting::label(&self)
     }
 
     fn description(self, _: Settings) -> &'static str {
@@ -77,7 +83,7 @@ impl SettingRow for LayoutSetting {
     }
 
     fn value(self, settings: Settings) -> PickerValue {
-        let layout = settings.layout;
+        let layout = settings.editor;
         PickerValue::Stepped(match self {
             Self::MaxInputHeight => format!("{}%", layout.max_input_height_percent),
             Self::OutputRows => format!("{} rows", layout.output_rows),
@@ -88,7 +94,7 @@ impl SettingRow for LayoutSetting {
     }
 
     fn adjust(self, settings: &mut Settings, delta: i8) {
-        let layout = &mut settings.layout;
+        let layout = &mut settings.editor;
         match self {
             Self::MaxInputHeight => {
                 layout.max_input_height_percent = layout
@@ -119,46 +125,59 @@ impl SettingRow for LayoutSetting {
     }
 }
 
+/// Editor rows, including mouse selection and copying behavior.
+pub fn rows(settings: Settings) -> Vec<Box<dyn PickerItem>> {
+    EditorSetting::CHOICES
+        .iter()
+        .map(|row| row.row(settings))
+        .chain(
+            SelectionSetting::CHOICES
+                .iter()
+                .map(|row| row.row(settings)),
+        )
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn completion_hint_threshold_is_a_persisted_u16_with_compatible_defaults() {
-        let old: LayoutSettings = serde_json::from_str(r#"{"complete_after":2}"#).unwrap();
+        let old: EditorSettings = serde_json::from_str(r#"{"complete_after":2}"#).unwrap();
         assert_eq!(
             old.hint_completion_below,
-            LayoutSettings::default().hint_completion_below
+            EditorSettings::default().hint_completion_below
         );
-        let layout: LayoutSettings =
+        let layout: EditorSettings =
             serde_json::from_str(r#"{"hintCompletionBelow":65535}"#).unwrap();
         let mut settings = Settings {
-            layout,
+            editor: layout,
             ..Settings::default()
         };
-        LayoutSetting::HintCompletionBelow.adjust(&mut settings, 1);
-        assert_eq!(settings.layout.hint_completion_below, u16::MAX);
-        let json = serde_json::to_value(settings.layout).unwrap();
+        EditorSetting::HintCompletionBelow.adjust(&mut settings, 1);
+        assert_eq!(settings.editor.hint_completion_below, u16::MAX);
+        let json = serde_json::to_value(settings.editor).unwrap();
         assert_eq!(json["hintCompletionBelow"], u16::MAX);
-        settings.layout.hint_completion_below = 0;
-        LayoutSetting::HintCompletionBelow.adjust(&mut settings, -1);
-        assert_eq!(settings.layout.hint_completion_below, 0);
+        settings.editor.hint_completion_below = 0;
+        EditorSetting::HintCompletionBelow.adjust(&mut settings, -1);
+        assert_eq!(settings.editor.hint_completion_below, 0);
     }
 
     #[test]
     fn stepped_values_stay_within_their_ranges() {
         let mut settings = Settings::default();
-        settings.layout.max_input_height_percent = MAX_INPUT_HEIGHT_PERCENT;
-        LayoutSetting::MaxInputHeight.adjust(&mut settings, 1);
+        settings.editor.max_input_height_percent = MAX_INPUT_HEIGHT_PERCENT;
+        EditorSetting::MaxInputHeight.adjust(&mut settings, 1);
         assert_eq!(
-            settings.layout.max_input_height_percent,
+            settings.editor.max_input_height_percent,
             MAX_INPUT_HEIGHT_PERCENT
         );
-        settings.layout.output_rows = UI.min_output_rows;
-        LayoutSetting::OutputRows.adjust(&mut settings, -1);
-        assert_eq!(settings.layout.output_rows, UI.min_output_rows);
-        settings.layout.complete_after = MIN_COMPLETE_AFTER;
-        LayoutSetting::CompleteAfter.adjust(&mut settings, -1);
-        assert_eq!(settings.layout.complete_after, MIN_COMPLETE_AFTER);
+        settings.editor.output_rows = UI.min_output_rows;
+        EditorSetting::OutputRows.adjust(&mut settings, -1);
+        assert_eq!(settings.editor.output_rows, UI.min_output_rows);
+        settings.editor.complete_after = MIN_COMPLETE_AFTER;
+        EditorSetting::CompleteAfter.adjust(&mut settings, -1);
+        assert_eq!(settings.editor.complete_after, MIN_COMPLETE_AFTER);
     }
 }

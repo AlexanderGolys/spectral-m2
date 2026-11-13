@@ -13,7 +13,7 @@ Spectral keeps configuration in one directory and session state in another, foll
 : The Macaulay2 side of the shell, written out from the program so M2's `code` can show you Spectral's hooks. Replaced whenever a new version brings a different one; don't edit it.
 
 `settings.json`
-: Settings and rebound keys, in a section per settings tab.
+: Editable settings and rebound keys, created on first launch. The `layout` and `selection` sections supply Editor; language-server options remain under `rendering`. Restart the shell after editing.
 
 `appearance.json`
 : The chosen scheme, variant, mode and background.

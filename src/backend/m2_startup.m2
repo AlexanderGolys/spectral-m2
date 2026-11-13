@@ -20,6 +20,10 @@
 -- scaffolding: no echoed input, no `iN :` prompt, no `oN =` labels. Printed text
 -- arrives as itself and needs no unpicking.
 
+-- Loaded by the shell ahead of everything else, so a session's init file can
+-- already draw its own classes; named here as what the hooks are built on.
+needsPackage "Spectral"
+
 announceReady := (() -> (
 	mode := global SpectralTopLevelMode;
 
@@ -55,9 +59,9 @@ announceReady := (() -> (
     -- statement that throws or ends in `;` never reaches Print, and the frame
     -- must leave exactly once per cell all the same.
 	renderedValue := null;
+	previews := {};
 	typeInfo := null;
 	typeParts := null;
-	hypertextType := value Core#"private dictionary"#"Hypertext";
 
 	-- Whether the statement in flight ran to completion: the hooks below are the
     -- last thing a statement does, and one that throws runs none of them.
@@ -90,330 +94,23 @@ announceReady := (() -> (
 		lookupMethod := lookup({Standard, BeforePrint}, class value) ?? identity;
 		lookupMethod value
 	);
-	-- What a value is drawn as, chosen by class. A frame's "value" is the
-    -- shell's M2Value (src/backend.rs) in serde's spelling of an enum, a one-key
-    -- table naming the variant:
-    --
-    --     net => text                   tex => {source, fallback, code}
-    --     markup => {html, fallback,    hashtable => {{key, value}, ...}
-    --         exampleWidth}
-    --     collection => {kind, items}   type => rendered type value
-    --     option => {key, value}
-    --
-    -- A value is either drawn whole by one of M2's own formatters, or it is a
-    -- container whose entries are rendered one by one, so the shell can set
-    -- each in its own colour. Dispatch takes the whole argument: a Sequence
-    -- would otherwise be spread into separate arguments.
-	render := method(Dispatch => Thing);
-	asNet := value -> hashTable {symbol net => toString net value};
-	-- Every class answers `tex`, most of them with their Net in a typewriter
-    -- font, and containers by spelling out their structure, `MdList{...}`. Only
-    -- a `texMath` of a class's own is a real TeX form: one that draws itself by
-    -- a `net` installed at or below such a fallback reads as that net, as M2
-    -- prints it. A formatter that throws costs the value its TeX, never the
-    -- statement its result. Its `code` is the one-line spelling M2 reads back,
-    -- which is what copying its picture gives.
-	structuralTex := apply({Thing, BasicList, HashTable}, type -> lookup(texMath, type));
-	installedAt := (method, type) -> last select(ancestors type,
-		ancestor -> lookup(method, ancestor) === lookup(method, type));
-	lacksTex := type -> (
-		member(lookup(texMath, type), structuralTex)
-			and ancestor(installedAt(texMath, type), installedAt(net, type))
-	);
-	drawnWhole := value -> (
-		if lacksTex class value then
-			asNet value
-		else try hashTable {
-			symbol tex => hashTable {
-				symbol source => tex value,
-				symbol fallback =>
-					toString net value,
-				symbol code => toString value
-			}
-		}
-			else asNet value
-	);
-	render Thing := HashTable => drawnWhole;
-	-- M2's own test for whether a function was ever bound to a name.
-	hasAttribute := value Core#"private dictionary"#"hasAttribute";
-	reverseDictionary := value Core#"private dictionary"#"ReverseDictionary";
-	-- The `file://` target documentation links to source files with, carrying a
-    -- FilePosition as its fragment, which the shell opens in the reference pane;
-    -- null when the file is not found. Documentation links only a file found as
-    -- written or under a directory of the path, and so does this: a position
-    -- built into M2 names the directory it was built in, and one in typed input
-    -- names no file at all.
-	sourceTarget := position -> (
-		file := position#0;
-		candidates := if #file == 0 then {} else
-				select(join({file}, apply(path, directory -> directory
-						| file)), fileExists);
-		if #candidates == 0 then
-			null
-		else urlEncode("file://" | toAbsolutePath first candidates
-				| "#L" | integerText position#1 | ":C" | integerText position#2
-				| (if #position > 3 then
-							"-L" | integerText position#3 | ":C" | integerText position#4
-						else ""))
-	);
-
-	-- A value that is one word with a role in code -- null, a Boolean, a
-    -- string, a function -- is sent with that role, so the shell colours it as
-    -- code colours the same word.
-	asToken := (text, role) -> hashTable {
-		symbol token => hashTable {
-			symbol text => text,
-			symbol role => role
-		}
-	};
-	render Nothing := HashTable => value -> asToken("null", "null");
-	render Boolean := HashTable => value -> asToken(toString value, "boolean");
-	render String := HashTable => value -> asToken(value, "string");
-	-- A function's TeX is its Net in a typewriter font, and nothing more. A
-    -- named one is drawn by its name; an anonymous one's Net only says where it
-    -- was written (`FunctionClosure[stdio:2:36-2:42]`), so it is drawn by its
-    -- class instead.
-    -- A function written in a source file still on disk also links to where it
-    -- was written; one typed at the prompt was written in no file.
-	render Function := HashTable => value -> (
-		word := asToken(
-			if hasAttribute(value, reverseDictionary) then
-				toString value
-			else toString class value,
-			"function"
-		);
-		position := locate value;
-		target := if position =!= null then
-				sourceTarget position;
-		if target === null then
-			word
-		else hashTable {symbol linked => hashTable {
-			symbol value => word,
-			symbol target => target
-		}}
-	);
-	-- Every documentation node at once: DIV, TABLE, UL and the rest all descend
-    -- from Hypertext. Its examples were run with the print width M2 gives every
-    -- example, so their wide values were wrapped to it.
-	exampleWidth := value Core#"private dictionary"#"ArgPrintWidthN";
-	-- A link to another node points at the page M2 writes it to, named by
-    -- `toFilename` of the node's key. Read back through the same encoding, each
-    -- such link instead carries the key as an M2 string, which is what the
-    -- shell asks `help` for when the link is clicked. Links elsewhere stay.
-	toFilename := value Core#"private dictionary"#"toFilename";
-	filenameCodes := hashTable apply(1..127, i -> (substring(
-		toFilename ascii i, 1
-	), ascii i));
-	nodeKey := name -> (
-		codes := characters substring(name, 1);
-		key := {};
-		i := 0;
-		while i < #codes do (
-			code := if codes#i == "_" then
-					concatenate codes_{i..min(i + 2, #codes - 1)}
-				else codes#i;
-			if not filenameCodes#?code then
-				return null;
-			key = append(key, filenameCodes#code);
-			i = i + #code
-		);
-		concatenate key
-	);
-	escapeAttribute := text -> replace(">", "&gt;", replace("<", "&lt;",
-		replace("\"", "&quot;", replace("&", "&amp;", text))));
-	linkedKeys := page -> (
-		pattern := ///href="(?:[^"]*/)?(_[^"/]*)\.html"///;
-		linked := "";
-		while (match := regex(pattern, page)) =!= null do (
-			key := nodeKey substring(match#1, page);
-			linked = linked | substring(page, 0, match#0#0)
-				| (if key === null then
-							substring(match#0, page)
-						else "href=\"" | escapeAttribute format key | "\"");
-			page = substring(page, match#0#0 + match#0#1)
-		);
-		linked | page
-	);
-	-- A source position is linked as `file:///dir/name.m2#L1:C2-L3:C4` and
-    -- spelled with its whole directory, which is most of a line and none of
-    -- what is wanted. Its link stays, and its text keeps the file's name, one
-    -- directory above it, and the position; any directories further up are
-    -- folded into `[...]/`.
-	foldedPath := path -> (
-		parts := select(separate("/", path), part -> part != "");
-		parents := drop(parts, -1);
-		if #parents == 0 then
-			last parts
-		else if #parents == 1 then
-			(if first path == "/" then
-						"/"
-					else "") | concatenate between("/", parts)
-		else "[...]/" | concatenate between("/", parts_{-2, -1})
-	);
-	shortenedPaths := page -> (
-		pattern := ///(<a href="file://([^"#]*)[^"]*">)([^<]*)</a>///;
-		shortened := "";
-		while (match := regex(pattern, page)) =!= null do (
-			path := substring(match#2, page);
-			text := substring(match#3, page);
-			shortened = shortened | substring(page, 0, match#0#0) | substring(
-				match#1, page
-			)
-				| (if substring(text, 0, #path) == path then
-							foldedPath path | substring(text, #path)
-						else text) | "</a>";
-			page = substring(page, match#0#0 + match#0#1)
-		);
-		shortened | page
-	);
-	linkedSources := page -> (
-		pattern := ///<span class="tt">([^<]*\.m2):([0-9]+):([0-9]+)</span>///;
-		linked := "";
-		while (match := regex(pattern, page)) =!= null do (
-			file := replace("&amp;", "&", replace("&gt;", ">", replace("&lt;",
-				"<", substring(match#1, page))));
-			candidates := select(join({file}, apply(path, directory ->
-					directory | file)), fileExists);
-			original := substring(match#0, page);
-			target := if #candidates != 0 then
-					urlEncode("file://" | toAbsolutePath first candidates | "#L"
-							| substring(match#2, page) | ":C" | substring(match#3, page));
-			linked = linked | substring(page, 0, match#0#0)
-				| (if target === null then
-							original
-						else
-							"<a href=\"" | escapeAttribute target | "\">"
-						| original | "</a>");
-			page = substring(page, match#0#0 + match#0#1)
-		);
-		linked | page
-	);
-	-- A source position is drawn as the link documentation gives it: its text
-    -- spelt as shortly as there, linking to the position itself when its file is
-    -- found; else it stays plain text.
-	render FilePosition := HashTable => value -> (
-		-- Typed input gives a bare `file:line:column`; only a located source
-        -- carries the end of its range.
-		position := ":" | integerText value#1 | ":" | integerText value#2
-			| (if #value > 3 then
-						"-" | integerText value#3 | ":" | integerText value#4
-					else "");
-		text := (if #value#0 > 0 then
-					foldedPath value#0
-				else "") | position;
-		target := sourceTarget value;
-		if target === null then
-			hashTable {symbol net => text}
-		else hashTable {symbol location => hashTable {
-			symbol text => text,
-			symbol target => target
-		}}
-	);
-	render hypertextType := HashTable => value -> hashTable {
-		symbol markup => hashTable {
-			symbol html => shortenedPaths linkedSources linkedKeys html value,
-			symbol fallback =>
-				toString net value,
-			symbol exampleWidth => exampleWidth
-		}
-	};
-	-- Only what M2 itself draws as a plain table: a class that still uses
-    -- HashTable's own `net`. Inheritance alone says far too much -- matrices,
-    -- modules, ideals, rings and some fifty more are HashTables that draw
-    -- themselves -- and reading M2's `net` dispatch covers every package's
-    -- types without listing them.
-	table := value -> hashTable {
-		symbol hashtable => apply(pairs value, pair -> apply(toList pair, render))
-	};
-	render HashTable := HashTable => value -> (
-		if lookup(net, class value) === lookup(net, HashTable) then
-			table value
-		else drawnWhole value
-	);
-	-- `key => value` is sent in its two parts, each drawn as what it is on its
-    -- own, rather than as one formula M2's TeX would make of both.
-	render Option := HashTable => value -> hashTable {
-		symbol option => hashTable {
-			symbol key => render value#0,
-			symbol value => render value#1
-		}
-	};
-	-- The kind names the nearest of the shell's collection kinds, so a list
-    -- subclass such as Hybrid arrives as the List it is drawn as.
-	collection := (kind, value) -> hashTable {
-		symbol collection => hashTable {
-			symbol kind => kind,
-			symbol items => apply(toList value,
-				render)
-		}
-	};
-	render List := HashTable => value -> collection("List", value);
-	render Array := HashTable => value -> collection("Array", value);
-	render Sequence := HashTable => value -> collection("Sequence", value);
-	render AngleBarList := HashTable => value -> collection("AngleBarList", value);
-	render VerticalList := HashTable => value -> collection("VerticalList", value);
-	-- A mutable container may hold itself, which is why M2 draws one only as a
-    -- summary (`MutableHashTable{...3...}`). The first one met is opened anyway;
-    -- any met while it is open stays folded, so nesting -- and with it any
-    -- self-loop -- ends at the first repeat. Reset with each result as well, so a
-    -- render that threw part-way cannot leave every later one folded.
-	openingMutable := false;
-	openMutable := (value, open) -> (
-		if openingMutable then
-			return drawnWhole value;
-		openingMutable = true;
-		rendered := open value;
-		openingMutable = false;
-		rendered
-	);
-	renderMutableHashTable := value -> (
-		if lookup(net, class value) === lookup(net, MutableHashTable) then
-			openMutable(value, table)
-		else drawnWhole value
-	);
-	render MutableHashTable := HashTable => renderMutableHashTable;
-	-- A type is a name in code, whatever kind of type it is -- Type,
-    -- WrapperType, a class made by `new Type of` -- and so is a package. A ring,
-    -- which is also a Type, draws itself, and so does a family of rings such as
-    -- RR and CC, which stands for the ring at default precision, and any type
-    -- that gives itself a formula, as RR_* and the other fields of arbitrary
-    -- precision do.
-	render Type := HashTable => value -> (
-		if instance(value, Ring) or instance(value, RingFamily) or value.?texMath then
-			if hasAttribute(value, reverseDictionary) then
-			hashTable {symbol type => renderMutableHashTable value}
-		else renderMutableHashTable value
-		else asToken(toString value, "type")
-	);
-	render Package := HashTable => value -> asToken(toString value, "package");
-	-- The words and operators the interpreter itself defines. An operator such as
-    -- `^` or `SPACE` is coloured as code colours operators, a word such as `if`
-    -- as a keyword.
-	operators := unique join(
-		value Core#"private dictionary"#"binaryOperators",
-		value Core#"private dictionary"#"prefixOperators",
-		value Core#"private dictionary"#"postfixOperators"
-	);
-	render Keyword := HashTable => value -> asToken(toString value,
-		if member(value, operators) then
-			"operator"
-		else "keyword");
-	-- A bare symbol is a name in code, though its TeX sets it as maths. A ring's
-    -- variable is an element of that ring rather than a Symbol, and stays maths.
-	render Symbol := HashTable => value -> asToken(toString value, "symbol");
-	-- What is typed bare to steer the session, `exit` or `help`.
-	render Command := HashTable => value -> asToken(toString value, "command");
-	-- `Ext`, `HH` and the like are applied as functions, though they are
-    -- hash tables that draw nothing of their own. One that carries a TeX
-    -- spelling, `OO` as a calligraphic O, is set in it.
-	render ScriptedFunctor := HashTable => value -> (
-		if value.?texMath then
-			drawnWhole value
-		else asToken(toString value, "function")
-	);
-	render MutableList := HashTable => value -> openMutable(value, entries ->
-			collection("List",
-				entries));
+	-- What a value is drawn as is the Spectral package's business: `specNet`,
+	-- which a session may install for a class of its own. The formatting hooks are
+	-- taken once, before any user code runs, so rebinding a name later cannot
+	-- change what is called here. `drawnAs` is `specNet` held to giving a
+	-- SpecNet; `forgetDrawing` clears what a drawing that threw part-way may have
+	-- left behind.
+	spectral := Spectral#"private dictionary";
+	drawnAs := value spectral#"drawnAs";
+	typedAs := value spectral#"typedAs";
+	forgetDrawing := value spectral#"forgetDrawing";
+	-- Whether drawing the statement's value failed. M2 reports an error raised
+	-- while printing and carries on into AfterPrint, so reaching AfterPrint alone
+	-- does not show that the statement came through whole.
+	drawingFailed := false;
+	-- A class in a frame -- the role of a word, the kind of a list -- is sent as
+	-- its ancestors, nearest first, for the shell to read by the first it knows.
+	typeName := lookup(toString, Type);
 
 	-- One frame closes one input. Marked with a control character no diagnostic
     -- and no prompt can begin with, so the shell can pick frames out of the
@@ -425,21 +122,23 @@ announceReady := (() -> (
 	encodeFrame = value -> (
 		if value === null then
 			"null"
-		else if instance(value, Boolean) then (if value then
-					"true"
-				else "false") else if instance(value, ZZ) then
+		else if instance(value, Boolean) then if value then
+			"true"
+		else "false" else if instance(value, ZZ) then
 			integerText value
 		else if instance(value, String) then
 			stringLiteral value
 		else if instance(value, VisibleList) then
 			"[" | demark(", ", apply(value, encodeFrame)) | "]"
+		else if instance(value, Type) then
+			encodeFrame apply(ancestors value, typeName)
 		else if instance(value, HashTable) then
 			"{" | demark(", ", apply(keys value, key ->
 					stringLiteral(if instance(key, Symbol) then
 								symbolText key
 							else key)
 					| ": " | encodeFrame value#key)) | "}"
-		else error "a frame holds only null, booleans, integers, strings, lists and tables"
+		else error "a frame holds only null, booleans, integers, strings, lists, classes and tables"
 	);
 	emitFrame := payload -> (
 		stdio << frameMark << encodeFrame payload << endl << flush;
@@ -467,6 +166,7 @@ announceReady := (() -> (
 		"names" => newNames join(dictionaryPath, locals),
 		"number" => lineNumber,
 		"value" => renderedValue,
+		"previews" => previews,
 		"typeInfo" => typeInfo,
 		"typeParts" => typeParts,
 		"hasValue" => OutputDictionary#?("o" | integerText lineNumber),
@@ -475,19 +175,20 @@ announceReady := (() -> (
 	};
 	forgetResult := () -> (
 		renderedValue = null;
+		previews = {};
 		typeInfo = null;
 		typeParts = null;
 		completed = false;
-		openingMutable = false;
+		drawingFailed = false;
+		forgetDrawing();
 	);
 	recordTypeInfo := value -> (
-		annotation := annotationPieces((lookup(AfterPrint, class value)) value
-				?? class value);
+		completed = false;
+		typeParts = {typedAs value};
+		-- Keep stock text for the explicitly requested original-output view.
+		annotation := annotationPieces((lookup(AfterPrint, class value)) value ?? class value);
 		typeInfo = toString horizontalJoin apply(annotation, net);
-		-- Each piece as the shell renders a value, so the annotation is set from
-        -- its structure rather than as the text of its nets.
-		typeParts = apply(annotation, render);
-		completed = true;
+		completed = not drawingFailed;
 	);
 
 	-- Recording rather than printing keeps the channel free of everything but
@@ -514,7 +215,19 @@ announceReady := (() -> (
 		else hook value
 	);
 	Thing#{mode, Print} = atShellTopLevel(Print, value -> (
-		renderedValue = render value;
+        completed = false;
+		drawingFailed = true;
+		renderedValue = drawnAs value;
+		previews = select(apply({
+            ("net", x -> toString net x),
+            ("string", toString),
+            ("tex", tex),
+            ("html", html)
+        }, (name, formatter) -> (
+            text := try formatter value;
+            if instance(text, String) then hashTable {"mode" => name, "text" => text}
+        )), preview -> preview =!= null);
+		drawingFailed = false;
 	));
 	Thing#{mode, NoPrint} = atShellTopLevel(NoPrint, identity);
 	-- Deliberately AfterPrint in both branches: stock M2 reads AfterNoPrint under
@@ -548,10 +261,10 @@ announceReady := (() -> (
     -- instead of being filed under the cell now waiting.
     -- Keep interruption from leaving a partial frame or half-reset cell state.
 	User#"spectral end of cell" = (submission, locals) -> shield (
-		lineNumber = lineNumber - 1;
+		lineNumber -= 1;
 		sendResult(submission, locals);
 		if not completed then
-			lineNumber = lineNumber - 1;
+			lineNumber -= 1;
 		forgetResult();
 		new cellEnd
 	);
