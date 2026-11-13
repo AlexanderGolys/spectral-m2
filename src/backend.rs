@@ -1481,11 +1481,15 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             80,
             crate::ui::render::maths::FractionStyle::Stacked,
         );
-        let text: Vec<String> = rows
+        let text: String = rows
             .iter()
-            .map(|row| row.iter().map(|span| span.content.as_str()).collect())
+            .flat_map(|row| row.iter().map(|span| span.content.as_str()))
             .collect();
-        assert_eq!(text, ["Matrix"]);
+        let (target, source) = text
+            .strip_prefix("Matrix")
+            .and_then(|rest| rest.split_once('⟵'))
+            .unwrap_or_else(|| panic!("a matrix is typed by its target and source: {text}"));
+        assert!(target.contains("QQ") && source.contains("QQ"), "{text}");
     }
 
     #[test]
@@ -1997,10 +2001,11 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
                 "CoherentSheaf[OO_X]",
             ),
             (
-                "SheafMap.typeDepth = 2; sheaf map(R^1,R^1,x)",
-                "SheafMap[OO_X]",
+                "SheafMap.typeDepth = 3; sheaf map(R^1,R^1,x)",
+                "SheafMap[OO_X ⟵ OO_X]",
             ),
-            ("Matrix.typeDepth = 2; vars R", "Matrix[R]"),
+            ("Matrix.typeDepth = 3; vars R", "Matrix[R ⟵ R²]"),
+            ("Matrix.typeDepth = 2; vars R", "Matrix[M ⟵ M]"),
         ] {
             let result = backend.evaluate(source, None).unwrap();
             assert!(!result.is_error, "{source}: {}", result.transcript);

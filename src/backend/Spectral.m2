@@ -31,10 +31,12 @@ export {
 exampleWidth := value Core#"private dictionary"#"ArgPrintWidthN"
 
 SpecNet = new Type of HashTable
+
 UnderExpression = new HeaderType of Expression
 -- A part a drawing introduces for a structure, as {name, part, shape}: spelled
 -- by its name until the value depth reaches it, then drawn from its shape.
 Intermediate = new HeaderType of Expression
+
 
 specNet = method(Dispatch => Thing, TypicalValue => SpecNet)
 specType = method(Dispatch => Thing, TypicalValue => SpecNet)
@@ -57,6 +59,10 @@ spelledShape = method()
 
 Thing.typeDepth = 1
 Module.typeDepth = 2
+-- A map's parameters are modules, a level below a module's ring.
+Matrix.typeDepth = 3
+SheafMap.typeDepth = 3
+
 Thing.valueDepth = 1
 -- A complex shows its modules and differentials rather than only their names.
 Complex.valueDepth = 2
@@ -68,6 +74,7 @@ configuredDepth (Symbol, Thing) := (depth, x) -> (
 		error(toString depth | " must be a non-negative integer");
 	owner#depth
 )
+
 
 -- Structures whose kind goes by a conventional name are what the value depth
 -- counts: past it an unnamed one keeps only that name. Anything else, such as
@@ -83,11 +90,21 @@ placeholder CoherentSheaf := x -> "F"
 placeholder Complex := x -> "C"
 
 -- The values a structure is built over, which its expression spells in place:
--- modules and sheaves are over their ring, a sheaf of rings over its variety.
+-- modules are over their ring, sheaves over their sheaf of algebras OO_X, a
+-- sheaf of rings over its variety, and a map is from its source to its target,
+-- spelled `N <-- M` as M2 spells it.
 parameters Thing := x -> {}
-parameters Ideal := parameters Module := parameters Matrix :=
-parameters Complex := parameters CoherentSheaf := parameters SheafMap :=
+
+parameters Ideal :=
+parameters Module :=
+parameters Complex :=
 parameters Variety := x -> {ring x}
+
+parameters CoherentSheaf := F -> {OO_(variety F)}
+
+parameters Matrix :=
+parameters SheafMap := f -> {MapExpression{f.target, f.source}}
+
 parameters QuotientRing := x -> {ambient x}
 parameters PolynomialRing := x -> {coefficientRing x}
 parameters SheafOfRings := x -> {variety x}
@@ -300,9 +317,14 @@ specNet Expression := shape -> new SpecNet from (class shape, apply(
 	toList shape, specNet
 ))
 specNet Parenthesize := lookup(specNet, Expression)
+
 specNet InexactNumber := opaque
-specNet VisibleList := specNet MutableList := specNet Option := items ->
-	contentsOf(items, toList items)
+
+specNet VisibleList :=
+specNet MutableList :=
+specNet Option :=
+	items -> contentsOf(items, toList items)
+
 -- A table keeping the stock formatting shows its pairs.
 specNet HashTable := table -> (
 	stock := base -> lookup(expression, class table) === lookup(expression, base)
@@ -385,7 +407,7 @@ specType' (ZZ, SpecNet) := (depth, drawn) -> (
 -- Mathematical types have their parameters rather than expression components:
 -- a sheaf is a sheaf of modules over its sheaf of rings, which is over the
 -- variety, and each type level below the outermost unfolds the parameter once.
-scan({Module, Matrix, SheafOfRings, CoherentSheaf, SheafMap}, type ->
+scan({Ideal, Module, Complex, Matrix, SheafOfRings, CoherentSheaf, SheafMap}, type ->
 		specType' (ZZ, type) := (depth, x) -> (
 			if depth <= 1 then
 				specNet class x
