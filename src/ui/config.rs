@@ -98,6 +98,16 @@ pub struct UiConfig {
     pub max_type_share: f32,
     pub typeset: TypesetConfig,
     pub floating: FloatingConfig,
+    pub resize: ResizeConfig,
+}
+
+/// How content follows a pane being resized; see [`crate::ui::settling`].
+#[derive(Clone, Copy, Debug)]
+pub struct ResizeConfig {
+    /// How long a pane's width must hold before content is laid out again.
+    pub settle: Duration,
+    /// The longest content keeps an old layout while the pane keeps moving.
+    pub max_stale: Duration,
 }
 
 /// Limits of a panel floating beside a point.
@@ -171,6 +181,10 @@ pub const UI: UiConfig = UiConfig {
     floating: FloatingConfig {
         max_width: 72,
         max_rows: 8,
+    },
+    resize: ResizeConfig {
+        settle: Duration::from_millis(120),
+        max_stale: Duration::from_millis(350),
     },
 };
 

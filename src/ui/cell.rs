@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::{iter, ptr};
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Offset, Position, Rect};
+use ratatui::layout::{Offset, Position, Rect, Size};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
@@ -29,6 +29,7 @@ use super::render::maths::MathDisplay;
 use super::render::selection::Inclusions;
 use super::render::{markup, maths, typeset};
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
+use super::settings::rendering::RendererPosition;
 use super::wrap::{offset_at_column, SpanWrap, WrapPolicy, WrappedText};
 use crate::backend::transcript::{captured_output, strip_m2_location};
 use crate::backend::{M2Response, PreviewMode, SpecNet, ValuePreview};
@@ -36,6 +37,7 @@ use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::SourceId;
 use crate::ui::config::UI;
 use crate::ui::glyphs::Glyph;
+use crate::ui::render::maths::MathStyle;
 use crate::ui::theme::groups::Groups;
 
 /// A source file's gutter is as wide as its last line number times this: two
@@ -1565,11 +1567,11 @@ impl OutputCell {
 struct ValueLayout {
     renderer: PreviewMode,
     markup_revision: u64,
-    renderer_position: super::settings::rendering::RendererPosition,
+    renderer_position: RendererPosition,
     width: u16,
-    pixel_cell: Option<ratatui::layout::Size>,
-    math: maths::MathStyle,
-    groups: &'static crate::ui::theme::groups::Groups,
+    pixel_cell: Option<Size>,
+    math: MathStyle,
+    groups: &'static Groups,
     lines: Rc<Vec<Line<'static>>>,
     /// The links drawn among `lines`, placed from their top left corner.
     links: Rc<Vec<Link>>,
@@ -1952,10 +1954,7 @@ impl OutputBlock {
 
     /// Mode controls share the border geometry used for painting and clicking.
     fn renderer_title(&self, index: usize, context: &RenderContext) -> Option<RendererTitle> {
-        if !self.framed
-            || index != 0
-            || context.renderer_position() == super::settings::rendering::RendererPosition::Off
-        {
+        if !self.framed || index != 0 || context.renderer_position() == RendererPosition::Off {
             return None;
         }
         let cell = &self.cells[index];

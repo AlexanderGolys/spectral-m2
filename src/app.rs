@@ -1137,16 +1137,20 @@ impl App {
     /// Advance whatever the shell animates while M2 works, and settle the typing
     /// prompt once typing pauses; whether anything changed.
     fn animate(&mut self) -> bool {
-        let settled = self.workspace.editor.settle();
+        let panes_settled = self.panes.list.iter().any(|pane| pane.viewport.width.due());
+        let settled = self.workspace.editor.settle() | panes_settled;
         let animated = self.workspace.session.busy() && self.workspace.editor.animate();
         settled || animated
     }
 
     /// How long to wait for events before something on screen changes by itself.
     fn event_timeout(&self) -> Duration {
-        self.workspace
-            .editor
-            .settles_in()
+        self.panes
+            .list
+            .iter()
+            .filter_map(|pane| pane.viewport.width.settles_in())
+            .chain(self.workspace.editor.settles_in())
+            .min()
             .map_or(EVENT_POLL_INTERVAL, |remaining| {
                 remaining.min(EVENT_POLL_INTERVAL)
             })

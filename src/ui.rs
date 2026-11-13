@@ -21,6 +21,7 @@ pub mod key;
 pub mod present;
 pub mod render;
 pub mod settings;
+pub mod settling;
 mod statusline;
 mod syntax_tree;
 pub mod terminal;

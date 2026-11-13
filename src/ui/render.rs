@@ -25,6 +25,7 @@ pub mod typeset;
 
 /// Horizontal placement of a bordered feed element.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 enum BorderPlacement {
     Gutter,
     /// Centred over the middle third, widened into the margins as far as `content`

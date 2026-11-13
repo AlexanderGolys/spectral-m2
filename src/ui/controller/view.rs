@@ -1,6 +1,7 @@
 //! Views of the session shown beside its shell: what each shows, the pane state
 //! it scrolls with, and how the editor draws it.
 
+use crate::ui::settling::SettlingWidth;
 use std::fs;
 use std::path::PathBuf;
 
@@ -65,6 +66,8 @@ impl ViewKind {
 pub struct Viewport {
     pub scroll: usize,
     preview: Option<PreviewCache>,
+    /// The width the view's content is laid out at while its pane is resized.
+    pub width: SettlingWidth,
 }
 
 /// Immutable committed cells paired with the revision that changes them.
@@ -408,7 +411,7 @@ impl Editor {
         ])
         .split(area);
         let context = self
-            .render_context(sections[0].width)
+            .render_context(viewport.width.width(sections[0].width))
             .with_swapped_code_background(swapped);
         self.feed_area = sections[0];
         self.picker_area = sections[1];
@@ -426,7 +429,9 @@ impl Editor {
             ViewKind::Shell => unreachable!("shells use Editor::draw"),
             ViewKind::Code | ViewKind::SyntaxTree => {
                 viewport.refresh_preview(committed, view, highlighter);
-                let Viewport { scroll, preview } = viewport;
+                let Viewport {
+                    scroll, preview, ..
+                } = viewport;
                 let blocks = preview
                     .iter()
                     .flat_map(|cache| cache.blocks.iter().map(Box::as_ref))

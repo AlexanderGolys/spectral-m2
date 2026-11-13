@@ -54,6 +54,7 @@ use crate::ui::floating::{Anchor, Floating};
 use crate::ui::settings::selection::CopyFormat;
 use crate::ui::settings::statusline::{StatusComponent, StatusLinePosition, StatusSegment};
 use crate::ui::settings::{tabs as settings_tabs, *};
+use crate::ui::settling::SettlingWidth;
 use crate::ui::text_object::{TextDirection, TextMotion};
 use crate::ui::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
 use crate::ui::theme::palette::blend;
@@ -283,6 +284,8 @@ impl EditorUpdate {
 /// The transcript feed, live input, and viewport state.
 pub struct Editor {
     feed: Feed,
+    /// The width the shell's feed is laid out at while its pane is resized.
+    feed_width: SettlingWidth,
     reference: Feed,
     reference_file: Option<String>,
     input: InputCode,
@@ -373,6 +376,7 @@ impl Editor {
             floating: None,
             input_cursor: None,
             frame_stats: FrameStats::default(),
+            feed_width: SettlingWidth::default(),
             last_click: None,
             copied: None,
             pointer: None,
@@ -447,10 +451,14 @@ impl Editor {
             .copied
             .as_ref()
             .and_then(|(at, _)| Self::COPY_NOTICE.checked_sub(at.elapsed()));
-        [self.input.typing_remaining(), notice]
-            .into_iter()
-            .flatten()
-            .min()
+        [
+            self.input.typing_remaining(),
+            notice,
+            self.feed_width.settles_in(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// Let go of what has run its time, the typing prompt and the note of a copy;
@@ -463,7 +471,7 @@ impl Editor {
         if lapsed {
             self.copied = None;
         }
-        self.input.settle_typing() | lapsed
+        self.input.settle_typing() | lapsed | self.feed_width.due()
     }
 
     /// How long each documentation example may take to be computed again.
@@ -2066,7 +2074,8 @@ impl Editor {
             } else {
                 (sections[2], sections[3])
             };
-        let context = self.render_context(editor_area.width);
+        let feed_width = self.feed_width.width(editor_area.width);
+        let context = self.render_context(feed_width);
         let input_context = RenderContext::new(editor_area.width, input_prefix);
 
         self.feed_area = sections[0];
