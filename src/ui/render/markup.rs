@@ -790,8 +790,14 @@ fn normalize(node: &Handle, in_examples: bool) -> Vec<Handle> {
             (
                 match tag {
                     // M2 marks the code it displays, a usage say, by its language,
-                    // and shows it apart from the text around it.
-                    "code" if class("language-macaulay2") && !within("pre", node) => Some("pre"),
+                    // and shows it apart from the text around it; in a table's cell
+                    // it stays in its column, beside the cells of its row.
+                    "code"
+                        if class("language-macaulay2")
+                            && !["pre", "td", "th"].iter().any(|tag| within(tag, node)) =>
+                    {
+                        Some("pre")
+                    }
                     "kbd" | "samp" => Some("code"),
                     "tt" if reads_as_code(node) => Some("code"),
                     "span" if class("tt") && reads_as_code(node) => Some("code"),
@@ -1008,9 +1014,14 @@ fn decorate_inline(node: &Handle, described: &mut bool, page: u64) {
         let children = node.children.take();
         node.children.replace(vec![adopt("code", children)]);
     }
+    // Code in a table's cell is left to be coloured once laid out: each token
+    // painted ahead carries its group as a link, and the layout reserves width
+    // for every link, which would leave the cell's column far wider than its code.
     if tag.as_deref() == Some("code") {
-        let source = inline_text(node);
-        paint_inline_code(node, &analysed_code(page, &source), &mut 0);
+        if !["td", "th"].iter().any(|cell| within(cell, node)) {
+            let source = inline_text(node);
+            paint_inline_code(node, &analysed_code(page, &source), &mut 0);
+        }
         return;
     }
     let mut local = false;

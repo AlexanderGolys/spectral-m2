@@ -471,6 +471,46 @@ fn no_text_is_lost_to_colouring() {
 }
 
 /// The text of each row `lines` draws.
+/// A command in one cell of a table and what it does in the next stay one row,
+/// inside the table's rules, rather than the command becoming a code block.
+#[test]
+fn code_in_a_table_cell_keeps_its_row() {
+    let html = "<table><tr><td><code class=\"language-macaulay2\">help coker</code></td>\
+        <td>-- what coker does</td></tr></table>";
+    let rows = drawn(html, 60);
+    let row = rows
+        .iter()
+        .find(|row| row.contains("help coker"))
+        .unwrap_or_else(|| panic!("the command is drawn: {rows:?}"));
+    assert!(row.contains("-- what coker does"), "{rows:?}");
+    let rule = rows
+        .iter()
+        .find(|row| row.contains('─'))
+        .unwrap_or_else(|| panic!("the table keeps its rules: {rows:?}"));
+    assert!(row.width() <= rule.width(), "{rows:?}");
+}
+
+/// A column of commands is as wide as its widest command needs, leaving the rest
+/// of the row to the column beside it.
+#[test]
+fn a_column_of_code_takes_only_the_width_its_code_needs() {
+    let command = "headlines about(\"Yoneda\", Body=>true)";
+    let comment = "-- show a list of documentation headlines mentioning Yoneda";
+    let html = format!(
+        "<table><tr><td><code class=\"language-macaulay2\">{command}</code></td>\
+         <td>{comment}</td></tr></table>"
+    );
+    let width = command.width() + comment.width() + 20;
+    let rows = drawn(&html, u16::try_from(width).expect("a terminal width"));
+    let row = rows
+        .iter()
+        .find(|row| row.starts_with(command))
+        .unwrap_or_else(|| panic!("the command is drawn: {rows:?}"));
+    assert!(row.ends_with(comment), "{rows:?}");
+    let groups = groups_of(&html, width);
+    assert_ne!(group_of(&groups, "headlines"), group_of(&groups, "\"Yoneda\""));
+}
+
 fn drawn(html: &str, width: u16) -> Vec<String> {
     super::lines(html, EXAMPLE_WIDTH, &RenderContext::new(width, 0))
         .unwrap()
