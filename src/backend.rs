@@ -1243,12 +1243,21 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             (PreviewMode::String, "string preview"),
             (PreviewMode::Tex, "$p$"),
             (PreviewMode::External, "external preview"),
+            (PreviewMode::Peek, "PreviewValue{}"),
         ] {
-            assert!(response.previews.contains(&ValuePreview {
-                mode,
-                text: text.into()
-            }));
+            assert!(response.previews.contains(&ValuePreview::new(mode, text)));
         }
+        let structure = response
+            .previews
+            .iter()
+            .find(|preview| preview.mode == PreviewMode::Speek)
+            .expect("speek answers with a structure");
+        assert!(
+            structure.text.contains("PreviewValue"),
+            "{}",
+            structure.text
+        );
+        assert!(structure.value.is_some());
         assert_eq!(response.value.unwrap().render(), "p");
         assert_eq!(
             backend

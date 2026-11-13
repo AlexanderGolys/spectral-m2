@@ -1509,6 +1509,8 @@ impl PreviewMode {
             Self::Tex => glyphs.renderer_tex,
             Self::Markup => glyphs.renderer_markup,
             Self::External => glyphs.renderer_external,
+            Self::Peek => glyphs.renderer_peek,
+            Self::Speek => glyphs.renderer_speek,
         }
     }
 }
@@ -1525,6 +1527,14 @@ impl OutputCell {
 
     fn preview_mode(&self) -> PreviewMode {
         self.chosen.get().unwrap_or_else(|| self.default_preview())
+    }
+
+    /// The drawing a structured formatter answered with, as `speek` does.
+    fn preview_value(&self, mode: PreviewMode) -> Option<&SpecNet> {
+        self.previews
+            .iter()
+            .find(|preview| preview.mode == mode)
+            .and_then(|preview| preview.value.as_ref())
     }
 
     fn preview_text(&self, mode: PreviewMode) -> Option<&str> {
@@ -1585,10 +1595,10 @@ impl OutputBlock {
         Self {
             cells: vec![OutputCell {
                 layout: RefCell::default(),
-                previews: vec![ValuePreview {
-                    mode: PreviewMode::Net,
-                    text: text.trim_end().to_string(),
-                }],
+                previews: vec![ValuePreview::new(
+                    PreviewMode::Net,
+                    text.trim_end().to_string(),
+                )],
                 pictures: RefCell::default(),
                 number: None,
                 text: text.trim_end().to_string(),
@@ -1614,10 +1624,7 @@ impl OutputBlock {
                     .fallback
                     .as_ref()
                     .or(value.text.as_ref())
-                    .map(|text| ValuePreview {
-                        mode: PreviewMode::Net,
-                        text: output_preview(text),
-                    })
+                    .map(|text| ValuePreview::new(PreviewMode::Net, output_preview(text)))
                     .into_iter()
                     .collect(),
                 pictures: RefCell::default(),
@@ -1642,7 +1649,10 @@ impl OutputBlock {
             .map(|mut preview| {
                 if matches!(
                     preview.mode,
-                    PreviewMode::Net | PreviewMode::String | PreviewMode::External
+                    PreviewMode::Net
+                        | PreviewMode::String
+                        | PreviewMode::External
+                        | PreviewMode::Peek
                 ) {
                     preview.text = output_preview(&preview.text);
                 }
@@ -1718,7 +1728,9 @@ impl OutputBlock {
                 .preview_text(PreviewMode::Net)
                 .map(str::to_owned)
                 .or_else(|| cell.value.as_ref().map(SpecNet::ascii)),
-            PreviewMode::String => cell.preview_text(PreviewMode::String).map(str::to_owned),
+            mode @ (PreviewMode::String | PreviewMode::Peek) => {
+                cell.preview_text(mode).map(str::to_owned)
+            }
             _ => None,
         }
         .unwrap_or_else(|| cell.text.clone());
@@ -1770,9 +1782,15 @@ impl OutputBlock {
             );
             links = drawn.links;
             drawn.lines
-        } else if renderer == PreviewMode::SpecNet {
-            let mut preview = cell.value.clone();
-            if let Some(value) = preview.as_mut().filter(|value| value.text.is_some()) {
+        } else if matches!(renderer, PreviewMode::SpecNet | PreviewMode::Speek) {
+            let mut preview = match renderer {
+                PreviewMode::SpecNet => cell.value.clone(),
+                _ => cell.preview_value(renderer).cloned(),
+            };
+            if let Some(value) = preview
+                .as_mut()
+                .filter(|value| renderer == PreviewMode::SpecNet && value.text.is_some())
+            {
                 value.text = Some(cell.text.clone());
             }
             match preview.as_ref() {
@@ -2003,6 +2021,7 @@ impl OutputBlock {
                     .as_ref()
                     .is_some_and(maths::Math::supports_spec_net),
                 PreviewMode::Net => cell.preview_text(PreviewMode::Net).is_some(),
+                PreviewMode::Speek => cell.preview_value(PreviewMode::Speek).is_some(),
                 PreviewMode::Markup => cell
                     .value
                     .as_ref()
@@ -2643,18 +2662,38 @@ mod tests {
         );
     }
 
+    /// `speek` is offered only when it answered with a structure, and draws that
+    /// structure rather than the value.
+    #[test]
+    fn the_speek_preview_draws_the_structure_it_was_sent() {
+        let context = RenderContext::new(90, 0);
+        let spelled = OutputBlock::rendered(SpecNet::leaf("Symbol", "x"), None)
+            .with_previews(vec![ValuePreview::new(PreviewMode::Speek, "Symbol => x")]);
+        assert!(!spelled
+            .renderers(&spelled.cells[0], &context)
+            .contains(&PreviewMode::Speek));
+        let mut structure = ValuePreview::new(PreviewMode::Speek, "Symbol => x");
+        structure.value = Some(SpecNet::leaf("Symbol", "structureOfX"));
+        let output = OutputBlock::rendered(SpecNet::leaf("Symbol", "x"), None)
+            .with_previews(vec![structure]);
+        assert!(output
+            .renderers(&output.cells[0], &context)
+            .contains(&PreviewMode::Speek));
+        output.cells[0].chosen.set(Some(PreviewMode::Speek));
+        let drawn = output
+            .unfolded_lines(&output.cells[0], &context)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<String>();
+        assert!(drawn.contains("structureOfX"), "{drawn}");
+    }
+
     #[test]
     fn formatter_labels_do_not_move_the_icon_hit_boxes() {
         let context = RenderContext::new(90, 0);
         let output = OutputBlock::rendered(SpecNet::leaf("Symbol", "x"), None).with_previews(vec![
-            ValuePreview {
-                mode: PreviewMode::Net,
-                text: "x".into(),
-            },
-            ValuePreview {
-                mode: PreviewMode::Tex,
-                text: "$x$".into(),
-            },
+            ValuePreview::new(PreviewMode::Net, "x"),
+            ValuePreview::new(PreviewMode::Tex, "$x$"),
         ]);
         let title = output.renderer_title(0, &context).unwrap();
         for mode in [PreviewMode::SpecNet, PreviewMode::Net, PreviewMode::Tex] {
@@ -3345,22 +3384,10 @@ mod tests {
     #[test]
     fn preview_modes_and_icons_are_independent_of_math_display() {
         let previews = vec![
-            ValuePreview {
-                mode: PreviewMode::Net,
-                text: "net spelling".into(),
-            },
-            ValuePreview {
-                mode: PreviewMode::String,
-                text: "string spelling".into(),
-            },
-            ValuePreview {
-                mode: PreviewMode::Tex,
-                text: "$x^2$".into(),
-            },
-            ValuePreview {
-                mode: PreviewMode::External,
-                text: "new HashTable from {x => 1}".into(),
-            },
+            ValuePreview::new(PreviewMode::Net, "net spelling"),
+            ValuePreview::new(PreviewMode::String, "string spelling"),
+            ValuePreview::new(PreviewMode::Tex, "$x^2$"),
+            ValuePreview::new(PreviewMode::External, "new HashTable from {x => 1}"),
         ];
         let output =
             OutputBlock::rendered(SpecNet::leaf("Symbol", "x"), None).with_previews(previews);

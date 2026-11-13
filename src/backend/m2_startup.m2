@@ -104,6 +104,7 @@ announceReady := (() -> (
 	drawnAs := value spectral#"drawnAs";
 	typedAs := value spectral#"typedAs";
 	forgetDrawing := value spectral#"forgetDrawing";
+	structureOf := value spectral#"speek";
 	-- Whether drawing the statement's value failed. M2 reports an error raised
 	-- while printing and carries on into AfterPrint, so reaching AfterPrint alone
 	-- does not show that the statement came through whole.
@@ -221,11 +222,19 @@ announceReady := (() -> (
             ("net", x -> toString net x),
             ("string", toString),
             ("tex", tex),
-            ("external", toExternalString)
+            ("external", toExternalString),
+            ("peek", x -> toString net peek x)
         }, (name, formatter) -> (
             text := try formatter value;
             if instance(text, String) then hashTable {"mode" => name, "text" => text}
         )), preview -> preview =!= null);
+        -- speek answers with a value of its own, sent drawn as any value is.
+        structure := try structureOf value;
+        if structure =!= null then previews = append(previews, hashTable {
+            "mode" => "speek",
+            "text" => toString net structure,
+            "value" => drawnAs structure
+        });
 		drawingFailed = false;
 	));
 	Thing#{mode, NoPrint} = atShellTopLevel(NoPrint, identity);

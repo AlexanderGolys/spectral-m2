@@ -57,6 +57,8 @@ pub struct Glyphs(
     renderer_net,
     renderer_spec_net,
     renderer_string,
+    renderer_peek,
+    renderer_speek,
     // Stands in for the leading part of text trimmed to fit.
     trimmed,
     // Either side of a picker value that steps with the horizontal arrows.
@@ -104,6 +106,8 @@ pub const GLYPHS: Glyphs = Glyphs {
     renderer_net: Glyph::new("󰧭", "n"),
     renderer_spec_net: Glyph::new("", "*"),
     renderer_string: Glyph::new("󰦨", "s"),
+    renderer_peek: Glyph::new("󰈈", "p"),
+    renderer_speek: Glyph::new("󰛐", "P"),
     trimmed: Glyph::new("󰨾 ", "..."),
     step_back: Glyph::new("‹", "<"),
     step_forward: Glyph::new("›", ">"),
@@ -141,6 +145,8 @@ mod tests {
             glyphs.renderer_net,
             glyphs.renderer_spec_net,
             glyphs.renderer_string,
+            glyphs.renderer_peek,
+            glyphs.renderer_speek,
             glyphs.step_back,
             glyphs.step_forward,
             glyphs.picker_rule,

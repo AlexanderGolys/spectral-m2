@@ -55,6 +55,12 @@ Each output block has one formatter selector on its outer border. It applies to 
 `external`
 : The result of M2's `toExternalString`: source that reads the value back in, such as `new HashTable from {1 => 2}`, coloured as code.
 
+`peek`
+: The result of M2's `peek`: one level of the value's inner structure, such as the entries of a hash table, without its usual presentation.
+
+`speek`
+: The structure Spectral's `speek` finds: the class of each part of the value and what it holds, two levels deep, coloured and set as `specNet` sets a value. Use it to see how a value is built, or what to give a type of your own.
+
 The active icon is highlighted and its mode name appears beside the controls. Click another icon to select that preview, or click the active icon or mode name to cycle. This changes every value inside that border. The original input is evaluated once; switching previews uses its retained formatter results. A formatter that fails is omitted without hiding the other previews.
 
 The *maths* setting controls how mathematical content is displayed within a preview. Changing between typeset, Unicode and ASCII leaves the selected preview and its icons unchanged, including when pictures are unavailable. Supported structured results start in `specNet`; documentation pages start in `markup`. A result without a supported structured layout starts in `net`, with no `specNet` option. Archived examples use `net` until a computed structured result is available. Choose `net` to compare a preview with M2's own terminal spelling.
