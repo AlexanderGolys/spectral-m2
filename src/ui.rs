@@ -19,6 +19,7 @@ pub mod graphics;
 pub mod item;
 pub mod key;
 pub mod present;
+pub mod relayout;
 pub mod render;
 pub mod settings;
 pub mod settling;

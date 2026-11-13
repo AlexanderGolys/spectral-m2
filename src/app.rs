@@ -50,13 +50,14 @@ use crate::ui::fold::FoldRanges;
 use crate::ui::glyphs::Glyph;
 use crate::ui::graphics;
 use crate::ui::key::{KeyEvent, Keyboard};
+use crate::ui::relayout;
 use crate::ui::render::markdown;
 use crate::ui::render::markup;
 use crate::ui::terminal::ReplTerminal;
 use crate::ui::theme::groups::{scheme, HLGroup};
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(80);
-/// How often to look for pictures the worker has finished encoding while any remain.
+/// How often to look for pictures or layouts workers have finished while any remain.
 const PICTURE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const NO_LANGUAGE_SERVER: &str = "the language server is not running";
 const NOTHING_KNOWN: &str = "nothing is known about this";
@@ -1354,7 +1355,7 @@ pub fn run(backend: M2Backend, startup: Option<String>) -> Result<()> {
             continue;
         }
         terminal.send_pictures()?;
-        let timeout = match graphics::encoding() {
+        let timeout = match graphics::encoding() || relayout::busy() {
             true => app.event_timeout().min(PICTURE_POLL_INTERVAL),
             false => app.event_timeout(),
         };

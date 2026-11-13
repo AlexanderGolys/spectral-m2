@@ -51,6 +51,7 @@ use crate::code::semantic::SEMANTIC_GROUPS;
 use crate::env::ENV;
 use crate::input::{InputCode, InputContext};
 use crate::ui::floating::{Anchor, Floating};
+use crate::ui::relayout;
 use crate::ui::settings::selection::CopyFormat;
 use crate::ui::settings::statusline::{StatusComponent, StatusLinePosition, StatusSegment};
 use crate::ui::settings::{tabs as settings_tabs, *};
@@ -284,6 +285,8 @@ impl EditorUpdate {
 /// The transcript feed, live input, and viewport state.
 pub struct Editor {
     feed: Feed,
+    /// How many layouts from workers the feeds have been told about.
+    relayouts_adopted: u64,
     /// The width the shell's feed is laid out at while its pane is resized.
     feed_width: SettlingWidth,
     reference: Feed,
@@ -377,6 +380,7 @@ impl Editor {
             input_cursor: None,
             frame_stats: FrameStats::default(),
             feed_width: SettlingWidth::default(),
+            relayouts_adopted: relayout::delivered(),
             last_click: None,
             copied: None,
             pointer: None,
@@ -471,7 +475,19 @@ impl Editor {
         if lapsed {
             self.copied = None;
         }
-        self.input.settle_typing() | lapsed | self.feed_width.due()
+        self.input.settle_typing() | lapsed | self.feed_width.due() | self.adopt_relayouts()
+    }
+
+    /// Let the feeds take up layouts workers finished since the last look; whether any did.
+    fn adopt_relayouts(&mut self) -> bool {
+        let delivered = relayout::delivered();
+        let adopted = delivered != self.relayouts_adopted;
+        if adopted {
+            self.relayouts_adopted = delivered;
+            self.feed.on_event(&Reformatted);
+            self.reference.on_event(&Reformatted);
+        }
+        adopted
     }
 
     /// How long each documentation example may take to be computed again.

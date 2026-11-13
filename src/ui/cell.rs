@@ -7,8 +7,10 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::fmt;
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::{iter, ptr};
 
 use ratatui::buffer::Buffer;
@@ -25,6 +27,7 @@ use super::graphics::cell_size;
 use super::graphics::{self, kitty::ImageId};
 use super::item::{Item, ItemKind};
 use super::present;
+use super::relayout::Pending;
 use super::render::maths::MathDisplay;
 use super::render::selection::Inclusions;
 use super::render::{markup, maths, typeset};
@@ -1488,12 +1491,12 @@ impl Block for TextBlock {
 /// One result inside a possibly shared value border.
 struct OutputCell {
     layout: RefCell<Option<ValueLayout>>,
-    previews: Vec<ValuePreview>,
+    /// The layout being computed beside the drawing thread, and what it is for.
+    relayout: RefCell<Option<(LayoutKey, Pending<Laid>)>>,
+    source: Arc<ValueSource>,
     /// The pictures the rows last laid out for this cell hold.
     pictures: RefCell<Vec<ImageId>>,
     number: Option<u32>,
-    text: String,
-    value: Option<SpecNet>,
     ty: Option<String>,
     /// The annotation's pieces, set from their structure when M2 sent them.
     type_parts: Vec<SpecNet>,
@@ -1519,7 +1522,7 @@ impl PreviewMode {
 
 impl OutputCell {
     fn default_preview(&self) -> PreviewMode {
-        match self.value.as_ref() {
+        match self.source.value.as_ref() {
             Some(value) if value.html.is_some() => PreviewMode::Markup,
             Some(value) if maths::Math::supports_spec_net(value) => PreviewMode::SpecNet,
             Some(_) => PreviewMode::Net,
@@ -1531,6 +1534,111 @@ impl OutputCell {
         self.chosen.get().unwrap_or_else(|| self.default_preview())
     }
 
+    fn preview_value(&self, mode: PreviewMode) -> Option<&SpecNet> {
+        self.source.preview_value(mode)
+    }
+
+    fn preview_text(&self, mode: PreviewMode) -> Option<&str> {
+        self.source.preview_text(mode)
+    }
+
+    fn markup(&self) -> Option<(&str, usize)> {
+        match self.preview_mode() {
+            PreviewMode::Markup => self
+                .source
+                .value
+                .as_ref()?
+                .markup()
+                .map(|(html, width)| (html, *width)),
+            PreviewMode::SpecNet => self
+                .source
+                .value
+                .as_ref()?
+                .markup()
+                .map(|(html, width)| (html, *width)),
+            _ => None,
+        }
+    }
+}
+
+/// Retained ordinary value rows, independent of folding and output labels.
+struct ValueLayout {
+    key: LayoutKey,
+    lines: Rc<Vec<Line<'static>>>,
+    /// The links drawn among `lines`, placed from their top left corner.
+    links: Rc<Vec<Link>>,
+}
+
+/// Everything a value's layout depends on besides the value itself.
+#[derive(Clone, Copy)]
+struct LayoutKey {
+    renderer: PreviewMode,
+    /// Zero for a value without markup, which no markup revision moves.
+    markup_revision: u64,
+    renderer_position: RendererPosition,
+    width: u16,
+    /// The block's own width, which bounds how many rows a preview keeps.
+    block_width: u16,
+    pixel_cell: Option<Size>,
+    math: MathStyle,
+    groups: &'static Groups,
+}
+
+impl PartialEq for LayoutKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.renderer == other.renderer
+            && self.markup_revision == other.markup_revision
+            && self.renderer_position == other.renderer_position
+            && self.width == other.width
+            && self.block_width == other.block_width
+            && self.pixel_cell == other.pixel_cell
+            && self.math == other.math
+            && ptr::eq(self.groups, other.groups)
+    }
+}
+
+impl fmt::Debug for LayoutKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LayoutKey")
+            .field("renderer", &self.renderer)
+            .field("width", &self.width)
+            .field("block_width", &self.block_width)
+            .field("math", &self.math)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LayoutKey {
+    /// Whether rows laid out under `other` may stand in until this key's are
+    /// ready: they differ only in widths or colours, so they still show the value.
+    fn stands_in(&self, other: &Self) -> bool {
+        *self
+            == Self {
+                width: self.width,
+                block_width: self.block_width,
+                groups: self.groups,
+                ..*other
+            }
+    }
+}
+
+/// What a value is laid out from, shared with the worker laying it out again.
+#[derive(Clone, Debug)]
+struct ValueSource {
+    previews: Vec<ValuePreview>,
+    text: String,
+    value: Option<SpecNet>,
+}
+
+/// A value's rows and the links among them.
+#[derive(Debug, Default)]
+struct Laid {
+    lines: Vec<Line<'static>>,
+    links: Vec<Link>,
+}
+
+impl ValueSource {
     /// The drawing a structured formatter answered with, as `speek` does.
     fn preview_value(&self, mode: PreviewMode) -> Option<&SpecNet> {
         self.previews
@@ -1546,35 +1654,112 @@ impl OutputCell {
             .map(|preview| preview.text.as_str())
     }
 
-    fn markup(&self) -> Option<(&str, usize)> {
-        match self.preview_mode() {
-            PreviewMode::Markup => self
-                .value
-                .as_ref()?
-                .markup()
-                .map(|(html, width)| (html, *width)),
-            PreviewMode::SpecNet => self
-                .value
-                .as_ref()?
-                .markup()
-                .map(|(html, width)| (html, *width)),
+    /// The rows M2's own text wraps into for the text formatters.
+    fn text_lines(&self, renderer: PreviewMode, width: u16) -> Vec<String> {
+        let text = match renderer {
+            PreviewMode::Net => self
+                .preview_text(PreviewMode::Net)
+                .map(str::to_owned)
+                .or_else(|| self.value.as_ref().map(SpecNet::ascii)),
+            mode @ (PreviewMode::String | PreviewMode::Peek) => {
+                self.preview_text(mode).map(str::to_owned)
+            }
             _ => None,
         }
+        .unwrap_or_else(|| self.text.clone());
+        word_lines(&text, width)
+    }
+
+    /// The value laid out under `key`, without markup, which is laid out apart.
+    fn laid(&self, key: &LayoutKey) -> Laid {
+        let LayoutKey {
+            renderer,
+            width,
+            math: style,
+            groups: theme,
+            ..
+        } = *key;
+        let width = usize::from(width);
+        let mut links = Vec::new();
+        let lines = if renderer == PreviewMode::External {
+            let source = self
+                .preview_text(PreviewMode::External)
+                .unwrap_or(&self.text);
+            code_lines(source, width as u16, theme)
+        } else if renderer == PreviewMode::Tex {
+            let drawn = typeset::tex_preview(
+                self.preview_text(PreviewMode::Tex).unwrap_or(""),
+                width,
+                theme,
+                style,
+            );
+            links = drawn.links;
+            drawn.lines
+        } else if matches!(renderer, PreviewMode::SpecNet | PreviewMode::Speek) {
+            let mut preview = match renderer {
+                PreviewMode::SpecNet => self.value.clone(),
+                _ => self.preview_value(renderer).cloned(),
+            };
+            if let Some(value) = preview
+                .as_mut()
+                .filter(|value| renderer == PreviewMode::SpecNet && value.text.is_some())
+            {
+                value.text = Some(self.text.clone());
+            }
+            match preview.as_ref() {
+                Some(value) if style.display == MathDisplay::Typeset => {
+                    let drawn = typeset::drawn(value, width, theme, style);
+                    links = drawn.links;
+                    drawn.lines
+                }
+                Some(value) if style.display == MathDisplay::Ascii => {
+                    word_lines(&value.ascii(), width as u16)
+                        .into_iter()
+                        .map(|line| Line::from(Span::styled(line, theme.value())))
+                        .collect()
+                }
+                Some(value) => maths::spans(value, width, style)
+                    .map(|rows| {
+                        links = present::links(&rows);
+                        rows.into_iter()
+                            .map(|row| Line::from(row.spans(theme)))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            }
+        } else {
+            self.text_lines(renderer, width as u16)
+                .into_iter()
+                .map(|line| Line::from(Span::styled(line, theme.value())))
+                .collect()
+        };
+        let mut laid = Laid { lines, links };
+        for span in laid.lines.iter_mut().flat_map(|line| &mut line.spans) {
+            span.style.bg = None;
+        }
+        laid.truncated(key.block_width)
     }
 }
 
-/// Retained ordinary value rows, independent of folding and output labels.
-struct ValueLayout {
-    renderer: PreviewMode,
-    markup_revision: u64,
-    renderer_position: RendererPosition,
-    width: u16,
-    pixel_cell: Option<Size>,
-    math: MathStyle,
-    groups: &'static Groups,
-    lines: Rc<Vec<Line<'static>>>,
-    /// The links drawn among `lines`, placed from their top left corner.
-    links: Rc<Vec<Link>>,
+impl Laid {
+    /// The rows a preview keeps within the render limit, the middle cut out.
+    fn truncated(mut self, block_width: u16) -> Self {
+        let limit = (UI.max_output_preview_cells / usize::from(block_width.max(1))).max(1);
+        if self.lines.len() > limit {
+            let head = limit.saturating_sub(1) / 2;
+            let tail = limit.saturating_sub(head + 1);
+            let end = self.lines.len().saturating_sub(tail);
+            self.lines.splice(
+                head..end,
+                [Line::raw("… output preview truncated (render limit) …")],
+            );
+            // Only the rows above the cut stay where they were laid out.
+            self.links
+                .retain(|link| link.cells.iter().all(|cells| usize::from(cells.y) < head));
+        }
+        self
+    }
 }
 
 struct RendererTitle {
@@ -1597,14 +1782,17 @@ impl OutputBlock {
         Self {
             cells: vec![OutputCell {
                 layout: RefCell::default(),
-                previews: vec![ValuePreview::new(
-                    PreviewMode::Net,
-                    text.trim_end().to_string(),
-                )],
+                relayout: RefCell::default(),
+                source: Arc::new(ValueSource {
+                    previews: vec![ValuePreview::new(
+                        PreviewMode::Net,
+                        text.trim_end().to_string(),
+                    )],
+                    text: text.trim_end().to_string(),
+                    value: None,
+                }),
                 pictures: RefCell::default(),
                 number: None,
-                text: text.trim_end().to_string(),
-                value: None,
                 ty: ty.map(|ty| ty.trim_end().to_string()),
                 type_parts: Vec::new(),
                 chosen: Rc::default(),
@@ -1622,19 +1810,22 @@ impl OutputBlock {
         Self {
             cells: vec![OutputCell {
                 layout: RefCell::default(),
-                previews: value
-                    .fallback
-                    .as_ref()
-                    .or(value.text.as_ref())
-                    .map(|text| ValuePreview::new(PreviewMode::Net, output_preview(text)))
-                    .into_iter()
-                    .collect(),
+                relayout: RefCell::default(),
+                source: Arc::new(ValueSource {
+                    previews: value
+                        .fallback
+                        .as_ref()
+                        .or(value.text.as_ref())
+                        .map(|text| ValuePreview::new(PreviewMode::Net, output_preview(text)))
+                        .into_iter()
+                        .collect(),
+                    text: value
+                        .plain_text()
+                        .map_or_else(|| value.render(), output_preview),
+                    value: Some(value),
+                }),
                 pictures: RefCell::default(),
                 number: None,
-                text: value
-                    .plain_text()
-                    .map_or_else(|| value.render(), output_preview),
-                value: Some(value),
                 ty,
                 type_parts: Vec::new(),
                 chosen: Rc::default(),
@@ -1646,7 +1837,7 @@ impl OutputBlock {
 
     /// Attach the M2 formatter results offered by this output's preview selector.
     pub fn with_previews(mut self, previews: Vec<ValuePreview>) -> Self {
-        self.cells[0].previews = previews
+        Arc::make_mut(&mut self.cells[0].source).previews = previews
             .into_iter()
             .map(|mut preview| {
                 if matches!(
@@ -1723,136 +1914,96 @@ impl OutputBlock {
         }
     }
 
-    fn layout(&self, cell: &OutputCell, context: &RenderContext) -> Vec<String> {
-        let width = self.value_width(cell, context);
-        let text = match cell.preview_mode() {
-            PreviewMode::Net => cell
-                .preview_text(PreviewMode::Net)
-                .map(str::to_owned)
-                .or_else(|| cell.value.as_ref().map(SpecNet::ascii)),
-            mode @ (PreviewMode::String | PreviewMode::Peek) => {
-                cell.preview_text(mode).map(str::to_owned)
-            }
-            _ => None,
-        }
-        .unwrap_or_else(|| cell.text.clone());
-        word_lines(&text, width)
-    }
-
     fn unfolded_lines(&self, cell: &OutputCell, context: &RenderContext) -> Rc<Vec<Line<'static>>> {
-        let theme = context.groups();
-        // Component classes arrive with the expression tree and remain attached
-        // through layout, wrapping and renderer changes.
-        let width = usize::from(self.value_width(cell, context));
         let style = context.math();
-        let renderer = cell.preview_mode();
-        let pixel_cell = (style.display == MathDisplay::Typeset)
-            .then(cell_size)
-            .flatten();
-        if let Some(layout) = cell.layout.borrow().as_ref().filter(|layout| {
-            layout.renderer == renderer
-                && (cell.markup().is_none() || layout.markup_revision == markup::revision())
-                && layout.renderer_position == context.renderer_position()
-                && layout.width == width as u16
-                && layout.pixel_cell == pixel_cell
-                && layout.math == style
-                && ptr::eq(layout.groups, theme)
-        }) {
+        let markup = cell.markup();
+        let key = LayoutKey {
+            renderer: cell.preview_mode(),
+            markup_revision: markup.map_or(0, |_| markup::revision()),
+            renderer_position: context.renderer_position(),
+            width: self.value_width(cell, context),
+            block_width: context.width(),
+            pixel_cell: (style.display == MathDisplay::Typeset)
+                .then(cell_size)
+                .flatten(),
+            math: style,
+            groups: context.groups(),
+        };
+        if let Some(layout) = cell
+            .layout
+            .borrow()
+            .as_ref()
+            .filter(|layout| layout.key == key)
+        {
             return layout.lines.clone();
         }
-        let mut links = Vec::new();
-        let mut lines: Vec<Line<'static>> = if let Some((html, example_width)) = cell.markup() {
-            markup::lines(html, example_width, &context.with_width(width as u16))
-                .map(|lines| lines.as_ref().clone())
-                .unwrap_or_else(|| {
-                    self.layout(cell, context)
-                        .into_iter()
-                        .map(Line::raw)
-                        .collect()
-                })
-        } else if renderer == PreviewMode::External {
-            let source = cell
-                .preview_text(PreviewMode::External)
-                .unwrap_or(&cell.text);
-            code_lines(source, width as u16, theme)
-        } else if renderer == PreviewMode::Tex {
-            let drawn = typeset::tex_preview(
-                cell.preview_text(PreviewMode::Tex).unwrap_or(""),
-                width,
-                theme,
-                style,
-            );
-            links = drawn.links;
-            drawn.lines
-        } else if matches!(renderer, PreviewMode::SpecNet | PreviewMode::Speek) {
-            let mut preview = match renderer {
-                PreviewMode::SpecNet => cell.value.clone(),
-                _ => cell.preview_value(renderer).cloned(),
-            };
-            if let Some(value) = preview
-                .as_mut()
-                .filter(|value| renderer == PreviewMode::SpecNet && value.text.is_some())
-            {
-                value.text = Some(cell.text.clone());
-            }
-            match preview.as_ref() {
-                Some(value) if style.display == MathDisplay::Typeset => {
-                    let drawn = typeset::drawn(value, width, theme, style);
-                    links = drawn.links;
-                    drawn.lines
-                }
-                Some(value) if style.display == MathDisplay::Ascii => {
-                    word_lines(&value.ascii(), width as u16)
-                        .into_iter()
-                        .map(|line| Line::from(Span::styled(line, theme.value())))
-                        .collect()
-                }
-                Some(value) => maths::spans(value, width, style)
-                    .map(|rows| {
-                        links = present::links(&rows);
-                        rows.into_iter()
-                            .map(|row| Line::from(row.spans(theme)))
+        let laid = match markup {
+            Some((html, example_width)) => {
+                let lines = markup::lines(html, example_width, &context.with_width(key.width))
+                    .map(|lines| lines.as_ref().clone())
+                    .unwrap_or_else(|| {
+                        cell.source
+                            .text_lines(key.renderer, key.width)
+                            .into_iter()
+                            .map(Line::raw)
                             .collect()
-                    })
-                    .unwrap_or_default(),
-                None => Vec::new(),
+                    });
+                Laid {
+                    lines,
+                    links: Vec::new(),
+                }
+                .truncated(key.block_width)
             }
-        } else {
-            self.layout(cell, context)
-                .into_iter()
-                .map(|line| Line::from(Span::styled(line, theme.value())))
-                .collect()
+            None => match Self::relaid(cell, &key) {
+                Ok(laid) => laid,
+                Err(stale) => return stale,
+            },
         };
-        if cell.markup().is_none() {
-            for span in lines.iter_mut().flat_map(|line| &mut line.spans) {
-                span.style.bg = None;
-            }
-        }
-        let limit = (UI.max_output_preview_cells / usize::from(context.width().max(1))).max(1);
-        if lines.len() > limit {
-            let head = limit.saturating_sub(1) / 2;
-            let tail = limit.saturating_sub(head + 1);
-            let end = lines.len().saturating_sub(tail);
-            lines.splice(
-                head..end,
-                [Line::raw("… output preview truncated (render limit) …")],
-            );
-            // Only the rows above the cut stay where they were laid out.
-            links.retain(|link| link.cells.iter().all(|cells| usize::from(cells.y) < head));
-        }
-        let lines = Rc::new(lines);
+        let lines = Rc::new(laid.lines);
         cell.layout.replace(Some(ValueLayout {
-            renderer,
-            markup_revision: markup::revision(),
-            renderer_position: context.renderer_position(),
-            width: width as u16,
-            pixel_cell,
-            math: style,
-            groups: theme,
+            key,
             lines: lines.clone(),
-            links: Rc::new(links),
+            links: Rc::new(laid.links),
         }));
         lines
+    }
+
+    /// `cell`'s value laid out under `key`: from a worker when it has finished,
+    /// at once when nothing was laid out before. When only the width moved, the
+    /// previous rows stay on screen while a worker lays the value out again; the
+    /// same holds for a change of theme.
+    fn relaid(cell: &OutputCell, key: &LayoutKey) -> Result<Laid, Rc<Vec<Line<'static>>>> {
+        let finished = cell
+            .relayout
+            .borrow()
+            .as_ref()
+            .filter(|(pending, _)| pending == key)
+            .and_then(|(_, pending)| pending.take());
+        if let Some(laid) = finished {
+            cell.relayout.take();
+            return Ok(laid);
+        }
+        let stale = cell
+            .layout
+            .borrow()
+            .as_ref()
+            .filter(|layout| key.stands_in(&layout.key))
+            .map(|layout| layout.lines.clone());
+        let Some(stale) = stale else {
+            cell.relayout.take();
+            return Ok(cell.source.laid(key));
+        };
+        let requested = cell
+            .relayout
+            .borrow()
+            .as_ref()
+            .is_some_and(|(pending, _)| pending == key);
+        if !requested {
+            let (source, key) = (cell.source.clone(), *key);
+            cell.relayout
+                .replace(Some((key, Pending::spawn(move || source.laid(&key)))));
+        }
+        Err(stale)
     }
 
     /// The path that laid out `cell`'s value rows.
@@ -1899,7 +2050,7 @@ impl OutputBlock {
     fn unwrapped_text(cell: &OutputCell, context: &RenderContext) -> String {
         let _ = context;
         cell.preview_text(cell.preview_mode())
-            .unwrap_or(&cell.text)
+            .unwrap_or(&cell.source.text)
             .to_string()
     }
 
@@ -2016,12 +2167,14 @@ impl OutputBlock {
             .copied()
             .filter(|mode| match mode {
                 PreviewMode::SpecNet => cell
+                    .source
                     .value
                     .as_ref()
                     .is_some_and(maths::Math::supports_spec_net),
                 PreviewMode::Net => cell.preview_text(PreviewMode::Net).is_some(),
                 PreviewMode::Speek => cell.preview_value(PreviewMode::Speek).is_some(),
                 PreviewMode::Markup => cell
+                    .source
                     .value
                     .as_ref()
                     .is_some_and(|value| value.html.is_some()),
@@ -2199,6 +2352,7 @@ impl OutputBlock {
     /// The link a source location draws: every row it wraps onto, before any fold.
     fn location_link(&self, cell: &OutputCell, context: &RenderContext) -> Option<Link> {
         let target = cell
+            .source
             .value
             .as_ref()
             .filter(|_| {
@@ -2338,7 +2492,7 @@ impl Block for OutputBlock {
                     ItemKind::Output,
                     row..row.saturating_add(shown),
                     cell.number,
-                    cell.text.clone(),
+                    cell.source.text.clone(),
                 )
                 .with_type(
                     if cell.type_parts.is_empty() || context.math().original_text {
@@ -2789,9 +2943,9 @@ mod tests {
         let block = OutputBlock::rendered(SpecNet::plain(text), None);
         let context = RenderContext::new(80, 0).full_output();
         let cell = &block.cells[0];
-        assert!(cell.text.len() <= UI.max_output_preview_bytes + 128);
-        assert!(cell.text.starts_with("begin"));
-        assert!(cell.text.ends_with("end"));
+        assert!(cell.source.text.len() <= UI.max_output_preview_bytes + 128);
+        assert!(cell.source.text.starts_with("begin"));
+        assert!(cell.source.text.ends_with("end"));
         let lines = block.unfolded_lines(cell, &context);
         assert!(
             lines.len() * usize::from(block.text_width(&context)) <= UI.max_output_preview_cells
@@ -2836,12 +2990,23 @@ mod tests {
             "net help: setup {cold:?}; 100 redraws and hover checks {:?}",
             start.elapsed()
         );
-        for changed in [context.with_width(60), context.with_blackboard(true)] {
-            assert!(!Rc::ptr_eq(
-                &first,
-                &block.unfolded_lines(&block.cells[0], &changed)
-            ));
+        let narrower = context.with_width(60);
+        assert!(
+            Rc::ptr_eq(&first, &block.unfolded_lines(&block.cells[0], &narrower)),
+            "the old rows stand in while a worker lays them out again"
+        );
+        let relaid = std::time::Instant::now();
+        while Rc::ptr_eq(&first, &block.unfolded_lines(&block.cells[0], &narrower)) {
+            assert!(
+                relaid.elapsed() < std::time::Duration::from_secs(10),
+                "the worker delivers"
+            );
+            std::thread::yield_now();
         }
+        assert!(!Rc::ptr_eq(
+            &first,
+            &block.unfolded_lines(&block.cells[0], &context.with_blackboard(true))
+        ));
     }
 
     #[test]
@@ -3633,7 +3798,7 @@ mod tests {
         let value = OutputBlock::value("  value  \n\n".into(), Some("  Type  \n".into()));
 
         assert_eq!(text.text, "  text");
-        assert_eq!(value.cells[0].text, "  value");
+        assert_eq!(value.cells[0].source.text, "  value");
         assert_eq!(value.cells[0].ty.as_deref(), Some("  Type"));
         assert_eq!(
             text.height(&RenderContext::new(40, 0)),
