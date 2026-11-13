@@ -921,6 +921,41 @@ fn a_documentation_name_takes_the_colour_its_pages_analysis_found_for_it() {
 }
 
 #[test]
+fn an_entry_with_elided_arguments_is_analysed_and_its_elisions_stay_plain() {
+    let entry = "isPrime(Ideal,Strategy=>...)";
+    let html = format!("<ul><li><kbd>{entry}</kbd></li></ul>");
+    let [analysed] = inline_code_sources(&html).try_into().unwrap();
+    assert_eq!(analysed.len(), entry.len(), "offsets carry over");
+    let key = entry.find("Strategy").unwrap();
+    let elided = entry.find("...").unwrap();
+    remember_colors(crate::code::semantic::PageColors {
+        page: page(&html),
+        sources: vec![(
+            analysed,
+            vec![
+                HLSpan::new(key..key + "Strategy".len(), HLGroup::Option),
+                HLSpan::new(elided..elided + 3, HLGroup::LspVariable),
+            ],
+        )],
+    });
+    let painted: Vec<_> = spans(&html, 80).unwrap().into_iter().flatten().collect();
+    let kind_of = |text: &str| {
+        painted
+            .iter()
+            .find(|span| span.content.contains(text))
+            .map(|span| span.kind)
+    };
+    assert_eq!(kind_of("Strategy"), Some(HLGroup::Option));
+    assert_ne!(kind_of("..."), Some(HLGroup::LspVariable));
+    let text: String = painted
+        .iter()
+        .map(|span| span.content.to_string())
+        .collect();
+    assert!(text.contains(entry), "{text}");
+    forget_colors();
+}
+
+#[test]
 fn embedded_formatter_clicks_survive_relayout_and_can_be_hidden() {
     use crate::ui::settings::rendering::RendererPosition;
     let html = "<p>Formatter interaction fixture</p><pre>i1 : example\n\no1 = archived</pre>";

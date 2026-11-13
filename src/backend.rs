@@ -845,6 +845,53 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     }
 
     #[test]
+    fn serre_twists_preserve_parentheses_around_the_degree() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let setup = backend.evaluate("R = QQ[x,y,z];", None).unwrap();
+        assert!(!setup.is_error, "{}", setup.transcript);
+        for degree in [-4, 3] {
+            let source = format!("sheaf(R^{{{degree}}})");
+            let result = backend.evaluate(&source, None).unwrap();
+            assert!(!result.is_error, "{}", result.transcript);
+            let value = result.value.unwrap();
+            let twist = value.children.last().unwrap();
+            assert!(twist.is("Parenthesize"), "{value:?}");
+            assert!(value.ascii().contains(&format!("({degree})")));
+        }
+    }
+
+    #[test]
+    fn sheaves_varieties_and_scripted_functors_have_structured_previews() {
+        use crate::ui::render::maths::{Math, MathStyle};
+        use crate::ui::render::typeset;
+        use crate::ui::theme::groups::Groups;
+
+        let mut backend = M2Backend::spawn().unwrap();
+        let setup = backend
+            .evaluate("R = QQ[x,y,z]; X = Proj R; F = sheaf image vars R;", None)
+            .unwrap();
+        assert!(!setup.is_error, "{}", setup.transcript);
+        for source in [
+            "F",
+            "expression F",
+            "sheaf(R^2 ++ R^{-1})",
+            "OO",
+            "OO_X",
+            "X",
+            "Proj(R/ideal(x*y))",
+            "sheaf map(R^1,R^1,x)",
+            "Spec R",
+        ] {
+            let result = backend.evaluate(source, None).unwrap();
+            assert!(!result.is_error, "{source}: {}", result.transcript);
+            let value = result.value.unwrap();
+            assert!(Math::supports_spec_net(&value), "{source}: {value:?}");
+            let rows = typeset::drawn(&value, None, 120, &Groups::default(), MathStyle::default());
+            assert!(!rows.lines.is_empty(), "{source}");
+        }
+    }
+
+    #[test]
     fn frames_survive_the_user_redefining_to_string() {
         let mut backend = M2Backend::spawn().expect("spawn M2");
         backend
@@ -1016,7 +1063,9 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         std::fs::write(&path, "sourceLocationProbe = 1\n").unwrap();
         let location = serde_json::to_string(&format!("{}:12:3", path.display())).unwrap();
         let mut backend = M2Backend::spawn().unwrap();
-        let response = backend.evaluate(&format!("(sourceType := value Core#\"private dictionary\"#\"TT\"; new sourceType from {{{location}}})"), None).unwrap();
+        let response = backend
+            .evaluate(&format!("needsPackage \"Text\"; TT {{{location}}}"), None)
+            .unwrap();
         std::fs::remove_file(&path).unwrap();
         let Some(SpecNet {
             html: Some(html), ..
@@ -1060,10 +1109,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         else {
             panic!("documentation did not return markup");
         };
-        assert!(
-            html.contains(r#"href="&quot;ancestor(Type,Type)&quot;""#),
-            "{html}"
-        );
+        assert!(html.contains(r#"href="&quot;ancestor&quot;""#), "{html}");
         assert!(!html.contains(".html\""), "{html}");
     }
 
@@ -1588,7 +1634,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         let init_file = config.join("init.m2");
         fs::write(
             &init_file,
-            "spectralInitProbe = 1729\nprint \"initialization probe loaded\"\n",
+            "spectralInitProbe = 1729\nArray.typeDepth = 2\nprint \"initialization probe loaded\"\n",
         )
         .expect("write init.m2");
 
@@ -1600,6 +1646,12 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         let out = be
             .evaluate("spectralInitProbe", Some(1))
             .expect("evaluate probe");
+
+        let configured = be
+            .evaluate("[1,2]", Some(2))
+            .expect("evaluate configured type");
+        assert!(!configured.is_error, "{}", configured.transcript);
+        assert_eq!(configured.type_parts[0].render(), "Array[ZZ, ZZ]");
 
         let _ = fs::remove_dir_all(&base);
 
@@ -1781,7 +1833,15 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         let mut backend = M2Backend::spawn().unwrap();
         let result = backend.evaluate("speek {1, symbol a}", None).unwrap();
         assert!(!result.is_error, "{}", result.transcript);
-        assert!(result.rendered_value().unwrap().contains("List"));
+        let value = result.value.unwrap();
+        assert!(value.is("Option"));
+        assert!(crate::ui::render::maths::Math::supports_spec_net(&value));
+        assert!(value.render().contains("List"));
+        let truncated = backend.evaluate("speek'(0, {1, symbol a})", None).unwrap();
+        assert!(!truncated.is_error, "{}", truncated.transcript);
+        let value = truncated.value.unwrap();
+        assert!(value.is("Option"));
+        assert_eq!(value.children[1].text.as_deref(), Some("..."));
     }
 
     #[test]
@@ -1861,6 +1921,112 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     }
 
     #[test]
+    fn value_depth_elides_unnamed_structures_and_keeps_names() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let mut drawn = |source: &str| {
+            let result = backend.evaluate(source, None).unwrap();
+            assert!(!result.is_error, "{source}: {}", result.transcript);
+            result.value.unwrap().render()
+        };
+        let unnamed = "OO_(Proj(QQ[a,b]))^2";
+        let shallow = drawn(&format!("specNet'(1, {unnamed})"));
+        let deep = drawn(&format!("specNet'(2, {unnamed})"));
+        assert!(!shallow.contains("Proj"), "{shallow}");
+        assert!(deep.contains("Proj"), "{deep}");
+        let named = drawn("Y = Proj(QQ[a,b]); specNet'(1, OO_Y^2)");
+        assert!(named.contains('Y'), "{named}");
+        let rank_one = drawn("OO_Y^1");
+        assert_eq!(rank_one, drawn("OO_Y"), "rank one is an index, not shown");
+        assert_ne!(
+            drawn("specType'(2, OO_Y^1)"),
+            drawn("specType'(2, OO_Y)"),
+            "a sheaf of rings and a sheaf of modules are different types"
+        );
+        let elements = drawn("specNet'(0, {a^2 - 1})");
+        assert!(elements.contains('a'), "{elements}");
+
+        let sheaf = |depth: u32| format!("specType'({depth}, OO_(Proj(QQ[a,b]))^2)");
+        let over_rings = drawn(&sheaf(2));
+        let over_variety = drawn(&sheaf(3));
+        assert!(
+            over_rings.contains("OO") && !over_rings.contains("Proj"),
+            "{over_rings}"
+        );
+        assert!(over_variety.contains("Proj"), "{over_variety}");
+
+        let complex = |depth: u32| {
+            format!("specNet'({depth}, res(coker vars (QQ[w,x]/(w^3)), LengthLimit => 1))")
+        };
+        let named = drawn(&complex(1));
+        let modules = drawn(&complex(2));
+        let quotient = drawn(&complex(3));
+        let rings = drawn(&complex(4));
+        assert!(named.contains("C") && named.contains('d'), "{named}");
+        assert!(!named.contains('w'), "{named}");
+        assert!(modules.contains('w') && !modules.contains("C"), "{modules}");
+        assert!(!modules.contains("QQ"), "{modules}");
+        assert!(
+            quotient != modules && !quotient.contains("QQ"),
+            "{quotient}"
+        );
+        assert!(rings.contains("QQ"), "{rings}");
+
+        let typed = |depth: u32| format!("specType'({depth}, (ZZ/7[t])^2)");
+        let shallow = drawn(&typed(2));
+        let deep = drawn(&typed(3));
+        assert!(!shallow.contains('t'), "{shallow}");
+        assert!(deep.contains('t'), "{deep}");
+    }
+
+    #[test]
+    fn type_depth_parameters_control_annotations_and_inherit_through_types() {
+        let mut backend = M2Backend::spawn().unwrap();
+        for (source, expected) in [
+            ("Array.typeDepth = 1; [1,2]", "Array"),
+            ("Array.typeDepth = 2; [1,2]", "Array[ZZ, ZZ]"),
+            ("Row = new Type of Array; new Row from {1,2}", "Row[ZZ, ZZ]"),
+            ("Row.typeDepth = 1; new Row from {1,2}", "Row"),
+            ("Module.typeDepth = 2; R = QQ[x,y]; R^3", "Module[R]"),
+            ("Module.typeDepth = 1; R^3", "Module"),
+            (
+                "X = Proj R; SheafOfRings.typeDepth = 2; OO_X",
+                "SheafOfRings[X]",
+            ),
+            (
+                "CoherentSheaf.typeDepth = 2; sheaf(R^{-4})",
+                "CoherentSheaf[OO_X]",
+            ),
+            (
+                "SheafMap.typeDepth = 2; sheaf map(R^1,R^1,x)",
+                "SheafMap[OO_X]",
+            ),
+            ("Matrix.typeDepth = 2; vars R", "Matrix[R]"),
+        ] {
+            let result = backend.evaluate(source, None).unwrap();
+            assert!(!result.is_error, "{source}: {}", result.transcript);
+            assert_eq!(result.type_parts[0].render(), expected, "{source}");
+        }
+        let explicit = backend
+            .evaluate("Array.typeDepth = 1; specType'(2, [1,2])", None)
+            .unwrap();
+        assert!(!explicit.is_error, "{}", explicit.transcript);
+        assert_eq!(explicit.value.unwrap().render(), "Array[ZZ, ZZ]");
+        for invalid in ["-1", "1/2", "\"deep\""] {
+            let result = backend
+                .evaluate(
+                    &format!("Array.typeDepth = {invalid}; try (specType([1]); false) else true"),
+                    None,
+                )
+                .unwrap();
+            assert_eq!(
+                result.value.unwrap().render(),
+                "true",
+                "invalid depth {invalid} was accepted"
+            );
+        }
+    }
+
+    #[test]
     fn inductive_types_fold_to_the_requested_depth() {
         let mut backend = M2Backend::spawn().unwrap();
         for (depth, expected) in [
@@ -1936,6 +2102,39 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     #[test]
     fn complexes_compose_maps_with_differentials_and_degree_labels() {
         let mut backend = M2Backend::spawn().unwrap();
+        // The chain of a complex, as its modules' degrees, between zeros.
+        let degrees_of = |value: &SpecNet| {
+            let is_zero = |drawn: &SpecNet| drawn.render() == "0";
+            let [chain, end] = value.children.as_slice() else {
+                panic!("a complex ends in zero: {value:?}");
+            };
+            assert!(value.is("MapExpression") && is_zero(end), "{value:?}");
+            let mut target = chain;
+            let mut degrees = Vec::new();
+            loop {
+                match target.children.as_slice() {
+                    [next, module, differential] => {
+                        assert!(differential.is("Array"));
+                        assert!(differential.children[0].is("Table"));
+                        degrees.push(module);
+                        target = next;
+                    }
+                    [start, module] => {
+                        assert!(is_zero(start), "{target:?}");
+                        degrees.push(module);
+                        break;
+                    }
+                    _ => panic!("incomplete differential: {target:?}"),
+                }
+            }
+            degrees
+                .into_iter()
+                .map(|module| {
+                    assert!(module.is("UnderExpression"), "{module:?}");
+                    module.children[1].render().parse::<i32>().unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
         for source in ["S = QQ[a_1..a_4]; C = res coker vars S; C", "C[2]"] {
             let result = backend.evaluate(source, None).unwrap();
             assert!(!result.is_error, "{source}: {}", result.transcript);
@@ -1944,26 +2143,13 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
                 crate::ui::render::maths::Math::supports_spec_net(&value),
                 "{value:?}"
             );
-            let mut target = &value;
-            let mut degrees = Vec::new();
-            while target.is("MapExpression") {
-                let [next, module, differential] = target.children.as_slice() else {
-                    panic!("incomplete differential: {target:?}");
-                };
-                assert!(module.is("UnderExpression"));
-                degrees.push(module.children[1].render().parse::<i32>().unwrap());
-                assert!(differential.is("Array"));
-                assert!(differential.children[0].is("Table"));
-                target = next;
-            }
-            assert!(target.is("UnderExpression"));
-            degrees.push(target.children[1].render().parse::<i32>().unwrap());
+            let degrees = degrees_of(&value);
             assert_eq!(degrees.len(), 5);
             assert!(degrees.windows(2).all(|pair| pair[0] - pair[1] == 1));
         }
         let result = backend.evaluate("complex S^1", None).unwrap();
         assert!(!result.is_error, "{}", result.transcript);
-        assert!(result.value.unwrap().is("UnderExpression"));
+        assert_eq!(degrees_of(&result.value.unwrap()).len(), 1);
         let result = backend.evaluate("complex S^0", None).unwrap();
         assert!(!result.is_error, "{}", result.transcript);
         assert_eq!(result.value.unwrap().render(), "0");

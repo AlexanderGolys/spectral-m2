@@ -53,7 +53,7 @@ impl ExpressionLayout for Vertical {
                             if self.numbered {
                                 vec![
                                     Math::atom(index.to_string(), HLGroup::Number),
-                                    Math::atom("=>", HLGroup::MapArrow),
+                                    Math::atom("=>", HLGroup::Operator),
                                     entry,
                                 ]
                             } else {
@@ -81,9 +81,19 @@ impl ExpressionLayout for Angle {
         }
     }
 }
+/// A pair whose key is a plain name or string draws it as a key, as in
+/// `Strategy => x` or a table's `"a" => 1`; a compound key keeps its drawing.
 impl ExpressionLayout for OptionLayout {
     fn compose(&self, value: &SpecNet, style: MathStyle) -> Math {
-        joined(children(value, style), " => ", HLGroup::MapArrow)
+        let mut sides = children(value, style);
+        if let (Some(key), Some(Math::Atom { kind, .. })) =
+            (value.children.first(), sides.first_mut())
+        {
+            if key.children.is_empty() && key.tex.is_none() {
+                *kind = HLGroup::Option;
+            }
+        }
+        joined(sides, " => ", HLGroup::Operator)
     }
 }
 
@@ -279,11 +289,13 @@ impl ExpressionLayout for Map {
             },
             None => arrow,
         };
-        Math::Row(vec![
-            Math::from_spec_net(target, style),
-            arrow,
-            Math::from_spec_net(source, style),
-        ])
+        // A chain of maps is one row, so a chain too wide breaks between its maps.
+        let mut chain = match Math::from_spec_net(target, style) {
+            Math::Row(pieces) if target.is("MapExpression") => pieces,
+            composed => vec![composed],
+        };
+        chain.extend([arrow, Math::from_spec_net(source, style)]);
+        Math::Row(chain)
     }
 }
 impl ExpressionLayout for Call {
@@ -355,8 +367,8 @@ fn layout(class: &str) -> Option<&'static dyn ExpressionLayout> {
         "BinaryOperation" => &Binary,
         "Minus" => &Minus,
         "Parenthesize" => &Parenthesize,
-        "RowExpression" | "Adjacent" | "Holder" | "OneExpression" | "ZeroExpression"
-        | "RingElement" => &Row,
+        "RowExpression" | "Adjacent" | "Holder" | "SheafExpression" | "OneExpression"
+        | "ZeroExpression" | "RingElement" => &Row,
         "List" | "VisibleList" | "MutableList" => &Collection('{', '}'),
         "Table" => &Matrix(false),
         "Option" => &OptionLayout,
@@ -504,6 +516,61 @@ impl Math {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn option_arrows_are_operators_and_map_arrows_remain_distinct() {
+        let option = SpecNet::branch(
+            "Option",
+            vec![SpecNet::leaf("Symbol", "a"), SpecNet::leaf("ZZ", "1")],
+        );
+        let Math::Row(parts) = Math::from_spec_net(&option, MathStyle::default()) else {
+            panic!("expected an option row");
+        };
+        assert_eq!(parts[1], Math::atom(" => ", HLGroup::Operator));
+        let map = SpecNet::branch(
+            "MapExpression",
+            vec![SpecNet::leaf("Symbol", "A"), SpecNet::leaf("Symbol", "B")],
+        );
+        let Math::Row(parts) = Math::from_spec_net(&map, MathStyle::default()) else {
+            panic!("expected a map row");
+        };
+        assert!(parts.contains(&Math::atom("⟵", HLGroup::MapArrow)));
+    }
+
+    #[test]
+    fn a_named_key_is_drawn_as_a_key_and_its_value_keeps_its_own_colour() {
+        let style = MathStyle::default();
+        let drawn = |key: SpecNet| {
+            let pair = SpecNet::branch("Option", vec![key, SpecNet::leaf("ZZ", "1")]);
+            let Math::Row(parts) = Math::from_spec_net(&pair, style) else {
+                panic!("expected an option row");
+            };
+            parts
+        };
+        let named = drawn(SpecNet::leaf("Symbol", "Strategy"));
+        assert!(
+            matches!(
+                named[0],
+                Math::Atom {
+                    kind: HLGroup::Option,
+                    ..
+                }
+            ),
+            "{named:?}"
+        );
+        assert_eq!(
+            named[2],
+            Math::from_spec_net(&SpecNet::leaf("ZZ", "1"), style)
+        );
+        let compound = SpecNet::branch(
+            "List",
+            vec![SpecNet::leaf("Symbol", "a"), SpecNet::leaf("Symbol", "b")],
+        );
+        assert_eq!(
+            drawn(compound.clone())[0],
+            Math::from_spec_net(&compound, style)
+        );
+    }
 
     #[test]
     fn tuple_subscripts_use_comma_separated_entries_without_parentheses() {

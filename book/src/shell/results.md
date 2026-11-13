@@ -4,6 +4,8 @@ Spectral draws a value from its structure, not from the text M2 would print: a f
 
 Hash tables retain their structured entries even when a nested value has only a text representation. Vertical lists align entries on the left; `NumberedVerticalList` adds zero-based indices in a separate column, with every entry starting at the same position after its index and arrow.
 
+Coherent sheaves, sheaf expressions, structure sheaves (`SheafOfRings`), sheaf maps, and affine and projective varieties use M2's expression structure. Structure sheaves retain their variety subscripts and twists; sheaf maps show their source, target, and matrix. Named varieties keep their names. Scripted functors retain M2's mathematical notation in typeset output, including the calligraphic O for `OO`.
+
 Complexes show their modules joined by leftward arrows, with each differential matrix above its arrow and the homological degrees beneath the modules. The structured preview retains the component colours in both Unicode and typeset output:
 
 ```m2
@@ -71,7 +73,7 @@ You need a terminal speaking the kitty graphics protocol with Unicode placeholde
 
 ## Types, printed text and errors
 
-A value's type description stands at the right edge of its box. The default depth of one shows the outer type, such as `Array` for `[1, 1.]`. Request component types with `specType'(2, x)`; see [Formatting your own types](../deep/how-it-works.md#formatting-your-own-types). A long value wraps short of it, and a type wider than a third of the box moves below the value. Type annotations use one uniform type colour. Brackets follow the scheme’s `Punctuation` group, matching brackets in code. Commas use `Delimiter`. Arrows use `MapArrow`, which inherits the normal `Text` colour. Typeset annotations copy as text when selected.
+A value's type description stands at the right edge of its box. Each type's `typeDepth` parameter controls its detail: arrays and lists show only their outer type by default, while modules show their base ring as `Module[R]`. Set parameters such as `SheafOfRings.typeDepth = 2` in the shell or your Spectral `init.m2` to show the variety as `SheafOfRings[X]`. Request component types explicitly with `specType'(2, x)`; see [Formatting your own types](../deep/how-it-works.md#formatting-your-own-types). A long value wraps short of it, and a type wider than a third of the box moves below the value. Type annotations use one uniform type colour. Brackets follow the scheme’s `Punctuation` group, matching brackets in code. Commas use `Delimiter`. The `=>` arrows in options and hash tables use `Operator`, and a key that is a plain name or string, like `Strategy` in `Strategy => 2`, uses `Option`, the group option names take in code. The arrow in `MapExpression` uses `MapArrow`, which inherits the normal `Text` colour for visual clarity. Typeset annotations copy as text when selected.
 
 Text a cell prints with `print` or `<<` comes before its value, in a lighter shade of the string colour. Warnings and errors get boxes of their own: an error names itself in the box title and shows its message in red, and the failed cell sits on a red background. See [When things go wrong](errors.md).
 

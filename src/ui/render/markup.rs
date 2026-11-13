@@ -60,6 +60,11 @@ const GROUP_LINK_SCHEME: &str = "group:";
 const MARK_LINK_SCHEME: &str = "mark:";
 /// What M2 sets after a method listed in a page that has no documentation.
 const MISSING_DOCUMENTATION: &str = "(missing documentation)";
+/// What documentation writes for arguments it leaves out, as in `f(...,Key=>...)`.
+const ELIDED: &str = "...";
+/// A name as long as [`ELIDED`] that stands in for it while the code is analysed;
+/// `_` is an operator in M2, so the stand-in is made of letters.
+const ELIDED_STAND_IN: &str = "etc";
 /// The attribute typeset maths names each piece's highlight group by, until
 /// the document is parsed and the piece can be told to sit inside a link.
 const GROUP_ATTRIBUTE: &str = "data-group";
@@ -1080,9 +1085,10 @@ fn collect_inline_code(node: &Handle, found: &mut Vec<String>) {
         return;
     }
     if tag.as_deref() == Some("code") || (tag.as_deref() == Some("a") && is_code_link(node)) {
-        let source = inline_text(node);
-        if parse_native(&source).is_ok() && !found.contains(&source) {
-            found.push(source);
+        if let Some(source) = analysable(&inline_text(node)) {
+            if !found.contains(&source) {
+                found.push(source);
+            }
         }
         return;
     }
@@ -1545,8 +1551,33 @@ fn code(source: &str) -> Vec<TextSpan> {
 }
 
 /// `source` coloured as M2 code under what the analysis of `page` found in it.
+/// Elided arguments keep the plain colour of the text around them.
 fn analysed_code(page: u64, source: &str) -> Vec<TextSpan> {
-    filled(source, &examples::highlighted(page, source))
+    let analysed = analysable(source).unwrap_or_else(|| source.to_string());
+    let elided: Vec<_> = source
+        .match_indices(ELIDED)
+        .map(|(at, _)| at..at + ELIDED.len())
+        .collect();
+    let marked: Vec<_> = examples::highlighted(page, &analysed)
+        .into_iter()
+        .filter(|mark| {
+            !elided
+                .iter()
+                .any(|gap| mark.content.start < gap.end && gap.start < mark.content.end)
+        })
+        .collect();
+    filled(source, &marked)
+}
+
+/// The code the analysis is given for `source`: itself when it parses, else
+/// with each elided argument read as a name of the same length, so whatever
+/// is found in it lies at the same offsets in `source`.
+fn analysable(source: &str) -> Option<String> {
+    if parse_native(source).is_ok() {
+        return Some(source.to_string());
+    }
+    let standing_in = source.replace(ELIDED, ELIDED_STAND_IN);
+    parse_native(&standing_in).is_ok().then_some(standing_in)
 }
 
 fn filled(source: &str, marked: &[HLSpan]) -> Vec<TextSpan> {

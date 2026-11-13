@@ -22,6 +22,9 @@ pub struct Drawn {
 
 type Picture = fn(Typesetting, Rgb, u16) -> Option<Pictured>;
 
+/// M2's class of a value that is nothing but a name, spelled as terminal text.
+const NAME_CLASS: &str = "Symbol";
+
 fn paint(text: String, kind: HLGroup, groups: Option<&Groups>) -> String {
     match groups.and_then(|groups| groups.style(kind).fg) {
         Some(Color::Rgb(r, g, b)) => format!(r"{{\color{{#{r:02x}{g:02x}{b:02x}}}{text}}}"),
@@ -36,7 +39,7 @@ fn tex(math: &Math, groups: Option<&Groups>) -> String {
             let content = match (kind, text.as_str()) {
                 (HLGroup::MapArrow | HLGroup::Operator, "⟵") => r"\longleftarrow".into(),
                 (HLGroup::Delimiter, "," | ", " | ";") => text.clone(),
-                (HLGroup::Operator, "·") => r"\cdot".into(),
+                (HLGroup::Operator, "·") => r"\,".into(),
                 (HLGroup::Operator, "+" | "-" | "=") => text.clone(),
                 (HLGroup::Number, _) => maths::typewriter(text).replacen("texttt", "mathrm", 1),
                 (HLGroup::Variable, _) => maths::typewriter(text).replacen("texttt", "mathit", 1),
@@ -188,7 +191,16 @@ fn draw(
 ) -> Drawn {
     let width = width.max(1);
     let math = Math::from_spec_net(value, style);
-    if value.html.is_none() && !has_links(value) {
+    if value.html.is_none()
+        && !has_links(value)
+        && !matches!(
+            math,
+            Math::Atom {
+                kind: HLGroup::Package,
+                ..
+            }
+        )
+    {
         let layout_groups = groups.map_styles(|_, mut style| {
             style.fg = None;
             style
@@ -286,8 +298,39 @@ pub fn tex_preview(source: &str, width: usize, groups: &Groups, style: MathStyle
 }
 
 /// Draw the supplied expression directly, without classifying formatted text.
-pub fn drawn(value: &SpecNet, width: usize, groups: &Groups, style: MathStyle) -> Drawn {
-    draw(value, width, groups, style, graphics::typeset_alone)
+/// `value_class` is the class of the value itself, which its expression's
+/// classes do not show: a ring variable and a bare symbol share one tree.
+pub fn drawn(
+    value: &SpecNet,
+    value_class: Option<&str>,
+    width: usize,
+    groups: &Groups,
+    style: MathStyle,
+) -> Drawn {
+    drawn_with(
+        value,
+        value_class,
+        width,
+        groups,
+        style,
+        graphics::typeset_alone,
+    )
+}
+
+fn drawn_with(
+    value: &SpecNet,
+    value_class: Option<&str>,
+    width: usize,
+    groups: &Groups,
+    style: MathStyle,
+    picture: Picture,
+) -> Drawn {
+    let picture: Picture = if value_class == Some(NAME_CLASS) {
+        |_, _, _| None
+    } else {
+        picture
+    };
+    draw(value, width, groups, style, picture)
 }
 
 /// Render the type method's output with each component's supplied highlight class.
@@ -366,37 +409,31 @@ mod tests {
     }
 
     #[test]
-    fn package_picture_preserves_italic_glyphs_and_semantic_colour() {
+    fn package_names_use_terminal_text_and_the_package_style() {
         let groups = Groups {
-            Value: Style::default().fg(Color::Rgb(19, 31, 47)),
             Package: Style::default()
                 .fg(Color::Rgb(83, 127, 173))
                 .add_modifier(Modifier::ITALIC),
             ..Groups::default()
         };
-        let value = SpecNet::leaf("Package", "ExamplePackage");
-        draw(
+        let name = "ExamplePackage";
+        let value = SpecNet::leaf("Package", name);
+        let drawn = draw(
             &value,
             80,
             &groups,
-            MathStyle::default(),
-            |formula, ink, _| {
-                assert!(formula.tex.contains(r"\textit{ExamplePackage}"));
-                let actual = graphics::ratex::svg_colored(
-                    formula.tex,
-                    formula.painted,
-                    ink,
-                    formula.matrix_row_spacing_percent,
-                )
-                .unwrap()
-                .svg;
-                let expected = graphics::ratex::svg(formula.tex, Rgb([83, 127, 173])).unwrap();
-                assert_eq!(actual, expected);
-                Some(Pictured {
-                    lines: vec![Line::raw("package")],
-                    baseline: 0,
-                })
+            MathStyle {
+                ink: MathInk::Syntax,
+                ..MathStyle::default()
             },
+            |_, _, _| panic!("package names should render as terminal text"),
+        );
+        assert_eq!(
+            drawn.lines,
+            vec![Line::from(Span::styled(
+                name,
+                groups.style(HLGroup::Package)
+            ))]
         );
     }
 
@@ -592,6 +629,41 @@ mod tests {
             picture,
         );
         assert_eq!(drawing.lines, vec![Line::raw("typeset")]);
+    }
+
+    #[test]
+    fn bare_symbols_are_names_while_ring_variables_stay_typeset() {
+        let symbol = SpecNet::leaf("Symbol", "sss");
+        let groups = Groups::default();
+        let drawn = drawn_with(
+            &symbol,
+            Some(NAME_CLASS),
+            80,
+            &groups,
+            MathStyle::default(),
+            |_, _, _| panic!("a bare symbol should render as terminal text"),
+        );
+        let text = drawn
+            .lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(text, "sss");
+        let typeset = drawn_with(
+            &symbol,
+            Some("R"),
+            80,
+            &groups,
+            MathStyle::default(),
+            |_, _, _| {
+                Some(Pictured {
+                    lines: vec![Line::raw("typeset")],
+                    baseline: 0,
+                })
+            },
+        );
+        assert_eq!(typeset.lines, vec![Line::raw("typeset")]);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// A class-tagged expression node. Classes are transmitted nearest ancestor first.
 /// Unknown classes remain data and never prevent a result from being decoded.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase", try_from = "NodeData")]
+#[serde(rename_all = "PascalCase", try_from = "NodeData")]
 pub struct SpecNet {
     /// The concrete M2 class followed by its ancestors.
     pub classes: Vec<String>,
@@ -52,7 +52,7 @@ impl Default for SpecNet {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "PascalCase")]
 struct NodeData {
     classes: Vec<String>,
     highlight: Option<Vec<String>>,
@@ -137,7 +137,7 @@ impl SpecNet {
                 "Boolean" => Some(HLGroup::Boolean),
                 "String" => Some(HLGroup::String),
                 "ZZ" | "QQ" | "RR" | "CC" | "Number" => Some(HLGroup::Number),
-                "Symbol" | "RingElement" | "RawRingElement" => Some(HLGroup::Variable),
+                "Symbol" | "RingElement" | "RawRingElement" | "Variety" => Some(HLGroup::Variable),
                 "Function" | "ScriptedFunctor" => Some(HLGroup::Function),
                 "Type" | "Ring" | "RingFamily" => Some(HLGroup::Type),
                 "Package" => Some(HLGroup::Package),
@@ -403,7 +403,7 @@ mod tests {
 
     #[test]
     fn unknown_classes_roundtrip_without_losing_structure_or_highlights() {
-        let input = r#"{"classes":["Unfamiliar","Expression","BasicList","Thing"],"children":[{"classes":["String","Thing"],"children":[],"text":"a"},{"classes":["Symbol","Thing"],"children":[],"text":"a"}],"text":null}"#;
+        let input = r#"{"Classes":["Unfamiliar","Expression","BasicList","Thing"],"Children":[{"Classes":["String","Thing"],"Children":[],"Text":"a"},{"Classes":["Symbol","Thing"],"Children":[],"Text":"a"}],"Text":null}"#;
         let node: SpecNet = serde_json::from_str(input).unwrap();
         assert_eq!(node.class(), "Unfamiliar");
         assert_eq!(node.children[0].text, node.children[1].text);
@@ -417,9 +417,9 @@ mod tests {
     #[test]
     fn malformed_nodes_are_rejected_at_the_transport_boundary() {
         for input in [
-            r#"{"classes":[],"children":[],"text":"x"}"#,
-            r#"{"classes":["String"],"children":[{"classes":["Symbol"],"children":[],"text":"x"}],"text":"x"}"#,
-            r#"{"classes":["Expression"],"text":null}"#,
+            r#"{"Classes":[],"Children":[],"Text":"x"}"#,
+            r#"{"Classes":["String"],"Children":[{"Classes":["Symbol"],"Children":[],"Text":"x"}],"Text":"x"}"#,
+            r#"{"Classes":["Expression"],"Text":null}"#,
         ] {
             assert!(serde_json::from_str::<SpecNet>(input).is_err());
         }

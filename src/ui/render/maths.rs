@@ -1360,6 +1360,12 @@ impl Math {
         }
         matches!(
             self,
+            Self::Atom {
+                kind: HLGroup::MapArrow,
+                ..
+            }
+        ) || matches!(
+            self,
             Self::Atom { text, kind: HLGroup::Operator, .. }
                 if matches!(
                     text.as_str(),
@@ -2249,6 +2255,47 @@ mod tests {
             rows.iter().all(|row| !row.trim_end().ends_with('+')),
             "{rows:?}"
         );
+    }
+
+    /// A chain of maps too wide for the width breaks between its maps, so every
+    /// module and every map's label stays whole; cutting into slabs would split them.
+    #[test]
+    fn a_wide_chain_of_maps_breaks_between_maps() {
+        let modules = ["zeroth", "first", "second", "third", "fourth"];
+        let labels = ["alpha", "beta", "gamma", "delta"];
+        let leaf = |name: &str| SpecNet::leaf("Symbol", name);
+        let chain =
+            labels
+                .iter()
+                .zip(&modules[1..])
+                .fold(leaf(modules[0]), |chain, (label, module)| {
+                    SpecNet::branch("MapExpression", vec![chain, leaf(module), leaf(label)])
+                });
+        let names = modules.iter().chain(&labels);
+        let whole: usize = spans(&chain, usize::MAX, MathStyle::default())
+            .unwrap()
+            .iter()
+            .map(|row| row.iter().map(|span| span.content.chars().count()).sum())
+            .max()
+            .unwrap();
+        let width = whole / 2;
+        let rows: Vec<String> = spans(&chain, width, MathStyle::default())
+            .unwrap()
+            .iter()
+            .map(|row| row.iter().map(|span| span.content.as_str()).collect())
+            .collect();
+
+        assert!(
+            rows.iter()
+                .all(|row| row.trim_end().chars().count() <= width),
+            "{rows:?} overflows {width}"
+        );
+        for name in names {
+            assert!(
+                rows.iter().any(|row| row.contains(name)),
+                "{name} was cut: {rows:?}"
+            );
+        }
     }
 
     /// A value as M2 sends it for anything with a TeX form.
