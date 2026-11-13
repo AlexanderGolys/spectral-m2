@@ -78,8 +78,8 @@ configuredDepth (Symbol, Thing) := (depth, x) -> (
 
 -- Structures whose kind goes by a conventional name are what the value depth
 -- counts: past it an unnamed one keeps only that name. Anything else, such as
--- a ring element, is always drawn whole, and so is a variety's structure sheaf,
--- which is spelled by its variety.
+-- a ring element, is always drawn whole, and so is a sheaf of rings, which M2
+-- spells over its variety.
 placeholder Thing := x -> null
 placeholder Ring := x -> "R"
 placeholder SheafOfRings := x -> null
@@ -90,9 +90,9 @@ placeholder CoherentSheaf := x -> "F"
 placeholder Complex := x -> "C"
 
 -- The values a structure is built over, which its expression spells in place:
--- modules are over their ring, sheaves over theirs, the sheaf of algebras OO_X, a
--- sheaf of rings over its variety, and a map is from its source to its target,
--- spelled `N <-- M` as M2 spells it.
+-- modules are over their ring, sheaves over their sheaf of rings, a sheaf of
+-- rings over its variety, and a map is from its source to its target, spelled
+-- `N <-- M` as M2 spells it.
 parameters Thing := x -> {}
 
 parameters Ideal :=

@@ -19,7 +19,7 @@ All notable changes to Spectral M2 are documented here.
 
 ### Fixed
 
-- Map types name the modules they go between, as M2 does: a matrix is typed `Matrix[N ⟵ M]` and a sheaf map `SheafMap[G ⟵ F]`, shown by default. A sheaf's type is over its sheaf of algebras, `CoherentSheaf[OO_X]`, and an ideal's over its ring.
+- Map types name the modules they go between, as M2 does: a matrix is typed `Matrix[N ⟵ M]` and a sheaf map `SheafMap[G ⟵ F]`, shown by default. A sheaf's type is over its sheaf of rings, as `CoherentSheaf[OO_X]` for a sheaf of `OO_X`-modules, and an ideal's over its ring.
 
 - Empty vertical lists and hash tables, such as `hooks` for a method with none, draw as empty braces instead of stopping the shell.
 
