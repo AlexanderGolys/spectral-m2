@@ -418,6 +418,24 @@ fn the_header_centres_the_title_and_gives_each_tab_one_cell() {
             && tabs.iter().position(|cell| *cell == icons[1]) > Some(tabs.len() / 2),
         "opened tabs sit left, the views always there right"
     );
+    let style_of = |icon: &String| {
+        let x = tabs.iter().position(|cell| cell == icon).unwrap() as u16;
+        buffer[(split.left() + x, split.y + 1)].style()
+    };
+    let active = style_of(&icons[1]);
+    let theme = crate::ui::theme::groups::scheme();
+    assert_eq!(
+        active.fg,
+        theme
+            .style(crate::ui::theme::groups::HLGroup::ViewLabelActive)
+            .fg
+    );
+    assert_ne!(
+        active.fg,
+        style_of(&icons[2]).fg,
+        "the active tab stands out by its colour"
+    );
+    assert!(active.add_modifier.is_empty(), "no reversed block marks it");
 
     let opened = app
         .preview_controls

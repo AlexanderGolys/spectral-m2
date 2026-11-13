@@ -888,9 +888,9 @@ impl App {
     ) {
         let theme = scheme();
         let style = match control {
-            PreviewControl::Select(tab) if self.previews.active == Some(tab) => theme
-                .style(HLGroup::MarkupLink)
-                .add_modifier(Modifier::REVERSED),
+            PreviewControl::Select(tab) if self.previews.active == Some(tab) => {
+                theme.style(HLGroup::ViewLabelActive)
+            }
             _ => theme.style(HLGroup::Muted),
         };
         let cell = Rect::new(at.x, at.y, 1, 1);
