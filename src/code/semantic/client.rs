@@ -1,7 +1,8 @@
 //! Optional stdio language-server process, isolated from the terminal thread.
 
 use std::collections::{HashMap, VecDeque};
-use std::io::BufReader;
+use std::fs::{self, OpenOptions};
+use std::io::{BufReader, Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -36,6 +37,8 @@ use crate::env::ENV;
 
 /// The language server Spectral runs, looked up on `PATH`.
 pub const SERVER_EXECUTABLE: &str = "m2-ls";
+const STDERR_CAPACITY: usize = 16 * 1024;
+const FAILURE_LOG: &str = "language-server.log";
 const DEBOUNCE: Duration = Duration::from_millis(100);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -105,7 +108,7 @@ impl Client {
             let result = command
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null())
+                .stderr(Stdio::piped())
                 .spawn()
                 .map_err(|error| format!("cannot start {SERVER_EXECUTABLE}: {error}"))
                 .and_then(|child| serve(child, &shared, &sender, timeout));
@@ -171,11 +174,30 @@ struct Process {
     child: Child,
     outgoing: Sender<Message>,
     incoming: Receiver<WireEvent>,
+    stderr: Arc<Mutex<VecDeque<u8>>>,
+    stderr_done: Receiver<()>,
 }
 
 impl Process {
     fn new(mut child: Child) -> Self {
         let stdout = child.stdout.take().expect("piped server stdout");
+        let mut stderr = child.stderr.take().expect("piped server stderr");
+        let recent_stderr = Arc::new(Mutex::new(VecDeque::new()));
+        let captured = recent_stderr.clone();
+        let (stderr_finished, stderr_done) = mpsc::channel();
+        thread::spawn(move || {
+            let mut buffer = [0; STDERR_CAPACITY];
+            while let Ok(length) = stderr.read(&mut buffer) {
+                if length == 0 {
+                    break;
+                }
+                let mut captured = captured.lock().unwrap();
+                captured.extend(&buffer[..length]);
+                let excess = captured.len().saturating_sub(STDERR_CAPACITY);
+                captured.drain(..excess);
+            }
+            let _ = stderr_finished.send(());
+        });
         let mut stdin = child.stdin.take().expect("piped server stdin");
         let (incoming_tx, incoming) = mpsc::channel();
         let read_events = incoming_tx.clone();
@@ -214,7 +236,53 @@ impl Process {
             child,
             outgoing,
             incoming,
+            stderr: recent_stderr,
+            stderr_done,
         }
+    }
+
+    fn failure(&mut self, error: String) -> String {
+        let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+        let status = loop {
+            let status = self.child.try_wait().ok().flatten();
+            if status.is_some() || Instant::now() >= deadline {
+                break status;
+            }
+            thread::sleep(WORKER_INTERVAL);
+        };
+        if status.is_none() {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+        let _ = self.stderr_done.recv_timeout(SHUTDOWN_TIMEOUT);
+        let bytes: Vec<_> = self.stderr.lock().unwrap().iter().copied().collect();
+        let stderr = String::from_utf8_lossy(&bytes);
+        let mut report = error;
+        if let Some(status) = status {
+            report.push_str(&format!(" ({status})"));
+        }
+        let mut summary = report.clone();
+        if let Some(line) = stderr.lines().rev().find(|line| !line.trim().is_empty()) {
+            summary.push_str(&format!(": {line}"));
+            report.push_str(&format!("\n{}", stderr.trim()));
+        }
+        if let Some(path) = ENV
+            .state_home()
+            .map(|root| root.join("spectral-m2").join(FAILURE_LOG))
+        {
+            let saved = path
+                .parent()
+                .map(fs::create_dir_all)
+                .transpose()
+                .and_then(|_| {
+                    let mut log = OpenOptions::new().create(true).append(true).open(&path)?;
+                    writeln!(log, "{report}\n")
+                });
+            if saved.is_ok() {
+                summary.push_str(&format!("\nDetails: {}", path.display()));
+            }
+        }
+        summary
     }
 
     fn send(&self, message: impl Into<Message>) -> Result<(), String> {
@@ -382,36 +450,39 @@ fn serve(
         next_id: 1,
         in_flight: HashMap::new(),
     };
-    worker.process.request(
-        0,
-        Initialize::METHOD,
-        json!({
-            "processId": std::process::id(),
-            "rootUri": root_uri.as_str(),
-            "capabilities": client_capabilities(),
-        }),
-    )?;
-    let started = Instant::now();
-    loop {
-        {
-            let mut mailbox = mailbox.lock().unwrap();
-            if mailbox.stop {
-                drop(mailbox);
-                worker.stop();
-                return Ok(());
+    let result = (|| {
+        worker.process.request(
+            0,
+            Initialize::METHOD,
+            json!({
+                "processId": std::process::id(),
+                "rootUri": root_uri.as_str(),
+                "capabilities": client_capabilities(),
+            }),
+        )?;
+        let started = Instant::now();
+        loop {
+            {
+                let mut mailbox = mailbox.lock().unwrap();
+                if mailbox.stop {
+                    drop(mailbox);
+                    worker.stop();
+                    return Ok(());
+                }
+                if let Some(document) = mailbox.latest.take() {
+                    worker.latest = Some(document.0.clone());
+                    worker.pending = Some(document);
+                }
+                worker.pages.append(&mut mailbox.pages);
+                worker.queries.append(&mut mailbox.queries);
             }
-            if let Some(document) = mailbox.latest.take() {
-                worker.latest = Some(document.0.clone());
-                worker.pending = Some(document);
+            if !worker.initialized && started.elapsed() >= timeout {
+                return Err("language-server initialization timed out".to_string());
             }
-            worker.pages.append(&mut mailbox.pages);
-            worker.queries.append(&mut mailbox.queries);
+            worker.step()?;
         }
-        if !worker.initialized && started.elapsed() >= timeout {
-            return Err("language-server initialization timed out".to_string());
-        }
-        worker.step()?;
-    }
+    })();
+    result.map_err(|error| worker.process.failure(error))
 }
 
 impl Worker<'_> {
@@ -1072,6 +1143,11 @@ while True:
             reply(request, {'data':[0,0]})
             continue
         if mode == 'exit': sys.exit(0)
+        if mode == 'crash':
+            sys.stderr.write('discarded diagnostic\n' * 10000)
+            sys.stderr.write('fixture server panic\n')
+            sys.stderr.flush()
+            sys.exit(7)
         reply(request, {'data':[0,0,1,0,0]})
         if mode == 'refresh' and not refreshed:
             refreshed = True
@@ -1220,6 +1296,19 @@ while True:
                 Event::Failed(error) => assert!(error.contains("timed out"), "{error}"),
                 _ => panic!("fixture must time out"),
             }
+        }
+    }
+
+    #[test]
+    fn server_failure_preserves_stderr_and_exit_status() {
+        let client = fixture("crash", Duration::from_secs(3));
+        client.update(document(0, 1, "f"));
+        match event(&client) {
+            Event::Failed(error) => {
+                assert!(error.contains("fixture server panic"), "{error}");
+                assert!(error.contains("7"), "{error}");
+            }
+            _ => panic!("the server failure must be reported"),
         }
     }
 
@@ -1388,6 +1477,38 @@ while True:
             "{findings:?}"
         );
         assert!(bindings.iter().any(|binding| binding.name == "myFunction"));
+    }
+
+    #[test]
+    #[ignore = "requires an installed m2-ls executable"]
+    fn installed_server_colours_a_documentation_entrys_function_and_option_key() {
+        let mut highlighter = SemanticHighlighter::new();
+        highlighter.configure(true, true);
+        let entry = "isPrime(Ideal,Strategy=>etc)";
+        highlighter.analyse_page(1, vec![entry.to_string()]);
+        let colors = polled_until(&mut highlighter, |polled| polled.pages.into_iter().next());
+        let (_, spans) = &colors.sources[0];
+        let group_of = |name: &str| {
+            let at = entry.find(name).unwrap();
+            spans
+                .iter()
+                .find(|span| span.content == (at..at + name.len()))
+                .map(|span| span.mark.unwrap_or(span.kind))
+        };
+        assert!(
+            matches!(
+                group_of("isPrime"),
+                Some(HLGroup::Function | HLGroup::Method | HLGroup::CompiledFunction)
+            ),
+            "{spans:?}"
+        );
+        assert!(
+            matches!(
+                group_of("Strategy"),
+                Some(HLGroup::Property | HLGroup::Option)
+            ),
+            "{spans:?}"
+        );
     }
 
     #[test]

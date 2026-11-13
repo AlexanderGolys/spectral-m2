@@ -50,3 +50,9 @@ tmux display-message -p '#{client_termtype} #{client_termname}'
 ```
 
 It should mention `kitty` or `ghostty`. Spectral checks once, as it starts, so restart it after attaching from a different terminal.
+
+## The language server exited
+
+Spectral includes the server's exit status and recent stderr in the failure message, and saves the report to `~/.local/state/spectral-m2/language-server.log` (under `$XDG_STATE_HOME` when set). This report can distinguish a server panic from a protocol error or another process failure.
+
+To start a fresh server during the same session, turn *language server* off and on again in settings.
