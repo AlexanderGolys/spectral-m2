@@ -118,7 +118,10 @@ impl SettingRow for EditorSetting {
             }
             Self::Scrolloff => layout.scrolloff = layout.scrolloff.saturating_add_signed(delta),
             Self::ScrollRows => {
-                layout.scroll_rows = layout.scroll_rows.saturating_add_signed(delta).max(MIN_SCROLL_ROWS);
+                layout.scroll_rows = layout
+                    .scroll_rows
+                    .saturating_add_signed(delta)
+                    .max(MIN_SCROLL_ROWS);
             }
             Self::CompleteAfter => {
                 layout.complete_after = layout

@@ -1388,7 +1388,11 @@ mod tests {
             let before = editor.caret_capture().map(|(_, at)| at);
             editor.handle_caret_key(pressed(crossterm::event::KeyCode::Char('k')));
             redrawn(&mut editor, (60, 30));
-            assert_ne!(before, editor.caret_capture().map(|(_, at)| at), "{code} is above");
+            assert_ne!(
+                before,
+                editor.caret_capture().map(|(_, at)| at),
+                "{code} is above"
+            );
         }
         editor
     }

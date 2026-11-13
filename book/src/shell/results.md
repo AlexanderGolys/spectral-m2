@@ -67,7 +67,7 @@ With *maths* set to `typeset`, mathematical values become pictures in your theme
 
 Set *maths size* to choose the preferred formula size independently of the terminal font. Matrix degrees sit beside their rows, and tuple subscripts follow M2's TeX spelling without extra parentheses.
 
-Pictures scroll, fold and split with the panes, and a theme change repaints them. A value too wide for the pane wraps onto more rows after separators and suitable operators; a part that cannot break shrinks while it stays readable, and past that it is drawn in Unicode instead. Typewriter words, such as the `ideal` in `ideal(x, y)`, use the font your kitty or Ghostty configuration names, so they match the code around them.
+Pictures scroll, fold and split with the panes, and a theme change repaints them. A value too wide for the pane wraps onto more rows after separators and suitable operators; a part that cannot break shrinks while it stays readable, and past that it is drawn in Unicode instead. A value made of lines, such as a hash table, is never cut apart: it shrinks to fit, or is drawn in Unicode with each entry wrapping beneath itself. Typewriter words, such as the `ideal` in `ideal(x, y)`, use the font your kitty or Ghostty configuration names, so they match the code around them.
 
 You need a terminal speaking the kitty graphics protocol with Unicode placeholders: kitty and Ghostty do, inside tmux too, with [two lines of tmux setup](../troubleshooting.md#typeset-tmux). Elsewhere `typeset` is still offered, marked unavailable in that terminal, and values are drawn in Unicode meanwhile.
 

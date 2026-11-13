@@ -42,7 +42,8 @@ use crate::ui::cell::OutputBlock;
 use crate::ui::cell::{response_blocks, SourceBlock, TextBlock};
 use crate::ui::config::UI;
 use crate::ui::controller::{
-    CodePoint, CodeSource, CommittedCells, Editor, EditorUpdate, Lookup, Reaction, ReferenceEntry, ViewKind,
+    CodePoint, CodeSource, CommittedCells, Editor, EditorUpdate, Lookup, Reaction, ReferenceEntry,
+    ViewKind,
 };
 use crate::ui::floating::{Anchor, Floating, MarkupContent};
 use crate::ui::fold::FoldRanges;
@@ -492,9 +493,7 @@ impl App {
                 match pane.view {
                     ViewKind::Shell => workspace.editor.scroll_feed(rows),
                     ViewKind::Reference => workspace.editor.scroll_reference(rows),
-                    _ => {
-                        pane.viewport.scroll = pane.viewport.scroll.saturating_add_signed(-rows)
-                    }
+                    _ => pane.viewport.scroll = pane.viewport.scroll.saturating_add_signed(-rows),
                 }
                 true
             }
@@ -647,7 +646,8 @@ impl App {
             CodeSource::Input => workspace.highlighter.draft(),
             CodeSource::Cell { submission, index } => workspace.highlighter.cell(submission, index),
         };
-        let asked = source.and_then(|source| workspace.highlighter.ask(source, point.offset, question));
+        let asked =
+            source.and_then(|source| workspace.highlighter.ask(source, point.offset, question));
         let unanswered = match (asked, workspace.highlighter.serving()) {
             (Some(id), _) => {
                 self.asked.insert(id, Asked::Lookup(lookup, point.anchor));

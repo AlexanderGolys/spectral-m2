@@ -36,6 +36,14 @@ new Pair from {0 => "a", 1 => symbol a}
 
 The first component is a string and the second a symbol. Their colours follow those classes. No shell extension is needed. An unfamiliar expression constructor remains inspectable with `speek`; outputs whose structure has no installed layout use M2's `net` formatter instead.
 
+`AlignedExpression` sets rows of cells in aligned columns, with each row's last cell running on. When that cell is too long for the pane it wraps beneath where it began, and when the columns before it leave it too little room it moves beneath them, indented. Hash tables draw their pairs this way, so every `=>` stands in one column. Use it for any type that reads as labelled lines:
+
+```m2
+Report = new Type of HashTable;
+expression Report := r -> AlignedExpression apply(sort keys r, k -> {k, symbol :, r#k});
+new Report from {"status" => "converged", "steps" => toList(1..40)}
+```
+
 `MapExpression{target, source, label}` places a label above a leftward arrow. Nest maps in the target position to compose a chain without repeating its modules. `UnderExpression{base, label}` centers a label beneath its base while keeping the base on the surrounding baseline; complexes use it for homological degrees.
 
 Use `speek` to inspect a value's formatting structure. It returns a nested option and list tree, so its output has the same structured previews as other values. `speek'(depth, value)` limits the expansion; depth zero shows the root class with `"..."`. `specNet` and `specType` are separate methods, both receiving the original value. You can change a type annotation independently:

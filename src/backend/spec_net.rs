@@ -142,6 +142,7 @@ impl SpecNet {
                 "Type" | "Ring" | "RingFamily" => Some(HLGroup::Type),
                 "Package" => Some(HLGroup::Package),
                 "Operator" => Some(HLGroup::Operator),
+                "Option" => Some(HLGroup::Option),
                 "Keyword" => Some(HLGroup::Keyword),
                 "Command" => Some(HLGroup::Macro),
                 "FilePosition" => Some(HLGroup::MarkupLink),

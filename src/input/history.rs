@@ -169,7 +169,12 @@ impl History {
     /// spans lines), so typing `R =` and stepping back visits only the entries
     /// that begin with it. [`Recall::Any`] steps past the prefix to the very
     /// previous entry without forgetting it for the steps after.
-    pub fn previous(&mut self, current: &str, cursor: usize, recall: Recall) -> Option<HistoryBuffer> {
+    pub fn previous(
+        &mut self,
+        current: &str,
+        cursor: usize,
+        recall: Recall,
+    ) -> Option<HistoryBuffer> {
         self.end_search_if_edited(current, recall);
         let end = match &self.browse {
             Some(browse) => browse.pos,
@@ -191,7 +196,9 @@ impl History {
             None => draft.text[..draft.cursor].to_string(),
         };
         let filter = Self::filter(&prefix, recall);
-        let found = (0..end).rev().find(|&index| self.matches(index, filter, &draft.text))?;
+        let found = (0..end)
+            .rev()
+            .find(|&index| self.matches(index, filter, &draft.text))?;
         self.browse = Some(Browse {
             pos: found,
             draft,
@@ -294,7 +301,9 @@ mod tests {
 
         let mut reloaded = History::from_path(Some(path.clone()));
         assert_eq!(
-            reloaded.previous("", 0, Recall::Prefixed).map(|buffer| buffer.text),
+            reloaded
+                .previous("", 0, Recall::Prefixed)
+                .map(|buffer| buffer.text),
             Some("  f = i -> (\n  i + 1\n)".to_string())
         );
         assert_eq!(
@@ -318,10 +327,22 @@ mod tests {
         second.record("f = x^2");
         first.record("g = 1");
 
-        assert_eq!(text(second.previous("", 0, Recall::Prefixed)), Some("g = 1".into()));
-        assert_eq!(text(second.previous("g = 1", 0, Recall::Prefixed)), Some("f = x^2".into()));
-        assert_eq!(text(second.previous("f = x^2", 0, Recall::Prefixed)), Some("R = QQ[x]".into()));
-        assert_eq!(text(first.previous("f", 1, Recall::Prefixed)), Some("f = x^2".into()));
+        assert_eq!(
+            text(second.previous("", 0, Recall::Prefixed)),
+            Some("g = 1".into())
+        );
+        assert_eq!(
+            text(second.previous("g = 1", 0, Recall::Prefixed)),
+            Some("f = x^2".into())
+        );
+        assert_eq!(
+            text(second.previous("f = x^2", 0, Recall::Prefixed)),
+            Some("R = QQ[x]".into())
+        );
+        assert_eq!(
+            text(first.previous("f", 1, Recall::Prefixed)),
+            Some("f = x^2".into())
+        );
 
         let _ = fs::remove_file(path);
     }
@@ -334,11 +355,26 @@ mod tests {
         }
         let text = |buffer: Option<HistoryBuffer>| buffer.map(|buffer| buffer.text);
 
-        assert_eq!(text(history.previous("R =", 3, Recall::Prefixed)), Some("R = ZZ[y]".into()));
-        assert_eq!(text(history.previous("R = ZZ[y]", 9, Recall::Prefixed)), Some("R = QQ[x]".into()));
-        assert_eq!(text(history.previous("R = QQ[x]", 9, Recall::Prefixed)), None);
-        assert_eq!(text(history.next("R = QQ[x]", Recall::Prefixed)), Some("R = ZZ[y]".into()));
-        assert_eq!(text(history.next("R = ZZ[y]", Recall::Prefixed)), Some("R =".into()));
+        assert_eq!(
+            text(history.previous("R =", 3, Recall::Prefixed)),
+            Some("R = ZZ[y]".into())
+        );
+        assert_eq!(
+            text(history.previous("R = ZZ[y]", 9, Recall::Prefixed)),
+            Some("R = QQ[x]".into())
+        );
+        assert_eq!(
+            text(history.previous("R = QQ[x]", 9, Recall::Prefixed)),
+            None
+        );
+        assert_eq!(
+            text(history.next("R = QQ[x]", Recall::Prefixed)),
+            Some("R = ZZ[y]".into())
+        );
+        assert_eq!(
+            text(history.next("R = ZZ[y]", Recall::Prefixed)),
+            Some("R =".into())
+        );
 
         assert_eq!(text(history.previous("h", 1, Recall::Prefixed)), None);
         assert_eq!(
@@ -346,9 +382,18 @@ mod tests {
             None,
             "a failed search leaves the draft alone"
         );
-        assert_eq!(text(history.previous("", 0, Recall::Prefixed)), Some("R = ZZ[y]".into()));
-        assert_eq!(text(history.previous("R = ZZ[y]", 9, Recall::Prefixed)), Some("g = 2".into()));
-        assert_eq!(text(history.previous("g = 2", 5, Recall::Prefixed)), Some("f = 1".into()));
+        assert_eq!(
+            text(history.previous("", 0, Recall::Prefixed)),
+            Some("R = ZZ[y]".into())
+        );
+        assert_eq!(
+            text(history.previous("R = ZZ[y]", 9, Recall::Prefixed)),
+            Some("g = 2".into())
+        );
+        assert_eq!(
+            text(history.previous("g = 2", 5, Recall::Prefixed)),
+            Some("f = 1".into())
+        );
     }
 
     /// Editing a recalled entry ends the search, so the next step searches by what
@@ -361,10 +406,22 @@ mod tests {
         }
         let text = |buffer: Option<HistoryBuffer>| buffer.map(|buffer| buffer.text);
 
-        assert_eq!(text(history.previous("o", 1, Recall::Prefixed)), Some("ooo".into()));
-        assert_eq!(text(history.previous("1", 1, Recall::Prefixed)), Some("11".into()));
-        assert_eq!(text(history.previous("11", 1, Recall::Prefixed)), Some("1/2".into()));
-        assert_eq!(text(history.next("1/2", Recall::Prefixed)), Some("11".into()));
+        assert_eq!(
+            text(history.previous("o", 1, Recall::Prefixed)),
+            Some("ooo".into())
+        );
+        assert_eq!(
+            text(history.previous("1", 1, Recall::Prefixed)),
+            Some("11".into())
+        );
+        assert_eq!(
+            text(history.previous("11", 1, Recall::Prefixed)),
+            Some("1/2".into())
+        );
+        assert_eq!(
+            text(history.next("1/2", Recall::Prefixed)),
+            Some("11".into())
+        );
         assert_eq!(text(history.next("11", Recall::Prefixed)), Some("1".into()));
     }
 
@@ -378,14 +435,32 @@ mod tests {
         }
         let text = |buffer: Option<HistoryBuffer>| buffer.map(|buffer| buffer.text);
 
-        assert_eq!(text(history.previous("R", 1, Recall::Any)), Some("g = 2".into()));
-        assert_eq!(text(history.previous("g = 2", 5, Recall::Prefixed)), Some("R = ZZ[y]".into()));
-        assert_eq!(text(history.previous("R = ZZ[y]", 9, Recall::Any)), Some("f = 1".into()));
-        assert_eq!(text(history.next("f = 1", Recall::Prefixed)), Some("R = ZZ[y]".into()));
-        assert_eq!(text(history.next("R = ZZ[y]", Recall::Prefixed)), Some("R".into()));
+        assert_eq!(
+            text(history.previous("R", 1, Recall::Any)),
+            Some("g = 2".into())
+        );
+        assert_eq!(
+            text(history.previous("g = 2", 5, Recall::Prefixed)),
+            Some("R = ZZ[y]".into())
+        );
+        assert_eq!(
+            text(history.previous("R = ZZ[y]", 9, Recall::Any)),
+            Some("f = 1".into())
+        );
+        assert_eq!(
+            text(history.next("f = 1", Recall::Prefixed)),
+            Some("R = ZZ[y]".into())
+        );
+        assert_eq!(
+            text(history.next("R = ZZ[y]", Recall::Prefixed)),
+            Some("R".into())
+        );
 
         history.stop_browsing();
-        assert_eq!(text(history.previous("f", 1, Recall::Prefixed)), Some("f = 1".into()));
+        assert_eq!(
+            text(history.previous("f", 1, Recall::Prefixed)),
+            Some("f = 1".into())
+        );
     }
 
     #[test]
@@ -396,7 +471,9 @@ mod tests {
 
         let mut history = History::from_path(Some(path.clone()));
         assert_eq!(
-            history.previous("", 0, Recall::Prefixed).map(|buffer| buffer.text),
+            history
+                .previous("", 0, Recall::Prefixed)
+                .map(|buffer| buffer.text),
             Some("valid entry".to_string())
         );
 

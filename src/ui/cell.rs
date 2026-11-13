@@ -1734,7 +1734,9 @@ impl OutputBlock {
                         .collect()
                 })
         } else if renderer == PreviewMode::External {
-            let source = cell.preview_text(PreviewMode::External).unwrap_or(&cell.text);
+            let source = cell
+                .preview_text(PreviewMode::External)
+                .unwrap_or(&cell.text);
             code_lines(source, width as u16, theme)
         } else if renderer == PreviewMode::Tex {
             let drawn = typeset::tex_preview(

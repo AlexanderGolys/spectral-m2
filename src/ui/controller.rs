@@ -134,7 +134,10 @@ pub enum Lookup {
 pub enum CodeSource {
     Input,
     /// A cell of a submission in the feed.
-    Cell { submission: u64, index: usize },
+    Cell {
+        submission: u64,
+        index: usize,
+    },
 }
 
 /// A point in code that something was asked about.

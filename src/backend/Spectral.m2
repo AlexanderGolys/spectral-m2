@@ -21,6 +21,7 @@ export {
 	"speek",
 	"speek'",
 	"UnderExpression",
+	"AlignedExpression",
 	"typeDepth",
 	"valueDepth",
 	"specNet'"
@@ -33,6 +34,12 @@ exampleWidth := value Core#"private dictionary"#"ArgPrintWidthN"
 SpecNet = new Type of HashTable
 
 UnderExpression = new HeaderType of Expression
+-- Rows of cells, AlignedExpression{{a, b, c}, …}: every cell but a row's last
+-- sits in a column aligned across the rows, and the last runs on, wrapping
+-- beneath where it started.
+AlignedExpression = new HeaderType of Expression
+net AlignedExpression := aligned -> netList(apply(toList aligned, toList),
+	Boxes => false, HorizontalSpace => 1)
 -- A part a drawing introduces for a structure, as {name, part, shape}: spelled
 -- by its name until the value depth reaches it, then drawn from its shape.
 Intermediate = new HeaderType of Expression
@@ -329,13 +336,21 @@ specNet HashTable := table -> (
 	stock := base -> lookup(expression, class table) === lookup(expression, base)
 		and lookup(net, class table) === lookup(net, base);
 	if any({HashTable, MutableHashTable}, stock) then
-		contentsOf(table, apply(pairs table, pair -> pair#0 => pair#1))
+		contentsOf(table, {AlignedExpression apply(pairs table, pair -> {
+			if instance(pair#0, Symbol) or instance(pair#0, String) then
+				specNet pair#0 ++ {Highlight => {"Option"}}
+			else pair#0,
+			symbol =>,
+			pair#1
+		})})
 	else (lookup(specNet, Thing)) table
 )
 specNet MatrixExpression := matrix -> new SpecNet from (class matrix,
 	apply(toList matrix, row -> if instance(row, Option) then
 				specNet row
 			else new SpecNet from (List, apply(toList row, specNet))))
+specNet AlignedExpression := aligned -> new SpecNet from (class aligned,
+	apply(toList aligned, row -> new SpecNet from (List, apply(toList row, specNet))))
 specNet IndexedVariable := variable -> new SpecNet from (Subscript,
 	apply(toList variable, specNet))
 specNet Intermediate := part -> (
@@ -457,6 +472,23 @@ Node
     specType
     speek
     UnderExpression
+    AlignedExpression
+Node
+  Key
+    AlignedExpression
+  Headline
+    rows aligned in columns, each ending in a cell that runs on
+  Usage
+    AlignedExpression{{a, b, c}, {d, e, f}}
+  Description
+    Text
+      Every cell but a row's last sits in a column aligned across the rows.
+      The last cell takes the rest of the width: when it is too long it wraps,
+      continuing beneath where it started rather than at the left margin.
+      A hash table draws its pairs this way, each key and its arrow in aligned
+      columns; install @TO specNet@ for a type to draw it the same way.
+    Example
+      AlignedExpression{{"x", symbol =>, 1}, {"longer", symbol =>, {1, 2, 3}}}
 Node
   Key
     UnderExpression

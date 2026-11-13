@@ -26,6 +26,7 @@ struct Vertical {
     numbered: bool,
 }
 struct Angle;
+struct Aligned;
 struct Under;
 impl ExpressionLayout for Under {
     fn compose(&self, value: &SpecNet, style: MathStyle) -> Math {
@@ -61,6 +62,18 @@ impl ExpressionLayout for Vertical {
                 },
                 Math::atom(" ", HLGroup::Canvas),
             ])),
+        }
+    }
+}
+impl ExpressionLayout for Aligned {
+    fn compose(&self, value: &SpecNet, style: MathStyle) -> Math {
+        Math::Grid {
+            rows: value
+                .children
+                .iter()
+                .map(|row| children(row, style))
+                .collect(),
+            kind: GridKind::Aligned,
         }
     }
 }
@@ -371,6 +384,7 @@ fn layout(class: &str) -> Option<&'static dyn ExpressionLayout> {
         "Array" => &Collection('[', ']'),
         "Sequence" => &Collection('(', ')'),
         "AngleBarList" => &Angle,
+        "AlignedExpression" => &Aligned,
         "NumberedVerticalList" => &Vertical { numbered: true },
         "HashTable" | "MutableHashTable" | "VerticalList" => &Vertical { numbered: false },
         _ => return None,

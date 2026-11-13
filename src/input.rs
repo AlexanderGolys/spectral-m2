@@ -157,13 +157,16 @@ impl InputAction {
 
     /// Whether this action changes the text.
     fn edits(self) -> bool {
-        matches!(
-            self.traversal(),
-            Some((Traversal::Delete, ..))
-        ) || matches!(
-            self,
-            Self::InsertNewline | Self::InsertTab | Self::DeleteLine | Self::Undo | Self::Redo | Self::Clear
-        )
+        matches!(self.traversal(), Some((Traversal::Delete, ..)))
+            || matches!(
+                self,
+                Self::InsertNewline
+                    | Self::InsertTab
+                    | Self::DeleteLine
+                    | Self::Undo
+                    | Self::Redo
+                    | Self::Clear
+            )
     }
 }
 
@@ -280,7 +283,10 @@ impl InputTextField {
     /// Select what a triple click at `cursor` picks out: the lines around it up to the
     /// blank ones either side; nothing on a blank line.
     pub fn select_paragraph(&mut self, cursor: usize) {
-        if let Some(paragraph) = TextMotion::Paragraph.around(&self.text, cursor..cursor).pop() {
+        if let Some(paragraph) = TextMotion::Paragraph
+            .around(&self.text, cursor..cursor)
+            .pop()
+        {
             self.select(paragraph);
         }
     }
@@ -1628,8 +1634,12 @@ mod tests {
         }
 
         deleted.insert(source);
-        deleted.field_mut().move_by(TextMotion::Full, TextDirection::Backward);
-        moved.field_mut().move_by(TextMotion::Full, TextDirection::Backward);
+        deleted
+            .field_mut()
+            .move_by(TextMotion::Full, TextDirection::Backward);
+        moved
+            .field_mut()
+            .move_by(TextMotion::Full, TextDirection::Backward);
         while !deleted.text().is_empty() {
             moved.handle_key(KeyCode::Right + Ctrl);
             deleted.handle_key(KeyCode::Delete + Ctrl);
@@ -1712,7 +1722,9 @@ mod tests {
     fn a_replaced_buffer_carries_no_selection() {
         let mut input = InputCode::new_in_memory();
         input.field_mut().insert_str("abc");
-        input.field_mut().select_by(TextMotion::Line, TextDirection::Backward);
+        input
+            .field_mut()
+            .select_by(TextMotion::Line, TextDirection::Backward);
 
         input.accept_submission();
         input.field_mut().insert_char('x');
@@ -2064,14 +2076,22 @@ mod tests {
         assert!(underlined("a") && underlined("d"));
         assert!(!underlined("bc"));
         // Away from every finding, the first error is told.
-        input.field_mut().move_by(TextMotion::Full, TextDirection::Backward);
-        input.field_mut().move_by(TextMotion::Character, TextDirection::Forward);
-        input.field_mut().move_by(TextMotion::Character, TextDirection::Forward);
+        input
+            .field_mut()
+            .move_by(TextMotion::Full, TextDirection::Backward);
+        input
+            .field_mut()
+            .move_by(TextMotion::Character, TextDirection::Forward);
+        input
+            .field_mut()
+            .move_by(TextMotion::Character, TextDirection::Forward);
         assert_eq!(
             input.shown_diagnostic(),
             Some(("an error".to_string(), Severity::Error))
         );
-        input.field_mut().move_by(TextMotion::Full, TextDirection::Backward);
+        input
+            .field_mut()
+            .move_by(TextMotion::Full, TextDirection::Backward);
         assert_eq!(
             input.shown_diagnostic(),
             Some(("a hint".to_string(), Severity::Hint))
@@ -2097,7 +2117,9 @@ mod tests {
     fn the_rest_of_a_completion_is_drawn_after_the_cursor_as_a_hint() {
         let mut input = InputCode::new_in_memory();
         input.field_mut().insert_str("f(ide)");
-        input.field_mut().move_by(TextMotion::Character, TextDirection::Backward);
+        input
+            .field_mut()
+            .move_by(TextMotion::Character, TextDirection::Backward);
         let candidates = vec!["ideal".to_string()];
         input.offer(Completion::new(input.text(), 2..5, candidates));
         let context = RenderContext::new(40, UI.prompt_width());
@@ -2170,7 +2192,9 @@ mod tests {
         let mut input = InputCode::new_in_memory();
         input.field_mut().insert_str("ab\ncd");
         input.field_mut().move_vertically(TextDirection::Backward);
-        input.field_mut().move_by(TextMotion::Line, TextDirection::Forward);
+        input
+            .field_mut()
+            .move_by(TextMotion::Line, TextDirection::Forward);
 
         assert_eq!(input.visual_cursor(4), (0, 2));
     }
@@ -2193,10 +2217,14 @@ mod tests {
         let mut input = InputCode::new_in_memory();
         input.field_mut().insert_str("abcd\n😀x");
         input.field_mut().move_vertically(TextDirection::Backward);
-        input.field_mut().move_by(TextMotion::Line, TextDirection::Forward);
+        input
+            .field_mut()
+            .move_by(TextMotion::Line, TextDirection::Forward);
         input.field_mut().move_vertically(TextDirection::Forward);
         assert_eq!(input.visual_cursor(80), (1, 3));
-        input.field_mut().move_by(TextMotion::Character, TextDirection::Backward);
+        input
+            .field_mut()
+            .move_by(TextMotion::Character, TextDirection::Backward);
         input.field_mut().move_vertically(TextDirection::Backward);
         assert_eq!(input.visual_cursor(80), (0, 2));
     }
@@ -2270,13 +2298,17 @@ mod editing_workflow_tests {
         input.field.history.record("older = 1");
         input.field.history.record("newer = 2");
         input.field.insert_str("unrelated\ndraft");
-        input.field.move_by(TextMotion::Line, TextDirection::Backward);
+        input
+            .field
+            .move_by(TextMotion::Line, TextDirection::Backward);
         let draft = input.field.snapshot();
         input.edit(InputAction::HistoryPrevious);
         assert_eq!(input.field.text, "newer = 2");
         input.edit(InputAction::HistoryPrevious);
         assert_eq!(input.field.text, "older = 1");
-        input.field.move_by(TextMotion::Line, TextDirection::Backward);
+        input
+            .field
+            .move_by(TextMotion::Line, TextDirection::Backward);
         input.field.insert_str("edited ");
         input.edit(InputAction::HistoryNext);
         assert_eq!(input.field.text, "newer = 2");
@@ -2348,7 +2380,9 @@ mod editing_workflow_tests {
     fn shift_up_and_down_select_across_lines() {
         let mut input = InputCode::new_in_memory();
         input.insert("first\nsecond");
-        input.field.move_by(TextMotion::Full, TextDirection::Backward);
+        input
+            .field
+            .move_by(TextMotion::Full, TextDirection::Backward);
         pressing(&mut input, InputAction::SelectDown);
         assert_eq!(input.field.selected_text(), Some("first\n"));
         pressing(&mut input, InputAction::SelectUp);
@@ -2362,7 +2396,9 @@ mod editing_workflow_tests {
         let context = RenderContext::new(40, 0);
         let mut highlighter = SyntaxHighlighter::new();
         let styles_at = |input: &mut InputCode, highlighter: &mut SyntaxHighlighter| {
-            let line = input.highlighted_lines(&context, highlighter, false, None).remove(0);
+            let line = input
+                .highlighted_lines(&context, highlighter, false, None)
+                .remove(0);
             let mut styles = Vec::new();
             for span in line.spans.iter().skip(1) {
                 styles.extend(span.content.chars().map(|_| span.style));

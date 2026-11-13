@@ -572,6 +572,21 @@ mod tests {
     use super::*;
     use unicode_width::UnicodeWidthStr;
 
+    use crate::ui::theme::groups::HLGroup;
+
+    /// A hash table's rows, each its key, the arrow and its value, aligned as one.
+    fn table_rows(table: &SpecNet) -> &[SpecNet] {
+        let [aligned] = table.children.as_slice() else {
+            panic!("a table holds its rows aligned together: {table:?}");
+        };
+        assert!(aligned.is("AlignedExpression"));
+        assert!(aligned
+            .children
+            .iter()
+            .all(|row| row.children.len() == 3 && row.children[1].group() == HLGroup::Operator));
+        &aligned.children
+    }
+
     #[test]
     fn debugger_commands_return_to_a_usable_session() {
         for command in ["break", "end", "continue"] {
@@ -1289,7 +1304,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             .unwrap();
         assert!(!looped.is_error, "{}", looped.transcript);
         let looped = looped.value.unwrap();
-        assert!(looped.children[0].children[1].text.is_some());
+        assert!(table_rows(&looped)[0].children[2].text.is_some());
         let after = backend.evaluate("{1, 2}", None).unwrap();
         assert!(!after.is_error);
         assert_eq!(after.value.unwrap().children.len(), 2);
@@ -2169,16 +2184,15 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         assert!(table.is("HashTable"));
         assert!(crate::ui::render::maths::Math::supports_spec_net(&table));
         assert!(table.text.is_none());
-        assert!(!table.children.is_empty());
-        for entry in &table.children {
-            assert!(entry.is("Option"));
-            let [key, attributes] = entry.children.as_slice() else {
+        assert!(!table_rows(&table).is_empty());
+        for entry in table_rows(&table) {
+            let [key, _, attributes] = entry.children.as_slice() else {
                 panic!("table entry lost its key or value: {entry:?}");
             };
             assert!(key.is("Keyword"));
             assert!(attributes.is("HashTable"));
             assert!(attributes.text.is_none());
-            assert!(!attributes.children.is_empty());
+            assert!(!table_rows(attributes).is_empty());
         }
         let rows = crate::ui::render::maths::spans(
             &table,
@@ -2190,7 +2204,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         assert!(rows
             .iter()
             .flatten()
-            .any(|span| span.kind == table.children[0].children[0].group()));
+            .any(|span| span.kind == table_rows(&table)[0].children[0].group()));
     }
 
     #[test]
@@ -2203,19 +2217,10 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             let result = backend.evaluate(source, None).unwrap();
             assert!(!result.is_error, "{source}: {}", result.transcript);
             let table = result.value.unwrap();
-            assert_eq!(table.children.len(), 2);
-            assert!(table
-                .children
-                .iter()
-                .all(|entry| entry.is("Option") && entry.children.len() == 2));
-            assert!(table
-                .children
-                .iter()
-                .any(|entry| entry.children[1].is("Divide")));
-            assert!(table
-                .children
-                .iter()
-                .any(|entry| entry.children[1].is("String")));
+            let rows = table_rows(&table);
+            assert_eq!(rows.len(), 2);
+            assert!(rows.iter().any(|entry| entry.children[2].is("Divide")));
+            assert!(rows.iter().any(|entry| entry.children[2].is("String")));
             assert!(table.render().contains("=>"));
         }
         let result = backend.evaluate("toList(200:symbol if)", None).unwrap();

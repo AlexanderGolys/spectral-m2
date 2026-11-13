@@ -110,9 +110,11 @@ impl ScreenCapture {
 
     /// Whether `row` shows any text a selection could read.
     fn shows_text(&self, row: i64) -> bool {
-        self.rows
-            .get(&row)
-            .is_some_and(|cells| cells.iter().any(|cell| cell.layer.is_some() && cell.selectable))
+        self.rows.get(&row).is_some_and(|cells| {
+            cells
+                .iter()
+                .any(|cell| cell.layer.is_some() && cell.selectable)
+        })
     }
 
     /// Where a caret entering the pane stands: the start of the last row of text.
@@ -124,7 +126,10 @@ impl ScreenCapture {
             .copied()
             .find(|&row| self.shows_text(row))
             .unwrap_or(self.top);
-        let column = self.row_text(row).ends().map_or(self.area.x, |(first, _)| first);
+        let column = self
+            .row_text(row)
+            .ends()
+            .map_or(self.area.x, |(first, _)| first);
         ScreenPosition::new(column, row)
     }
 
@@ -155,12 +160,14 @@ impl ScreenCapture {
                 });
                 (partner.unwrap_or(at), 0)
             }
-            CaretStep::Text(TextMotion::Character, Backward) => {
-                (ScreenPosition::new(at.column.saturating_sub(1).max(self.area.x), at.row), 0)
-            }
-            CaretStep::Text(TextMotion::Character, Forward) => {
-                (ScreenPosition::new((at.column + 1).min(rightmost), at.row), 0)
-            }
+            CaretStep::Text(TextMotion::Character, Backward) => (
+                ScreenPosition::new(at.column.saturating_sub(1).max(self.area.x), at.row),
+                0,
+            ),
+            CaretStep::Text(TextMotion::Character, Forward) => (
+                ScreenPosition::new((at.column + 1).min(rightmost), at.row),
+                0,
+            ),
             CaretStep::Text(TextMotion::Line, direction) => {
                 let ends = self.row_text(at.row).ends();
                 let column = match direction {
@@ -183,12 +190,14 @@ impl ScreenCapture {
                 to_row(row, self.area.x)
             }
             // Past either end of what is held, which drawing brings into view.
-            CaretStep::Text(TextMotion::Full, Backward) => {
-                (ScreenPosition::new(self.area.x, i64::MIN / 2), isize::MAX / 2)
-            }
-            CaretStep::Text(TextMotion::Full, Forward) => {
-                (ScreenPosition::new(self.area.x, i64::MAX / 2), -(isize::MAX / 2))
-            }
+            CaretStep::Text(TextMotion::Full, Backward) => (
+                ScreenPosition::new(self.area.x, i64::MIN / 2),
+                isize::MAX / 2,
+            ),
+            CaretStep::Text(TextMotion::Full, Forward) => (
+                ScreenPosition::new(self.area.x, i64::MAX / 2),
+                -(isize::MAX / 2),
+            ),
             CaretStep::Text(motion, direction) => {
                 let row = self.row_text(at.row);
                 let from = row.offset(at.column);

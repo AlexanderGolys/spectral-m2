@@ -88,6 +88,9 @@ pub enum GridKind {
     Bare,
     /// Unfenced columns with each entry aligned to its left edge.
     LeftAligned,
+    /// Left-aligned columns before each row's last entry, which runs on: given too
+    /// little width it wraps beneath where it started, as a long value beside its key.
+    Aligned,
     /// Entries the environment itself parenthesises, as `pmatrix` does.
     Matrix,
     /// Branches after a single opening brace.
@@ -854,6 +857,9 @@ const THIN_SPACE: &str = "\\,";
 const PHANTOM: &str = "\\vphantom";
 /// How many digits M2 sets between the thin spaces of a long numeral.
 const DIGIT_GROUP: usize = 3;
+/// What an aligned row's last entry is indented by when it cannot fit beside the
+/// columns before it and goes beneath them instead.
+const BENEATH_INDENT: &str = "  ";
 const SPACING: [&str; 8] = [
     "\\qquad",
     "\\quad",
@@ -1239,7 +1245,7 @@ impl Math {
                 }
             }
             Self::AnnotatedMatrix { rows, degrees } => {
-                MathBlock::grid_with_degrees(rows, GridKind::Matrix, fractions, Some(degrees))
+                MathBlock::grid_with_degrees(rows, GridKind::Matrix, fractions, Some(degrees), None)
             }
             Self::Grid { rows, kind } => MathBlock::grid(rows, *kind, fractions),
         }
@@ -1257,14 +1263,99 @@ impl Math {
 
     /// Lay out as terminal rows no wider than `width`.
     ///
-    /// Only the outermost row breaks into lines, since that is where a long polynomial's
-    /// terms live. Whatever a break cannot shorten is cut into column slabs instead.
+    /// Whatever no break can shorten is cut into column slabs instead, line by line.
     fn wrapped(&self, width: usize, fractions: FractionStyle) -> Vec<SpanLine> {
-        let lines = match self {
-            Self::Row(pieces) => MathBlock::pack(Self::chunks(pieces, fractions), width),
-            other => vec![other.layout(fractions)],
+        MathBlock::fitted(self.fitted_lines(width, fractions), width)
+    }
+
+    /// Lines, to be set one under another, that keep within `width` wherever the
+    /// structure lets them: a row too wide breaks between its chunks, and a row that
+    /// has no break fits its widest piece into what the others leave.
+    fn fitted_lines(&self, width: usize, fractions: FractionStyle) -> Vec<MathBlock> {
+        let Self::Row(pieces) = self else {
+            return vec![self.fit(width, fractions)];
         };
-        MathBlock::fitted(lines, width)
+        let chunks = Self::chunks(pieces, fractions);
+        if MathBlock::row(chunks.iter().cloned()).width() <= width {
+            return vec![MathBlock::row(chunks)];
+        }
+        if chunks.len() > 1 {
+            return MathBlock::pack(chunks, width);
+        }
+        let mut laid: Vec<MathBlock> = pieces.iter().map(|piece| piece.layout(fractions)).collect();
+        let Some(widest) = (0..laid.len()).max_by_key(|&index| laid[index].width()) else {
+            return vec![MathBlock::empty()];
+        };
+        let others: usize = laid.iter().map(MathBlock::width).sum::<usize>() - laid[widest].width();
+        laid[widest] = pieces[widest].fit(width.saturating_sub(others), fractions);
+        vec![MathBlock::row(laid)]
+    }
+
+    /// Laid out within `width` where the structure lets it, else as it is.
+    ///
+    /// A row continues beneath where it began; fences around a row that breaks stay
+    /// on the lines they open and close, as a wrapped list's do; the last entry of a
+    /// vertical or aligned grid's rows fits beside the columns before it.
+    fn fit(&self, width: usize, fractions: FractionStyle) -> MathBlock {
+        let laid = self.layout(fractions);
+        if laid.width() <= width {
+            return laid;
+        }
+        match self {
+            Self::Row(_) => MathBlock::lines(self.fitted_lines(width, fractions)),
+            Self::Linked { body, target } => body.fit(width, fractions).linked(target),
+            Self::Delimited { left, right, body } => {
+                let (left, right) = (left.to_string(), right.to_string());
+                let fences =
+                    UnicodeWidthStr::width(left.as_str()) + UnicodeWidthStr::width(right.as_str());
+                let mut lines = body.fitted_lines(width.saturating_sub(fences), fractions);
+                match lines.len() {
+                    1 => lines.remove(0).fenced(&left, &right),
+                    _ => MathBlock::lines(MathBlock::run_on(lines, &left, &right)),
+                }
+            }
+            Self::Grid {
+                rows,
+                kind: kind @ (GridKind::LeftAligned | GridKind::Aligned),
+            } => MathBlock::grid_with_degrees(rows, *kind, fractions, None, Some(width)),
+            _ => laid,
+        }
+    }
+
+    /// Whether this holds rows read one after another, as lines of text are: a
+    /// vertical list's entries, an aligned grid's. Cut into strips, a picture of it
+    /// would scatter the rows' tails beneath it.
+    pub fn reads_in_lines(&self) -> bool {
+        match self {
+            Self::Grid {
+                kind: GridKind::LeftAligned | GridKind::Aligned,
+                ..
+            } => true,
+            Self::Grid { rows, .. } | Self::AnnotatedMatrix { rows, .. } => {
+                rows.iter().flatten().any(Self::reads_in_lines)
+            }
+            Self::Row(pieces) => pieces.iter().any(Self::reads_in_lines),
+            Self::Linked { body, .. } | Self::Delimited { body, .. } => body.reads_in_lines(),
+            Self::Over { base, label } | Self::Under { base, label } => {
+                base.reads_in_lines() || label.reads_in_lines()
+            }
+            Self::Power { base, exponent } => base.reads_in_lines() || exponent.reads_in_lines(),
+            Self::Index { base, subscript } => base.reads_in_lines() || subscript.reads_in_lines(),
+            Self::Fraction {
+                numerator,
+                denominator,
+            } => numerator.reads_in_lines() || denominator.reads_in_lines(),
+            Self::Atom { .. } | Self::Native { .. } | Self::Space => false,
+        }
+    }
+
+    /// Whether a line may end after this, as after a list's comma.
+    fn is_separator(&self) -> bool {
+        matches!(
+            self,
+            Self::Atom { text, kind: HLGroup::Delimiter, .. }
+                if matches!(text.trim_end(), "," | ";")
+        )
     }
 
     /// Parse what M2's `tex` produced, when it is maths: the source between `$` signs.
@@ -1344,6 +1435,9 @@ impl Math {
             chunk.push(piece.layout(fractions));
             if apart || runs_into_factor {
                 chunk.push(MathBlock::gap());
+            }
+            if piece.is_separator() {
+                chunks.push(Vec::new());
             }
         }
         chunks
@@ -1620,12 +1714,19 @@ impl MathBlock {
                 }
             })
             .collect();
-        let indent = UnicodeWidthStr::width(open);
-        let budget = width.saturating_sub(indent + UnicodeWidthStr::width(close));
-        let mut lines = Self::pack(entries, budget);
+        let budget =
+            width.saturating_sub(UnicodeWidthStr::width(open) + UnicodeWidthStr::width(close));
+        Self::run_on(Self::pack(entries, budget), open, close)
+    }
+
+    /// Lines between fences that stay on the lines they open and close, as text
+    /// brackets do: the first line follows the opening fence, the rest are indented
+    /// beneath it, and the closing fence ends the last.
+    fn run_on(mut lines: Vec<Self>, open: &str, close: &str) -> Vec<Self> {
         if lines.is_empty() {
             lines.push(Self::empty());
         }
+        let indent = UnicodeWidthStr::width(open);
         let count = lines.len();
         lines
             .into_iter()
@@ -1640,6 +1741,13 @@ impl MathBlock {
                 Self::row([lead, line].into_iter().chain(tail))
             })
             .collect()
+    }
+
+    /// Lines set one under another, aligned on their left edges, the first line's
+    /// baseline aligning with neighbours.
+    fn lines(lines: Vec<Self>) -> Self {
+        let baseline = lines.first().map_or(0, |line| line.baseline);
+        Self::stack(lines, baseline, Align::Left)
     }
 
     /// Text M2 drew itself, row for row, all in one group.
@@ -1837,38 +1945,73 @@ impl MathBlock {
 
     /// Entries aligned into columns, fenced by whatever the grid's kind calls for.
     fn grid(rows: &[Vec<Math>], kind: GridKind, fractions: FractionStyle) -> Self {
-        Self::grid_with_degrees(rows, kind, fractions, None)
+        Self::grid_with_degrees(rows, kind, fractions, None, None)
     }
 
+    /// The grid, with each row's last entry fitted into what is left of `room`
+    /// beside the columns before it, when there is a room to keep within.
     fn grid_with_degrees(
         rows: &[Vec<Math>],
         kind: GridKind,
         fractions: FractionStyle,
         degrees: Option<&[Math]>,
+        room: Option<usize>,
     ) -> Self {
-        let laid: Vec<Vec<Self>> = rows
+        let gap = match kind {
+            GridKind::Aligned => " ",
+            _ => "  ",
+        };
+        let column_widths = |laid: &[Vec<Self>]| -> Vec<usize> {
+            let columns = laid.iter().map(Vec::len).max().unwrap_or(0);
+            (0..columns)
+                .map(|column| {
+                    laid.iter()
+                        .filter_map(|row| row.get(column))
+                        .map(Self::width)
+                        .max()
+                        .unwrap_or(0)
+                })
+                .collect()
+        };
+        let mut laid: Vec<Vec<Self>> = rows
             .iter()
             .map(|row| row.iter().map(|entry| entry.layout(fractions)).collect())
             .collect();
-        let columns = laid.iter().map(Vec::len).max().unwrap_or(0);
-        let widths: Vec<usize> = (0..columns)
-            .map(|column| {
-                laid.iter()
-                    .filter_map(|row| row.get(column))
-                    .map(Self::width)
-                    .max()
-                    .unwrap_or(0)
-            })
-            .collect();
+        // An aligned row's last entry too wide to fit beside the columns before it
+        // is set beneath them, leaving the columns to the rows that fit.
+        let mut beneath: Vec<Option<Self>> = vec![None; rows.len()];
+        if let Some(room) = room {
+            let widths = column_widths(&laid);
+            for ((row, entries), beneath) in rows.iter().zip(&mut laid).zip(&mut beneath) {
+                let (Some(last), Some(cell)) = (row.last(), entries.last_mut()) else {
+                    continue;
+                };
+                let before = row.len() - 1;
+                let beside = room
+                    .saturating_sub(widths[..before].iter().sum::<usize>() + before * gap.len());
+                *cell = last.fit(beside, fractions);
+                if kind == GridKind::Aligned && before > 0 && cell.width() > beside {
+                    entries.pop();
+                    *beneath = Some(
+                        Self::atom(BENEATH_INDENT, HLGroup::Canvas)
+                            .beside(last.fit(room.saturating_sub(BENEATH_INDENT.len()), fractions)),
+                    );
+                }
+            }
+        }
+        let widths = column_widths(&laid);
 
-        let column_gap = || Self::atom("  ", HLGroup::Canvas);
+        let column_gap = || Self::atom(gap, HLGroup::Canvas);
         let stacked: Vec<Self> = laid
             .into_iter()
-            .map(|row| {
-                row.into_iter()
+            .zip(beneath)
+            .map(|(row, beneath)| {
+                let row = row
+                    .into_iter()
                     .enumerate()
                     .map(|(column, entry)| {
-                        let alignment = if kind == GridKind::LeftAligned {
+                        let alignment = if matches!(kind, GridKind::LeftAligned | GridKind::Aligned)
+                        {
                             Align::Left
                         } else {
                             Align::Centre
@@ -1876,7 +2019,11 @@ impl MathBlock {
                         entry.pad(widths[column], alignment)
                     })
                     .reduce(|left, right| left.beside(column_gap()).beside(right))
-                    .unwrap_or_else(Self::empty)
+                    .unwrap_or_else(Self::empty);
+                match beneath {
+                    Some(beneath) => Self::lines(vec![row, beneath]),
+                    None => row,
+                }
             })
             .collect();
 
@@ -1908,7 +2055,7 @@ impl MathBlock {
         let height: usize = stacked.iter().map(Self::height).sum();
         let body = Self::stack(stacked, height.saturating_sub(1) / 2, Align::Left);
         match kind {
-            GridKind::Bare | GridKind::LeftAligned => body,
+            GridKind::Bare | GridKind::LeftAligned | GridKind::Aligned => body,
             GridKind::Matrix => body.fenced("(", ")"),
             GridKind::Cases => Self::fence("{", body.height(), body.baseline).beside(body),
         }
@@ -2420,6 +2567,90 @@ mod tests {
                 .all(|row| matches!(row.trim_end().chars().last(), Some(',' | '}'))),
             "{rows:?}"
         );
+    }
+
+    /// An aligned row: a key, its arrow, and a sequence of `items`.
+    fn aligned_row(key: &str, items: impl IntoIterator<Item = impl ToString>) -> SpecNet {
+        SpecNet::branch(
+            "List",
+            vec![
+                SpecNet::leaf("String", key),
+                SpecNet::leaf("Keyword", "=>"),
+                SpecNet::branch(
+                    "Sequence",
+                    items
+                        .into_iter()
+                        .map(|item| SpecNet::leaf("ZZ", item.to_string()))
+                        .collect(),
+                ),
+            ],
+        )
+    }
+
+    fn aligned_rows(aligned: &SpecNet, width: usize) -> Vec<String> {
+        text(&spans(aligned, width, FractionStyle::Stacked).expect("renders"))
+    }
+
+    fn value_column(row: &str) -> usize {
+        row.find('(').expect("a value")
+    }
+
+    /// A row of an aligned grid too long for the width keeps its key in the aligned
+    /// column and wraps its value beneath where the value began, inside the width.
+    #[test]
+    fn an_aligned_value_wraps_beneath_itself() {
+        let aligned = SpecNet::branch(
+            "AlignedExpression",
+            vec![aligned_row("k", 1..=30), aligned_row("longer", [1])],
+        );
+        let laid = |width| aligned_rows(&aligned, width);
+        let natural = laid(usize::MAX / 4);
+        let start = value_column(&natural[0]);
+        assert_eq!(value_column(&natural[1]), start, "{natural:?}");
+
+        let width = UnicodeWidthStr::width(natural[0].trim_end()) / 2;
+        let rows = laid(width);
+        assert!(rows.len() > natural.len(), "{rows:?} did not wrap");
+        assert!(rows
+            .iter()
+            .all(|row| UnicodeWidthStr::width(row.trim_end()) <= width));
+        let (wrapped, last) = rows.split_at(rows.len() - 1);
+        assert_eq!(value_column(&wrapped[0]), start, "{rows:?}");
+        for continued in &wrapped[1..] {
+            assert!(continued[..=start].trim().is_empty(), "{rows:?}");
+            assert!(!continued[start + 1..].trim().is_empty(), "{rows:?}");
+        }
+        assert!(
+            wrapped[wrapped.len() - 1].trim_end().ends_with(')'),
+            "{rows:?}"
+        );
+        assert_eq!(value_column(&last[0]), start, "{rows:?}");
+    }
+
+    /// A value the columns before it leave too little room goes beneath them,
+    /// indented, while the rows that fit keep the aligned column.
+    #[test]
+    fn an_aligned_value_without_room_goes_beneath_its_key() {
+        let aligned = SpecNet::branch(
+            "AlignedExpression",
+            vec![
+                aligned_row("a long key", [123_456_789]),
+                aligned_row("k", [1]),
+            ],
+        );
+        let natural = aligned_rows(&aligned, usize::MAX / 4);
+        let start = value_column(&natural[0]);
+        let short = UnicodeWidthStr::width(natural[1][start..].trim_end());
+        let width = start + short;
+        let rows = aligned_rows(&aligned, width);
+        assert!(rows
+            .iter()
+            .all(|row| UnicodeWidthStr::width(row.trim_end()) <= width));
+        assert!(rows[0].trim_end().ends_with("=>"), "{rows:?}");
+        let beneath = value_column(&rows[1]);
+        assert!(beneath > 0 && beneath < start, "{rows:?}");
+        assert!(rows[1][..beneath].trim().is_empty(), "{rows:?}");
+        assert_eq!(value_column(&rows[rows.len() - 1]), start, "{rows:?}");
     }
 
     /// Greedy packing, pinned: each line takes terms until the next would overflow,

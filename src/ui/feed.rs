@@ -614,13 +614,18 @@ impl Feed {
 
     /// The rows of the view, as last drawn.
     pub fn height(&self) -> u16 {
-        self.surface.as_ref().map_or(0, |surface| surface.area.height)
+        self.surface
+            .as_ref()
+            .map_or(0, |surface| surface.area.height)
     }
 
     /// Bring the start of the block at the top of the view to the top, or the
     /// start of the one before it when it is already there.
     pub fn scroll_to_block_start(&mut self) {
-        let Some(&(index, _, start)) = self.surface.as_ref().and_then(|surface| surface.placements.first())
+        let Some(&(index, _, start)) = self
+            .surface
+            .as_ref()
+            .and_then(|surface| surface.placements.first())
         else {
             return;
         };
@@ -634,11 +639,15 @@ impl Feed {
     /// Bring the end of the block at the bottom of the view to the bottom, or the
     /// end of the one after it when it is already there.
     pub fn scroll_to_block_end(&mut self) {
-        let Some(&(index, area, start)) = self.surface.as_ref().and_then(|surface| surface.placements.last())
+        let Some(&(index, area, start)) = self
+            .surface
+            .as_ref()
+            .and_then(|surface| surface.placements.last())
         else {
             return;
         };
-        let height = |block: &RetainedBlock| block.layout.map_or(1, |layout| usize::from(layout.height));
+        let height =
+            |block: &RetainedBlock| block.layout.map_or(1, |layout| usize::from(layout.height));
         let hidden = height(&self.blocks[index]).saturating_sub(usize::from(start + area.height));
         let rows = match (hidden, self.blocks.get(index + 1)) {
             (0, Some(next)) => height(next),

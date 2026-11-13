@@ -729,7 +729,9 @@ mod tests {
     fn an_edit_can_move_but_not_onto_an_alias_or_a_key_its_swap_partner_cannot_hold() {
         let mut keymaps = Keymaps::default();
         let original = keymaps.key(InputAction::Clear).expect("clear binding");
-        let replacement = keymaps.key(InputAction::DeleteLine).expect("line deletion binding");
+        let replacement = keymaps
+            .key(InputAction::DeleteLine)
+            .expect("line deletion binding");
         assert!(keymaps.rebind(InputAction::Clear, replacement));
         assert_eq!(keymaps.edit(replacement), Some(InputAction::Clear));
         assert_eq!(keymaps.edit(original), Some(InputAction::DeleteLine));

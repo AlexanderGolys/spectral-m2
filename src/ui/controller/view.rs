@@ -238,7 +238,8 @@ impl Editor {
 
     /// Scroll the reference pane by whole pages, positive toward its start.
     pub fn page_reference(&mut self, pages: isize) {
-        self.reference.scroll(pages * self.page_rows(self.reference.height()));
+        self.reference
+            .scroll(pages * self.page_rows(self.reference.height()));
     }
 
     pub fn reference_to_block_start(&mut self) {

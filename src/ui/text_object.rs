@@ -180,7 +180,9 @@ impl TextMotion {
                 }
             }
             Self::DelimitedBlock if forward => unmatched(
-                after.char_indices().map(|(index, character)| (from + index, character)),
+                after
+                    .char_indices()
+                    .map(|(index, character)| (from + index, character)),
                 false,
             )
             .map_or(text.len(), |close| close + 1),
@@ -255,7 +257,10 @@ impl TextMotion {
                 if lines[first..=last].iter().all(blank) {
                     return Vec::new();
                 }
-                let first = lines[..first].iter().rposition(blank).map_or(0, |gap| gap + 1);
+                let first = lines[..first]
+                    .iter()
+                    .rposition(blank)
+                    .map_or(0, |gap| gap + 1);
                 let last = lines[last..]
                     .iter()
                     .position(blank)
@@ -296,24 +301,30 @@ impl TextMotion {
 /// The bracket at `cursor`, or else the one just before it, and its partner's
 /// position.
 pub fn bracket_pair_at(text: &str, cursor: usize) -> Option<(usize, usize)> {
-    let under = text[cursor..].chars().next().map(|character| (cursor, character));
+    let under = text[cursor..]
+        .chars()
+        .next()
+        .map(|character| (cursor, character));
     let before = text[..cursor]
         .char_indices()
         .next_back()
         .filter(|&(_, character)| Bracket::of(character).is_some_and(|bracket| !bracket.opening));
-    [under, before].into_iter().flatten().find_map(|(at, character)| {
-        let bracket = Bracket::of(character)?;
-        let after = at + character.len_utf8();
-        let partner = match bracket.opening {
-            true => bracket.partner(
-                text[after..]
-                    .char_indices()
-                    .map(|(index, character)| (after + index, character)),
-            ),
-            false => bracket.partner(text[..at].char_indices().rev()),
-        }?;
-        Some((at, partner))
-    })
+    [under, before]
+        .into_iter()
+        .flatten()
+        .find_map(|(at, character)| {
+            let bracket = Bracket::of(character)?;
+            let after = at + character.len_utf8();
+            let partner = match bracket.opening {
+                true => bracket.partner(
+                    text[after..]
+                        .char_indices()
+                        .map(|(index, character)| (after + index, character)),
+                ),
+                false => bracket.partner(text[..at].char_indices().rev()),
+            }?;
+            Some((at, partner))
+        })
 }
 
 /// The first bracket among `characters` left without a partner among those
@@ -409,7 +420,10 @@ mod tests {
         let step = |motion: TextMotion, from, direction| motion.reach(text, from, direction);
         assert_eq!(step(TextMotion::WordAlpha, 0, TextDirection::Forward), 1);
         assert_eq!(step(TextMotion::WordAny, 0, TextDirection::Forward), 6);
-        assert_eq!(step(TextMotion::WordAny, text.len(), TextDirection::Backward), 12);
+        assert_eq!(
+            step(TextMotion::WordAny, text.len(), TextDirection::Backward),
+            12
+        );
         assert_eq!(step(TextMotion::WordAlpha, 6, TextDirection::Backward), 5);
     }
 
@@ -420,9 +434,18 @@ mod tests {
         assert_eq!(&text[forward..], "\nc\n\nd");
         let further = TextMotion::Paragraph.reach(text, forward, TextDirection::Forward);
         assert_eq!(&text[further..], "\nd");
-        assert_eq!(TextMotion::Paragraph.reach(text, further, TextDirection::Forward), text.len());
-        assert_eq!(TextMotion::Paragraph.reach(text, further, TextDirection::Backward), forward);
-        assert_eq!(TextMotion::Paragraph.reach(text, forward, TextDirection::Backward), 0);
+        assert_eq!(
+            TextMotion::Paragraph.reach(text, further, TextDirection::Forward),
+            text.len()
+        );
+        assert_eq!(
+            TextMotion::Paragraph.reach(text, further, TextDirection::Backward),
+            forward
+        );
+        assert_eq!(
+            TextMotion::Paragraph.reach(text, forward, TextDirection::Backward),
+            0
+        );
     }
 
     #[test]
@@ -431,10 +454,16 @@ mod tests {
         let inside = text.find('c').unwrap();
         let open = TextMotion::DelimitedBlock.reach(text, inside, TextDirection::Backward);
         assert_eq!(&text[open..open + 1], "{");
-        assert_eq!(TextMotion::DelimitedBlock.reach(text, open, TextDirection::Backward), 1);
+        assert_eq!(
+            TextMotion::DelimitedBlock.reach(text, open, TextDirection::Backward),
+            1
+        );
         let close = TextMotion::DelimitedBlock.reach(text, inside, TextDirection::Forward);
         assert_eq!(&text[..close], "f(a, {b, c}");
-        assert_eq!(TextMotion::DelimitedBlock.reach(text, close, TextDirection::Forward), 12);
+        assert_eq!(
+            TextMotion::DelimitedBlock.reach(text, close, TextDirection::Forward),
+            12
+        );
     }
 
     #[test]

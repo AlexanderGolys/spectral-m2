@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 
 use crate::backend::SpecNet;
 use crate::ui::block::{Link, Text};
-use crate::ui::graphics::{self, ratex::Rgb, Pictured, Typesetting};
+use crate::ui::graphics::{self, ratex::Rgb, Pictured, Slicing, Typesetting};
 use crate::ui::present;
 use crate::ui::theme::groups::{Groups, HLGroup};
 use crate::ui::wrap::WrappedText;
@@ -159,7 +159,10 @@ fn tex(math: &Math, groups: Option<&Groups>) -> String {
                 .map(|row| row.iter().map(recurse).collect::<Vec<_>>().join("&"))
                 .collect::<Vec<_>>()
                 .join(r"\\");
-            if *kind == maths::GridKind::LeftAligned {
+            if matches!(
+                kind,
+                maths::GridKind::LeftAligned | maths::GridKind::Aligned
+            ) {
                 let columns = "l".repeat(rows.iter().map(Vec::len).max().unwrap_or(0));
                 return paint(
                     format!(r"\begin{{array}}{{{columns}}}{body}\end{{array}}"),
@@ -171,7 +174,7 @@ fn tex(math: &Math, groups: Option<&Groups>) -> String {
                 maths::GridKind::Matrix => "pmatrix",
                 maths::GridKind::Cases => "cases",
                 maths::GridKind::Bare => "matrix",
-                maths::GridKind::LeftAligned => unreachable!(),
+                maths::GridKind::LeftAligned | maths::GridKind::Aligned => unreachable!(),
             };
             paint(
                 format!(r"\begin{{{environment}}}{body}\end{{{environment}}}"),
@@ -219,6 +222,11 @@ fn draw(
                     code: value.code.as_deref().unwrap_or(""),
                     matrix_row_spacing_percent: style.matrix_row_spacing_percent,
                     scale_percent: style.scale_percent,
+                    slicing: if math.reads_in_lines() {
+                        Slicing::Whole
+                    } else {
+                        Slicing::AtBreaks
+                    },
                 },
                 Rgb([r, g, b]),
                 u16::try_from(width).unwrap_or(u16::MAX),
@@ -260,6 +268,7 @@ pub fn tex_preview(source: &str, width: usize, groups: &Groups, style: MathStyle
                     code: source,
                     matrix_row_spacing_percent: style.matrix_row_spacing_percent,
                     scale_percent: style.scale_percent,
+                    slicing: Slicing::AtBreaks,
                 },
                 Rgb([r, g, b]),
                 u16::try_from(width).unwrap_or(u16::MAX),
@@ -631,6 +640,44 @@ mod tests {
             picture,
         );
         assert_eq!(drawing.lines, vec![Line::raw("typeset")]);
+    }
+
+    #[test]
+    fn rows_read_as_lines_are_never_cut_into_strips() {
+        let aligned = SpecNet::branch(
+            "AlignedExpression",
+            vec![SpecNet::branch(
+                "List",
+                vec![
+                    SpecNet::leaf("Symbol", "a"),
+                    SpecNet::leaf("Keyword", "=>"),
+                    SpecNet::leaf("ZZ", "1"),
+                ],
+            )],
+        );
+        let sum = SpecNet::branch(
+            "Sum",
+            vec![SpecNet::leaf("Symbol", "a"), SpecNet::leaf("Symbol", "b")],
+        );
+        let whole: Picture = |formula, _, _| {
+            assert_eq!(formula.slicing, Slicing::Whole);
+            Some(Pictured {
+                lines: vec![Line::raw("whole")],
+                baseline: 0,
+            })
+        };
+        let strips: Picture = |formula, _, _| {
+            assert_eq!(formula.slicing, Slicing::AtBreaks);
+            Some(Pictured {
+                lines: vec![Line::raw("strips")],
+                baseline: 0,
+            })
+        };
+        let groups = Groups::default();
+        for (value, picture, drawn) in [(&aligned, whole, "whole"), (&sum, strips, "strips")] {
+            let drawing = draw(value, 80, &groups, MathStyle::default(), picture);
+            assert_eq!(drawing.lines, vec![Line::raw(drawn)]);
+        }
     }
 
     #[test]

@@ -202,6 +202,17 @@ pub struct Typesetting<'a> {
     pub matrix_row_spacing_percent: u16,
     /// Preferred size relative to terminal text.
     pub scale_percent: u16,
+    pub slicing: Slicing,
+}
+
+/// What a formula too wide for its room may do about it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Slicing {
+    /// Be cut into strips at its breaks, set one under another, as a long sum is.
+    AtBreaks,
+    /// Only shrink: its rows read as lines, and a cut through all of them at once
+    /// would scatter their tails beneath the picture.
+    Whole,
 }
 
 /// A formula's placeholder lines and the one its baseline runs through.
@@ -375,7 +386,7 @@ fn gallery() -> MutexGuard<'static, Gallery> {
 type FormulaKey = (String, Rgb, u16);
 /// A formula's picture at a column count and cell pixel size, for its copied code.
 /// Values sharing TeX but not code each get their own picture to copy from.
-type ImageKey = (FormulaKey, u16, Size, String, Placement, u16);
+type ImageKey = (FormulaKey, u16, Size, String, Placement, u16, Slicing);
 
 /// A formula's vector picture and the places it may be cut into rows.
 struct Formula {
@@ -503,6 +514,7 @@ impl Gallery {
             code,
             matrix_row_spacing_percent,
             scale_percent,
+            slicing,
         }: Typesetting,
         colour: Rgb,
         canvas: Canvas,
@@ -524,7 +536,8 @@ impl Gallery {
                 }))
             })
             .clone()?;
-        let raster = Raster::fitted_at_scale(&formula, canvas, width, placement, scale_percent)?;
+        let raster =
+            Raster::fitted_at_scale(&formula, canvas, width, placement, scale_percent, slicing)?;
         let baseline = raster.baseline_row();
         let image_key = (
             key,
@@ -533,6 +546,7 @@ impl Gallery {
             code.to_string(),
             placement,
             scale_percent,
+            slicing,
         );
         if let Some(image) = self.images.get(&image_key) {
             return image.clone().map(|image| (image, baseline));
@@ -673,7 +687,14 @@ impl Raster {
     /// cannot break is wider; none when shrinking would make it too small to read.
     #[cfg(test)]
     fn fitted(formula: &Formula, canvas: Canvas, width: u16, placement: Placement) -> Option<Self> {
-        Self::fitted_at_scale(formula, canvas, width, placement, UI.math_size_percent)
+        Self::fitted_at_scale(
+            formula,
+            canvas,
+            width,
+            placement,
+            UI.math_size_percent,
+            Slicing::AtBreaks,
+        )
     }
 
     fn fitted_at_scale(
@@ -682,6 +703,7 @@ impl Raster {
         width: u16,
         placement: Placement,
         scale_percent: u16,
+        slicing: Slicing,
     ) -> Option<Self> {
         let tree = &formula.tree;
         // Font ascender/descender metrics can reserve more space than the ink,
@@ -695,8 +717,11 @@ impl Raster {
             cell_height * UI.typeset.em_per_cell_height / EM * f32::from(scale_percent) / 100.0;
         let room = f32::from(width) * cell_width / natural;
         let across = tree.size().width();
-        let breaks = formula
-            .breaks
+        let breaks = match slicing {
+            Slicing::AtBreaks => formula.breaks.as_slice(),
+            Slicing::Whole => &[],
+        };
+        let breaks = breaks
             .iter()
             .map(|cut| cut.across(across))
             .collect::<Vec<_>>();
@@ -829,12 +854,50 @@ mod tests {
     #[test]
     fn preferred_formula_size_wraps_before_shrinking() {
         let formula = formula("a+b+c+d+e+f+g+h+i+j+k+l");
-        let small = Raster::fitted_at_scale(&formula, CANVAS, 12, Placement::Alone, 80).unwrap();
-        let large = Raster::fitted_at_scale(&formula, CANVAS, 12, Placement::Alone, 120).unwrap();
+        let small = Raster::fitted_at_scale(
+            &formula,
+            CANVAS,
+            12,
+            Placement::Alone,
+            80,
+            Slicing::AtBreaks,
+        )
+        .unwrap();
+        let large = Raster::fitted_at_scale(
+            &formula,
+            CANVAS,
+            12,
+            Placement::Alone,
+            120,
+            Slicing::AtBreaks,
+        )
+        .unwrap();
         assert!(small.rows.len() > 1);
         assert!(large.rows.len() >= small.rows.len());
         assert!(large.scale > small.scale);
         assert!(large.cells.width <= 12);
+    }
+
+    #[test]
+    fn a_whole_formula_shrinks_rather_than_being_cut() {
+        let formula = formula("a+b+c+d+e+f+g+h+i+j+k+l");
+        let fitted = |width, slicing| {
+            Raster::fitted_at_scale(
+                &formula,
+                CANVAS,
+                width,
+                Placement::Alone,
+                UI.math_size_percent,
+                slicing,
+            )
+        };
+        let natural = fitted(u16::MAX, Slicing::Whole).unwrap();
+        let narrower = natural.cells.width - 1;
+        assert!(fitted(narrower, Slicing::AtBreaks).unwrap().rows.len() > 1);
+        if let Some(whole) = fitted(narrower, Slicing::Whole) {
+            assert_eq!(whole.rows.len(), 1);
+            assert!(whole.cells.width <= narrower);
+        }
     }
 
     #[test]
@@ -993,6 +1056,7 @@ mod tests {
             code: "{{x/3}, {Z, 1/2}, {1, \"1\"}}",
             matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
             scale_percent: UI.math_size_percent,
+            slicing: Slicing::AtBreaks,
         };
 
         let picture = gallery.formula(formula, Rgb([1, 2, 3]), CANVAS, 80, Placement::Alone);
@@ -1064,6 +1128,7 @@ mod tests {
             code: tex,
             matrix_row_spacing_percent,
             scale_percent: UI.math_size_percent,
+            slicing: Slicing::AtBreaks,
         };
         let ink = Rgb([1, 2, 3]);
         let placement = Placement::Alone;
@@ -1086,6 +1151,7 @@ mod tests {
             code: "x^2",
             matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
             scale_percent: UI.math_size_percent,
+            slicing: Slicing::AtBreaks,
         };
 
         let placement = Placement::AmongText;
@@ -1124,6 +1190,7 @@ mod tests {
             code: tex,
             matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
             scale_percent: UI.math_size_percent,
+            slicing: Slicing::AtBreaks,
         };
         let (image, _) = gallery
             .formula(formula, Rgb([1, 2, 3]), CANVAS, 80, Placement::Alone)
