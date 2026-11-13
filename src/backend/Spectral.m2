@@ -63,6 +63,7 @@ configuredDepth = method()
 placeholder = method(Dispatch => Thing)
 parameters = method(Dispatch => Thing, TypicalValue => List)
 spelledShape = method()
+optionKey = method(Dispatch => Thing, TypicalValue => SpecNet)
 
 Thing.typeDepth = 1
 Module.typeDepth = 2
@@ -337,11 +338,7 @@ specNet HashTable := table -> (
 		and lookup(net, class table) === lookup(net, base);
 	if any({HashTable, MutableHashTable}, stock) then
 		contentsOf(table, {AlignedExpression apply(pairs table, pair -> {
-			if instance(pair#0, Symbol) or instance(pair#0, String) then
-				specNet pair#0 ++ {Highlight => {"Option"}}
-			else pair#0,
-			symbol =>,
-			pair#1
+			optionKey pair#0, symbol =>, pair#1
 		})})
 	else (lookup(specNet, Thing)) table
 )
@@ -349,6 +346,18 @@ specNet MatrixExpression := matrix -> new SpecNet from (class matrix,
 	apply(toList matrix, row -> if instance(row, Option) then
 				specNet row
 			else new SpecNet from (List, apply(toList row, specNet))))
+-- The key before `=>`: one spelled by a name or a string is coloured as an
+-- option's name is in code, whatever builds the pair.
+optionKey Thing := specNet
+optionKey Holder := held -> optionKey held#0
+optionKey Symbol := optionKey String := key -> specNet key ++ {Highlight => {"Option"}}
+specNet BinaryOperation := operation -> (
+	(operator, key, entry) := toSequence operation;
+	if operator === symbol => then
+		new SpecNet from (class operation, {specNet operator, optionKey key,
+			specNet entry})
+	else (lookup(specNet, Expression)) operation
+)
 specNet AlignedExpression := aligned -> new SpecNet from (class aligned,
 	apply(toList aligned, row -> new SpecNet from (List, apply(toList row, specNet))))
 specNet IndexedVariable := variable -> new SpecNet from (Subscript,

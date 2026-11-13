@@ -2208,6 +2208,32 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
     }
 
     #[test]
+    fn a_named_key_before_an_arrow_is_coloured_as_an_option_name() {
+        let mut backend = M2Backend::spawn().unwrap();
+        let result = backend.evaluate("describe(ZZ[x,y])", None).unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        fn keys(node: &SpecNet, found: &mut Vec<HLGroup>) {
+            if node.is("BinaryOperation")
+                && node
+                    .children
+                    .first()
+                    .and_then(|arrow| arrow.text.as_deref())
+                    == Some("=>")
+            {
+                found.push(node.children[1].group());
+            }
+            node.children.iter().for_each(|child| keys(child, found));
+        }
+        let mut found = Vec::new();
+        keys(&result.value.unwrap(), &mut found);
+        assert!(!found.is_empty());
+        assert!(
+            found.iter().all(|group| *group == HLGroup::Option),
+            "{found:?}"
+        );
+    }
+
+    #[test]
     fn tables_keep_pairs_and_default_type_depth_keeps_annotations_short() {
         let mut backend = M2Backend::spawn().unwrap();
         for source in [
