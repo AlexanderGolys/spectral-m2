@@ -514,6 +514,28 @@ fn a_column_of_code_takes_only_the_width_its_code_needs() {
     );
 }
 
+/// Code a narrow column wraps keeps the colours it has on one row, though no
+/// piece of it would read as code on its own.
+#[test]
+fn code_wrapped_in_a_table_cell_keeps_its_colours() {
+    let html = "<table><tr><td><code class=\"language-macaulay2\">help \"reading the documentation\"</code></td>\
+        <td>-- how to read the documentation of Macaulay2</td></tr></table>";
+    let whole = groups_of(html, 200);
+    let string = group_of(&whole, "\"reading the documentation\"");
+    let narrow = groups_of(html, 50);
+    let piece = narrow
+        .iter()
+        .find(|(content, _)| content.starts_with("\"reading"))
+        .unwrap_or_else(|| panic!("the string is wrapped: {narrow:?}"));
+    assert_ne!(
+        piece.0.trim(),
+        "\"reading the documentation\"",
+        "{narrow:?}"
+    );
+    assert_eq!(piece.1, string, "{narrow:?}");
+    assert_eq!(group_of(&narrow, "help"), group_of(&whole, "help"));
+}
+
 fn drawn(html: &str, width: u16) -> Vec<String> {
     super::lines(html, EXAMPLE_WIDTH, &RenderContext::new(width, 0))
         .unwrap()

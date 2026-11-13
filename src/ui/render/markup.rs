@@ -87,6 +87,8 @@ const UNCOLOURED_WITHIN: [&str; 3] = ["a", "pre", "sub"];
 const TABLE_COLUMN_MIN_WIDTH: usize = 24;
 /// What a table too wide to fit draws between the cells it stacks in a row,
 /// and what is drawn in its place.
+/// The tags of a table's cells.
+const TABLE_CELLS: [&str; 2] = ["td", "th"];
 const STACKED_CELL_BORDER: char = '/';
 const STACKED_CELL_RULE: &str = "┄";
 
@@ -171,10 +173,10 @@ type HtmlLine = TaggedLine<Vec<RichAnnotation>>;
 /// Lay HTML out at the available width, retaining document and code semantics.
 pub fn spans(html: &str, width: usize) -> Option<Vec<SpanLine>> {
     let width = width.clamp(1, usize::from(u16::MAX));
-    let tagged = layout(html, width, MathStyle::default().blackboard)?;
+    let (tagged, cells) = layout(html, width, MathStyle::default().blackboard)?;
     Some(
         (0..tagged.len())
-            .flat_map(|index| prose(&tagged, index, width))
+            .flat_map(|index| prose(&tagged, index, width, &cells))
             .collect(),
     )
 }
@@ -454,7 +456,8 @@ pub fn code_sources(html: &str, example_width: usize) -> Vec<String> {
 }
 
 fn preformatted_sources(html: &str) -> Vec<String> {
-    let Some(tagged) = layout(html, usize::from(u16::MAX), MathStyle::default().blackboard) else {
+    let Some((tagged, _)) = layout(html, usize::from(u16::MAX), MathStyle::default().blackboard)
+    else {
         return Vec::new();
     };
     let mut found = Vec::new();
@@ -546,7 +549,7 @@ struct DocumentRows {
 
 fn rows(html: &str, example_width: usize, context: &RenderContext) -> Option<DocumentRows> {
     let width = usize::from(context.width().max(1));
-    let tagged = layout(html, width, context.math().blackboard)?;
+    let (tagged, cells) = layout(html, width, context.math().blackboard)?;
     let page = page(html);
     let mut result = Vec::new();
     let mut inclusions = Inclusions::default();
@@ -622,11 +625,11 @@ fn rows(html: &str, example_width: usize, context: &RenderContext) -> Option<Doc
             // The prefix only places the block, unless it is a table's own column.
             let indent = if can_embed { indent } else { 0 };
             for line in start..index {
-                let rows = prose(&tagged, line, width);
+                let rows = prose(&tagged, line, width, &cells);
                 push_prose(&mut result, &mut inclusions, rows, indent);
             }
         } else {
-            let rows = prose(&tagged, index, width);
+            let rows = prose(&tagged, index, width, &cells);
             push_prose(&mut result, &mut inclusions, rows, 0);
             index += 1;
         }
@@ -657,11 +660,11 @@ fn preformatted(line: &HtmlLine) -> Option<bool> {
 
 /// Laid-out line `index` fitted to `width`. The title's rule spans the full
 /// documentation body, alongside the output blocks below it.
-fn prose(tagged: &[HtmlLine], index: usize, width: usize) -> Vec<SpanLine> {
+fn prose(tagged: &[HtmlLine], index: usize, width: usize, cells: &CellCode) -> Vec<SpanLine> {
     if let Some(rule) = stacked_cell_rule(&tagged[index], width) {
         return vec![vec![TextSpan::new(rule, HLGroup::Value)]];
     }
-    let mut rows = fitted_row(&tagged[index], width);
+    let mut rows = fitted_row(&tagged[index], width, cells);
     let is_title = |line: &HtmlLine| heading_level(line) == 1;
     let title_ends = is_title(&tagged[index]) && !tagged.get(index + 1).is_some_and(is_title);
     if title_ends {
@@ -684,8 +687,8 @@ fn stacked_cell_rule(line: &HtmlLine, width: usize) -> Option<String> {
     .then(|| text.replace(STACKED_CELL_BORDER, STACKED_CELL_RULE))
 }
 
-fn fitted_row(line: &HtmlLine, width: usize) -> Vec<SpanLine> {
-    let spans = row(line);
+fn fitted_row(line: &HtmlLine, width: usize, cells: &CellCode) -> Vec<SpanLine> {
+    let spans = row(line, cells);
     if spans.iter().map(|span| span.content.width()).sum::<usize>() > width {
         wrap(&spans, width as u16, &WordWrap)
     } else {
@@ -757,12 +760,72 @@ fn normalized(config: &Config<Decorator>, html: &str, blackboard: bool) -> Optio
     Some(dom)
 }
 
-fn layout(html: &str, width: usize, blackboard: bool) -> Option<Vec<HtmlLine>> {
+fn layout(html: &str, width: usize, blackboard: bool) -> Option<(Vec<HtmlLine>, CellCode)> {
     let config = html_config();
     let dom = normalized(&config, html, blackboard)?;
-    decorate_inline(&dom.document, &mut false, page(html));
+    let page = page(html);
+    decorate_inline(&dom.document, &mut false, page);
+    let mut cells = CellCode::default();
+    cells.collect(&dom.document, page);
     let tree = config.dom_to_render_tree(&dom).ok()?;
-    config.render_to_lines(tree, width).ok()
+    Some((config.render_to_lines(tree, width).ok()?, cells))
+}
+
+/// The code in a document's table cells, each coloured whole: a cell wraps its
+/// code into pieces, and a piece such as `help "reading the` would not parse
+/// as code on its own.
+#[derive(Debug, Default)]
+struct CellCode(Vec<(String, Vec<HLSpan>)>);
+
+impl CellCode {
+    fn collect(&mut self, node: &Handle, page: u64) {
+        if tag_of(node).as_deref() == Some("code")
+            && TABLE_CELLS.iter().any(|cell| within(cell, node))
+        {
+            let source = inline_text(node);
+            if !self.0.iter().any(|(known, _)| *known == source) {
+                let marks = analysed_marks(page, &source);
+                self.0.push((source, marks));
+            }
+            return;
+        }
+        for child in node.children.borrow().iter() {
+            self.collect(child, page);
+        }
+    }
+
+    /// `piece` in the colours of the cell code it was wrapped from, if it is one.
+    fn coloured(&self, piece: &str) -> Option<Vec<TextSpan>> {
+        let code = piece.trim();
+        let (marks, at) = self
+            .0
+            .iter()
+            .filter(|_| !code.is_empty())
+            .find_map(|(source, marks)| Some((marks, source.find(code)?)))?;
+        let end = at + code.len();
+        let within: Vec<HLSpan> = marks
+            .iter()
+            .filter_map(|mark| {
+                let start = mark.content.start.max(at);
+                let stop = mark.content.end.min(end);
+                (start < stop).then(|| HLSpan {
+                    content: start - at..stop - at,
+                    ..mark.clone()
+                })
+            })
+            .collect();
+        let leading = piece.len() - piece.trim_start().len();
+        let trailing = &piece[leading + code.len()..];
+        let mut spans = Vec::new();
+        if leading > 0 {
+            spans.push(TextSpan::new(&piece[..leading], HLGroup::Value));
+        }
+        spans.extend(filled(code, &within));
+        if !trailing.is_empty() {
+            spans.push(TextSpan::new(trailing, HLGroup::Value));
+        }
+        Some(spans)
+    }
 }
 
 /// Normalize M2's presentation wrappers before layout. Example tables describe
@@ -1018,7 +1081,7 @@ fn decorate_inline(node: &Handle, described: &mut bool, page: u64) {
     // painted ahead carries its group as a link, and the layout reserves width
     // for every link, which would leave the cell's column far wider than its code.
     if tag.as_deref() == Some("code") {
-        if !["td", "th"].iter().any(|cell| within(cell, node)) {
+        if !TABLE_CELLS.iter().any(|cell| within(cell, node)) {
             let source = inline_text(node);
             paint_inline_code(node, &analysed_code(page, &source), &mut 0);
         }
@@ -1397,7 +1460,7 @@ fn find_element(node: &Handle, tag: &str) -> Option<Handle> {
         .find_map(|child| find_element(child, tag))
 }
 
-fn row(line: &TaggedLine<Vec<RichAnnotation>>) -> SpanLine {
+fn row(line: &TaggedLine<Vec<RichAnnotation>>, cells: &CellCode) -> SpanLine {
     let Some(_) = line.tagged_strings().next() else {
         return SpanLine::new();
     };
@@ -1471,7 +1534,10 @@ fn row(line: &TaggedLine<Vec<RichAnnotation>>) -> SpanLine {
         let mut painted = if let Some(group) = group.filter(|_| heading.is_none() && !described) {
             vec![TextSpan::new(text, group)]
         } else if is_code && !file_link {
-            example(text, preformatted)
+            (!preformatted)
+                .then(|| cells.coloured(text))
+                .flatten()
+                .unwrap_or_else(|| example(text, preformatted))
         } else {
             let group = heading.unwrap_or(if described {
                 HLGroup::Muted
@@ -1567,20 +1633,24 @@ fn code(source: &str) -> Vec<TextSpan> {
 /// `source` coloured as M2 code under what the analysis of `page` found in it.
 /// Elided arguments keep the plain colour of the text around them.
 fn analysed_code(page: u64, source: &str) -> Vec<TextSpan> {
+    filled(source, &analysed_marks(page, source))
+}
+
+/// What the analysis of `page` marks in `source`, outside its elided arguments.
+fn analysed_marks(page: u64, source: &str) -> Vec<HLSpan> {
     let analysed = analysable(source).unwrap_or_else(|| source.to_string());
     let elided: Vec<_> = source
         .match_indices(ELIDED)
         .map(|(at, _)| at..at + ELIDED.len())
         .collect();
-    let marked: Vec<_> = examples::highlighted(page, &analysed)
+    examples::highlighted(page, &analysed)
         .into_iter()
         .filter(|mark| {
             !elided
                 .iter()
                 .any(|gap| mark.content.start < gap.end && gap.start < mark.content.end)
         })
-        .collect();
-    filled(source, &marked)
+        .collect()
 }
 
 /// The code the analysis is given for `source`: itself when it parses, else
