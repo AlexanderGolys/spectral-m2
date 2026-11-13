@@ -1741,8 +1741,12 @@ impl MathBlock {
         self
     }
 
-    /// Set blocks one under another, nominating which row aligns with neighbours.
+    /// Set blocks one under another, nominating which row aligns with neighbours;
+    /// no blocks stack as an empty block, which still takes a row.
     fn stack(blocks: Vec<Self>, baseline: usize, align: Align) -> Self {
+        if blocks.is_empty() {
+            return Self::empty();
+        }
         let width = blocks.iter().map(Self::width).max().unwrap_or(0);
         Self {
             rows: blocks
@@ -2564,6 +2568,22 @@ mod tests {
             wrapped_picture(r"1\,267\,650\,600\,228", 5),
             ["12676", "50600", "228"]
         );
+    }
+
+    /// An empty vertical list, as `hooks` gives for a method with none, still
+    /// draws its braces.
+    #[test]
+    fn empty_vertical_lists_draw_their_braces() {
+        for class in ["NumberedVerticalList", "VerticalList", "HashTable"] {
+            let value = SpecNet::branch(class, Vec::new());
+            let rows = spans(&value, 80, MathStyle::default()).unwrap();
+            let text: String = rows
+                .iter()
+                .flatten()
+                .map(|span| span.content.as_str())
+                .collect();
+            assert!(text.contains('{') && text.contains('}'), "{class}: {text}");
+        }
     }
 
     /// A grid too wide for the screen is cut between its columns, never through
