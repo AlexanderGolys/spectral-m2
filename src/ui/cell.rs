@@ -1071,8 +1071,8 @@ impl EvaluationBlock {
         }
     }
 
-    /// Draw the returned value whose renderer icon is at local `position` by its
-    /// next renderer; false when no icon is there.
+    /// Draw the returned value whose renderer icon is at local `position` by that
+    /// renderer; false when no other renderer's icon is there.
     pub fn cycle_renderer(&mut self, position: Position, context: &RenderContext) -> bool {
         let mut top = self.code_height(context) + self.output_margin();
         for output in &mut self.outputs {
@@ -1901,7 +1901,6 @@ impl OutputBlock {
             Rect::new(0, 0, context.width(), self.height(context)),
             self.border_layout(),
         );
-        let segment = frame;
         loop {
             let mut spans = vec![Span::raw(" ")];
             for mode in &modes {
@@ -1913,20 +1912,11 @@ impl OutputBlock {
                 spans.push(Span::styled(mode.glyph().current().to_string(), style));
                 spans.push(Span::raw(" "));
             }
-            let label_width = modes
-                .iter()
-                .map(|mode| mode.name().width())
-                .max()
-                .unwrap_or_default();
-            spans.push(Span::styled(
-                format!("{:<label_width$} ", current.name()),
-                context.groups().value(),
-            ));
             let line = Line::from(spans);
             if line.width() <= usize::from(frame.width.saturating_sub(2)) || modes.len() <= 1 {
                 let area = context
                     .renderer_position()
-                    .area(segment, row_count!(line.width()));
+                    .area(frame, row_count!(line.width()));
                 let mut column = area.x + 1;
                 let icons = modes
                     .iter()
@@ -1939,8 +1929,9 @@ impl OutputBlock {
                     .collect();
                 return Some(RendererTitle { area, line, icons });
             }
-            if let Some(remove) = modes.len().checked_sub(1) {
-                modes.remove(remove);
+            // The renderer in use stays, as the one the title shows is chosen.
+            if let Some(dropped) = modes.iter().rposition(|mode| *mode != current) {
+                modes.remove(dropped);
             }
         }
     }
@@ -1967,7 +1958,7 @@ impl OutputBlock {
             .collect()
     }
 
-    /// Draw the value whose renderer icon is at local `position` by its next
+    /// Draw the value whose renderer icon is at local `position` by that
     /// renderer, so what an author wrote can be told from what it was drawn as.
     fn cycle_renderer(&mut self, position: Position, context: &RenderContext) -> bool {
         let area = Rect::new(0, 0, context.width(), self.height(context));
@@ -2002,32 +1993,17 @@ impl OutputBlock {
             let Some(title) = self.renderer_title(index, context) else {
                 continue;
             };
-            if !title.area.contains(position) {
-                continue;
-            }
-            let current = self.renderer(cell, context);
-            let clicked = title
+            let Some(clicked) = title
                 .icons
                 .iter()
                 .find(|(area, _)| area.contains(position))
-                .map(|(_, mode)| *mode);
-            let mut options = self.renderers(cell, context);
-            options.retain(|mode| {
-                self.cells
-                    .iter()
-                    .all(|cell| self.renderers(cell, context).contains(mode))
-            });
-            let next = match clicked.filter(|mode| *mode != current) {
-                Some(mode) => Some(mode),
-                None => options
-                    .iter()
-                    .cycle()
-                    .skip_while(|&&mode| mode != current)
-                    .nth(1)
-                    .copied(),
+                .map(|(_, mode)| *mode)
+            else {
+                continue;
             };
-            cell.chosen.set(next);
-            return next.is_some_and(|next| next != current);
+            let changed = clicked != self.renderer(cell, context);
+            cell.chosen.set(Some(clicked));
+            return changed;
         }
         false
     }
@@ -3188,7 +3164,7 @@ mod tests {
     }
 
     #[test]
-    fn output_numbers_stay_in_the_gutter_and_mode_names_move_to_the_border() {
+    fn output_numbers_stay_in_the_gutter_and_mode_icons_move_to_the_border() {
         let output = OutputBlock::value("a\nb".into(), None).numbered(123);
         let output = rendered_buffer(&output, 20);
         let border = inset();
@@ -3196,7 +3172,10 @@ mod tests {
         assert_eq!(output[(border, 0)].symbol(), "╭");
         assert_eq!(output[(border - 3, 1)].symbol(), " ");
         let title: String = (border + 1..20).map(|x| output[(x, 0)].symbol()).collect();
-        assert!(title.contains("net"), "{title}");
+        assert!(
+            title.contains(PreviewMode::Net.glyph().current()),
+            "{title}"
+        );
         assert_eq!(output[(border - 2, 1)].symbol(), "o");
         assert_eq!(output[(border - 1, 1)].symbol(), "1");
         assert_eq!(output[(border, 1)].symbol(), "2");
@@ -3206,7 +3185,7 @@ mod tests {
     }
 
     #[test]
-    fn clicking_the_renderer_icon_steps_through_the_ways_to_draw_the_value() {
+    fn clicking_a_renderer_icon_draws_the_value_by_that_renderer() {
         let context = RenderContext::new(40, 0);
         let page = SpecNet::document("<p>rendered words</p>".into(), "original words".into(), 80);
         let mut output = OutputBlock::rendered(page, None).numbered(1);
@@ -3245,7 +3224,22 @@ mod tests {
         assert!(shown(&output).contains("original words"));
 
         assert!(!output.cycle_renderer(Position::new(0, 1), &context));
-        assert!(output.cycle_renderer(active_icon(&output), &context));
+        assert!(!output.cycle_renderer(active_icon(&output), &context));
+        assert_eq!(drawn(&output), PreviewMode::Net);
+        let title = output.renderer_title(0, &context).unwrap();
+        assert!(!title.line.to_string().contains(PreviewMode::Net.name()));
+        let gap = Position::new(net.right(), net.y);
+        assert!(title.icons.iter().all(|(area, _)| !area.contains(gap)));
+        assert!(!output.cycle_renderer(gap, &context));
+        assert_eq!(drawn(&output), PreviewMode::Net);
+
+        let markup = title
+            .icons
+            .iter()
+            .find(|(_, mode)| *mode == PreviewMode::Markup)
+            .unwrap()
+            .0;
+        assert!(output.cycle_renderer(Position::new(markup.x, markup.y), &context));
         assert_eq!(drawn(&output), PreviewMode::Markup);
     }
 
@@ -3383,7 +3377,7 @@ mod tests {
             let line: String = (title.area.x..title.area.right())
                 .map(|x| buffer[(x, title.area.y)].symbol())
                 .collect();
-            assert!(line.contains("net"), "{line}");
+            assert!(line.contains(PreviewMode::Net.glyph().current()), "{line}");
         }
     }
 
@@ -3679,7 +3673,10 @@ mod tests {
             groups.code().bg.unwrap()
         );
         assert!(rows[5].contains('1'), "{rows:?}");
-        assert!(rows[4].contains("net"), "{rows:?}");
+        assert!(
+            rows[4].contains(PreviewMode::Net.glyph().current()),
+            "{rows:?}"
+        );
         assert!(rows[6]
             .chars()
             .all(|character| character == ' ' || character == '│'));

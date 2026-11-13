@@ -957,6 +957,7 @@ fn an_entry_with_elided_arguments_is_analysed_and_its_elisions_stay_plain() {
 
 #[test]
 fn embedded_formatter_clicks_survive_relayout_and_can_be_hidden() {
+    use crate::ui::config::UI;
     use crate::ui::settings::rendering::RendererPosition;
     let html = "<p>Formatter interaction fixture</p><pre>i1 : example\n\no1 = archived</pre>";
     let mut backend = crate::backend::M2Backend::spawn().unwrap();
@@ -966,38 +967,24 @@ fn embedded_formatter_clicks_survive_relayout_and_can_be_hidden() {
         backend.evaluate("symbol example", None).unwrap(),
     );
     let context = RenderContext::new(90, 0).with_renderer_position(RendererPosition::LowerRight);
-    let first = document(html, 77, &context).unwrap();
-    let (y, label) = first
-        .lines
-        .iter()
-        .enumerate()
-        .find_map(|(y, line)| {
+    let net = UI.glyphs.renderer_net.current();
+    let icon = |lines: &[Line]| {
+        lines.iter().enumerate().find_map(|(y, line)| {
             let text = line.to_string();
-            text.find("specNet")
-                .map(|offset| (y, text[..offset].width()))
+            text.find(net)
+                .map(|offset| Position::new(text[..offset].width() as u16, y as u16))
         })
-        .unwrap();
-    assert!(cycle_renderer(
-        html,
-        77,
-        &context,
-        Position::new(label as u16, y as u16)
-    ));
+    };
+    let first = document(html, 77, &context).unwrap();
+    let at = icon(&first.lines).unwrap();
+    assert!(cycle_renderer(html, 77, &context, at));
     let second = document(html, 77, &context).unwrap();
-    assert!(second
-        .lines
-        .iter()
-        .any(|line| line.to_string().contains("net")));
-    assert!(!second
-        .lines
-        .iter()
-        .any(|line| line.to_string().contains("specNet")));
+    assert!(!Rc::ptr_eq(&first.lines, &second.lines));
+    assert_eq!(icon(&second.lines), Some(at));
+    assert!(!cycle_renderer(html, 77, &context, at));
     let hidden = context.with_renderer_position(RendererPosition::Off);
     let hidden = document(html, 77, &hidden).unwrap();
-    assert!(!hidden
-        .lines
-        .iter()
-        .any(|line| line.to_string().contains("net")));
+    assert!(icon(&hidden.lines).is_none());
     assert!(!Rc::ptr_eq(&second.lines, &hidden.lines));
 }
 

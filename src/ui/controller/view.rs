@@ -404,6 +404,7 @@ impl Editor {
             .render_context(sections[0].width)
             .with_swapped_code_background(swapped);
         self.feed_area = sections[0];
+        self.picker_area = sections[1];
 
         match view {
             ViewKind::Reference => {

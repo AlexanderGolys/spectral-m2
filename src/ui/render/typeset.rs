@@ -448,9 +448,10 @@ mod tests {
         );
         let math = Math::from_spec_net(&value, MathStyle::default());
         let source = tex(&math, None);
-        assert!(source.contains(r"\begin{array}{lll}"));
-        assert!(source.contains(r"\mathrm{0}"));
-        assert!(source.contains(r"\mathrm{1}"));
+        assert!(source.contains(r"\begin{array}{ll}"));
+        assert!(source.contains(r"\mathrm{0.}"));
+        assert!(source.contains(r"\mathrm{1.}"));
+        assert!(!source.contains(r"\Rightarrow"));
         assert!(crate::ui::graphics::ratex::svg(&source, Rgb([17, 29, 43])).is_ok());
         let rows = maths::spans(&value, 80, MathStyle::default()).unwrap();
         let rows: Vec<String> = rows
@@ -463,8 +464,9 @@ mod tests {
             .find(|row| row.contains("longer entry"))
             .unwrap();
         assert_eq!(short.find("short"), longer.find("longer entry"));
-        assert!(short.contains('0'));
-        assert!(longer.contains('1'));
+        assert!(short.contains("0."));
+        assert!(longer.contains("1."));
+        assert!(!short.contains("=>") && !short.contains('⇒'));
     }
 
     #[test]

@@ -282,6 +282,8 @@ pub struct Editor {
     /// The names M2 knows, which the input completes.
     names: Names,
     pickers: Vec<PickerController>,
+    /// Where the picker on top was drawn last, for clicks on its tabs.
+    picker_area: Rect,
     feed_area: Rect,
     feed_top: i64,
     screen_selecting: bool,
@@ -337,6 +339,7 @@ impl Editor {
             cancel_hint_shown: false,
             names: Names::default(),
             pickers: Vec::new(),
+            picker_area: Rect::ZERO,
             feed_area: Rect::ZERO,
             feed_top: 0,
             screen_selecting: false,
@@ -756,6 +759,9 @@ impl Editor {
         self.control_held = event.modifiers.contains(KeyModifiers::CONTROL);
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
             self.feed.deselect();
+            if self.click_picker_tab(pointer) {
+                return Reaction::Continue;
+            }
         }
         if let Some(lookup) = Self::lookup_click(event) {
             if let Some(offset) = self.input.offset_under(pointer) {
@@ -833,6 +839,20 @@ impl Editor {
         Reaction::Continue
     }
 
+    /// Show the picker tab clicked at `pointer`, if one is drawn there.
+    fn click_picker_tab(&mut self, pointer: Position) -> bool {
+        let area = self.picker_area;
+        let clicked = self
+            .pickers
+            .last_mut()
+            .filter(|_| self.pane_focused)
+            .is_some_and(|controller| controller.picker.click(area, pointer));
+        if clicked {
+            self.refresh_status_line();
+        }
+        clicked
+    }
+
     /// A middle click opens a reference; Ctrl-left opens in the transcript.
     fn link_click(event: MouseEvent) -> Option<bool> {
         match event.kind {
@@ -903,6 +923,11 @@ impl Editor {
         let pointer = Position::new(event.column, event.row);
         self.pointer = Some(pointer);
         self.control_held = event.modifiers.contains(KeyModifiers::CONTROL);
+        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
+            && self.click_picker_tab(pointer)
+        {
+            return Reaction::Continue;
+        }
         if let Some(in_feed) = Self::link_click(event) {
             if let Some(link) = self.reference.link_at(pointer) {
                 self.screen_selection = None;
@@ -1976,6 +2001,7 @@ impl Editor {
         let input_context = RenderContext::new(editor_area.width, input_prefix);
 
         self.feed_area = sections[0];
+        self.picker_area = sections[1];
         self.draw_feed(frame, sections[0], &context);
         if let Some(controller) = self.pickers.last().filter(|_| self.pane_focused) {
             controller
@@ -2268,6 +2294,7 @@ mod picker_tests {
             editor.pickers.last().map(|controller| controller.mode),
             Some(PickerMode::Settings)
         );
+        editor.handle_input(KeyCode::Down.into());
         editor.handle_action(Action::Submit);
         assert!(editor.pickers.is_empty());
     }
@@ -2314,6 +2341,7 @@ mod unified_settings_tests {
             .iter()
             .position(|item| item.cells()[0].to_string() == shortcut.description())
             .unwrap();
+        editor.handle_input(KeyCode::Down.into());
         editor.pickers[0].picker.select(row);
         let replacement = editor.keymaps.key(Action::OpenSettings).unwrap();
         editor.handle_action(Action::Submit);
@@ -2337,6 +2365,7 @@ mod unified_settings_tests {
     fn escape_cancels_key_capture_without_closing_the_settings_tabs() {
         let mut editor = Editor::new(String::new());
         editor.handle_action(Action::OpenKeymaps);
+        editor.handle_input(KeyCode::Down.into());
         editor.handle_action(Action::Submit);
         assert!(editor.pickers[0].picker.capturing());
         editor.handle_input(KeyCode::Esc.into());

@@ -1020,6 +1020,35 @@ mod tests {
     }
 
     #[test]
+    fn a_matrix_may_break_between_its_columns() {
+        let columns = ["x", "y^{2}", "z"];
+        let row = columns.join("&");
+        let formula = formula(&format!(r"\begin{{pmatrix}}{row}\\{row}\end{{pmatrix}}"));
+        assert_eq!(formula.breaks.len(), columns.len() - 1);
+
+        let unbroken = Raster::fitted(&formula, CANVAS, u16::MAX, Placement::Alone).unwrap();
+        let width = unbroken.cells.width / 2;
+        let wrapped = Raster::fitted(&formula, CANVAS, width, Placement::Alone).unwrap();
+        assert!(wrapped.rows.len() > 1);
+        assert_eq!(wrapped.scale, unbroken.scale, "wrapping never shrinks");
+    }
+
+    /// As M2 spells a module's presentation, which no separator could break.
+    #[test]
+    fn a_presented_module_breaks_between_its_columns() {
+        let row = ["-y", "x^{2}", "0", "0"].join("&");
+        let tex = format!(
+            r"\texttt{{cokernel}}\ \left(\!\begin{{array}}{{cccc}}{row}\\{row}\end{{array}}\!\right)"
+        );
+        assert!(formula(&tex).breaks.len() >= 3);
+    }
+
+    #[test]
+    fn the_space_around_an_operator_is_no_break() {
+        assert!(formula(r"x y - z").breaks.is_empty());
+    }
+
+    #[test]
     fn a_fraction_bar_is_never_cut() {
         let formula = formula(r"\frac{1,\,2,\,3,\,4,\,5,\,6,\,7,\,8}{9}");
         assert!(formula.breaks.is_empty());

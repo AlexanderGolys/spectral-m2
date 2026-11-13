@@ -2,7 +2,7 @@
 
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::{Alignment, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as TuiBlock, BorderType, Borders, Paragraph, Widget};
@@ -354,9 +354,9 @@ pub struct PickerTab {
 
 /// Presentation and selection state for pages of picker items.
 ///
-/// A picker with several tabs names them on its first row, which the selection can
-/// reach to switch them with the horizontal arrows, as Tab does from anywhere; one
-/// with a single tab is titled by it.
+/// A picker with several tabs names them on its first row, which it opens on and
+/// the selection can reach again to switch them with the horizontal arrows, as Tab
+/// does from anywhere and a click on a name does; one with a single tab is titled by it.
 pub struct Picker {
     tabs: Vec<PickerTab>,
     tab: usize,
@@ -392,6 +392,7 @@ impl Picker {
             column_widths: Vec::new(),
         };
         picker.set_tabs(tabs);
+        picker.on_tab_bar = picker.has_tabs();
         picker
     }
 
@@ -500,6 +501,32 @@ impl Picker {
             true => rows,
             false => self.selected.min(rows.saturating_sub(1)),
         });
+    }
+
+    /// Show the tab whose name is drawn at `position` of the picker drawn over
+    /// `area`, selecting the row of tabs; false when no name is there.
+    pub fn click(&mut self, area: Rect, position: Position) -> bool {
+        let Some(tab) = self.tab_at(area, position) else {
+            return false;
+        };
+        self.switch_tab(tab as isize - self.tab as isize);
+        self.on_tab_bar = true;
+        true
+    }
+
+    /// The tab named at `position` when the picker is drawn over `area`.
+    fn tab_at(&self, area: Rect, position: Position) -> Option<usize> {
+        let inner = Self::frame().inner(area);
+        if !self.has_tabs() || position.y != inner.y || !inner.contains(position) {
+            return None;
+        }
+        let mut left = inner.x + MARKER.width() as u16;
+        self.tabs.iter().position(|tab| {
+            let right = left + Self::tab_label(tab).width() as u16;
+            let hit = (left..right).contains(&position.x);
+            left = right;
+            hit
+        })
     }
 
     /// Input policy supplied by the active tab, if it overrides the controller.
@@ -790,17 +817,32 @@ impl Picker {
                 true => groups.picker_tab_selected(),
                 false => groups.picker_tab(),
             };
-            Span::styled(format!(" {} ", tab.label), row.patch(style))
+            Span::styled(Self::tab_label(tab), row.patch(style))
         }));
         let used = Line::from(spans.clone()).width();
         spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), row));
         Line::from(spans)
     }
 
+    fn tab_label(tab: &PickerTab) -> String {
+        format!(" {} ", tab.label)
+    }
+
+    /// The border around the rows, whose inside they are laid out in.
+    fn frame() -> TuiBlock<'static> {
+        let groups = scheme();
+        TuiBlock::default()
+            .style(groups.picker())
+            .borders(Borders::TOP | Borders::BOTTOM)
+            .border_type(BorderType::Rounded)
+            .border_style(groups.picker_border())
+            .title_alignment(Alignment::Center)
+    }
+
     /// The label a picker with a single tab shows along its top edge.
     fn title(&self) -> Option<Line<'static>> {
         match self.tabs.as_slice() {
-            [tab] => Some(Span::styled(format!(" {} ", tab.label), scheme().picker_title()).into()),
+            [tab] => Some(Span::styled(Self::tab_label(tab), scheme().picker_title()).into()),
             _ => None,
         }
     }
@@ -810,13 +852,7 @@ impl Element for Picker {
     type Context = ();
 
     fn render(&self, _: &(), area: Rect, buf: &mut Buffer) {
-        let groups = scheme();
-        let mut block = TuiBlock::default()
-            .style(groups.picker())
-            .borders(Borders::TOP | Borders::BOTTOM)
-            .border_type(BorderType::Rounded)
-            .border_style(groups.picker_border())
-            .title_alignment(Alignment::Center);
+        let mut block = Self::frame();
         if let Some(title) = self.title() {
             block = block.title(title);
         }
@@ -1151,6 +1187,41 @@ mod tests {
         )
     }
 
+    /// A tabbed picker with the selection moved from its tabs onto the first row.
+    fn tabbed_on_first_row(button: bool) -> Picker {
+        let mut picker = tabbed(button);
+        picker.handle(key(KeyCode::Down));
+        picker
+    }
+
+    #[test]
+    fn a_tabbed_picker_opens_on_its_row_of_tabs() {
+        let picker = tabbed(false);
+        assert!(picker.selected_item().is_none());
+        let buffer = rendered(&picker, 60);
+        assert!(row(&buffer, 1).contains(">"));
+        assert!(!row(&buffer, FIRST_TABBED_ROW).contains(">"));
+    }
+
+    #[test]
+    fn clicking_a_tab_name_shows_that_tab() {
+        let mut picker = tabbed_on_first_row(false);
+        let area = Rect::new(0, 0, 60, picker.height(60));
+        let buffer = rendered(&picker, 60);
+        let second = column(&row(&buffer, 1), "second").unwrap() as u16;
+
+        assert!(!picker.click(area, Position::new(second, FIRST_TABBED_ROW)));
+        assert!(picker.click(area, Position::new(second, 1)));
+        let buffer = rendered(&picker, 60);
+        assert!(row(&buffer, FIRST_TABBED_ROW).contains("a much longer label"));
+        assert!(picker.selected_item().is_none());
+
+        let first = column(&row(&buffer, 1), "first").unwrap() as u16;
+        assert!(picker.click(area, Position::new(first, 1)));
+        assert!(row(&rendered(&picker, 60), FIRST_TABBED_ROW).contains("mode"));
+        assert!(!picker.click(area, Position::new(59, 1)));
+    }
+
     fn key(code: KeyCode) -> PickerInput {
         PickerInput::Key(KeyEvent::from(code))
     }
@@ -1160,7 +1231,7 @@ mod tests {
 
     #[test]
     fn tabs_are_named_beneath_the_border_and_switched_with_tab() {
-        let mut picker = tabbed(false);
+        let mut picker = tabbed_on_first_row(false);
         let buffer = rendered(&picker, 60);
         assert!(!row(&buffer, 0).contains("first"));
         assert!(row(&buffer, 1).contains(" first "));
@@ -1182,7 +1253,7 @@ mod tests {
 
     #[test]
     fn control_arrows_switch_tabs_rather_than_change_the_row() {
-        let mut picker = tabbed(false);
+        let mut picker = tabbed_on_first_row(false);
         let before = row(&rendered(&picker, 60), FIRST_TABBED_ROW);
         assert!(
             picker
@@ -1196,7 +1267,7 @@ mod tests {
 
     #[test]
     fn the_row_of_tabs_is_selected_above_the_first_row_and_switches_with_arrows() {
-        let mut picker = tabbed(false);
+        let mut picker = tabbed_on_first_row(false);
         picker.handle(key(KeyCode::Up));
         let buffer = rendered(&picker, 60);
         assert!(row(&buffer, 1).contains(">"));
@@ -1214,7 +1285,7 @@ mod tests {
 
     #[test]
     fn selection_wraps_through_the_row_of_tabs() {
-        let mut picker = tabbed(true);
+        let mut picker = tabbed_on_first_row(true);
         picker.handle(key(KeyCode::Up));
         picker.handle(key(KeyCode::Up));
         let buffer = rendered(&picker, 60);
@@ -1246,7 +1317,6 @@ mod tests {
             ]
         };
         let mut picker = Picker::tabbed(tabs(), None);
-        picker.handle(key(KeyCode::Up));
         picker.handle(key(KeyCode::Right));
         assert!(picker.selected_item().is_none());
 
@@ -1259,7 +1329,7 @@ mod tests {
 
     #[test]
     fn the_height_follows_the_rows_of_the_current_tab() {
-        let mut picker = tabbed(false);
+        let mut picker = tabbed_on_first_row(false);
         let taller = picker.height(60);
         picker.handle(key(KeyCode::Up));
         assert_eq!(picker.height(60), taller, "moving within a tab keeps it");
@@ -1291,7 +1361,7 @@ mod tests {
 
     #[test]
     fn values_share_one_column_across_tabs() {
-        let mut picker = tabbed(false);
+        let mut picker = tabbed_on_first_row(false);
         let first = column(&row(&rendered(&picker, 60), FIRST_TABBED_ROW), "dark").unwrap();
         picker.handle(key(KeyCode::Tab));
         let second = column(&row(&rendered(&picker, 60), FIRST_TABBED_ROW), "3").unwrap();
@@ -1300,7 +1370,7 @@ mod tests {
 
     #[test]
     fn the_button_follows_the_rows_of_whichever_tab_is_shown() {
-        let mut picker = tabbed(true);
+        let mut picker = tabbed_on_first_row(true);
         let height = picker.height(60);
         picker.move_selection(2);
         let buffer = rendered(&picker, 60);
@@ -1321,7 +1391,7 @@ mod tests {
 
     #[test]
     fn a_description_wraps_beneath_its_selected_row() {
-        let picker = tabbed(true);
+        let picker = tabbed_on_first_row(true);
         let wide = picker.height(60);
         let narrow = picker.height(16);
         assert!(narrow > wide, "the description takes more rows when narrow");
@@ -1360,10 +1430,10 @@ mod tests {
             .collect::<String>()
         };
         let tab = KeyEvent::from(KeyCode::Tab).to_string();
-        assert!(hints(tabbed(true)).contains(&format!("{tab} ")));
+        assert!(hints(tabbed_on_first_row(true)).contains(&format!("{tab} ")));
         assert!(!hints(picker(vec![item("one", "")])).contains(&tab));
 
-        let mut on_tab_bar = tabbed(true);
+        let mut on_tab_bar = tabbed_on_first_row(true);
         on_tab_bar.handle(key(KeyCode::Up));
         assert!(hints(on_tab_bar).contains("switch tabs"));
     }

@@ -1671,23 +1671,56 @@ impl MathBlock {
     /// Cut into column ranges at most `width` wide, set one under another.
     ///
     /// The last resort for a piece no line break can shorten: a numeral, or a matrix,
-    /// wider than the screen.
+    /// wider than the screen. A slab ends on the last column blank in every row
+    /// that it can reach, between a matrix's columns or a list's entries, and the
+    /// next starts past the blanks; only a stretch with no such column is cut through.
     fn slabs(self, width: usize) -> Vec<Self> {
         let total = self.visible_width();
         if total <= width || width == 0 {
             return vec![self];
         }
-        (0..total)
-            .step_by(width)
-            .map(|from| Self {
+        let blank = self.blank_columns(total);
+        let mut ranges = Vec::new();
+        let mut from = 0;
+        while total - from > width {
+            let end = (from + 1..=from + width)
+                .rev()
+                .find(|&column| blank[column])
+                .unwrap_or(from + width);
+            ranges.push(from..end);
+            from = (end..total).find(|&column| !blank[column]).unwrap_or(total);
+        }
+        ranges.push(from..total);
+        ranges
+            .into_iter()
+            .map(|range| Self {
                 rows: self
                     .rows
                     .iter()
-                    .map(|row| Self::columns(row, from..from + width))
+                    .map(|row| Self::columns(row, range.clone()))
                     .collect(),
                 baseline: self.baseline,
             })
             .collect()
+    }
+
+    /// Which of the first `width` columns show nothing in any row.
+    fn blank_columns(&self, width: usize) -> Vec<bool> {
+        let mut blank = vec![true; width];
+        for row in &self.rows {
+            let mut column = 0;
+            for span in row {
+                for character in span.content.chars() {
+                    let cells = UnicodeWidthChar::width(character).unwrap_or(0);
+                    if character != ' ' || span.mark.is_some() {
+                        let end = (column + cells).min(width);
+                        blank[column.min(end)..end].fill(false);
+                    }
+                    column += cells;
+                }
+            }
+        }
+        blank
     }
 
     /// Pad every row to `width`, placing the content by `align`.
@@ -2531,6 +2564,27 @@ mod tests {
             wrapped_picture(r"1\,267\,650\,600\,228", 5),
             ["12676", "50600", "228"]
         );
+    }
+
+    /// A grid too wide for the screen is cut between its columns, never through
+    /// an entry, wherever a column of blanks falls within reach.
+    #[test]
+    fn a_wide_grid_is_cut_between_its_columns() {
+        let grid = r"\begin{matrix}alpha&beta&gamma\\a&b&c\end{matrix}";
+        let whole = picture(grid);
+        let width = whole[0].trim_end().len() - 1;
+        let rows = wrapped_picture(grid, width);
+        assert_eq!(rows.len(), 2 * whole.len(), "{rows:?}");
+        assert!(
+            rows.iter().all(|row| row.chars().count() <= width),
+            "{rows:?}"
+        );
+        for word in ["alpha", "beta", "gamma"] {
+            assert!(
+                rows.iter().any(|row| row.contains(word)),
+                "{word}: {rows:?}"
+            );
+        }
     }
 
     /// The rendered rows as plain text, for reading a layout in a failure message.

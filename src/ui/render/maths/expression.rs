@@ -51,11 +51,7 @@ impl ExpressionLayout for Vertical {
                         .enumerate()
                         .map(|(index, entry)| {
                             if self.numbered {
-                                vec![
-                                    Math::atom(index.to_string(), HLGroup::Number),
-                                    Math::atom("=>", HLGroup::Operator),
-                                    entry,
-                                ]
+                                vec![Math::atom(format!("{index}."), HLGroup::Number), entry]
                             } else {
                                 vec![entry]
                             }

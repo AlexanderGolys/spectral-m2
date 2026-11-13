@@ -8,12 +8,18 @@ All notable changes to Spectral M2 are documented here.
 
 - Complexes compose labelled map expressions, with differential matrices above arrows and homological degrees beneath modules, in structured Unicode and typeset previews.
 
-- Output mode controls sit in the value border, with dimmed alternative icons and the current mode name. Their position is configurable. The controls select M2 representations (`specNet`, `net`, `string`, `tex`, `markup` and `html`), independently of the display capabilities chosen in settings. Select `net` for M2's own terminal spelling.
+- Output mode controls sit in the value border as icons, the current one bold and the alternatives dimmed; clicking an icon selects that mode. Their position is configurable.
+
+- Tabbed pickers open with the row of tabs selected, and clicking a tab name shows that tab.
+
+- Numbered vertical lists number their entries `0.`, `1.`, … as M2's TeX does, without `=>`. The controls select M2 representations (`specNet`, `net`, `string`, `tex`, `markup` and `html`), independently of the display capabilities chosen in settings. Select `net` for M2's own terminal spelling.
 
 - Values retain M2 expression structure and component classes through `specNet`, with independent `specType` formatting for type annotations. Type descriptions default to the outer type; `specType'(depth, value)` controls the number of constructor layers, with `specType value` defaulting to one. Custom types compose existing expression constructors without shell changes; unsupported constructors retain their class and children.
 - Mathematical output uses the transmitted classes for highlighting in Unicode and typeset rendering, without recovering roles from TeX. Type annotations use a uniform type colour; map arrows have their own theme group.
 
 ### Fixed
+
+- Typeset previews wider than the screen break between matrix columns and across other wide blanks, so a large matrix wraps instead of shrinking. Structured previews cut wide rows at columns blank in every row, never through a word.
 
 - Italic package names retain their semantic colour in typeset output.
 

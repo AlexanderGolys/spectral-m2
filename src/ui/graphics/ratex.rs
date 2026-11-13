@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use ratex_font::{get_char_metrics, FontId};
+use ratex_font::{get_char_metrics, get_char_metrics_with_fallback, FontId};
 use ratex_layout::{layout, to_display_list, validate_layout, LayoutOptions};
 use ratex_parser::parser::parse;
 use ratex_svg::{render_to_svg, SvgOptions};
@@ -24,6 +24,9 @@ const SVG_END: &str = "</svg>";
 const BREAK_AFTER: [char; 4] = [',', '+', '=', ';'];
 /// How far, in ems, an item may start before a separator ends and still follow it.
 const BREAK_TOLERANCE: f64 = 1e-6;
+/// The least blank width, in ems, a formula may break across with no separator,
+/// as between a matrix's columns: wider than the space around any operator.
+const BREAK_GAP: f64 = 0.8;
 /// The percentage of row spacing that TeX's `\arraystretch` calls one.
 const PERCENT_PER_ARRAYSTRETCH: u16 = 100;
 
@@ -122,12 +125,81 @@ pub fn svg_colored(
 }
 
 /// Where the formula may be cut into rows: after each separator set in the
-/// maths font, when nothing drawn reaches across from it to what follows, as a
-/// fraction bar or a radical would.
+/// maths font, and across each blank as wide as [`BREAK_GAP`] from top to bottom,
+/// as between a matrix's columns, when nothing drawn reaches across from it to
+/// what follows, as a fraction bar or a radical would.
 fn breaks(list: &DisplayList) -> Vec<Break> {
     let separator_font = FontId::MainRegular.as_str();
-    let extent = |item: &DisplayItem| match item {
-        DisplayItem::GlyphPath { x, .. } => (*x, *x),
+    let extents = list.items.iter().map(extent).collect::<Vec<_>>();
+    let em = f64::from(EM);
+    let padding = f64::from(PADDING);
+    let width = list.width * em + 2.0 * padding;
+    let reached_across = |end: f64, start: f64| {
+        extents
+            .iter()
+            .any(|(left, right)| *left < end - BREAK_TOLERANCE && *right > start)
+    };
+    let separators = list.items.iter().filter_map(|item| {
+        let DisplayItem::GlyphPath {
+            x,
+            scale,
+            font,
+            char_code,
+            ..
+        } = item
+        else {
+            return None;
+        };
+        let separator = char::from_u32(*char_code).is_some_and(|c| BREAK_AFTER.contains(&c));
+        if !separator || font != separator_font {
+            return None;
+        }
+        let end = x + get_char_metrics(FontId::MainRegular, *char_code)?.width * scale;
+        let start = extents
+            .iter()
+            .map(|(left, _)| *left)
+            .filter(|left| *left >= end - BREAK_TOLERANCE)
+            .fold(f64::INFINITY, f64::min);
+        (start.is_finite() && !reached_across(end, start)).then_some((end, start))
+    });
+    let mut covered = extents
+        .iter()
+        .copied()
+        .filter(|(left, right)| left.is_finite() && right.is_finite())
+        .collect::<Vec<_>>();
+    covered.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut reach = f64::NEG_INFINITY;
+    let gaps = covered.into_iter().filter_map(move |(left, right)| {
+        let gap = (reach.is_finite() && left - reach >= BREAK_GAP).then_some((reach, left));
+        reach = reach.max(right);
+        gap
+    });
+    let mut breaks = separators
+        .chain(gaps)
+        .map(|(end, start)| Break {
+            end: ((end * em + 2.0 * padding) / width) as f32,
+            start: (start * em / width) as f32,
+        })
+        .collect::<Vec<_>>();
+    breaks.sort_by(|a, b| a.end.total_cmp(&b.end));
+    breaks
+}
+
+/// How far across, in ems, `item` reaches, from its left edge to its right.
+fn extent(item: &DisplayItem) -> (f64, f64) {
+    match item {
+        DisplayItem::GlyphPath {
+            x,
+            scale,
+            font,
+            char_code,
+            ..
+        } => {
+            let advance = FontId::parse(font)
+                .and_then(|font| get_char_metrics_with_fallback(font, *char_code))
+                .map_or(0.0, |metrics| metrics.width * scale);
+            (*x, x + advance)
+        }
         DisplayItem::Line { x, width, .. } | DisplayItem::Rect { x, width, .. } => (*x, x + width),
         DisplayItem::Path { x, commands, .. } => commands
             .iter()
@@ -142,46 +214,7 @@ fn breaks(list: &DisplayList) -> Vec<Break> {
                 (f64::INFINITY, f64::NEG_INFINITY),
                 |(left, right), offset| (left.min(x + offset), right.max(x + offset)),
             ),
-    };
-    let extents = list.items.iter().map(extent).collect::<Vec<_>>();
-    let em = f64::from(EM);
-    let padding = f64::from(PADDING);
-    let width = list.width * em + 2.0 * padding;
-    let mut breaks = list
-        .items
-        .iter()
-        .filter_map(|item| {
-            let DisplayItem::GlyphPath {
-                x,
-                scale,
-                font,
-                char_code,
-                ..
-            } = item
-            else {
-                return None;
-            };
-            let separator = char::from_u32(*char_code).is_some_and(|c| BREAK_AFTER.contains(&c));
-            if !separator || font != separator_font {
-                return None;
-            }
-            let end = x + get_char_metrics(FontId::MainRegular, *char_code)?.width * scale;
-            let start = extents
-                .iter()
-                .map(|(left, _)| *left)
-                .filter(|left| *left >= end - BREAK_TOLERANCE)
-                .fold(f64::INFINITY, f64::min);
-            let reached_across = extents
-                .iter()
-                .any(|(left, right)| *left < end - BREAK_TOLERANCE && *right > start);
-            (start.is_finite() && !reached_across).then(|| Break {
-                end: ((end * em + 2.0 * padding) / width) as f32,
-                start: (start * em / width) as f32,
-            })
-        })
-        .collect::<Vec<_>>();
-    breaks.sort_by(|a, b| a.end.total_cmp(&b.end));
-    breaks
+    }
 }
 
 /// Take the typewriter glyphs the terminal font can draw out of `list`, and
