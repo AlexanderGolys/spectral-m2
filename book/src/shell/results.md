@@ -63,7 +63,7 @@ Place the controls with *output mode position* in the rendering settings: upper 
 
 ## Typeset maths { #typeset }
 
-With *maths* set to `typeset`, mathematical values become pictures in your theme's colours, with matrices and fractions at their full height. M2 decides what is mathematical through each type's `typeset` setting: ring elements, rings, modules, matrices and fractions are typeset, while a list of names, strings or packages stays terminal text. When a value mixes the two, such as a matrix in a list beside a string, the whole value is one picture so its brackets fit what they hold, and the parts that were not asked to be typeset keep the typewriter face. The `net` and `string` formatters retain their terminal text.
+With *maths* set to `typeset`, mathematical values become pictures in your theme's colours, with matrices and fractions at their full height. M2 decides what is mathematical through each type's `typeset` setting: numbers, ring elements, rings, modules, matrices and fractions are typeset, while a list of names, strings or packages stays terminal text. When a value mixes the two, such as a matrix in a list beside a string, the whole value is one picture so its brackets fit what they hold, and the parts that were not asked to be typeset keep the typewriter face. The `net` and `string` formatters retain their terminal text.
 
 Set *maths size* to choose the preferred formula size independently of the terminal font. Matrix degrees sit beside their rows, and tuple subscripts follow M2's TeX spelling without extra parentheses.
 

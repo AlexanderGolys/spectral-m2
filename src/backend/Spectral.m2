@@ -83,7 +83,7 @@ Complex.valueDepth = 2
 -- is typeset with it; anything typeset only to sit beside it, a name or a
 -- string in the same list, keeps a typewriter face.
 Thing.typeset = false
-scan({RingElement, Ring, RingFamily, Ideal, Module, Matrix, RingMap, Complex,
+scan({Number, RingElement, Ring, RingFamily, Ideal, Module, Matrix, RingMap, Complex,
 	ComplexMap, Variety, SheafOfRings, CoherentSheaf, SheafMap, Divide, Power,
 	Superscript, Subscript, MatrixExpression, VectorExpression, MapExpression,
 	UnderExpression}, type -> type.typeset = true)
@@ -603,7 +603,7 @@ Node
       true. Everything inside a typeset part is typeset with it; the rest of
       the value is drawn in the picture in a typewriter face, or, when no part
       is typeset, as text.
-      Thing.typeset is false; mathematical types such as RingElement, Ring,
+      Thing.typeset is false; mathematical types such as Number, RingElement, Ring,
       Module and Matrix, and the expressions Divide, Power, Subscript and
       MatrixExpression, are true.
 Node

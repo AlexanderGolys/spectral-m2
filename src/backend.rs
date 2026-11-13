@@ -2215,10 +2215,18 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             assert!(!result.is_error, "{source}: {}", result.transcript);
             result.value.unwrap()
         };
-        for plain in ["loadedPackages", r#"{1, "a", symbol b}"#, r#""text""#] {
+        for plain in ["loadedPackages", r#"{"a", symbol b}"#, r#""text""#] {
             assert!(!value(plain).wants_typesetting(), "{plain}");
         }
-        for maths in ["matrix{{1, 2}}", "1/2", "QQ[t]; t^2 + 1"] {
+        for maths in [
+            "matrix{{1, 2}}",
+            "1/2",
+            "QQ[t]; t^2 + 1",
+            "5",
+            "-3",
+            "1.5",
+            "2/4",
+        ] {
             assert!(value(maths).wants_typesetting(), "{maths}");
         }
         let mixed = value(r#"{matrix{{1}}, "beside"}"#);
