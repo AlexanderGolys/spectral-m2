@@ -1,5 +1,6 @@
 //! TeX set as vector graphics by RaTeX: KaTeX's layout and fonts, in pure Rust.
 
+use std::borrow::Cow;
 use std::fmt::Write;
 
 use ratex_font::{get_char_metrics, get_char_metrics_with_fallback, FontId};
@@ -27,6 +28,11 @@ const BREAK_TOLERANCE: f64 = 1e-6;
 /// The least blank width, in ems, a formula may break across with no separator,
 /// as between a matrix's columns: wider than the space around any operator.
 const BREAK_GAP: f64 = 0.8;
+/// How RaTeX begins its message about a command it does not know.
+const UNDEFINED_COMMAND: &str = "Undefined control sequence: ";
+/// How many commands run into the letters after them one formula is parted for.
+const MAX_PARTINGS: usize = 32;
+
 /// The percentage of row spacing that TeX's `\arraystretch` calls one.
 const PERCENT_PER_ARRAYSTRETCH: u16 = 100;
 
@@ -84,7 +90,22 @@ pub fn svg_colored(
     colour: Rgb,
     matrix_row_spacing_percent: u16,
 ) -> Result<Typeset, Unset> {
-    let mut original = display(tex, colour, matrix_row_spacing_percent)?;
+    let mut original = match display(tex, colour, matrix_row_spacing_percent) {
+        Ok(original) => original,
+        Err(unset) => {
+            let parted_tex = parted(tex);
+            if parted_tex == tex {
+                return Err(unset);
+            }
+            let parted_painted = parted(painted);
+            return svg_colored(
+                &parted_tex,
+                &parted_painted,
+                colour,
+                matrix_row_spacing_percent,
+            );
+        }
+    };
     if tex != painted {
         if let Ok(paint) = display(painted, colour, matrix_row_spacing_percent) {
             if original.items.len() == paint.items.len()
@@ -306,6 +327,49 @@ fn typewriter_paths(list: &mut DisplayList, font: &TerminalFont) -> String {
 }
 
 /// Lay out the source without modifying its mathematical atom classes.
+/// `tex` with each command run into the letters after it parted from them, as
+/// M2's `tex` writes `\midX` for `\mid X`: the longest known command the
+/// unknown name begins with is set apart. Other faults are left for parsing to
+/// report.
+fn parted(tex: &str) -> Cow<'_, str> {
+    let mut source = Cow::Borrowed(tex);
+    for _ in 0..MAX_PARTINGS {
+        let Err(error) = parse(&source) else {
+            break;
+        };
+        let Some(unknown) = error.message.strip_prefix(UNDEFINED_COMMAND) else {
+            break;
+        };
+        let Some(name) = unknown.strip_prefix('\\') else {
+            break;
+        };
+        let known = (1..name.len())
+            .rev()
+            .filter(|end| name.is_char_boundary(*end))
+            .find(|end| is_command(&name[..*end]));
+        let at = error
+            .loc
+            .map(|loc| loc.start)
+            .filter(|at| source[*at..].starts_with(unknown))
+            .or_else(|| source.find(unknown));
+        let (Some(known), Some(at)) = (known, at) else {
+            break;
+        };
+        let apart = format!("\\{} {}", &name[..known], &name[known..]);
+        source
+            .to_mut()
+            .replace_range(at..at + unknown.len(), &apart);
+    }
+    source
+}
+
+/// Whether RaTeX knows `\name`, whatever arguments it goes on to want.
+fn is_command(name: &str) -> bool {
+    parse(&format!("\\{name}"))
+        .err()
+        .is_none_or(|error| !error.message.starts_with(UNDEFINED_COMMAND))
+}
+
 fn display(
     tex: &str,
     Rgb([r, g, b]): Rgb,
@@ -375,6 +439,18 @@ fn item_color(item: &mut DisplayItem) -> &mut Color {
 
 #[cfg(test)]
 mod tests {
+    /// M2's `tex` runs `\mid` into the symbol after it; the formula still sets.
+    #[test]
+    fn a_command_run_into_the_letters_after_it_is_parted_from_them() {
+        let m2 = r"Y\mid\midX\midX^{X}\wedge\wedge \mathit{XYW}";
+        assert_eq!(
+            parted(m2),
+            r"Y\mid\mid X\mid X^{X}\wedge\wedge \mathit{XYW}"
+        );
+        assert!(svg(m2, Rgb([17, 29, 43])).is_ok());
+        assert!(svg(r"\nosuchcommand", Rgb([17, 29, 43])).is_err());
+    }
+
     use super::*;
 
     const INK: Rgb = Rgb([0x12, 0x34, 0x56]);
