@@ -14,6 +14,9 @@ const XDG_STATE_HOME: &str = "XDG_STATE_HOME";
 const CONFIG_UNDER_HOME: &str = ".config";
 /// Where state lives under the home directory without `XDG_STATE_HOME`.
 const STATE_UNDER_HOME: &str = ".local/state";
+/// Where a test build keeps its state, under the temporary directory.
+#[cfg(test)]
+const TEST_STATE: &str = "spectral-m2-test-state";
 /// Set in every process tmux runs.
 const TMUX: &str = "TMUX";
 const TERM: &str = "TERM";
@@ -42,8 +45,12 @@ impl Environment {
         self.xdg_home(XDG_CONFIG_HOME, CONFIG_UNDER_HOME)
     }
 
-    /// `XDG_STATE_HOME`, else `~/.local/state`.
+    /// `XDG_STATE_HOME`, else `~/.local/state`. A test build keeps its state in a
+    /// temporary directory instead, so no test writes the user's history or logs.
     pub fn state_home(&self) -> Option<PathBuf> {
+        #[cfg(test)]
+        return Some(temp_dir().join(TEST_STATE));
+        #[cfg(not(test))]
         self.xdg_home(XDG_STATE_HOME, STATE_UNDER_HOME)
     }
 
@@ -91,10 +98,19 @@ mod tests {
             return;
         };
         if var_os(XDG_STATE_HOME).is_none() {
-            assert_eq!(ENV.state_home(), Some(home.join(STATE_UNDER_HOME)));
+            assert_eq!(
+                ENV.xdg_home(XDG_STATE_HOME, STATE_UNDER_HOME),
+                Some(home.join(STATE_UNDER_HOME))
+            );
         }
         if var_os(XDG_CONFIG_HOME).is_none() {
             assert_eq!(ENV.config_home(), Some(home.join(CONFIG_UNDER_HOME)));
         }
+    }
+
+    #[test]
+    fn tests_keep_their_state_out_of_the_users() {
+        let state = ENV.state_home().expect("a state directory");
+        assert!(state.starts_with(temp_dir()), "{state:?}");
     }
 }
