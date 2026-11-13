@@ -18,7 +18,7 @@ pub mod statusline;
 pub mod tabs;
 
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
 pub use self::config::*;
@@ -75,6 +75,7 @@ struct StoredSettings {
     statusline: StatusLineSettings,
     rendering: RenderingSettings,
     selection: SelectionSettings,
+    #[serde(deserialize_with = "known_rebinds")]
     rebinds: Vec<(Shortcut, KeyEvent)>,
     editor: Map<String, Value>,
     input: Map<String, Value>,
@@ -101,6 +102,17 @@ impl From<StoredSettings> for SavedSettings {
             rebinds,
         }
     }
+}
+
+/// The saved rebinds still naming a shortcut and key this version has; one for an
+/// action since removed is dropped rather than losing every other setting.
+fn known_rebinds<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<(Shortcut, KeyEvent)>, D::Error> {
+    Ok(Vec::<Value>::deserialize(deserializer)?
+        .into_iter()
+        .filter_map(|rebind| serde_json::from_value(rebind).ok())
+        .collect())
 }
 
 /// The section reading its own fields out of an older file's values.
@@ -163,6 +175,25 @@ mod tests {
         for action in [Action::ClearFeed, Action::OpenOutput] {
             assert_eq!(replayed.key_for(action), keymaps.key_for(action));
         }
+    }
+
+    /// A rebind of an action this version no longer has costs only that rebind.
+    #[test]
+    fn a_rebind_of_a_removed_action_is_dropped_alone() {
+        let keymaps = Keymaps::replaying(&[]);
+        let kept = serde_json::to_value((
+            Shortcut::Command(Action::ClearFeed),
+            keymaps.key(Action::OpenOutput).expect("output has a key"),
+        ))
+        .expect("serializes");
+        let record = serde_json::json!({
+            "rendering": {"fractions": "underlined"},
+            "rebinds": [["an action that was removed", kept[1].clone()], kept],
+        });
+        let saved: SavedSettings = serde_json::from_value(record).expect("parses");
+
+        assert_eq!(saved.rendering.fractions, FractionStyle::Underlined);
+        assert_eq!(saved.rebinds.len(), 1);
     }
 
     /// A record from an older version, missing fields added since, keeps the rest.

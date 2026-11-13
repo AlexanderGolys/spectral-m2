@@ -60,6 +60,21 @@ impl RendererPosition {
     }
 }
 
+cyclic! {
+    /// What the output view beside the session shows of the feed.
+    #[non_exhaustive]
+    #[discriminated_str(label)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum OutputView {
+        /// Everything in the feed except the code: printed text, values and messages.
+        #[default]
+        Everything = "everything",
+        Values = "values",
+        Printed = "printed",
+    }
+}
+
 /// The values of the *rendering* tab.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -94,6 +109,7 @@ pub struct RenderingSettings {
     /// Seconds each documentation example may take to be computed again, so
     /// its value is drawn from its structure; none computes nothing.
     pub example_seconds: u16,
+    pub output_view: OutputView,
 }
 
 impl Default for RenderingSettings {
@@ -114,6 +130,7 @@ impl Default for RenderingSettings {
             math_fonts: false,
             matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
             example_seconds: 0,
+            output_view: OutputView::default(),
         }
     }
 }
@@ -180,6 +197,7 @@ cyclic! {
         MatrixRowSpacing = "matrix row spacing",
         ExampleTimeout = "compute examples",
         ReferenceCodeBackground = "swap reference backgrounds",
+        OutputView = "output view",
     }
 }
 
@@ -216,6 +234,9 @@ impl SettingRow for RenderingSetting {
             }
             Self::ExampleTimeout => {
                 "run documentation examples again, each for at most this long, to draw their values"
+            }
+            Self::OutputView => {
+                "what the output view beside the session shows: everything but the code, values, or printed text"
             }
         }
     }
@@ -262,6 +283,11 @@ impl SettingRow for RenderingSetting {
             Self::MatrixRowSpacing => {
                 PickerValue::Stepped(format!("{}%", rendering.matrix_row_spacing_percent))
             }
+            Self::OutputView => {
+                PickerValue::among(OutputView::CHOICES, &rendering.output_view, |view| {
+                    view.label().into()
+                })
+            }
             Self::ExampleTimeout => PickerValue::Stepped(match rendering.example_seconds {
                 0 => "off".to_string(),
                 seconds => format!("{seconds}s"),
@@ -305,6 +331,7 @@ impl SettingRow for RenderingSetting {
                     UI.max_matrix_row_spacing_percent,
                 );
             }
+            Self::OutputView => rendering.output_view = rendering.output_view.cycle(delta),
             Self::ExampleTimeout => {
                 rendering.example_seconds = rendering
                     .example_seconds

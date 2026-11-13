@@ -375,8 +375,6 @@ impl Default for Keymaps {
                 keymap!(A::OpenKeymaps => Char('k') + Ctrl),
                 keymap!(A::ClearFeed => Char('l') + Alt),
                 keymap!(A::OpenCode => F(2)),
-                keymap!(A::OpenValues => F(3)),
-                keymap!(A::OpenStdOut => F(4)),
                 keymap!(A::OpenOutput => F(5)),
                 keymap!(A::OpenSyntaxTree => F(6)),
                 keymap!(A::Restart => Char('n') + Ctrl),

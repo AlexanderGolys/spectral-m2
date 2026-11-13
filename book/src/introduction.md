@@ -28,7 +28,7 @@ Documentation in the shell
 : `help` pages are drawn natively, with clickable links and examples coloured like your own cells, in a pane of their own. See [Documentation without leaving](shell/documentation.md).
 
 Views of the same session
-: Your code alone, your values alone, printed output alone, or the syntax tree, beside the live session. See [Views beside the session](shell/views.md).
+: Your code alone, its output alone, or the syntax tree, beside the live session, with documentation and files in tabs of their own. See [Views beside the session](shell/views.md).
 
 Sessions you can keep
 : Save a session as an `.m2` file, browse earlier ones, resume where you left off. See [Sessions and files](shell/sessions.md).

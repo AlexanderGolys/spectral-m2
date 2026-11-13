@@ -24,22 +24,20 @@ use crate::ui::element::EventListener;
 use crate::ui::feed::BlockView;
 use crate::ui::feed::Feed;
 use crate::ui::graphics::kitty::ImageId;
+use crate::ui::settings::rendering::OutputView;
 use crate::ui::statusline::{StatusLine, StatusLineContext};
 use crate::ui::syntax_tree::SyntaxTreeBlock;
 use crate::ui::theme::groups::{scheme, HLGroup};
 
 /// Content rendered by one workspace pane.
 #[discriminated_str(label)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ViewKind {
     #[default]
     Shell = "shell",
     Code = "code",
-    /// Returned values alone.
-    Values = "values",
-    /// Text the cells printed alone.
-    StdOut = "stdout",
-    /// Printed text and returned values together, without input cells.
+    /// What the session answered, without input cells, as the *output view* setting
+    /// selects it.
     Output = "output",
     SyntaxTree = "syntax tree",
     /// Documentation and source files opened for reference.
@@ -49,13 +47,7 @@ pub enum ViewKind {
 impl ViewKind {
     /// The views shown beside the session, in the order `Left` and `Right` step
     /// through them.
-    const PREVIEWS: [Self; 5] = [
-        Self::Code,
-        Self::Values,
-        Self::StdOut,
-        Self::Output,
-        Self::SyntaxTree,
-    ];
+    pub const PREVIEWS: [Self; 3] = [Self::Code, Self::Output, Self::SyntaxTree];
 
     pub fn is_preview(self) -> bool {
         Self::PREVIEWS.contains(&self)
@@ -452,12 +444,12 @@ impl Editor {
                         canvas,
                     ));
             }
-            ViewKind::Values | ViewKind::StdOut | ViewKind::Output => {
+            ViewKind::Output => {
                 let context = context.full_output().with_printed_numbers();
-                let blocks = match view {
-                    ViewKind::Values => self.feed.values(),
-                    ViewKind::StdOut => self.feed.printed(),
-                    _ => self.feed.outputs(),
+                let blocks = match self.settings.rendering.output_view {
+                    OutputView::Everything => self.feed.outputs(),
+                    OutputView::Values => self.feed.values(),
+                    OutputView::Printed => self.feed.printed(),
                 };
                 self.selection_inclusions.merge(
                     BlockView::new(&blocks, "no matching output").render(
@@ -695,7 +687,8 @@ mod tests {
             });
         }
 
-        let rows = drawn_rows(&mut editor, ViewKind::StdOut);
+        editor.settings.rendering.output_view = OutputView::Printed;
+        let rows = drawn_rows(&mut editor, ViewKind::Output);
         let row_of = |needle: &str| {
             rows.iter()
                 .position(|row| row.contains(needle))
@@ -748,7 +741,7 @@ mod tests {
     #[test]
     fn a_focused_view_lists_every_view_and_highlights_its_own() {
         let editor = Editor::new(String::new());
-        let view = ViewKind::Values;
+        let view = ViewKind::Output;
         let listed = |focused| -> Vec<(String, HLGroup)> {
             editor
                 .preview_status(view, focused)
@@ -778,11 +771,11 @@ mod tests {
     fn only_a_focused_view_claims_the_right_side_of_the_status_line() {
         let editor = Editor::new(String::new());
         assert!(!editor
-            .preview_status(ViewKind::Values, true)
+            .preview_status(ViewKind::Output, true)
             .right
             .is_empty());
         assert!(editor
-            .preview_status(ViewKind::Values, false)
+            .preview_status(ViewKind::Output, false)
             .right
             .is_empty());
     }

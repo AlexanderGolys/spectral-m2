@@ -1177,8 +1177,6 @@ impl Editor {
             | Action::OpenKeymaps
             | Action::ClearFeed
             | Action::OpenCode
-            | Action::OpenValues
-            | Action::OpenStdOut
             | Action::OpenOutput
             | Action::OpenSyntaxTree
             | Action::ClosePane
@@ -1217,8 +1215,6 @@ impl Editor {
                 Reaction::Continue
             }
             Action::OpenCode => self.leave_pickers(Reaction::Open(ViewKind::Code)),
-            Action::OpenValues => self.leave_pickers(Reaction::Open(ViewKind::Values)),
-            Action::OpenStdOut => self.leave_pickers(Reaction::Open(ViewKind::StdOut)),
             Action::OpenOutput => self.leave_pickers(Reaction::Open(ViewKind::Output)),
             Action::OpenSyntaxTree => self.leave_pickers(Reaction::Open(ViewKind::SyntaxTree)),
             Action::ClosePane => self.leave_pickers(Reaction::ClosePane),

@@ -53,6 +53,9 @@ compute examples
 swap reference backgrounds
 : Use the feed background for code in the reference pane. Default: off.
 
+output view
+: What the [output view](../shell/views.md) shows: `everything` in the feed except the code, only returned `values`, or only `printed` text. Default: everything.
+
 ## LSP
 
 language server

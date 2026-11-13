@@ -1,21 +1,28 @@
 use url::Url;
+fn source_tab(label: &str) -> super::previews::Opened {
+    super::previews::Opened {
+        label: label.to_string(),
+        kind: super::previews::OpenedKind::Source,
+    }
+}
+
 #[test]
 fn preview_tabs_retain_arbitrary_views_and_source_actions() {
     use super::previews::PreviewTab;
     use crate::ui::cell::TextBlock;
     use crate::ui::controller::ViewKind;
     let mut app = super::App::new(crate::backend::M2Backend::spawn().unwrap());
-    app.open_preview(ViewKind::Code, "code".into());
-    let code_tab = app.previews.active.unwrap();
+    let code_tab = PreviewTab::Fixed(ViewKind::Code);
+    app.select_preview(code_tab);
     app.panes.list[super::Panes::SPLIT].viewport.scroll = 7;
-    app.open_preview(ViewKind::Reference, "source".into());
+    app.open_preview(ViewKind::Reference, source_tab("source"));
     app.workspace.editor.open_reference(
         vec![Box::new(TextBlock::system("source text"))],
         Some("source.m2".into()),
     );
     let source_tab = app.previews.active.unwrap();
     app.previews.pin();
-    app.open_preview(ViewKind::Output, "output".into());
+    app.select_preview(PreviewTab::Fixed(ViewKind::Output));
     app.select_preview(code_tab);
     assert_eq!(app.panes.list[super::Panes::SPLIT].view, ViewKind::Code);
     assert_eq!(app.panes.list[super::Panes::SPLIT].viewport.scroll, 7);
@@ -207,7 +214,7 @@ fn clicked_documentation_is_rendered_outside_the_session_feed() {
     app.workspace.editor.paste("documentation draft");
     app.handle_reaction(Reaction::Documentation("\"isPrime\"".into()));
     let documentation_tab = app.previews.active.unwrap();
-    app.open_preview(ViewKind::Code, "code".into());
+    app.select_preview(super::previews::PreviewTab::Fixed(ViewKind::Code));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut terminal = Terminal::new(TestBackend::new(160, 35)).unwrap();
     loop {
@@ -222,7 +229,7 @@ fn clicked_documentation_is_rendered_outside_the_session_feed() {
         let split = app.pane_areas[super::Panes::SPLIT];
         let reference = split
             .positions()
-            .filter(|position| position.y > split.y)
+            .filter(|position| position.y >= split.y + super::PREVIEW_HEADER_ROWS)
             .map(|position| buffer[position].symbol())
             .collect::<String>();
         if reference.contains("isPrime") && app.documentation_requests.is_empty() {
@@ -333,8 +340,8 @@ fn control_arrows_move_the_inputs_cursor_by_words_with_a_preview_open() {
     use crate::ui::key::{KeyEvent, KeyMod};
     use crossterm::event::KeyCode;
     let mut app = super::App::new(crate::backend::M2Backend::spawn().unwrap());
-    app.open_preview(ViewKind::Code, "code".into());
-    app.open_preview(ViewKind::Output, "output".into());
+    app.handle_reaction(crate::ui::controller::Reaction::Open(ViewKind::Code));
+    app.handle_reaction(crate::ui::controller::Reaction::Open(ViewKind::Output));
     let shown = app.panes.list[super::Panes::SPLIT].view;
     assert!(app.panes.split());
     app.workspace.editor.paste("one two");
@@ -353,5 +360,80 @@ fn control_arrows_move_the_inputs_cursor_by_words_with_a_preview_open() {
         app.panes.list[super::Panes::SPLIT].view,
         shown,
         "Ctrl+PageUp steps the preview"
+    );
+}
+
+#[test]
+fn the_header_centres_the_title_and_gives_each_tab_one_cell() {
+    use super::previews::PreviewTab;
+    use super::PreviewControl;
+    use crate::ui::config::UI;
+    use crate::ui::controller::{Reaction, ViewKind};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::{backend::TestBackend, Terminal};
+    let mut app = super::App::new(crate::backend::M2Backend::spawn().unwrap());
+    app.open_preview(ViewKind::Reference, source_tab("notes.m2"));
+    app.handle_reaction(Reaction::Open(ViewKind::Code));
+    let mut terminal = Terminal::new(TestBackend::new(160, 20)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let split = app.pane_areas[super::Panes::SPLIT];
+    let buffer = terminal.backend().buffer();
+    let row = |y| {
+        (split.left()..split.right())
+            .map(|x| buffer[(x, y)].symbol().to_string())
+            .collect::<Vec<_>>()
+    };
+
+    let title = row(split.y);
+    let label = ViewKind::Code.label();
+    let start = title
+        .windows(label.len())
+        .position(|cells| cells.concat() == label)
+        .expect("the title names the view showing");
+    let after = title.len() - start - label.len();
+    assert!(
+        start.abs_diff(after) <= 1,
+        "{start} cells before, {after} after"
+    );
+
+    let tabs = row(split.y + 1);
+    let icons = tabs
+        .iter()
+        .filter(|cell| cell.trim() != "")
+        .cloned()
+        .collect::<Vec<_>>();
+    let glyphs = UI.glyphs;
+    assert_eq!(
+        icons,
+        [
+            glyphs.tab_source,
+            glyphs.tab_code,
+            glyphs.tab_output,
+            glyphs.tab_syntax_tree
+        ]
+        .map(|glyph| glyph.current().to_string())
+    );
+    assert!(
+        tabs.iter().position(|cell| *cell == icons[0]) < Some(tabs.len() / 2)
+            && tabs.iter().position(|cell| *cell == icons[1]) > Some(tabs.len() / 2),
+        "opened tabs sit left, the views always there right"
+    );
+
+    let opened = app
+        .preview_controls
+        .iter()
+        .find(|(_, control)| matches!(control, PreviewControl::Select(PreviewTab::Recent(_))))
+        .map(|(area, _)| *area)
+        .expect("the opened tab is clickable");
+    assert_eq!(opened.area(), 1);
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: opened.x,
+        row: opened.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(
+        app.panes.list[super::Panes::SPLIT].view,
+        ViewKind::Reference
     );
 }

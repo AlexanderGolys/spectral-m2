@@ -17,7 +17,7 @@ use crossterm::clipboard::CopyToClipboard;
 use crossterm::event::{Event, MouseButton, MouseEvent, MouseEventKind};
 use crossterm::execute;
 use lsp_types::ServerInfo;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::Alignment;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Paragraph;
@@ -25,7 +25,7 @@ use ratatui::Frame;
 
 use self::documentation::DocumentationBrowser;
 use self::panes::{pane_layout, ratio_for_width, Pane, Panes, MIN_PANE_WIDTH};
-use self::previews::{PreviewTab, PreviewTabs, RECENT_PREVIEWS};
+use self::previews::{Opened, OpenedKind, PreviewTab, PreviewTabs};
 use self::session::Session;
 use crate::backend::M2Backend;
 use crate::backend::SpecNet;
@@ -47,6 +47,7 @@ use crate::ui::controller::{
 };
 use crate::ui::floating::{Anchor, Floating, MarkupContent};
 use crate::ui::fold::FoldRanges;
+use crate::ui::glyphs::Glyph;
 use crate::ui::graphics;
 use crate::ui::key::{KeyEvent, Keyboard};
 use crate::ui::render::markdown;
@@ -61,6 +62,8 @@ const NO_LANGUAGE_SERVER: &str = "the language server is not running";
 const NOTHING_KNOWN: &str = "nothing is known about this";
 const CODE_NOT_IN_SESSION: &str = "that code is not part of the running session";
 const NO_DEFINITION: &str = "no definition found";
+/// Rows above the view beside the session: its title, then a cell for each tab.
+const PREVIEW_HEADER_ROWS: u16 = 2;
 
 struct PreviewSnapshot {
     pane: Pane,
@@ -230,9 +233,13 @@ impl App {
                 _ => {}
             }
         }
-        if !editor.picker_open()
-            && (self.panes.step_split_view(key) || self.panes.focused_mut().handle_key(key))
-        {
+        if let Some(direction) = self.panes.split_step(key).filter(|_| !editor.picker_open()) {
+            if let Some(tab) = self.previews.neighbour(direction) {
+                self.select_preview(tab);
+            }
+            return true;
+        }
+        if !editor.picker_open() && self.panes.focused_mut().handle_key(key) {
             return true;
         }
         let reaction = if previewing {
@@ -498,8 +505,14 @@ impl App {
                 true
             }
             Reaction::Open(view) => {
-                self.open_preview(view, view.label().to_string());
-                true
+                let tab = PreviewTab::Fixed(view);
+                match self.panes.split() && self.previews.active == Some(tab) {
+                    true => self.handle_reaction(Reaction::ClosePane),
+                    false => {
+                        self.select_preview(tab);
+                        true
+                    }
+                }
             }
             Reaction::ClosePane => {
                 let current = self.take_preview();
@@ -610,9 +623,9 @@ impl App {
         Some(PreviewSnapshot { pane, reference })
     }
 
-    fn open_preview(&mut self, view: ViewKind, label: String) {
+    fn open_preview(&mut self, view: ViewKind, opened: Opened) {
         let current = self.take_preview();
-        self.previews.open(current, label);
+        self.previews.open(current, opened);
         let replaced = self.previews.active;
         self.documentation_requests
             .retain(|_, tab| Some(*tab) != replaced);
@@ -776,7 +789,15 @@ impl App {
             return;
         }
         let current = self.take_preview();
-        if let Some(snapshot) = self.previews.select(tab, current) {
+        let snapshot = match (self.previews.select(tab, current), tab) {
+            (Some(snapshot), _) => Some(snapshot),
+            (None, PreviewTab::Fixed(view)) => Some(PreviewSnapshot {
+                pane: Pane::new(view),
+                reference: None,
+            }),
+            (None, _) => None,
+        };
+        if let Some(snapshot) = snapshot {
             if self.panes.split() {
                 self.panes.list[Panes::SPLIT] = snapshot.pane;
             } else {
@@ -788,60 +809,96 @@ impl App {
         }
     }
 
+    /// The view's title centred over its own row, the back and bookmark controls at
+    /// its start; beneath, a cell for each tab the user opened on the left and for
+    /// each view always there on the right.
     fn draw_preview_header(&mut self, frame: &mut Frame<'_>) {
         self.preview_controls.clear();
         let Some(area) = self
             .pane_areas
             .get(Panes::SPLIT)
             .copied()
-            .filter(|area| !area.is_empty())
+            .filter(|area| area.height >= PREVIEW_HEADER_ROWS)
         else {
             return;
         };
-        let header = Rect::new(area.x, area.y, area.width, 1);
         let theme = scheme();
-        let mut controls = vec![
-            (PreviewControl::Back, " ‹ ".to_string()),
-            (PreviewControl::Bookmark, " ☆ ".to_string()),
+        let title = self
+            .previews
+            .active
+            .and_then(|tab| self.previews.label(tab))
+            .unwrap_or_default();
+        frame.render_widget(
+            Paragraph::new(title)
+                .style(theme.style(HLGroup::ViewLabelActive))
+                .alignment(Alignment::Center),
+            Rect::new(area.x, area.y, area.width, 1),
+        );
+        let glyphs = UI.glyphs;
+        let controls = [
+            (PreviewControl::Back, glyphs.tab_back),
+            (PreviewControl::Bookmark, glyphs.tab_pin),
         ];
-        controls.extend((0..RECENT_PREVIEWS).map(|index| {
-            let tab = PreviewTab::Recent(index);
-            (
-                PreviewControl::Select(tab),
-                format!(
-                    " {}:{} ",
-                    index + 1,
-                    self.previews.label(tab).unwrap_or("—")
-                ),
-            )
-        }));
-        controls.push((
-            PreviewControl::Select(PreviewTab::Bookmark),
-            format!(
-                " ★:{} ",
-                self.previews.label(PreviewTab::Bookmark).unwrap_or("—")
-            ),
-        ));
-        let constraints = controls.iter().enumerate().map(|(index, _)| {
-            if index < 2 {
-                Constraint::Length(3)
-            } else {
-                Constraint::Ratio(1, (RECENT_PREVIEWS + 1) as u32)
-            }
-        });
-        let cells = Layout::horizontal(constraints).split(header);
-        for ((control, label), area) in controls.into_iter().zip(cells.iter().copied()) {
-            let selected =
-                matches!(control, PreviewControl::Select(tab) if self.previews.active == Some(tab));
-            let style = if selected {
-                theme
-                    .style(HLGroup::MarkupLink)
-                    .add_modifier(Modifier::REVERSED)
-            } else {
-                theme.style(HLGroup::Muted)
+        for (index, (control, glyph)) in controls.into_iter().enumerate() {
+            let column = area.x + 1 + 2 * index as u16;
+            self.draw_header_cell(frame, Position::new(column, area.y), glyph, control);
+        }
+        let tabs = area.y + 1;
+        let opened = self.previews.opened_tabs().collect::<Vec<_>>();
+        for (index, tab) in opened.into_iter().enumerate() {
+            let glyph = match (tab, self.previews.opened(tab).map(|opened| opened.kind)) {
+                (PreviewTab::Bookmark, _) => glyphs.tab_bookmark,
+                (_, Some(OpenedKind::Documentation)) => glyphs.tab_documentation,
+                _ => glyphs.tab_source,
             };
-            frame.render_widget(Paragraph::new(label).style(style), area);
-            self.preview_controls.push((area, control));
+            let column = area.x + 1 + 2 * index as u16;
+            self.draw_header_cell(
+                frame,
+                Position::new(column, tabs),
+                glyph,
+                PreviewControl::Select(tab),
+            );
+        }
+        let fixed = ViewKind::PREVIEWS;
+        for (index, view) in fixed.into_iter().enumerate() {
+            let glyph = match view {
+                ViewKind::Code => glyphs.tab_code,
+                ViewKind::SyntaxTree => glyphs.tab_syntax_tree,
+                _ => glyphs.tab_output,
+            };
+            let column = area
+                .right()
+                .saturating_sub(2 * (fixed.len() - index) as u16);
+            self.draw_header_cell(
+                frame,
+                Position::new(column, tabs),
+                glyph,
+                PreviewControl::Select(PreviewTab::Fixed(view)),
+            );
+        }
+    }
+
+    /// One cell of the header, highlighted when it is the tab showing.
+    fn draw_header_cell(
+        &mut self,
+        frame: &mut Frame<'_>,
+        at: Position,
+        glyph: Glyph,
+        control: PreviewControl,
+    ) {
+        let theme = scheme();
+        let style = match control {
+            PreviewControl::Select(tab) if self.previews.active == Some(tab) => theme
+                .style(HLGroup::MarkupLink)
+                .add_modifier(Modifier::REVERSED),
+            _ => theme.style(HLGroup::Muted),
+        };
+        let cell = Rect::new(at.x, at.y, 1, 1);
+        if frame.area().contains(at) {
+            frame.buffer_mut()[at]
+                .set_symbol(glyph.current())
+                .set_style(style);
+            self.preview_controls.push((cell, control));
         }
     }
 
@@ -868,10 +925,14 @@ impl App {
                 ];
                 self.open_preview(
                     ViewKind::Reference,
-                    path.file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
+                    Opened {
+                        label: path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned(),
+                        kind: OpenedKind::Source,
+                    },
                 );
                 self.workspace
                     .editor
@@ -898,7 +959,13 @@ impl App {
             }
             return;
         }
-        self.open_preview(ViewKind::Reference, target.trim_matches('"').to_string());
+        self.open_preview(
+            ViewKind::Reference,
+            Opened {
+                label: target.trim_matches('"').to_string(),
+                kind: OpenedKind::Documentation,
+            },
+        );
         self.workspace.editor.open_reference(
             vec![Box::new(TextBlock::system("opening documentation…"))],
             None,
@@ -988,8 +1055,8 @@ impl App {
                 continue;
             }
             if pane == Panes::SPLIT {
-                area.y += 1;
-                area.height = area.height.saturating_sub(1);
+                area.y += PREVIEW_HEADER_ROWS;
+                area.height = area.height.saturating_sub(PREVIEW_HEADER_ROWS);
             }
             let view = self.panes.list[pane].view;
             workspace

@@ -38,16 +38,13 @@ impl Pane {
         None
     }
 
-    /// Interpret unbound navigation as private input for the current preview:
-    /// `Left` and `Right` step to the neighbouring view, `Up` and `Down` scroll.
-    /// The shell and the reference pane keep their keys.
+    /// Interpret unbound `Up` and `Down` as scrolling the current preview. The
+    /// shell and the reference pane keep their keys.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         if !self.view.is_preview() {
             return false;
         }
         match key.code {
-            KeyCode::Left => *self = Self::new(self.view.cycle(-1)),
-            KeyCode::Right => *self = Self::new(self.view.cycle(1)),
             KeyCode::Up => self.viewport.scroll = self.viewport.scroll.saturating_sub(1),
             KeyCode::Down => self.viewport.scroll += 1,
             _ => return false,
@@ -127,20 +124,16 @@ impl Panes {
         }
     }
 
-    /// Step the view beside the session with `Ctrl+PageUp` or `Ctrl+PageDown` while
-    /// the shell has focus, its arrows moving through the input; whether it did.
-    pub fn step_split_view(&mut self, key: KeyEvent) -> bool {
-        let step = match key.code {
-            KeyCode::PageUp => KeyCode::Left,
-            KeyCode::PageDown => KeyCode::Right,
-            _ => return false,
+    /// The direction `Ctrl+PageUp` or `Ctrl+PageDown` steps the view beside the
+    /// session while the shell has focus, its arrows moving through the input.
+    pub fn split_step(&self, key: KeyEvent) -> Option<i8> {
+        let direction = match key.code {
+            KeyCode::PageUp => -1,
+            KeyCode::PageDown => 1,
+            _ => return None,
         };
-        key.ctrl()
-            && !key.shift()
-            && !key.alt()
-            && self.split()
-            && self.active != Self::SPLIT
-            && self.list[Self::SPLIT].handle_key(step.into())
+        (key.ctrl() && !key.shift() && !key.alt() && self.split() && self.active != Self::SPLIT)
+            .then_some(direction)
     }
 }
 
@@ -192,12 +185,9 @@ mod tests {
     }
 
     #[test]
-    fn control_page_keys_leave_a_reference_pane_in_place() {
+    fn a_reference_pane_keeps_its_arrow_keys() {
         let mut panes = Panes::new();
         panes.open_view(ViewKind::Reference);
-        assert!(!panes.step_split_view(KeyCode::PageDown + KeyMod::Ctrl));
-        assert!(!panes.step_split_view(KeyCode::PageUp + KeyMod::Ctrl));
-        assert_eq!(panes.list[Panes::SPLIT].view, ViewKind::Reference);
         let reference = &mut panes.list[Panes::SPLIT];
         assert!(!reference.handle_key(KeyCode::Left.into()));
         assert!(!reference.handle_key(KeyCode::Right.into()));
@@ -210,14 +200,13 @@ mod tests {
     #[test]
     fn control_page_keys_step_the_view_beside_a_focused_shell() {
         let mut panes = Panes::new();
-        assert!(!panes.step_split_view(KeyCode::PageDown + KeyMod::Ctrl));
+        assert_eq!(panes.split_step(KeyCode::PageDown + KeyMod::Ctrl), None);
         panes.open_view(ViewKind::Code);
-        assert!(panes.step_split_view(KeyCode::PageDown + KeyMod::Ctrl));
-        assert_eq!(panes.list[Panes::SPLIT].view, ViewKind::Code.cycle(1));
-        assert!(panes.step_split_view(KeyCode::PageUp + KeyMod::Ctrl));
-        assert_eq!(panes.list[Panes::SPLIT].view, ViewKind::Code);
-        assert!(
-            !panes.step_split_view(KeyCode::PageDown.into()),
+        assert_eq!(panes.split_step(KeyCode::PageDown + KeyMod::Ctrl), Some(1));
+        assert_eq!(panes.split_step(KeyCode::PageUp + KeyMod::Ctrl), Some(-1));
+        assert_eq!(
+            panes.split_step(KeyCode::PageDown.into()),
+            None,
             "plain page keys scroll"
         );
         for word_motion in [
@@ -225,12 +214,12 @@ mod tests {
             KeyCode::Left + KeyMod::Ctrl,
             KeyCode::Right + KeyMod::Ctrl + KeyMod::Shift,
         ] {
-            assert!(
-                !panes.step_split_view(word_motion),
+            assert_eq!(
+                panes.split_step(word_motion),
+                None,
                 "word motion stays the input's"
             );
         }
-        assert_eq!(panes.list[Panes::SPLIT].view, ViewKind::Code);
         assert_eq!(panes.active, 0);
     }
 

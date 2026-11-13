@@ -64,6 +64,16 @@ pub struct Glyphs(
     step_forward,
     // Divides a picker's rows from what it shows beneath them.
     picker_rule,
+    // One cell for each tab of the pane beside the session.
+    tab_documentation,
+    tab_source,
+    tab_bookmark,
+    tab_code,
+    tab_output,
+    tab_syntax_tree,
+    // Before the tab's title: back to the previous tab, and bookmark this one.
+    tab_back,
+    tab_pin,
 );
 
 impl Glyphs {
@@ -97,6 +107,14 @@ pub const GLYPHS: Glyphs = Glyphs {
     step_back: Glyph::new("‹", "<"),
     step_forward: Glyph::new("›", ">"),
     picker_rule: Glyph::new("─", "-"),
+    tab_documentation: Glyph::new("󰗚", "d"),
+    tab_source: Glyph::new("󰈮", "f"),
+    tab_bookmark: Glyph::new("★", "*"),
+    tab_code: Glyph::new("󰅩", "c"),
+    tab_output: Glyph::new("󰞷", "o"),
+    tab_syntax_tree: Glyph::new("󰙅", "t"),
+    tab_back: Glyph::new("‹", "<"),
+    tab_pin: Glyph::new("☆", "+"),
 };
 
 #[cfg(test)]
@@ -124,6 +142,14 @@ mod tests {
             glyphs.step_back,
             glyphs.step_forward,
             glyphs.picker_rule,
+            glyphs.tab_documentation,
+            glyphs.tab_source,
+            glyphs.tab_bookmark,
+            glyphs.tab_code,
+            glyphs.tab_output,
+            glyphs.tab_syntax_tree,
+            glyphs.tab_back,
+            glyphs.tab_pin,
         ] {
             assert_eq!(UnicodeWidthStr::width(glyph.for_basic(true)), 1);
             assert_eq!(UnicodeWidthStr::width_cjk(glyph.for_basic(true)), 1);

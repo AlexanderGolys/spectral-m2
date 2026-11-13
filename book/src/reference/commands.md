@@ -14,14 +14,8 @@ Commands are handled by the shell, never sent to Macaulay2. Type `/` into an emp
 `/code`, `F2`
 : Show your committed code beside the session.
 
-`/values`, `F3`
-: Show returned values beside the session.
-
-`/stdout`, `F4`
-: Show printed text beside the session.
-
 `/output`, `F5`
-: Show printed text and values, without the code, beside the session.
+: Show the session's output, without the code, beside the session; the *output view* setting chooses which.
 
 `/ast`, `F6`
 : Show the syntax tree of the committed code beside the session.
