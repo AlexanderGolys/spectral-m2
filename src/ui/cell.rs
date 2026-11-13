@@ -38,6 +38,10 @@ use crate::ui::config::UI;
 use crate::ui::glyphs::Glyph;
 use crate::ui::theme::groups::Groups;
 
+/// A source file's gutter is as wide as its last line number times this: two
+/// columns more, for a space and the fold marker after the number.
+const LINE_NUMBER_ROOM: u32 = 100;
+
 macro_rules! row_count {
     ($rows:expr) => {
         u16::try_from($rows).unwrap_or(u16::MAX)
@@ -295,6 +299,8 @@ impl M2CodeCell {
 /// One feed block containing one or more lexical input cells.
 pub struct CodeBlock {
     cells: Vec<M2CodeCell>,
+    /// The widest number the gutter makes room for, beyond its cells' own.
+    widest_number: u32,
 }
 
 /// A source document with semantic colours and an optional referenced fragment,
@@ -314,14 +320,18 @@ struct SourceRow {
 
 impl SourceBlock {
     pub fn new(source: String, page: u64, focus: Option<Range<usize>>) -> Self {
+        let lines = source.lines().count().max(1) as u32;
         let cell = M2CodeCell::highlighted(
             source,
             None,
             SourceId::Page { page, index: 0 },
             &mut SyntaxHighlighter::new(),
         );
+        let mut code = CodeBlock::new([cell]);
+        // Room for the last line's number, a space, and the fold marker.
+        code.widest_number = lines.saturating_mul(LINE_NUMBER_ROOM);
         Self {
-            code: RefCell::new(CodeBlock::new([cell])),
+            code: RefCell::new(code),
             page,
             focus,
             folds: LineFolds::default(),
@@ -459,15 +469,25 @@ impl Block for SourceBlock {
         }
         let (separator, gutter) = self.gutter();
         let style = context.groups().fold_marker();
+        let number_style = context.groups().cell_number();
+        let number_width = usize::from(separator.saturating_sub(UI.cell_margin + 2));
         let code = self.code.borrow();
         for (index, row) in Self::line_starts(&rows) {
-            let (Some(range), Some(y)) = (self.folds.starting_at(row.line), shown[index]) else {
+            let Some(y) = shown[index]
+                .map(|y| area.y + y)
+                .filter(|y| *y < area.bottom())
+            else {
                 continue;
             };
-            let y = area.y + y;
-            if y >= area.bottom() {
+            buffer.set_string(
+                area.x + UI.cell_margin,
+                y,
+                format!("{:>number_width$}", row.line + 1),
+                number_style,
+            );
+            let Some(range) = self.folds.starting_at(row.line) else {
                 continue;
-            }
+            };
             let folded = self.folds.is_folded(row.line);
             let glyph = match folded {
                 true => UI.glyphs.fold_closed,
@@ -525,6 +545,7 @@ impl CodeBlock {
     pub fn new(cells: impl IntoIterator<Item = M2CodeCell>) -> Self {
         Self {
             cells: cells.into_iter().collect(),
+            widest_number: 0,
         }
     }
 
@@ -532,7 +553,9 @@ impl CodeBlock {
         self.cells
             .iter()
             .filter_map(|cell| cell.marker().number())
+            .chain([self.widest_number])
             .max()
+            .filter(|widest| *widest > 0)
             .map_or_else(CellLayout::plain, CellLayout::numbered)
     }
 
@@ -2692,6 +2715,34 @@ mod tests {
 
         assert!(block.toggle_fold(Position::new(0, first), &context));
         assert_eq!(block.height(&context), unfolded);
+    }
+
+    /// A source file beside the session numbers its lines, each number leaving
+    /// room for the fold marker of the stretch it starts.
+    #[test]
+    fn a_source_numbers_its_lines_beside_its_fold_markers() {
+        let source = (1..=12).map(|n| format!("x{n} = {n}")).collect::<Vec<_>>();
+        let ranges = FoldRanges::default();
+        ranges.borrow_mut().push(9..=11);
+        let block = SourceBlock::new(source.join("\n"), 0, None).with_folds(ranges);
+        let context = RenderContext::new(60, 0);
+        let rows = drawn_rows(&block, &context);
+        for (index, line) in source.iter().enumerate() {
+            let row = rows
+                .iter()
+                .find(|row| row.contains(line.as_str()))
+                .unwrap_or_else(|| panic!("{line} is drawn: {rows:?}"));
+            let gutter = &row[..row.find(line.as_str()).unwrap()];
+            let number = (index + 1).to_string();
+            assert_eq!(
+                gutter.split_whitespace().next(),
+                Some(number.as_str()),
+                "{row}"
+            );
+            if index == 9 {
+                assert!(gutter.contains(UI.glyphs.fold_open.current()), "{row}");
+            }
+        }
     }
 
     #[test]

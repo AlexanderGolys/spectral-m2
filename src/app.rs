@@ -62,6 +62,7 @@ const NO_LANGUAGE_SERVER: &str = "the language server is not running";
 const NOTHING_KNOWN: &str = "nothing is known about this";
 const CODE_NOT_IN_SESSION: &str = "that code is not part of the running session";
 const NO_DEFINITION: &str = "no definition found";
+const NO_NAME_AT_POINT: &str = "no name here to look up";
 /// Rows above the view beside the session: its title, then a cell for each tab.
 const PREVIEW_HEADER_ROWS: u16 = 2;
 
@@ -135,7 +136,12 @@ struct App {
 /// What an answer from the language server is for.
 #[derive(Clone, Debug)]
 enum Asked {
-    Lookup(Lookup, Anchor),
+    /// A lookup about `name`, the name at the point it was asked, when known.
+    Lookup {
+        lookup: Lookup,
+        anchor: Anchor,
+        name: Option<String>,
+    },
     /// Where the name under the cursor occurs, in the input at a revision.
     Occurrences(u64),
     /// The call the cursor is in, in the input at a revision.
@@ -412,7 +418,8 @@ impl App {
         match reaction {
             Reaction::Continue => true,
             Reaction::Documentation(target) => {
-                self.open_documentation(target);
+                let label = target.trim_matches('"').to_string();
+                self.open_documentation(target, label);
                 true
             }
             Reaction::DocumentationInFeed(target) => {
@@ -636,34 +643,39 @@ impl App {
         }
     }
 
-    /// Show `blocks` beside the session for a moment, holding no tab of its own.
-    fn show_transient(&mut self, blocks: Vec<Box<dyn Block>>) {
-        let current = self.take_preview();
-        self.previews.open_transient(current);
-        if self.panes.split() {
-            self.panes.list[Panes::SPLIT] = Pane::new(ViewKind::Reference);
-        } else {
-            self.panes.open_view(ViewKind::Reference);
-        }
-        self.workspace.editor.open_reference(blocks, None);
-    }
-
     /// Put `lookup` to the language server about the name at `point`.
     fn look_up(&mut self, lookup: Lookup, point: CodePoint) {
         let workspace = &mut self.workspace;
-        let question = match lookup {
-            Lookup::Brief | Lookup::Description => Question::Hover,
-            Lookup::Definition => Question::Definition,
-        };
         let source = match point.source {
             CodeSource::Input => workspace.highlighter.draft(),
             CodeSource::Cell { submission, index } => workspace.highlighter.cell(submission, index),
+        };
+        let name = source.and_then(|source| workspace.highlighter.name_at(source, point.offset));
+        let question = match lookup {
+            Lookup::Brief | Lookup::Description => Question::Hover,
+            Lookup::Definition => Question::Definition,
+            Lookup::Documentation => {
+                match name {
+                    Some(name) => self.open_documentation(format!("symbol {name}"), name),
+                    None => {
+                        workspace
+                            .editor
+                            .apply(EditorUpdate::Diagnostic(NO_NAME_AT_POINT.to_string()));
+                    }
+                }
+                return;
+            }
         };
         let asked =
             source.and_then(|source| workspace.highlighter.ask(source, point.offset, question));
         let unanswered = match (asked, workspace.highlighter.serving()) {
             (Some(id), _) => {
-                self.asked.insert(id, Asked::Lookup(lookup, point.anchor));
+                let asked = Asked::Lookup {
+                    lookup,
+                    anchor: point.anchor,
+                    name,
+                };
+                self.asked.insert(id, asked);
                 return;
             }
             (None, false) => NO_LANGUAGE_SERVER,
@@ -703,25 +715,48 @@ impl App {
     fn answered(&mut self, asked: Asked, answer: Answer) -> bool {
         let editor = &mut self.workspace.editor;
         match (asked, answer) {
-            (Asked::Lookup(Lookup::Brief, anchor), Answer::Hover(Some(text))) => {
-                editor.apply(EditorUpdate::Float(Floating::new(
-                    MarkupContent::from_markdown(markdown::lead(&text)),
+            (
+                Asked::Lookup {
+                    lookup: Lookup::Brief,
                     anchor,
-                )))
-            }
-            (Asked::Lookup(Lookup::Description, _), Answer::Hover(Some(text))) => {
+                    ..
+                },
+                Answer::Hover(Some(text)),
+            ) => editor.apply(EditorUpdate::Float(Floating::new(
+                MarkupContent::from_markdown(markdown::lead(&text)),
+                anchor,
+            ))),
+            (
+                Asked::Lookup {
+                    lookup: Lookup::Description,
+                    name,
+                    ..
+                },
+                Answer::Hover(Some(text)),
+            ) => {
                 let html = markdown::html(&text);
                 let width = usize::from(self.pane_areas.last().map_or(0, |area| area.width));
-                self.show_transient(vec![Box::new(
-                    OutputBlock::rendered(SpecNet::document(html, text, width), None)
-                        .without_frame(),
-                )]);
+                let label = name.unwrap_or_else(|| ViewKind::Reference.label().to_string());
+                self.open_preview(
+                    ViewKind::Reference,
+                    Opened {
+                        label,
+                        kind: OpenedKind::Hover,
+                    },
+                );
+                self.workspace.editor.open_reference(
+                    vec![Box::new(
+                        OutputBlock::rendered(SpecNet::document(html, text, width), None)
+                            .without_frame(),
+                    )],
+                    None,
+                );
                 true
             }
-            (Asked::Lookup(_, _), Answer::Hover(None)) => {
+            (Asked::Lookup { .. }, Answer::Hover(None)) => {
                 editor.apply(EditorUpdate::Diagnostic(NOTHING_KNOWN.to_string()))
             }
-            (Asked::Lookup(_, _), Answer::Definition(places)) => match places.into_iter().next() {
+            (Asked::Lookup { .. }, Answer::Definition(places)) => match places.into_iter().next() {
                 Some(place) => self.go_to(place),
                 None => editor.apply(EditorUpdate::Diagnostic(NO_DEFINITION.to_string())),
             },
@@ -849,6 +884,7 @@ impl App {
             let glyph = match (tab, self.previews.opened(tab).map(|opened| opened.kind)) {
                 (PreviewTab::Bookmark, _) => glyphs.tab_bookmark,
                 (_, Some(OpenedKind::Documentation)) => glyphs.tab_documentation,
+                (_, Some(OpenedKind::Hover)) => glyphs.tab_hover,
                 _ => glyphs.tab_source,
             };
             let column = area.x + 1 + 2 * index as u16;
@@ -943,7 +979,8 @@ impl App {
         }
     }
 
-    fn open_documentation(&mut self, target: String) {
+    /// Open the documentation `help target` shows in a tab titled `label`.
+    fn open_documentation(&mut self, target: String, label: String) {
         if target.starts_with("file:") {
             match SourceLink::parse(&target) {
                 Some(source) => {
@@ -962,7 +999,7 @@ impl App {
         self.open_preview(
             ViewKind::Reference,
             Opened {
-                label: target.trim_matches('"').to_string(),
+                label,
                 kind: OpenedKind::Documentation,
             },
         );

@@ -66,6 +66,7 @@ pub struct Glyphs(
     picker_rule,
     // One cell for each tab of the pane beside the session.
     tab_documentation,
+    tab_hover,
     tab_source,
     tab_bookmark,
     tab_code,
@@ -108,6 +109,7 @@ pub const GLYPHS: Glyphs = Glyphs {
     step_forward: Glyph::new("›", ">"),
     picker_rule: Glyph::new("─", "-"),
     tab_documentation: Glyph::new("󰗚", "d"),
+    tab_hover: Glyph::new("󰋽", "i"),
     tab_source: Glyph::new("󰈮", "f"),
     tab_bookmark: Glyph::new("★", "*"),
     tab_code: Glyph::new("󰅩", "c"),
@@ -143,6 +145,7 @@ mod tests {
             glyphs.step_forward,
             glyphs.picker_rule,
             glyphs.tab_documentation,
+            glyphs.tab_hover,
             glyphs.tab_source,
             glyphs.tab_bookmark,
             glyphs.tab_code,

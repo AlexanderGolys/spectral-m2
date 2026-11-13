@@ -246,6 +246,31 @@ fn clicked_documentation_is_rendered_outside_the_session_feed() {
     assert!(!app.workspace.session.busy());
 }
 
+/// The documentation jump runs `help symbol` on the whole name at the cursor
+/// and opens it as a documentation tab named after it, with no language server.
+#[test]
+fn the_documentation_jump_opens_the_page_of_the_name_at_the_cursor() {
+    use super::previews::OpenedKind;
+    use crate::ui::controller::{CodePoint, CodeSource, Lookup, Reaction};
+    use crate::ui::floating::Anchor;
+    let mut app = super::App::new(crate::backend::M2Backend::spawn().unwrap());
+    app.workspace.editor.paste("isPrime 7");
+    app.poll();
+    app.handle_reaction(Reaction::Lookup(
+        Lookup::Documentation,
+        CodePoint {
+            source: CodeSource::Input,
+            offset: 3,
+            anchor: Anchor::InputCursor,
+        },
+    ));
+    let tab = app.previews.active.expect("a tab opens");
+    let opened = app.previews.opened(tab).expect("one the user opened");
+    assert_eq!(opened.label, "isPrime");
+    assert_eq!(opened.kind, OpenedKind::Documentation);
+    assert_eq!(app.documentation_requests.len(), 1);
+}
+
 #[test]
 fn source_file_links_preview_encoded_paths_without_evaluating_them() {
     use ratatui::{backend::TestBackend, Terminal};

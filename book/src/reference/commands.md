@@ -5,7 +5,7 @@ Commands are handled by the shell, never sent to Macaulay2. Type `/` into an emp
 `/settings`, `Ctrl+O`
 : Open the settings. See [Settings](settings.md).
 
-`/keymaps`, `Ctrl+K`
+`/keymaps`, `Ctrl+Shift+K`
 : Open the settings on the keymaps tab. See [Keymaps](../custom/keymaps.md).
 
 `/clear`, `Alt+L`

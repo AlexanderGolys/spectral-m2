@@ -126,6 +126,8 @@ pub enum Lookup {
     Description,
     /// Where it is defined.
     Definition,
+    /// Its documentation page, beside the session.
+    Documentation,
 }
 
 /// The code a point is in.
@@ -1082,6 +1084,7 @@ impl Editor {
                 Action::Describe => return self.look_up_at_caret(Lookup::Brief),
                 Action::DescribeBeside => return self.look_up_at_caret(Lookup::Description),
                 Action::GoToDefinition => return self.look_up_at_caret(Lookup::Definition),
+                Action::GoToDocumentation => return self.look_up_at_caret(Lookup::Documentation),
                 _ => {}
             }
         }
@@ -1157,6 +1160,7 @@ impl Editor {
             Action::Describe => return at_cursor(Lookup::Brief),
             Action::DescribeBeside => return at_cursor(Lookup::Description),
             Action::GoToDefinition => return at_cursor(Lookup::Definition),
+            Action::GoToDocumentation => return at_cursor(Lookup::Documentation),
             Action::FormatInput => return Reaction::Format(self.input.text().to_string()),
             Action::CopySelection | Action::CutSelection => {
                 unreachable!("copying and cutting are handled before editing")
@@ -1265,6 +1269,7 @@ impl Editor {
             | Action::Describe
             | Action::DescribeBeside
             | Action::GoToDefinition
+            | Action::GoToDocumentation
             | Action::FormatInput
             | Action::CopySelection => return None,
         })

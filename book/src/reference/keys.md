@@ -10,7 +10,7 @@ Every key below can be [rebound](../custom/keymaps.md) unless marked *fixed*. Th
 | `Ctrl+C` | Cancel the computation and queued work; when idle, discard a continuation or draft, then quit. |
 | `Ctrl+/` | Open the commands. |
 | `Ctrl+O` | Open the settings. |
-| `Ctrl+K` | Open the keymaps. |
+| `Ctrl+Shift+K` | Open the keymaps. |
 | `Alt+L` | Clear the feed. |
 | `F2` … `F6` | Show code, values, printed output, all output, or the syntax tree beside the session. |
 | `F7` | Browse saved sessions. |
@@ -25,8 +25,9 @@ Every key below can be [rebound](../custom/keymaps.md) unless marked *fixed*. Th
 | `Ctrl+E` | Move the cursor into the feed or the focused view, and back; see [the view cursor](#the-view-cursor). |
 | `Alt+Up`, `Alt+Down` | Select the previous or next cell or result. |
 | `Alt+K` | Tell what the name at the cursor is, in a panel beside it. |
-| `Alt+Shift+K` | Describe the name at the cursor beside the session. |
 | `Ctrl+]` (`Ctrl+5`) | Go to where the name at the cursor is defined. |
+| `Alt+]` | Describe the name at the cursor beside the session, in a tab of its own. |
+| `Ctrl+K` | Open the documentation of the name at the cursor beside the session. |
 | `Alt+Shift+F` | Format the input. |
 | `PageUp`, `PageDown` | Scroll the feed a page, keeping *scrolloff* rows of the last one in sight. *Fixed.* |
 | `Alt+PageUp` | Scroll to the start of the block at the top of the feed or view; again, to the start of the one before. |
@@ -111,7 +112,7 @@ After `Ctrl+E` the cursor sits on the last text of the focused pane, the feed or
 | `y` | Copy the selection. |
 | `Alt+Shift+Up` | Select what a double-click would. |
 | `Enter` | Open the link under the cursor beside the session; else fold or unfold the value; else switch to the formatter whose icon it is on. |
-| `K`, `Alt+K`, `Alt+Shift+K`, `Ctrl+]` | Ask the language server about the session code under the cursor. |
+| `K`, `Alt+K`, `Ctrl+]`, `Alt+]`, `Ctrl+K` | Ask about the name in the session code under the cursor, or open its documentation. |
 | `Esc`, `q`, `i`, `Ctrl+E` | Go back to the input. |
 
 ## Mouse

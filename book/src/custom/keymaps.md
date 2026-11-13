@@ -4,7 +4,7 @@ Every command and every editing key can be rebound, in the same picker as the ot
 
 ## Rebind a key
 
-1. Open the keymaps with `Ctrl+K`, or `/keymaps`. It is the last tab of the settings.
+1. Open the keymaps with `Ctrl+Shift+K`, or `/keymaps`. It is the last tab of the settings.
 2. Select a row and press `Enter`. Its key changes to *Type keybind…*.
 3. Press the new shortcut, or `Esc` to keep the old one.
 

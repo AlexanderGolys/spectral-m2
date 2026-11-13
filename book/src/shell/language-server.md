@@ -7,21 +7,32 @@ g = x -> x + 1
 ideal(g 2, 3
 ```
 
-Put the cursor on `ideal` and press `Alt+K`: a small panel above the cursor shows its signatures and the line saying what it does. Press `Alt+Shift+K` for everything the server knows, shown beside the session.
+Put the cursor on `ideal` and press `Alt+K`: a small panel above the cursor shows its signatures and the line saying what it does. Press `Alt+]` for everything the server knows, shown beside the session, or `Ctrl+K` for the documentation page of `ideal`.
 
 ## Ask what a name is
 
 `Alt+K`
 : A small panel floats above the cursor with the start of the description: the signature or type and its headline. Any key or click puts it away.
 
-`Alt+Shift+K`
-: The whole description opens beside the session, its links leading to the documentation. It takes no tab of its own: choose any tab and it is gone, while the tab it covered is kept as it was.
-
 Middle-click
 : A middle click on code in the input asks the same as `Alt+K` about the name under the pointer, the panel floating beside the click.
 
-In the feed
-: Code you already ran answers too. Press `Ctrl+E` to put a cursor in the feed, walk it onto a name in an earlier cell, and `Alt+K`, `Alt+Shift+K` or `Ctrl+]` ask about that name as they do in the input. Cells from before a restart are no longer part of the session, and say so.
+## Jump from a name
+
+Three keys jump from the name under the cursor to a tab beside the session, each tab named after the name:
+
+`Ctrl+]`
+: Its source: where it is defined. See [below](#go-to-a-definition).
+
+`Alt+]`
+: Its description: everything the server knows about it, its links leading to the documentation.
+
+`Ctrl+K`
+: Its documentation: the page `help symbol` shows for it, as for `help symbol ideal`. Operators work too, such as `++`. This one needs no language server, since Macaulay2 itself finds the page.
+
+The tabs sit with the documentation and files you opened, so `Ctrl+Shift+B` goes back and `Ctrl+PageUp` cycles through them; see [the tabs](views.md#tabs). Each key can be remapped in the [keymaps](../custom/keymaps.md).
+
+Code you already ran answers too. Press `Ctrl+E` to put a cursor in the feed, walk it onto a name in an earlier cell, and the keys above ask about that name as they do in the input. Cells from before a restart are no longer part of the session, and say so.
 
 ## Go to a definition
 
@@ -55,8 +66,8 @@ Names the server reads as bound in your session complete before Macaulay2 has ru
 
 ## Fold a file
 
-A file opened beside the session, by `/view` or by going to a definition, marks every stretch of code the server can fold, such as a function body, with ▾ in its gutter. Double-click beside it to fold the stretch to its first line, which then ends with how many lines it hides; double-click the ▸ again to unfold it. A copy of the file's text skips what is folded.
+A file opened beside the session, by `/view` or by going to a definition, numbers its lines and marks every stretch of code the server can fold, such as a function body, with ▾ in its gutter. Double-click beside it to fold the stretch to its first line, which then ends with how many lines it hides; double-click the ▸ again to unfold it. A copy of the file's text skips what is folded.
 
 ## When the server is off
 
-Turn the server off in [settings](../reference/settings.md) (*language server*) and all of the above goes quiet: the keys say that the language server is not running, underlines and shading go away, and files open without folds.
+Turn the server off in [settings](../reference/settings.md) (*language server*) and all of the above goes quiet: the keys say that the language server is not running (`Ctrl+K` still opens documentation), underlines and shading go away, and files open without folds.

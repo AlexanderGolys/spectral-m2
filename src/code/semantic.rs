@@ -253,6 +253,15 @@ impl SemanticHighlighter {
         Some(id)
     }
 
+    /// The name or operator at `local` in `source`, read from the session's text
+    /// without asking the server.
+    pub fn name_at(&self, source: SourceId, local: usize) -> Option<String> {
+        self.document
+            .as_ref()?
+            .name_at(source, local)
+            .map(str::to_string)
+    }
+
     /// Whether a language server is running to be asked.
     pub fn serving(&self) -> bool {
         self.client.is_some()

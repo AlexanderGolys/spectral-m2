@@ -10,6 +10,9 @@ use lsp_types::{DiagnosticSeverity, Position};
 use super::{Document, SourceId};
 use crate::ui::theme::groups::HLGroup;
 
+/// The characters M2's operators are spelled with.
+const OPERATOR_CHARACTERS: &str = "+-*/^<>=!&|@#%.:\\~?$_";
+
 /// What is asked. A point is a byte offset into the asked document's text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -147,6 +150,34 @@ pub struct Binding {
 }
 
 impl Document {
+    /// The name or operator at byte `local` of the segment `id`, or ending there,
+    /// as `help symbol` takes it: a run of name characters, or else of operator
+    /// characters.
+    pub fn name_at(&self, id: SourceId, local: usize) -> Option<&str> {
+        let segment = self.segments.iter().find(|segment| segment.id == id)?;
+        let source = &self.text[segment.range.clone()];
+        let kinds: [fn(char) -> bool; 2] = [
+            |ch| ch.is_alphanumeric() || ch == '\'',
+            |ch| OPERATOR_CHARACTERS.contains(ch),
+        ];
+        kinds.into_iter().find_map(|kind| {
+            let start = source[..local.min(source.len())]
+                .char_indices()
+                .rev()
+                .take_while(|(_, ch)| kind(*ch))
+                .last()
+                .map_or(local.min(source.len()), |(at, _)| at);
+            let end = source[start..]
+                .char_indices()
+                .find(|(_, ch)| !kind(*ch))
+                .map_or(source.len(), |(at, _)| start + at);
+            let name = &source[start..end];
+            let named = name.chars().next().is_some_and(|ch| !ch.is_ascii_digit());
+            // A name just before the point counts, as when typing ends it.
+            named.then_some(name)
+        })
+    }
+
     /// The byte offset of `local` within the segment `id`.
     pub fn offset_in(&self, id: SourceId, local: usize) -> Option<usize> {
         self.segments
@@ -211,6 +242,18 @@ mod tests {
             assert_eq!(offset_of(text, position_of(text, offset)), Some(offset));
         }
         assert_eq!(position_of(text, 9), Position::new(1, 2));
+    }
+
+    #[test]
+    fn the_name_at_a_point_is_the_whole_name_or_operator_there() {
+        let mut document = Document::new(0);
+        document.push(SourceId::Draft(0), "res' coker(M ++ N) + 12");
+        let name = |at| document.name_at(SourceId::Draft(0), at);
+        assert_eq!(name(0), Some("res'"));
+        assert_eq!(name(7), Some("coker"));
+        assert_eq!(name(14), Some("++"));
+        assert_eq!(name(10), Some("coker"));
+        assert_eq!(name(22), None);
     }
 
     #[test]

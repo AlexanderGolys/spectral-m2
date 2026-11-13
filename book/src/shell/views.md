@@ -21,7 +21,7 @@ A view opens to the right of the shell and focus stays in the shell, so you can 
 
 The pane has two header rows. The first names what is showing, centred, with **‹** (back) and **☆** (bookmark) at its start. The second holds one icon per tab:
 
-- On the left, the tabs you opened: documentation pages and files. They rotate through five slots, so the next one replaces the oldest once all five are used. Click **☆** to move the current one into the **★** bookmark tab, which never rotates out until you bookmark something else.
+- On the left, the tabs you opened: documentation pages, files, and descriptions of names from the [language server](language-server.md#jump-from-a-name). They rotate through five slots, so the next one replaces the oldest once all five are used. Click **☆** to move the current one into the **★** bookmark tab, which never rotates out until you bookmark something else.
 - On the right, the three views above, always there, each with its own tab that never takes one of your five.
 
 Every tab keeps its scroll position and folds. Click an icon to go to it.

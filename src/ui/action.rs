@@ -40,6 +40,7 @@ pub enum Action {
     Describe = "tell what the name at the cursor is",
     DescribeBeside = "describe the name at the cursor beside the session",
     GoToDefinition = "go to where the name at the cursor is defined",
+    GoToDocumentation = "open the documentation of the name at the cursor beside the session",
     FormatInput = "format the input",
     ToggleViewCursor = "move the cursor into the feed or the view beside it, and back",
 }
