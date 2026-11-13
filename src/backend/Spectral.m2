@@ -90,7 +90,7 @@ placeholder CoherentSheaf := x -> "F"
 placeholder Complex := x -> "C"
 
 -- The values a structure is built over, which its expression spells in place:
--- modules are over their ring, sheaves over their sheaf of algebras OO_X, a
+-- modules are over their ring, sheaves over theirs, the sheaf of algebras OO_X, a
 -- sheaf of rings over its variety, and a map is from its source to its target,
 -- spelled `N <-- M` as M2 spells it.
 parameters Thing := x -> {}
@@ -98,9 +98,8 @@ parameters Thing := x -> {}
 parameters Ideal :=
 parameters Module :=
 parameters Complex :=
+parameters CoherentSheaf :=
 parameters Variety := x -> {ring x}
-
-parameters CoherentSheaf := F -> {OO_(variety F)}
 
 parameters Matrix :=
 parameters SheafMap := f -> {MapExpression{f.target, f.source}}
