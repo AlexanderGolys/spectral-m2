@@ -208,8 +208,19 @@ impl WrapPolicy for WordWrap {
     }
 }
 
-/// Parsed-span wrapping that never guesses syntax boundaries.
+/// Code wrapping that never splits a word or a token: each row ends at the last
+/// place that fits where whitespace stands or one token meets the next, and only
+/// a word wider than the whole row is cut.
 pub struct SpanWrap<'a>(pub &'a [Range<usize>]);
+
+impl SpanWrap<'_> {
+    /// Whether a row may end before byte `at`, between `before` and `after`.
+    fn parts(&self, at: usize, before: char, after: char) -> bool {
+        let within_word = is_word_character(before) && is_word_character(after);
+        let within_token = self.0.iter().any(|span| span.start < at && at < span.end);
+        !within_word && !within_token
+    }
+}
 
 impl WrapPolicy for SpanWrap<'_> {
     fn wrap_logical_line(
@@ -218,17 +229,18 @@ impl WrapPolicy for SpanWrap<'_> {
         width: u16,
         logical_start: usize,
     ) -> Vec<VisualLine> {
-        let width = width as usize;
-        let mut lines = Vec::new();
+        let width = usize::from(width);
         let characters: Vec<(usize, char)> = logical.char_indices().collect();
+        let count = characters.len();
         let byte_at = |index: usize| {
-            characters
-                .get(index)
-                .map_or(logical.len(), |&(byte, _)| byte)
+            logical_start
+                + characters
+                    .get(index)
+                    .map_or(logical.len(), |&(byte, _)| byte)
         };
+        let mut lines = Vec::new();
         let mut start = 0;
         let mut hard_continuation = false;
-
         if width == 0 || characters.is_empty() {
             lines.push(VisualLine {
                 range: logical_start..logical_start + logical.len(),
@@ -236,53 +248,65 @@ impl WrapPolicy for SpanWrap<'_> {
             });
             return lines;
         }
-
-        while characters.len() - start > width {
-            let limit = start + width;
-            let whitespace = (start + 1..=limit)
-                .rev()
-                .find(|&index| characters[index].1.is_whitespace());
-            if let Some(end) = whitespace {
+        loop {
+            // The first character past the row, measured in terminal columns.
+            let mut past = start;
+            let mut columns = 0;
+            while past < count {
+                let cells = characters[past].1.width().unwrap_or(0);
+                if past > start && columns + cells > width {
+                    break;
+                }
+                columns += cells;
+                past += 1;
+            }
+            if past == count {
                 lines.push(VisualLine {
-                    range: logical_start + byte_at(start)..logical_start + byte_at(end),
+                    range: byte_at(start)..byte_at(count),
                     hard_continuation,
                 });
-                start = end + 1;
-                hard_continuation = false;
-                continue;
+                return lines;
             }
-
-            let start_byte = logical_start + byte_at(start);
-            let limit_byte = logical_start + byte_at(limit);
-            if let Some(end) = self
-                .0
-                .iter()
-                .rev()
-                .map(|span| span.end)
-                .find(|&end| start_byte < end && end <= limit_byte)
-            {
-                lines.push(VisualLine {
-                    range: start_byte..end,
-                    hard_continuation,
-                });
-                start = characters.partition_point(|&(byte, _)| logical_start + byte < end);
-                hard_continuation = false;
-                continue;
-            }
-
+            let whitespace = |index: usize| characters[index].1.is_whitespace();
+            // A row ending at whitespace drops it; one ending between tokens keeps all.
+            let parting = (start + 1..=past).rev().find_map(|index| {
+                if index - 1 > start && whitespace(index - 1) {
+                    Some((index - 1, index))
+                } else if index < count && whitespace(index) {
+                    Some((index, index + 1))
+                } else if self.parts(byte_at(index), characters[index - 1].1, characters[index].1) {
+                    Some((index, index))
+                } else {
+                    None
+                }
+            });
+            let word_end = || {
+                (start + 1..past)
+                    .rev()
+                    .find(|&index| {
+                        !(is_word_character(characters[index - 1].1)
+                            && is_word_character(characters[index].1))
+                    })
+                    .map(|index| (index, index))
+            };
+            let (end, next, cut) = match parting.or_else(word_end) {
+                Some((end, next)) => (end, next, false),
+                None => (past, past, true),
+            };
             lines.push(VisualLine {
-                range: start_byte..limit_byte,
+                range: byte_at(start)..byte_at(end),
                 hard_continuation,
             });
-            start = limit;
-            hard_continuation = true;
+            start = next;
+            hard_continuation = cut;
+            if start >= count {
+                lines.push(VisualLine {
+                    range: byte_at(count)..byte_at(count),
+                    hard_continuation: false,
+                });
+                return lines;
+            }
         }
-
-        lines.push(VisualLine {
-            range: logical_start + byte_at(start)..logical_start + logical.len(),
-            hard_continuation,
-        });
-        lines
     }
 }
 
@@ -349,6 +373,43 @@ mod tests {
         assert_eq!(tokens[0].range, 0..4);
         assert_eq!(tokens[1].range, 4..7);
         assert!(!tokens[1].hard_continuation);
+    }
+
+    /// However narrow the row, a name or keyword is never cut while a place
+    /// between tokens fits.
+    #[test]
+    fn code_never_splits_a_word_that_could_move_whole() {
+        let source = "result = matrix{{alpha, beta}} ** identity";
+        let words: Vec<Range<usize>> = source.match_indices(|ch: char| ch.is_alphanumeric()).fold(
+            Vec::<Range<usize>>::new(),
+            |mut words, (at, ch)| {
+                match words.last_mut().filter(|word| word.end == at) {
+                    Some(word) => word.end = at + ch.len(),
+                    None => words.push(at..at + ch.len()),
+                }
+                words
+            },
+        );
+        for width in 9..=source.len() as u16 {
+            for row in SpanWrap(&words).wrap(source, width) {
+                for word in &words {
+                    let cut = word.start < row.range.end && row.range.end < word.end
+                        || word.start < row.range.start && row.range.start < word.end;
+                    assert!(
+                        !cut,
+                        "{width}: {:?} cuts {:?}",
+                        row.range,
+                        &source[word.clone()]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn code_is_measured_in_terminal_columns() {
+        let rows = SpanWrap(&[]).wrap("漢漢漢", 4);
+        assert_eq!(rows[0].range, 0.."漢漢".len());
     }
 
     #[test]
