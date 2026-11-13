@@ -118,7 +118,6 @@ announceReady := (() -> (
     -- start with it is the user's own doing and reads back as a frame, which is
     -- the same bargain any in-band marker makes.
 	frameMark := ascii 29;
-	encodeFrame := null;
 	encodeFrame = value -> (
 		if value === null then
 			"null"

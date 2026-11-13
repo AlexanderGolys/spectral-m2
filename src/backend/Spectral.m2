@@ -88,14 +88,14 @@ configuredDepth (Symbol, Thing) := (depth, x) -> (
 -- counts: past it an unnamed one keeps only that name. Anything else, such as
 -- a ring element, is always drawn whole, and so is a sheaf of rings, which M2
 -- spells over its variety.
-placeholder Thing := x -> null
-placeholder Ring := x -> "R"
-placeholder SheafOfRings := x -> null
-placeholder Ideal := x -> "I"
-placeholder Module := x -> "M"
-placeholder Variety := x -> "X"
-placeholder CoherentSheaf := x -> "F"
-placeholder Complex := x -> "C"
+placeholder Thing := Nothing => x -> null
+placeholder Ring := String => x -> "R"
+placeholder SheafOfRings := Nothing => x -> null
+placeholder Ideal := String => x -> "I"
+placeholder Module := String => x -> "M"
+placeholder Variety := String => x -> "X"
+placeholder CoherentSheaf := String => x -> "F"
+placeholder Complex := String => x -> "C"
 
 -- The values a structure is built over, which its expression spells in place:
 -- modules are over their ring, sheaves over their sheaf of rings, a sheaf of
@@ -125,7 +125,7 @@ spelledShape (Module, Expression) := spelledShape (CoherentSheaf,
 		if instance(shape, Superscript) and instance(shape#1, OneExpression) then
 			shape#0
 		else if instance(shape, Adjacent) then
-			apply(shape, part -> spelledShape(x, part))
+			apply(shape, spelledShape_x)
 		else shape
 	)
 
@@ -199,14 +199,14 @@ documentationTags Hypertext := List => page -> unique flatten apply(toList page,
 documentationTags TO := documentationTags TO2 := documentationTags TOH :=
 List => link -> {link#0}
 
-attributeText String := text -> fold((escaped, entity) ->
+attributeText String := List => text -> fold((escaped, entity) ->
 		replace(entity#0, entity#1, escaped), text,
 	{("&", "&amp;"), ("\"", "&quot;"), ("<", "&lt;"), (">", "&gt;")})
 
 -- M2 links a tag wherever it appears with the same target, so the target its
 -- own link gets is the one to replace.
 keysLinked = method()
-keysLinked (String, Hypertext) := (page, document) -> fold((linked, tag) -> (
+keysLinked (String, Hypertext) := List => (page, document) -> fold((linked, tag) -> (
 	anchor := html TO {tag};
 	target := regex(///href="[^"]*"///, anchor);
 	if target === null then
@@ -274,8 +274,7 @@ contentsOf := (container, items) -> (
 -- Draw x from `shape`, its expression with each parameter spelled in place
 -- given back as the parameter itself, so that it is drawn at the next depth.
 unfolding := (x, shape) -> (
-	if unfoldable === null then
-		return specNet'(configuredDepth(symbol valueDepth, x), x);
+	unfoldable ?? return specNet'(configuredDepth(symbol valueDepth, x), x);
 	name := placeholder x;
 	if name =!= null and unfoldable <= 0 then
 		return opaque x ++ {

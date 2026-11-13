@@ -26,8 +26,10 @@ use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::PageColors;
 use crate::ui::block::{HLSpan, Link, Text, TextSpan};
 use crate::ui::present::{wrap, SpanLine};
+use crate::ui::render::markup::examples::EmbeddedControl;
 use crate::ui::render::selection::Inclusions;
 use crate::ui::render::RenderContext;
+use crate::ui::settings::rendering::RendererPosition;
 use crate::ui::theme::groups::HLGroup;
 use crate::ui::wrap::WordWrap;
 
@@ -69,6 +71,7 @@ const ELIDED_STAND_IN: &str = "etc";
 /// the document is parsed and the piece can be told to sit inside a link.
 const GROUP_ATTRIBUTE: &str = "data-group";
 /// The groups of the `token` classes M2 sets a value's text in.
+/// @##HLG
 const TOKEN_GROUPS: [(&str, HLGroup); 4] = [
     ("class-name", HLGroup::Type),
     ("function", HLGroup::Function),
@@ -203,8 +206,8 @@ struct Document {
     groups: &'static Groups,
     numbers_printed: bool,
     code_style: Style,
-    renderer_position: crate::ui::settings::rendering::RendererPosition,
-    controls: Vec<examples::EmbeddedControl>,
+    renderer_position: RendererPosition,
+    controls: Vec<EmbeddedControl>,
     links: Vec<Vec<(Rect, Rc<Link>)>>,
     lines: Rc<Vec<Line<'static>>>,
     inclusions: Inclusions,
@@ -538,7 +541,7 @@ struct DocumentRows {
     rows: Vec<Row>,
     inclusions: Inclusions,
     links: Vec<Link>,
-    controls: Vec<examples::EmbeddedControl>,
+    controls: Vec<EmbeddedControl>,
 }
 
 fn rows(html: &str, example_width: usize, context: &RenderContext) -> Option<DocumentRows> {
