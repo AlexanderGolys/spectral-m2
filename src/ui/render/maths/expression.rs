@@ -3,13 +3,22 @@ use super::{GridKind, Math, MathStyle};
 use crate::backend::SpecNet;
 use crate::ui::theme::groups::HLGroup;
 
+/// The sign between the factors of a product.
+pub const PRODUCT_SIGN: &str = "·";
+/// The sign between the factors of a tensor product.
+pub const TENSOR_SIGN: &str = "⊗";
+/// M2's tensor product operator.
+const TENSOR_OPERATOR: &str = "**";
+/// M2's tensor power operator, `M ^** n`.
+const TENSOR_POWER_OPERATOR: &str = "^**";
+
 trait ExpressionLayout: Sync {
     fn compose(&self, value: &SpecNet, style: MathStyle) -> Math;
 }
 
 struct Row;
 struct Sum;
-struct Product;
+struct Product(&'static str);
 struct Power;
 struct Subscript;
 struct Divide;
@@ -130,6 +139,26 @@ fn parenthesized(body: Math) -> Math {
         body: Box::new(body),
     }
 }
+/// `base` raised to a power, parenthesized unless it reads as one term.
+fn power_base(base: &SpecNet, style: MathStyle) -> Math {
+    let body = Math::from_spec_net(base, style);
+    let compound = [
+        "Sum",
+        "Product",
+        "TensorProduct",
+        "Divide",
+        "Minus",
+        "Power",
+    ]
+    .iter()
+    .any(|class| base.is(class))
+        || base.is("BinaryOperation");
+    if compound {
+        parenthesized(body)
+    } else {
+        body
+    }
+}
 fn operand(value: &SpecNet, style: MathStyle) -> Math {
     let body = Math::from_spec_net(value, style);
     if value.is("Sum") || value.is("Equation") {
@@ -163,7 +192,7 @@ impl ExpressionLayout for Product {
     fn compose(&self, value: &SpecNet, style: MathStyle) -> Math {
         joined(
             value.children.iter().map(|x| operand(x, style)).collect(),
-            "·",
+            self.0,
             HLGroup::Operator,
         )
     }
@@ -173,14 +202,7 @@ impl ExpressionLayout for Power {
         let [base, exponent] = value.children.as_slice() else {
             return unknown(value, style);
         };
-        let base_math = if ["Sum", "Product", "Divide", "Minus", "Power"]
-            .iter()
-            .any(|class| base.is(class))
-        {
-            parenthesized(Math::from_spec_net(base, style))
-        } else {
-            Math::from_spec_net(base, style)
-        };
+        let base_math = power_base(base, style);
         let exponent = Math::from_spec_net(exponent, style);
         let role = style.exponent_color.role(&base_math);
         Math::Power {
@@ -328,6 +350,25 @@ impl ExpressionLayout for Binary {
         let [operator, left, right] = value.children.as_slice() else {
             return unknown(value, style);
         };
+        match operator.text.as_deref() {
+            Some(TENSOR_POWER_OPERATOR) => {
+                return Math::Power {
+                    base: Box::new(power_base(left, style)),
+                    exponent: Box::new(Math::Row(vec![
+                        Math::atom(TENSOR_SIGN, HLGroup::Operator),
+                        Math::from_spec_net(right, style),
+                    ])),
+                }
+            }
+            Some(TENSOR_OPERATOR) => {
+                return joined(
+                    vec![operand(left, style), operand(right, style)],
+                    TENSOR_SIGN,
+                    HLGroup::Operator,
+                )
+            }
+            _ => {}
+        }
         Math::Row(vec![
             operand(left, style),
             Math::atom(" ", HLGroup::Canvas),
@@ -364,7 +405,8 @@ impl ExpressionLayout for Collection {
 fn layout(class: &str) -> Option<&'static dyn ExpressionLayout> {
     Some(match class {
         "Sum" | "DirectSum" => &Sum,
-        "Product" | "NonAssociativeProduct" | "TensorProduct" => &Product,
+        "Product" | "NonAssociativeProduct" => &Product(PRODUCT_SIGN),
+        "TensorProduct" => &Product(TENSOR_SIGN),
         "Power" | "Superscript" => &Power,
         "Subscript" => &Subscript,
         "Divide" => &Divide,
@@ -403,7 +445,8 @@ fn ascii(math: Math) -> Math {
             if matches!(kind, HLGroup::Operator | HLGroup::MapArrow) {
                 match text.as_str() {
                     "⟵" => "<--".into(),
-                    "·" => "*".into(),
+                    PRODUCT_SIGN => "*".into(),
+                    TENSOR_SIGN => TENSOR_OPERATOR.into(),
                     _ => text,
                 }
             } else {

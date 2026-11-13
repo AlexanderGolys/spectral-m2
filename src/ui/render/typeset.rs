@@ -10,7 +10,7 @@ use crate::ui::present;
 use crate::ui::theme::groups::{Groups, HLGroup};
 use crate::ui::wrap::WrappedText;
 
-use super::maths::{self, Math, MathDisplay, MathInk, MathStyle};
+use super::maths::{self, Math, MathDisplay, MathInk, MathStyle, PRODUCT_SIGN, TENSOR_SIGN};
 
 /// Rendered rows with their interactive links and chosen representation.
 pub struct Drawn {
@@ -36,7 +36,8 @@ fn tex(math: &Math, groups: Option<&Groups>) -> String {
             let content = match (kind, text.as_str()) {
                 (HLGroup::MapArrow | HLGroup::Operator, "⟵") => r"\longleftarrow".into(),
                 (HLGroup::Delimiter, "," | ", " | ";") => text.clone(),
-                (HLGroup::Operator, "·") => r"\,".into(),
+                (HLGroup::Operator, PRODUCT_SIGN) => r"\,".into(),
+                (HLGroup::Operator, TENSOR_SIGN) => r"\otimes ".into(),
                 (HLGroup::Operator, "+" | "-" | "=") => text.clone(),
                 (HLGroup::Number, _) => maths::typewriter(text).replacen("texttt", "mathrm", 1),
                 (HLGroup::Variable, _) => maths::typewriter(text).replacen("texttt", "mathit", 1),
@@ -376,6 +377,34 @@ mod tests {
         assert!(graphics::ratex::svg(&source, Rgb([17, 29, 43])).is_ok());
         let rows = maths::spans(&value, 240, MathStyle::default()).unwrap();
         assert!(!rows.is_empty());
+    }
+
+    /// Every part of an operator expression is maths, and M2's tensor operators
+    /// read as tensor products and powers rather than as their spelling.
+    #[test]
+    fn tensor_products_and_powers_are_typeset_as_such() {
+        let mut backend = crate::backend::M2Backend::spawn().unwrap();
+        let result = backend
+            .evaluate(
+                "(X,Y,Z,W) = expression \\ (X,Y,Z,W); X ^** Z ^ Y ** (W ^** Z*X*hold 2)",
+                None,
+            )
+            .unwrap();
+        assert!(!result.is_error, "{}", result.transcript);
+        let value = result.value.unwrap();
+        fn leaves(node: &SpecNet, found: &mut Vec<(String, bool)>) {
+            if let Some(text) = &node.text {
+                found.push((text.clone(), node.typeset));
+            }
+            node.children.iter().for_each(|child| leaves(child, found));
+        }
+        let mut found = Vec::new();
+        leaves(&value, &mut found);
+        assert!(found.iter().all(|(_, typeset)| *typeset), "{found:?}");
+        let source = tex(&Math::from_spec_net(&value, MathStyle::default()), None);
+        assert_eq!(source.matches(r"\otimes").count(), 3, "{source}");
+        assert!(!source.contains("^**"), "{source}");
+        assert!(graphics::ratex::svg(&source, Rgb([17, 29, 43])).is_ok());
     }
 
     #[test]

@@ -2229,6 +2229,15 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
         ] {
             assert!(value(maths).wants_typesetting(), "{maths}");
         }
+        let indexed = value(r#"(X, Y) = (expression X, expression Y); X_"a" + Y_true + 1"#);
+        assert!(indexed.typeset);
+        for subscript in &indexed.children[..2] {
+            assert!(subscript.children[0].typeset, "the base of {subscript:?}");
+            assert!(!subscript.children[1].typeset, "the index of {subscript:?}");
+        }
+        let listed = value(r#"{expression X, "s", 3}"#);
+        let marks: Vec<_> = listed.children.iter().map(|entry| entry.typeset).collect();
+        assert_eq!(marks, [false, false, true]);
         let mixed = value(r#"{matrix{{1}}, "beside"}"#);
         assert!(mixed.children[0].typeset);
         assert!(mixed.children[0].children.iter().all(|row| row.typeset));

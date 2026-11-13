@@ -25,6 +25,8 @@ export {
 	"typeDepth",
 	"valueDepth",
 	"typeset",
+	"typesetOperands",
+	"typewriter",
 	"specNet'"
 }
 
@@ -65,7 +67,7 @@ placeholder = method(Dispatch => Thing)
 parameters = method(Dispatch => Thing, TypicalValue => List)
 spelledShape = method()
 optionKey = method(Dispatch => Thing, TypicalValue => SpecNet)
-typesetting = method(TypicalValue => Boolean)
+nearestSetting = method(TypicalValue => Boolean)
 typesetMarked = method(TypicalValue => SpecNet)
 
 Thing.typeDepth = 1
@@ -79,31 +81,52 @@ Thing.valueDepth = 1
 Complex.valueDepth = 2
 
 -- Whether a drawing is set as typeset maths: values of a mathematical type,
--- and the shapes only typesetting draws well. Whatever such a drawing holds
--- is typeset with it; anything typeset only to sit beside it, a name or a
--- string in the same list, keeps a typewriter face.
+-- and the shapes only typesetting draws well. Whatever such a value holds is
+-- typeset with it; anything typeset only to sit beside it, a name or a string
+-- in the same list, keeps a typewriter face.
 Thing.typeset = false
 scan({Number, RingElement, Ring, RingFamily, Ideal, Module, Matrix, RingMap, Complex,
 	ComplexMap, Variety, SheafOfRings, CoherentSheaf, SheafMap, Divide, Power,
-	Superscript, Subscript, MatrixExpression, VectorExpression, MapExpression,
-	UnderExpression}, type -> type.typeset = true)
+	Superscript, Subscript, MapExpression, UnderExpression, ZeroExpression,
+	OneExpression}, type -> type.typeset = true)
 
--- The nearest typeset setting in the ancestry of `type`.
-typesetting Type := type -> (
-	owner := first select(ancestors type, ancestor -> ancestor#?typeset);
-	if not instance(owner.typeset, Boolean) then
-		error "typeset must be true or false";
-	owner.typeset
+-- Operators set their operands as maths, a symbol in a sum as much as a ring
+-- element, all but the index of a subscript or superscript. Containers such as
+-- a matrix or a table only hold their entries, which keep their own setting.
+Thing.typesetOperands = false
+scan({AssociativeExpression, BinaryOperation, Divide, Minus, Power, Subscript,
+	Superscript, MapExpression, UnderExpression, Parenthesize, Adjacent},
+	type -> type.typesetOperands = true)
+-- An operator's operands of these types still keep a typewriter face.
+Thing.typewriter = false
+scan({String, Net, Boolean, Nothing, Function}, type -> type.typewriter = true)
+
+-- The nearest setting of `field` in the ancestry of `type`.
+nearestSetting (Symbol, Type) := (field, type) -> (
+	owner := first select(ancestors type, ancestor -> ancestor#?field);
+	if not instance(owner#field, Boolean) then
+		error(toString field | " must be true or false");
+	owner#field
 )
-typesetting Thing := x -> false
+nearestSetting (Symbol, Thing) := (field, x) -> false
 
 -- Mark each part of a drawing whether it is typeset: by its own class or the
--- class of the value it stands for, or for being part of a typeset drawing.
-typesetMarked (SpecNet, Boolean) := (drawn, within) -> (
-	marked := within or typesetting drawn.Classes or typesetting valueClass drawn;
+-- class of the value it stands for, or for being held by a typeset value or
+-- an operator, unless its class keeps a typewriter face.
+typesetMarked (SpecNet, Boolean) := (drawn, forced) -> (
+	classes := {drawn.Classes, valueClass drawn};
+	setting := field -> any(classes, class' -> nearestSetting(field, class'));
+	mathematical := setting typeset;
+	operator := setting typesetOperands;
+	marked := not setting typewriter and (forced or mathematical or operator);
+	indexed := any(classes, class' -> instance(class', Type)
+		and (ancestor(Subscript, class') or ancestor(Superscript, class')));
 	drawn ++ {
 		Typeset => marked,
-		Children => apply(drawn.Children, child -> typesetMarked(child, marked))
+		Children => apply(#drawn.Children, position -> typesetMarked(
+			drawn.Children#position,
+			if operator then not (indexed and position > 0)
+			else marked and mathematical))
 	}
 )
 
@@ -593,19 +616,25 @@ Node
 Node
   Key
     typeset
+    typesetOperands
+    typewriter
   Headline
     choose which values are set as typeset maths
   Description
     Text
-      Assign true or false to a type's typeset field. A value is drawn as a
-      typeset picture only when some part of it is typeset: a part whose class,
-      or the class of the value it stands for, has the nearest typeset setting
-      true. Everything inside a typeset part is typeset with it; the rest of
-      the value is drawn in the picture in a typewriter face, or, when no part
-      is typeset, as text.
-      Thing.typeset is false; mathematical types such as Number, RingElement, Ring,
-      Module and Matrix, and the expressions Divide, Power, Subscript and
-      MatrixExpression, are true.
+      Assign true or false to these fields of a type; the nearest setting in
+      the type's ancestry applies. A value is drawn as a typeset picture only
+      when some part of it is typeset, and the rest of the picture keeps a
+      typewriter face. A part is typeset when its class, or the class of the
+      value it stands for, has typeset true, or when it is held by such a
+      value or is an operand of an operator, a type with typesetOperands true.
+      The index of a subscript or superscript keeps its own setting, and a part
+      whose class has typewriter true is never typeset.
+      Number, RingElement, Ring, Module, Matrix and the like have typeset true.
+      Sums, products, tensor products, powers, quotients, maps and the other
+      operator expressions have typesetOperands true, so a symbol in a sum is
+      set as maths; MatrixExpression, VectorExpression and Table only hold
+      their entries. String, Net, Boolean, Nothing and Function have typewriter true.
 Node
   Key
     typeDepth

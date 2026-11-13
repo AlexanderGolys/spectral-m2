@@ -1,6 +1,7 @@
 //! Structured expression layout and explicit TeX rendering for documentation.
 
 mod expression;
+pub use expression::{PRODUCT_SIGN, TENSOR_SIGN};
 
 use super::markup;
 use crate::backend::{CollectionKind, SpecNet, OPTION_ARROW};
