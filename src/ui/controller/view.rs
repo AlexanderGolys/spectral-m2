@@ -10,6 +10,7 @@ use ratatui::widgets::{Block as TuiBlock, Clear, Widget};
 use ratatui::Frame;
 use these_macros_should_be_illegal::discriminated_str;
 
+use super::screen::CaretPane;
 use super::Editor;
 use crate::app::session::CommittedCell;
 use crate::code::highlight::Highlighter;
@@ -231,8 +232,21 @@ impl Editor {
     }
 
     /// Scroll the reference pane independently of the transcript.
-    pub fn scroll_reference(&mut self, rows: i8) {
+    pub fn scroll_reference(&mut self, rows: isize) {
         self.reference.scroll(rows);
+    }
+
+    /// Scroll the reference pane by whole pages, positive toward its start.
+    pub fn page_reference(&mut self, pages: isize) {
+        self.reference.scroll(pages * self.page_rows(self.reference.height()));
+    }
+
+    pub fn reference_to_block_start(&mut self) {
+        self.reference.scroll_to_block_start();
+    }
+
+    pub fn reference_to_block_end(&mut self) {
+        self.reference.scroll_to_block_end();
     }
 
     /// Offer archived session files to preview.
@@ -495,6 +509,7 @@ impl Editor {
         self.draw_highlight_debug(frame);
         self.capture_screen(frame);
         self.paint_screen_selection(frame);
+        self.place_caret(frame, CaretPane::View);
     }
 }
 

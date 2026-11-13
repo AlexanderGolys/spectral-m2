@@ -11,7 +11,7 @@ use KeyCode::*;
 use ratatui::text::{Line, Span};
 use serde::{Deserialize, Serialize};
 
-use crate::input::InputAction;
+use crate::input::{InputAction, Traversal};
 use crate::ui::action::Action;
 use crate::ui::controller::picker::{PickerInput, PickerItem, PickerMode, PickerTab, Row};
 use crate::ui::controller::EditorEvent;
@@ -21,6 +21,7 @@ use KeyMod::{Alt, Ctrl, Shift};
 
 /// The part of the editor a shortcut works in; each context is a tab of the keymaps
 /// picker.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum KeyContext {
     Global,
@@ -46,6 +47,7 @@ impl KeyContext {
 ///
 /// Serialized as the bare action name, so shortcuts saved before edits were
 /// bindable still load.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Shortcut {
@@ -56,21 +58,21 @@ pub enum Shortcut {
 impl Shortcut {
     pub fn context(self) -> KeyContext {
         use InputAction::*;
-        match self {
-            Self::Command(_) => KeyContext::Global,
-            Self::Edit(edit) => match edit {
-                MoveLeft | MoveRight | MoveUp | MoveDown | MoveWordLeft | MoveWordRight
-                | MoveLineStart | MoveLineEnd | MoveTextStart | MoveTextEnd => KeyContext::Movement,
-                SelectLeft | SelectRight | SelectWordLeft | SelectWordRight | SelectLineStart
-                | SelectLineEnd | SelectTextStart | SelectTextEnd | SelectAll => {
-                    KeyContext::Selection
-                }
-                InsertNewline | InsertTab | DeleteBack | DeleteForward | DeleteWordBack
-                | DeleteWordForward | DeleteLine | Undo | Redo | Clear => KeyContext::Editing,
-                NextCompletion | PreviousCompletion | HistoryPrevious | HistoryNext => {
-                    KeyContext::Recall
-                }
-            },
+        let Self::Edit(edit) = self else {
+            return KeyContext::Global;
+        };
+        match (edit, edit.traversal()) {
+            (_, Some((Traversal::Move, ..))) | (MoveUp | MoveDown | MoveMatchingBracket, None) => {
+                KeyContext::Movement
+            }
+            (_, Some((Traversal::Select, ..)))
+            | (SelectUp | SelectDown | SelectAll | GrowSelection | ShrinkSelection, None) => {
+                KeyContext::Selection
+            }
+            (NextCompletion | PreviousCompletion | HistoryPrevious | HistoryNext, None) => {
+                KeyContext::Recall
+            }
+            _ => KeyContext::Editing,
         }
     }
 
@@ -397,25 +399,60 @@ impl Default for Keymaps {
                 keymap!(fixed A::Submit => Enter),
                 keymap!(fixed A::ScrollFeedUp => PageUp),
                 keymap!(fixed A::ScrollFeedDown => PageDown),
-                keymap!(I::MoveLeft => Left),
-                keymap!(I::MoveRight => Right),
-                keymap!(I::MoveUp => Up),
-                keymap!(I::MoveDown => Down),
-                keymap!(I::MoveWordLeft => Left + Ctrl),
-                keymap!(I::MoveWordRight => Right + Ctrl),
-                keymap!(I::MoveLineStart => Home),
-                keymap!(I::MoveLineEnd => End),
-                keymap!(I::MoveTextStart => Home + Ctrl),
-                keymap!(I::MoveTextEnd => End + Ctrl),
-                keymap!(I::SelectLeft => Left + Shift),
-                keymap!(I::SelectRight => Right + Shift),
-                keymap!(I::SelectWordLeft => Left + Ctrl + Shift),
-                keymap!(I::SelectWordRight => Right + Ctrl + Shift),
-                keymap!(I::SelectLineStart => Home + Shift),
-                keymap!(I::SelectLineEnd => End + Shift),
-                keymap!(I::SelectTextStart => Home + Ctrl + Shift),
-                keymap!(I::SelectTextEnd => End + Ctrl + Shift),
-                keymap!(I::SelectAll => Char('a') + Ctrl),
+                keymap!(fixed A::CutSelection => Char('x') + Ctrl),
+                keymap!(A::ToggleViewCursor => Char('e') + Ctrl),
+                keymap!(A::ScrollBlockStart => PageUp + Alt),
+                keymap!(A::ScrollBlockEnd => PageDown + Alt),
+                // Keys every editor gives the same meaning hold it here too, and
+                // stay out of the keymaps list.
+                keymap!(fixed I::MoveLeft => Left),
+                keymap!(fixed I::MoveRight => Right),
+                keymap!(fixed I::MoveUp => Up),
+                keymap!(fixed I::MoveDown => Down),
+                keymap!(fixed I::MoveWordLeft => Left + Ctrl),
+                keymap!(fixed I::MoveWordRight => Right + Ctrl),
+                keymap!(fixed I::MoveLineStart => Home),
+                keymap!(fixed I::MoveLineEnd => End),
+                keymap!(fixed I::MoveTextStart => Home + Ctrl),
+                keymap!(fixed I::MoveTextEnd => End + Ctrl),
+                keymap!(fixed I::SelectLeft => Left + Shift),
+                keymap!(fixed I::SelectRight => Right + Shift),
+                keymap!(fixed I::SelectUp => Up + Shift),
+                keymap!(fixed I::SelectDown => Down + Shift),
+                keymap!(fixed I::SelectWordLeft => Left + Ctrl + Shift),
+                keymap!(fixed I::SelectWordRight => Right + Ctrl + Shift),
+                keymap!(fixed I::SelectLineStart => Home + Shift),
+                keymap!(fixed I::SelectLineEnd => End + Shift),
+                keymap!(fixed I::SelectTextStart => Home + Ctrl + Shift),
+                keymap!(fixed I::SelectTextEnd => End + Ctrl + Shift),
+                keymap!(fixed I::SelectAll => Char('a') + Ctrl),
+                keymap!(fixed I::DeleteBack => Backspace),
+                keymap!(fixed I::DeleteForward => Delete),
+                keymap!(fixed I::DeleteWordBack => Backspace + Ctrl),
+                keymap!(alias I::DeleteWordBack => Backspace + Alt),
+                // The backspace control character, which is what a terminal sends
+                // for Ctrl+Backspace when it cannot report the modifier.
+                keymap!(alias I::DeleteWordBack => Char('h') + Ctrl),
+                keymap!(fixed I::DeleteWordForward => Delete + Ctrl),
+                keymap!(alias I::DeleteWordForward => Delete + Alt),
+                keymap!(fixed I::Undo => Char('z') + Ctrl),
+                keymap!(fixed I::Redo => Char('z') + Ctrl + Shift),
+                keymap!(fixed I::NextCompletion => Tab),
+                keymap!(fixed I::PreviousCompletion => BackTab),
+                keymap!(alias I::PreviousCompletion => Tab + Ctrl),
+                keymap!(I::MoveSpacedWordLeft => Left + Alt),
+                keymap!(I::MoveSpacedWordRight => Right + Alt),
+                keymap!(I::SelectSpacedWordLeft => Left + Alt + Shift),
+                keymap!(I::SelectSpacedWordRight => Right + Alt + Shift),
+                keymap!(I::MoveParagraphUp => Up + Ctrl + Alt),
+                keymap!(I::MoveParagraphDown => Down + Ctrl + Alt),
+                keymap!(I::SelectParagraphUp => Up + Ctrl + Alt + Shift),
+                keymap!(I::SelectParagraphDown => Down + Ctrl + Alt + Shift),
+                keymap!(I::MoveBlockStart => Left + Ctrl + Alt),
+                keymap!(I::MoveBlockEnd => Right + Ctrl + Alt),
+                keymap!(I::MoveMatchingBracket => Char('m') + Alt),
+                keymap!(I::GrowSelection => Up + Alt + Shift),
+                keymap!(I::ShrinkSelection => Down + Alt + Shift),
                 keymap!(I::InsertNewline => Enter + Shift),
                 // Enter that a terminal cannot report with Shift arrives as the
                 // newline control character or as a Shifted space.
@@ -423,22 +460,9 @@ impl Default for Keymaps {
                 keymap!(alias I::InsertNewline => Char(' ') + Shift),
                 keymap!(alias I::InsertNewline => Char('j') + Ctrl),
                 keymap!(I::InsertTab => Tab + Alt),
-                keymap!(I::DeleteBack => Backspace),
-                keymap!(I::DeleteForward => Delete),
                 keymap!(I::DeleteLine => Char('u') + Ctrl),
-                keymap!(I::DeleteWordBack => Backspace + Ctrl),
-                keymap!(alias I::DeleteWordBack => Backspace + Alt),
-                // The backspace control character, which is what a terminal sends
-                // for Ctrl+Backspace when it cannot report the modifier.
-                keymap!(alias I::DeleteWordBack => Char('h') + Ctrl),
-                keymap!(I::DeleteWordForward => Delete + Ctrl),
-                keymap!(alias I::DeleteWordForward => Delete + Alt),
-                keymap!(I::Undo => Char('z') + Ctrl),
-                keymap!(I::Redo => Char('z') + Ctrl + Shift),
+                keymap!(I::DeleteSpacedWordBack => Char('w') + Ctrl),
                 keymap!(I::Clear => Char('l') + Ctrl),
-                keymap!(I::NextCompletion => Tab),
-                keymap!(I::PreviousCompletion => BackTab),
-                keymap!(alias I::PreviousCompletion => Tab + Ctrl),
                 keymap!(I::HistoryPrevious => Up + Ctrl),
                 keymap!(I::HistoryNext => Down + Ctrl),
             ]),
@@ -610,7 +634,7 @@ mod tests {
             key!(Char('s') + Ctrl),
             key!(Char('q') + Ctrl),
             key!(Char('a') + Alt),
-            key!(Up + Shift),
+            key!(Up + Ctrl + Shift),
         ]) {
             let mut keymaps = Keymaps::default();
             assert!(keymaps.rebind(Action::ClearFeed, key), "rejected {key}");
@@ -704,34 +728,33 @@ mod tests {
     #[test]
     fn an_edit_can_move_but_not_onto_an_alias_or_a_key_its_swap_partner_cannot_hold() {
         let mut keymaps = Keymaps::default();
-        let original = keymaps.key(InputAction::Undo).expect("undo binding");
-        let replacement = key!(Char('u') + Ctrl);
-        let displaced = keymaps.edit(replacement);
-        assert!(keymaps.rebind(InputAction::Undo, replacement));
-        assert_eq!(keymaps.edit(replacement), Some(InputAction::Undo));
-        assert_eq!(keymaps.edit(original), displaced);
+        let original = keymaps.key(InputAction::Clear).expect("clear binding");
+        let replacement = keymaps.key(InputAction::DeleteLine).expect("line deletion binding");
+        assert!(keymaps.rebind(InputAction::Clear, replacement));
+        assert_eq!(keymaps.edit(replacement), Some(InputAction::Clear));
+        assert_eq!(keymaps.edit(original), Some(InputAction::DeleteLine));
 
-        assert!(!keymaps.rebind(InputAction::Undo, key!(Char('j') + Ctrl)));
+        assert!(!keymaps.rebind(InputAction::Clear, key!(Char('j') + Ctrl)));
         // A plain arrow is fine for editing, but a global command could not hold it.
         assert!(!keymaps.rebind(Action::ClearFeed, key!(Left)));
         // Swapping with a command would strand it on a key it cannot hold.
+        let moved_from = keymaps.key(InputAction::MoveSpacedWordLeft);
         assert!(
-            !keymaps.rebind(InputAction::MoveLeft, key!(Char('l') + Alt)) || {
-                keymaps.key(Action::ClearFeed) == Some(key!(Left))
-            }
+            !keymaps.rebind(InputAction::MoveSpacedWordLeft, key!(Char('l') + Alt))
+                || keymaps.key(Action::ClearFeed) == moved_from
         );
     }
 
     #[test]
     fn edit_rebinds_survive_saving_next_to_command_rebinds() {
         let mut keymaps = Keymaps::default();
-        assert!(keymaps.rebind(InputAction::Redo, key!(Char('y') + Alt)));
+        assert!(keymaps.rebind(InputAction::DeleteLine, key!(Char('y') + Alt)));
         assert!(keymaps.rebind(Action::ClearFeed, key!(F(7))));
         let saved = serde_json::to_string(keymaps.rebinds()).unwrap();
         let loaded: Vec<(Shortcut, KeyEvent)> = serde_json::from_str(&saved).unwrap();
 
         assert_eq!(
-            Keymaps::replaying(&loaded).key(InputAction::Redo),
+            Keymaps::replaying(&loaded).key(InputAction::DeleteLine),
             Some(key!(Char('y') + Alt))
         );
     }
@@ -741,5 +764,33 @@ mod tests {
         let keymaps = Keymaps::default();
         assert!(keymaps.action(key!(Enter + Ctrl), false).is_none());
         assert!(keymaps.action(key!(F(8)), false) == Some(Action::RunViewedFile));
+    }
+
+    /// Keys every editor gives one meaning keep it, and the keymaps list leaves
+    /// them out so the shortcuts worth learning are easy to find.
+    #[test]
+    fn everyday_editing_keys_are_fixed_and_unlisted() {
+        let mut keymaps = Keymaps::default();
+        for edit in [
+            InputAction::MoveLeft,
+            InputAction::SelectUp,
+            InputAction::DeleteBack,
+            InputAction::Undo,
+            InputAction::SelectAll,
+        ] {
+            let key = keymaps.key(edit).expect("everyday edits are bound");
+            assert_eq!(keymaps.edit(key), Some(edit));
+            assert!(!keymaps.rebind(edit, key!(F(24))));
+            assert!(keymaps
+                .remappable()
+                .iter()
+                .all(|(listed, _)| *listed != Shortcut::Edit(edit)));
+        }
+        for edit in [InputAction::GrowSelection, InputAction::MoveParagraphDown] {
+            assert!(keymaps
+                .remappable()
+                .iter()
+                .any(|(listed, _)| *listed == Shortcut::Edit(edit)));
+        }
     }
 }

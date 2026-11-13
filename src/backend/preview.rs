@@ -26,9 +26,9 @@ cyclic! {
         /// A semantic documentation page.
         #[serde(rename = "markup")]
         Markup = "markup",
-        /// M2's HTML formatter.
-        #[serde(rename = "html")]
-        Html = "html",
+        /// M2's re-readable spelling, `toExternalString`.
+        #[serde(rename = "external")]
+        External = "external",
     }
 }
 

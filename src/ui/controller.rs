@@ -21,7 +21,7 @@ use ratatui::Frame;
 
 use self::highlight_debug::{DebugEntry, DebugSection};
 use self::picker::{Picker, PickerController, PickerMode};
-use self::screen::{ScreenCapture, ScreenSelection};
+use self::screen::{CaretPane, ScreenCapture, ScreenCaret, ScreenSelection};
 pub use self::view::{CommittedCells, ReferenceEntry, ViewKind, Viewport};
 use self::{
     commands::Command,
@@ -47,7 +47,6 @@ use super::{
 use crate::code::file::abbreviate_home;
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::query::Finding;
-use crate::code::semantic::SourceId;
 use crate::code::semantic::SEMANTIC_GROUPS;
 use crate::env::ENV;
 use crate::input::{InputCode, InputContext};
@@ -55,12 +54,15 @@ use crate::ui::floating::{Anchor, Floating};
 use crate::ui::settings::selection::CopyFormat;
 use crate::ui::settings::statusline::{StatusComponent, StatusLinePosition, StatusSegment};
 use crate::ui::settings::{tabs as settings_tabs, *};
+use crate::ui::text_object::{TextDirection, TextMotion};
 use crate::ui::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
 use crate::ui::theme::palette::blend;
 use crate::ui::theme::AppearanceSettings;
 
 /// How far a hovered link's colours move toward the text colour.
 const LINK_HOVER_BRIGHTENING: f32 = 0.35;
+/// What the status line says while the keyboard cursor is in a pane.
+const CARET_STATE: &str = "Cursor in view (Esc returns to the input)";
 
 /// Left clicks on one cell, each within the double-click pause of the one before.
 struct ClickRun {
@@ -96,7 +98,7 @@ pub enum Reaction {
     /// Put the current selection on the system clipboard.
     Copy(String),
     /// Scroll the focused pane by rows, positive toward older content.
-    ScrollView(i8),
+    ScrollView(isize),
     Open(ViewKind),
     ClosePane,
     /// Return to the preceding reference without evaluating it again.
@@ -126,11 +128,19 @@ pub enum Lookup {
     Definition,
 }
 
+/// The code a point is in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CodeSource {
+    Input,
+    /// A cell of a submission in the feed.
+    Cell { submission: u64, index: usize },
+}
+
 /// A point in code that something was asked about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CodePoint {
-    /// The input, or a source the session holds.
-    pub source: Option<SourceId>,
+    pub source: CodeSource,
     /// Bytes into that source.
     pub offset: usize,
     /// Where on screen it was asked.
@@ -309,6 +319,10 @@ pub struct Editor {
     pointer: Option<Position>,
     /// Whether Ctrl is held, so the link under the pointer shows it would open.
     control_held: bool,
+    /// The keyboard cursor over a pane's text, while it is there.
+    caret: Option<ScreenCaret>,
+    /// Where the pane holding the caret was drawn last.
+    caret_area: Option<Rect>,
 }
 
 impl Editor {
@@ -358,6 +372,8 @@ impl Editor {
             copied: None,
             pointer: None,
             control_held: false,
+            caret: None,
+            caret_area: None,
         };
         editor.refresh_status_line();
         editor
@@ -723,6 +739,7 @@ impl Editor {
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Reaction {
         if matches!(event.kind, MouseEventKind::Down(_)) {
             self.floating = None;
+            self.caret = None;
         }
         let reaction = self.route_mouse(event);
         self.copied_on_select(reaction)
@@ -768,7 +785,7 @@ impl Editor {
                 return Reaction::Lookup(
                     lookup,
                     CodePoint {
-                        source: None,
+                        source: CodeSource::Input,
                         offset,
                         anchor: Anchor::At(pointer),
                     },
@@ -822,11 +839,11 @@ impl Editor {
                 if self.input.contains(event) {
                     let field = self.input.field_mut();
                     match delta > 0 {
-                        true => field.move_up(),
-                        false => field.move_down(),
+                        true => field.move_vertically(TextDirection::Backward),
+                        false => field.move_vertically(TextDirection::Forward),
                     }
                 } else {
-                    self.feed.scroll(delta);
+                    self.feed.scroll(delta * self.wheel_rows());
                 }
             }
             _ => {}
@@ -920,6 +937,9 @@ impl Editor {
     }
 
     pub fn handle_preview_mouse(&mut self, event: MouseEvent) -> Reaction {
+        if matches!(event.kind, MouseEventKind::Down(_)) {
+            self.caret = None;
+        }
         let pointer = Position::new(event.column, event.row);
         self.pointer = Some(pointer);
         self.control_held = event.modifiers.contains(KeyModifiers::CONTROL);
@@ -949,8 +969,22 @@ impl Editor {
     }
 
     /// Move the feed by signed rows, positive toward older content.
-    pub fn scroll_feed(&mut self, rows: i8) {
+    pub fn scroll_feed(&mut self, rows: isize) {
         self.feed.scroll(rows);
+    }
+
+    /// Rows one notch of the wheel scrolls.
+    pub fn wheel_rows(&self) -> isize {
+        self.settings.editor.scroll_rows.into()
+    }
+
+    /// Rows a page key scrolls a view `height` rows tall, keeping the scrolloff
+    /// rows of the page before in sight.
+    pub fn page_rows(&self, height: u16) -> isize {
+        let rows = height
+            .saturating_sub(self.settings.editor.scrolloff.into())
+            .max(1);
+        isize::try_from(rows).unwrap_or(isize::MAX)
     }
 
     /// Forward unbound shell input to its focused component.
@@ -1035,6 +1069,19 @@ impl Editor {
         if let Some(result) = self.handle_debug_action(action) {
             return result;
         }
+        if action == Action::ToggleViewCursor {
+            self.toggle_caret();
+            return Reaction::Continue;
+        }
+        if self.caret_active() {
+            match action {
+                Action::Submit => return self.activate_caret(),
+                Action::Describe => return self.look_up_at_caret(Lookup::Brief),
+                Action::DescribeBeside => return self.look_up_at_caret(Lookup::Description),
+                Action::GoToDefinition => return self.look_up_at_caret(Lookup::Definition),
+                _ => {}
+            }
+        }
         if !matches!(
             action,
             Action::CopySelection | Action::SaveSelection | Action::Submit | Action::OpenCommands
@@ -1049,6 +1096,8 @@ impl Editor {
                 | Action::SaveSelection
                 | Action::ScrollFeedUp
                 | Action::ScrollFeedDown
+                | Action::ScrollBlockStart
+                | Action::ScrollBlockEnd
         ) {
             self.feed.deselect();
         }
@@ -1056,6 +1105,11 @@ impl Editor {
             return reaction;
         }
 
+        if action == Action::CutSelection {
+            let taken = self.input.field_mut().cut().filter(|_| !self.previewing);
+            self.refresh_status_line();
+            return taken.map_or(Reaction::Continue, Reaction::Copy);
+        }
         if action == Action::CopySelection {
             return self
                 .selected_text(self.settings.selection.copy_format)
@@ -1090,7 +1144,7 @@ impl Editor {
             Reaction::Lookup(
                 lookup,
                 CodePoint {
-                    source: None,
+                    source: CodeSource::Input,
                     offset: self.input.field().cursor(),
                     anchor: Anchor::InputCursor,
                 },
@@ -1101,13 +1155,18 @@ impl Editor {
             Action::DescribeBeside => return at_cursor(Lookup::Description),
             Action::GoToDefinition => return at_cursor(Lookup::Definition),
             Action::FormatInput => return Reaction::Format(self.input.text().to_string()),
-            Action::CopySelection => unreachable!("copy selection is handled before editing"),
+            Action::CopySelection | Action::CutSelection => {
+                unreachable!("copying and cutting are handled before editing")
+            }
+            Action::ToggleViewCursor => unreachable!("the view cursor toggles before editing"),
             Action::SelectPreviousBlock | Action::SelectNextBlock => {
                 unreachable!("block selection is handled before editing")
             }
             Action::Submit => unreachable!("submission is handled before component dispatch"),
-            Action::ScrollFeedUp => self.feed.scroll(1),
-            Action::ScrollFeedDown => self.feed.scroll(-1),
+            Action::ScrollFeedUp => self.feed.scroll(self.page_rows(self.feed.height())),
+            Action::ScrollFeedDown => self.feed.scroll(-self.page_rows(self.feed.height())),
+            Action::ScrollBlockStart => self.feed.scroll_to_block_start(),
+            Action::ScrollBlockEnd => self.feed.scroll_to_block_end(),
             Action::OpenCommands => self.toggle_picker(PickerMode::Commands, Self::open_commands),
             Action::ToggleHighlightDebug => unreachable!("debug toggles before input handling"),
             Action::CancelExecution => unreachable!("cancelling is handled by the app"),
@@ -1193,9 +1252,13 @@ impl Editor {
             Action::ResumeSession => self.leave_pickers(Reaction::Resume),
             Action::RunViewedFile
             | Action::CancelExecution
+            | Action::CutSelection
+            | Action::ToggleViewCursor
             | Action::Submit
             | Action::ScrollFeedUp
             | Action::ScrollFeedDown
+            | Action::ScrollBlockStart
+            | Action::ScrollBlockEnd
             | Action::OpenCommands
             | Action::ToggleHighlightDebug
             | Action::SelectPreviousBlock
@@ -1456,6 +1519,8 @@ impl Editor {
     fn handle_picker_event(&mut self, event: EditorEvent) -> Reaction {
         match event {
             EditorEvent::EditCommand(key) => {
+                use TextDirection::{Backward, Forward};
+                use TextMotion::{Character, Line};
                 let revision = self.input.revision();
                 match key.code {
                     KeyCode::Tab if key.ctrl() => {
@@ -1468,12 +1533,12 @@ impl Editor {
                     }
                     KeyCode::BackTab => self.pickers.last_mut().unwrap().picker.move_selection(1),
                     KeyCode::Char(character) => self.input.field_mut().insert_char(character),
-                    KeyCode::Backspace => self.input.field_mut().backspace(),
-                    KeyCode::Delete => self.input.field_mut().delete_forward(),
-                    KeyCode::Left => self.input.field_mut().move_left(),
-                    KeyCode::Right => self.input.field_mut().move_right(),
-                    KeyCode::Home => self.input.field_mut().move_home(),
-                    KeyCode::End => self.input.field_mut().move_end(),
+                    KeyCode::Backspace => self.input.field_mut().delete_by(Character, Backward),
+                    KeyCode::Delete => self.input.field_mut().delete_by(Character, Forward),
+                    KeyCode::Left => self.input.field_mut().move_by(Character, Backward),
+                    KeyCode::Right => self.input.field_mut().move_by(Character, Forward),
+                    KeyCode::Home => self.input.field_mut().move_by(Line, Backward),
+                    KeyCode::End => self.input.field_mut().move_by(Line, Forward),
                     _ => {}
                 }
                 self.input.note_keystroke_since(revision);
@@ -2023,7 +2088,7 @@ impl Editor {
                 highlighter,
                 command,
                 debugging: in_debugger,
-                focused: self.pane_focused,
+                focused: self.pane_focused && !self.caret_active(),
                 pending,
             },
             input_area,
@@ -2043,6 +2108,7 @@ impl Editor {
         self.draw_highlight_debug(frame);
         self.capture_screen(frame);
         self.paint_screen_selection(frame);
+        self.place_caret(frame, CaretPane::Shell);
     }
 
     /// Whether the settings give the status line a row.
@@ -2066,6 +2132,8 @@ impl Editor {
     fn shell_state(&self) -> Option<TextSpan> {
         if let Some((_, copied)) = &self.copied {
             Some(TextSpan::new(copied.clone(), HLGroup::StatuslineState))
+        } else if self.caret.is_some() {
+            Some(TextSpan::new(CARET_STATE, HLGroup::StatuslineState))
         } else if self.processing {
             Some(TextSpan::new("Processing", HLGroup::StatuslineWarning))
         } else {
@@ -2479,7 +2547,7 @@ mod language_server_tests {
                 panic!("{action:?} asks the language server");
             };
             assert_eq!(asked, lookup);
-            assert_eq!(point.source, None);
+            assert_eq!(point.source, CodeSource::Input);
             assert_eq!(point.offset, 2);
         }
     }

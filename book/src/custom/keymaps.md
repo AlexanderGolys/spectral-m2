@@ -16,7 +16,7 @@ Rows come in five contexts: **global** commands, and the **movement**, **selecti
 - any other key with `Ctrl`, `Alt` or `Shift`;
 - `F2` to `F24` on their own.
 
-Plain typing, `F1`, terminal control characters such as `Ctrl+I`, and keys already used for editing are refused, and capture stays on until you press a valid one. Submitting with `Enter`, scrolling with `PageUp` and `PageDown`, and the highlight inspector `Ctrl+Shift+D` are fixed and not listed.
+Plain typing, `F1`, terminal control characters such as `Ctrl+I`, and keys already used for editing are refused, and capture stays on until you press a valid one. Submitting with `Enter`, scrolling with `PageUp` and `PageDown`, the highlight inspector `Ctrl+Shift+D`, and the keys every editor gives the same meaning (the arrows, `Home`, `End`, `Backspace`, `Delete`, their `Ctrl` and `Shift` forms, `Tab`, `Ctrl+A`, `Ctrl+X`, `Ctrl+Z`) are fixed and not listed.
 
 *Cancel execution*, `Ctrl+C` by default, can be moved too; after three seconds of computing, the status line shows whichever key it has.
 

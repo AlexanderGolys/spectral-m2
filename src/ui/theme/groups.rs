@@ -572,6 +572,7 @@ accessors! {
     floating_border: FloatingBorder,
     fold_marker: FoldMarker,
     name_occurrence: NameOccurrence,
+    matching_bracket: MatchingBracket,
     signature_active_parameter: SignatureActiveParameter,
     view_divider: ViewDivider,
 

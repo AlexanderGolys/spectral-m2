@@ -12,6 +12,9 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use ratatui::Frame;
 
+mod caret;
+
+pub use self::caret::{CaretPane, ScreenCaret};
 use super::{Editor, Reaction};
 use crate::ui::graphics::{
     self,
@@ -196,7 +199,7 @@ impl ScreenCapture {
 
     /// The rows the pane scrolls toward when a drag reaches `line`: older ones at
     /// its first line, newer ones at its last.
-    fn edge_scroll(&self, line: u16) -> Option<i8> {
+    fn edge_scroll(&self, line: u16) -> Option<isize> {
         match line {
             _ if line <= self.area.y => Some(1),
             _ if line >= self.area.bottom().saturating_sub(1) => Some(-1),
@@ -750,7 +753,7 @@ mod tests {
     use crate::ui::action::Action;
     use crate::ui::block::Block;
     use crate::ui::cell::OutputBlock;
-    use crate::ui::controller::EditorUpdate;
+    use crate::ui::controller::{CodeSource, EditorUpdate, Lookup};
     use crate::ui::render::maths::SHORT_BRACES;
     use crate::ui::settings::selection::CopyFormat;
 
@@ -1353,6 +1356,74 @@ mod tests {
         editor.handle_input(pressed(crossterm::event::KeyCode::Esc));
         assert!(!editor.feed.has_selection());
         assert_eq!(editor.analysis_input().0, "k", "Esc only lets go");
+    }
+
+    fn redrawn(editor: &mut Editor, size: (u16, u16)) {
+        let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).expect("test terminal");
+        terminal
+            .draw(|frame| {
+                editor.draw(frame, frame.area(), &mut SyntaxHighlighter::new(), false);
+            })
+            .expect("draw");
+    }
+
+    /// The text of the screen row the caret is on.
+    fn caret_row(editor: &Editor) -> String {
+        let (capture, at) = editor.caret_capture().expect("the caret is placed");
+        capture.row_text(at.row).text
+    }
+
+    /// Enter the caret into the shown session and climb to the row of `code`.
+    fn caret_on(code: &str) -> Editor {
+        let (mut editor, _) = session();
+        let enter = editor
+            .keymaps
+            .key(Action::ToggleViewCursor)
+            .and_then(|key| editor.resolve_action(key))
+            .expect("the view cursor is bound");
+        editor.handle_action(enter);
+        redrawn(&mut editor, (60, 30));
+        assert!(editor.caret_active());
+        while !caret_row(&editor).contains(code) {
+            let before = editor.caret_capture().map(|(_, at)| at);
+            editor.handle_caret_key(pressed(crossterm::event::KeyCode::Char('k')));
+            redrawn(&mut editor, (60, 30));
+            assert_ne!(before, editor.caret_capture().map(|(_, at)| at), "{code} is above");
+        }
+        editor
+    }
+
+    #[test]
+    fn the_view_cursor_asks_about_the_session_code_under_it() {
+        let mut editor = caret_on("2+2");
+        editor.handle_caret_key(pressed(crossterm::event::KeyCode::Char('$')));
+        let Reaction::Lookup(lookup, point) = editor.handle_action(Action::GoToDefinition) else {
+            panic!("the code under the cursor is looked up");
+        };
+        assert_eq!(lookup, Lookup::Definition);
+        assert_eq!(
+            point.source,
+            CodeSource::Cell {
+                submission: 1,
+                index: 1
+            }
+        );
+        assert!(point.offset < "2+2".len());
+    }
+
+    #[test]
+    fn the_view_cursor_selects_and_copies_and_esc_returns_to_the_input() {
+        let mut editor = caret_on("2+2");
+        for letter in ['$', 'v', '0'] {
+            editor.handle_caret_key(pressed(crossterm::event::KeyCode::Char(letter)));
+        }
+        let copied = editor.handle_caret_key(pressed(crossterm::event::KeyCode::Char('y')));
+        assert!(matches!(copied, Some(Reaction::Copy(text)) if text.contains("2+2")));
+
+        editor.handle_caret_key(pressed(crossterm::event::KeyCode::Esc));
+        assert!(!editor.caret_active());
+        editor.handle_input(pressed(crossterm::event::KeyCode::Char('k')));
+        assert_eq!(editor.analysis_input().0, "k");
     }
 
     /// Press the left button twice or three times on one cell, as a click run does,

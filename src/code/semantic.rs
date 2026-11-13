@@ -258,6 +258,19 @@ impl SemanticHighlighter {
         self.client.is_some()
     }
 
+    /// The identity of a submission's cell in the session as last updated, when
+    /// the session still holds it.
+    pub fn cell(&self, submission: u64, index: usize) -> Option<SourceId> {
+        self.document.as_ref()?.segments.iter().find_map(|segment| match segment.id {
+            SourceId::Cell {
+                submission: held,
+                index: at,
+                ..
+            } if held == submission && at == index => Some(segment.id),
+            _ => None,
+        })
+    }
+
     /// The identity of the live input in the session as last updated.
     pub fn draft(&self) -> Option<SourceId> {
         self.document

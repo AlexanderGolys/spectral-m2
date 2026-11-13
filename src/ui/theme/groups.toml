@@ -87,6 +87,8 @@ DiagnosticInfo = { sp_from = "Info.fg", underline = true }
 DiagnosticHint = { sp_from = "Hint.fg", underline = true }
 # Every place the name under the cursor occurs.
 NameOccurrence = { bg_from = "Raised.bg" }
+# The bracket at the cursor and its partner.
+MatchingBracket = { link = "Accent", bold = true, bg_from = "Selection.bg" }
 # The parameter a call's signature is at.
 SignatureActiveParameter = { link = "Parameter", bold = true, underline = true }
 Value = { link = "Text" }

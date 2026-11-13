@@ -16,6 +16,7 @@ use crate::ui::controller::picker::{PickerItem, PickerValue};
 const MAX_INPUT_HEIGHT_PERCENT: u8 = 100;
 const INPUT_HEIGHT_STEP_PERCENT: i8 = 5;
 const MIN_COMPLETE_AFTER: u8 = 1;
+const MIN_SCROLL_ROWS: u8 = 1;
 
 /// The values of the *editor* tab.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -28,8 +29,10 @@ pub struct EditorSettings {
     pub max_input_height_percent: u8,
     /// Rows a returned value shows before its middle folds away.
     pub output_rows: usize,
-    /// Context rows retained around the cursor.
+    /// Context rows retained around the cursor, and kept in sight by a page scroll.
     pub scrolloff: u8,
+    /// Rows one notch of the mouse wheel scrolls.
+    pub scroll_rows: u8,
     /// Characters of a name typed before it is completed.
     pub complete_after: u8,
     /// Show an inline completion hint only below this many candidates.
@@ -44,6 +47,7 @@ impl Default for EditorSettings {
             max_input_height_percent: 75,
             output_rows: UI.max_output_rows,
             scrolloff: 2,
+            scroll_rows: 3,
             complete_after: 1,
             hint_completion_below: 10,
         }
@@ -59,6 +63,7 @@ pub enum EditorSetting {
     MaxInputHeight = "max input height",
     OutputRows = "max output height",
     Scrolloff = "scrolloff",
+    ScrollRows = "scroll speed",
     CompleteAfter = "complete after",
     HintCompletionBelow = "hint below",
 }
@@ -74,7 +79,8 @@ impl SettingRow for EditorSetting {
         match self {
             Self::MaxInputHeight => "share of the pane multiline input may grow into",
             Self::OutputRows => "rows a value shows before its middle folds away",
-            Self::Scrolloff => "context rows kept around the input cursor",
+            Self::Scrolloff => "context rows kept around the input cursor and across a page scroll",
+            Self::ScrollRows => "rows one notch of the mouse wheel scrolls",
             Self::CompleteAfter => "characters of a name typed before it is completed",
             Self::HintCompletionBelow => {
                 "show an inline hint below this many candidates; zero disables hints"
@@ -88,6 +94,7 @@ impl SettingRow for EditorSetting {
             Self::MaxInputHeight => format!("{}%", layout.max_input_height_percent),
             Self::OutputRows => format!("{} rows", layout.output_rows),
             Self::Scrolloff => format!("{} rows", layout.scrolloff),
+            Self::ScrollRows => format!("{} rows", layout.scroll_rows),
             Self::CompleteAfter => format!("{} characters", layout.complete_after),
             Self::HintCompletionBelow => format!("{} candidates", layout.hint_completion_below),
         })
@@ -110,6 +117,9 @@ impl SettingRow for EditorSetting {
                     .max(UI.min_output_rows);
             }
             Self::Scrolloff => layout.scrolloff = layout.scrolloff.saturating_add_signed(delta),
+            Self::ScrollRows => {
+                layout.scroll_rows = layout.scroll_rows.saturating_add_signed(delta).max(MIN_SCROLL_ROWS);
+            }
             Self::CompleteAfter => {
                 layout.complete_after = layout
                     .complete_after
@@ -176,6 +186,9 @@ mod tests {
         settings.editor.output_rows = UI.min_output_rows;
         EditorSetting::OutputRows.adjust(&mut settings, -1);
         assert_eq!(settings.editor.output_rows, UI.min_output_rows);
+        settings.editor.scroll_rows = MIN_SCROLL_ROWS;
+        EditorSetting::ScrollRows.adjust(&mut settings, -1);
+        assert_eq!(settings.editor.scroll_rows, MIN_SCROLL_ROWS);
         settings.editor.complete_after = MIN_COMPLETE_AFTER;
         EditorSetting::CompleteAfter.adjust(&mut settings, -1);
         assert_eq!(settings.editor.complete_after, MIN_COMPLETE_AFTER);

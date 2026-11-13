@@ -18,7 +18,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
-use super::block::{Block, Element, HLSpan, Link, Text};
+use super::block::{Block, CellPoint, Element, HLSpan, Link, Text};
 use super::element::paste;
 use super::fold::{FoldRanges, LineFolds};
 use super::graphics::cell_size;
@@ -29,13 +29,14 @@ use super::render::maths::MathDisplay;
 use super::render::selection::Inclusions;
 use super::render::{markup, maths, typeset};
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
-use super::wrap::WrappedText;
+use super::wrap::{offset_at_column, SpanWrap, WrapPolicy, WrappedText};
 use crate::backend::transcript::{captured_output, strip_m2_location};
 use crate::backend::{M2Response, PreviewMode, SpecNet, ValuePreview};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::SourceId;
 use crate::ui::config::UI;
 use crate::ui::glyphs::Glyph;
+use crate::ui::theme::groups::Groups;
 
 macro_rules! row_count {
     ($rows:expr) => {
@@ -1113,6 +1114,29 @@ impl Block for EvaluationBlock {
         Self::cycle_renderer(self, position, context)
     }
 
+    fn code_at(&self, context: &RenderContext, position: Position) -> Option<CellPoint> {
+        let layout = self.layout();
+        let code_width = self.code_width(context);
+        let mut row = 1;
+        for (index, (cell, state)) in self.cells.iter().enumerate() {
+            let prefix = state.marker().width(layout);
+            let wrapped = cell.wrapped(code_width.saturating_sub(prefix));
+            let next = row + wrapped.height();
+            if (row..next).contains(&position.y) {
+                let (range, _) = wrapped.source_lines().nth(usize::from(position.y - row))?;
+                let column = usize::from(position.x.checked_sub(prefix)?);
+                let offset = range.start + offset_at_column(&cell.text[range.clone()], column);
+                return Some(CellPoint {
+                    submission: self.id,
+                    index,
+                    offset,
+                });
+            }
+            row = next;
+        }
+        None
+    }
+
     fn height(&self, context: &RenderContext) -> u16 {
         self.outputs.iter().fold(
             self.code_height(context)
@@ -1461,7 +1485,7 @@ impl PreviewMode {
             Self::String => glyphs.renderer_string,
             Self::Tex => glyphs.renderer_tex,
             Self::Markup => glyphs.renderer_markup,
-            Self::Html => glyphs.renderer_html,
+            Self::External => glyphs.renderer_external,
         }
     }
 }
@@ -1494,7 +1518,6 @@ impl OutputCell {
                 .as_ref()?
                 .markup()
                 .map(|(html, width)| (html, *width)),
-            PreviewMode::Html => self.preview_text(PreviewMode::Html).map(|html| (html, 0)),
             PreviewMode::SpecNet => self
                 .value
                 .as_ref()?
@@ -1594,7 +1617,10 @@ impl OutputBlock {
         self.cells[0].previews = previews
             .into_iter()
             .map(|mut preview| {
-                if matches!(preview.mode, PreviewMode::Net | PreviewMode::String) {
+                if matches!(
+                    preview.mode,
+                    PreviewMode::Net | PreviewMode::String | PreviewMode::External
+                ) {
                     preview.text = output_preview(&preview.text);
                 }
                 preview
@@ -1707,6 +1733,9 @@ impl OutputBlock {
                         .map(Line::raw)
                         .collect()
                 })
+        } else if renderer == PreviewMode::External {
+            let source = cell.preview_text(PreviewMode::External).unwrap_or(&cell.text);
+            code_lines(source, width as u16, theme)
         } else if renderer == PreviewMode::Tex {
             let drawn = typeset::tex_preview(
                 cell.preview_text(PreviewMode::Tex).unwrap_or(""),
@@ -2442,6 +2471,23 @@ impl Block for WarningBlock {
 }
 
 /// Bound synchronous work before wrapping flat output, retaining both ends.
+/// M2 source wrapped at its token boundaries to `width` and coloured as code.
+fn code_lines(source: &str, width: u16, groups: &Groups) -> Vec<Line<'static>> {
+    thread_local! {
+        static CODE: RefCell<SyntaxHighlighter> = RefCell::new(SyntaxHighlighter::new());
+    }
+    let spans = CODE.with_borrow_mut(|highlighter| highlighter.highlight(source));
+    let boundaries: Vec<Range<usize>> = spans.iter().map(|span| span.content.clone()).collect();
+    SpanWrap(&boundaries)
+        .wrap(source, width)
+        .into_iter()
+        .map(|row| {
+            let text = &source[row.range.clone()];
+            Line::from(spans.paint(row.range.start, text, groups.value(), groups))
+        })
+        .collect()
+}
+
 fn output_preview(text: &str) -> String {
     let budget = UI.max_output_preview_bytes;
     if text.len() <= budget {
@@ -3259,8 +3305,8 @@ mod tests {
                 text: "$x^2$".into(),
             },
             ValuePreview {
-                mode: PreviewMode::Html,
-                text: "<p>html spelling</p>".into(),
+                mode: PreviewMode::External,
+                text: "new HashTable from {x => 1}".into(),
             },
         ];
         let output =
@@ -3271,7 +3317,7 @@ mod tests {
             PreviewMode::Net,
             PreviewMode::String,
             PreviewMode::Tex,
-            PreviewMode::Html,
+            PreviewMode::External,
         ];
         for mode in expected {
             output.cells[0].chosen.set(Some(mode));
@@ -3294,7 +3340,7 @@ mod tests {
         for (mode, expected) in [
             (PreviewMode::Net, "net spelling"),
             (PreviewMode::String, "string spelling"),
-            (PreviewMode::Html, "html spelling"),
+            (PreviewMode::External, "new HashTable from"),
         ] {
             output.cells[0].chosen.set(Some(mode));
             let lines = output.unfolded_lines(&output.cells[0], &base);

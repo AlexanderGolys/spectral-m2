@@ -11,7 +11,7 @@ use ratatui::layout::{Alignment, Offset, Position, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{Block as TuiBlock, Paragraph, Widget};
 
-use super::block::{Block, Link, Reformatted, Resized, Rethemed, Ticked};
+use super::block::{Block, CellPoint, Link, Reformatted, Resized, Rethemed, Ticked};
 use super::cell::{EvaluationBlock, IncompleteBlock};
 use super::config::UI;
 use super::element::{paste, EventListener};
@@ -593,14 +593,59 @@ impl Feed {
         Some(Link { cells, ..link })
     }
 
+    /// The submitted code drawn at a screen position.
+    pub fn code_at(&self, position: Position) -> Option<CellPoint> {
+        let surface = self.surface.as_ref()?;
+        let &(index, area, start) = surface
+            .placements
+            .iter()
+            .find(|(_, area, _)| area.contains(position))?;
+        self.blocks[index].content.block().code_at(
+            &surface.context,
+            Position::new(position.x - area.x, start + position.y - area.y),
+        )
+    }
+
     /// Move by signed rows, positive toward older content.
-    pub fn scroll(&mut self, rows: i8) {
+    pub fn scroll(&mut self, rows: isize) {
         self.anchor = None;
-        self.scroll = if rows < 0 {
-            self.scroll.saturating_sub(rows.unsigned_abs().into())
-        } else {
-            self.scroll.saturating_add(rows as usize)
+        self.scroll = self.scroll.saturating_add_signed(rows);
+    }
+
+    /// The rows of the view, as last drawn.
+    pub fn height(&self) -> u16 {
+        self.surface.as_ref().map_or(0, |surface| surface.area.height)
+    }
+
+    /// Bring the start of the block at the top of the view to the top, or the
+    /// start of the one before it when it is already there.
+    pub fn scroll_to_block_start(&mut self) {
+        let Some(&(index, _, start)) = self.surface.as_ref().and_then(|surface| surface.placements.first())
+        else {
+            return;
         };
+        let index = match start {
+            0 => index.saturating_sub(1),
+            _ => index,
+        };
+        self.anchor = Some((index, 0));
+    }
+
+    /// Bring the end of the block at the bottom of the view to the bottom, or the
+    /// end of the one after it when it is already there.
+    pub fn scroll_to_block_end(&mut self) {
+        let Some(&(index, area, start)) = self.surface.as_ref().and_then(|surface| surface.placements.last())
+        else {
+            return;
+        };
+        let height = |block: &RetainedBlock| block.layout.map_or(1, |layout| usize::from(layout.height));
+        let hidden = height(&self.blocks[index]).saturating_sub(usize::from(start + area.height));
+        let rows = match (hidden, self.blocks.get(index + 1)) {
+            (0, Some(next)) => height(next),
+            (hidden, _) => hidden,
+        };
+        self.anchor = None;
+        self.scroll = self.scroll.saturating_sub(rows);
     }
 
     /// Open at the beginning of retained content.
@@ -1148,7 +1193,7 @@ mod tests {
 
         feed.scroll_to_top();
         feed.render(&context, area, &mut target, Style::default());
-        feed.scroll(-i8::MAX);
+        feed.scroll(-isize::MAX);
         feed.scroll(5);
         feed.render(&context, area, &mut target, Style::default());
         feed.scroll(-5);
@@ -1365,6 +1410,33 @@ mod tests {
     }
 
     #[test]
+    fn block_jumps_bring_a_block_edge_to_the_view_edge_then_step_on() {
+        let mut feed = Feed::new(Box::new(Responsive('A')));
+        for symbol in ['B', 'C', 'D', 'E', 'F'] {
+            feed.push(Box::new(Responsive(symbol)));
+        }
+        let context = RenderContext::new(6, 0);
+        let area = Rect::new(0, 0, UI.feed_margin + 6, 3);
+        let mut target = Buffer::empty(area);
+        let mut edges = |feed: &mut Feed| {
+            feed.render(&context, area, &mut target, Style::default());
+            let symbol = |row| target[(UI.feed_margin, row)].symbol().to_string();
+            (symbol(0), symbol(area.height - 1))
+        };
+        assert_eq!(edges(&mut feed), ("e".into(), "f".into()));
+
+        feed.scroll_to_block_start();
+        assert_eq!(edges(&mut feed).0, "E");
+        feed.scroll_to_block_start();
+        assert_eq!(edges(&mut feed).0, "D");
+
+        feed.scroll_to_block_end();
+        assert_eq!(edges(&mut feed).1, "e");
+        feed.scroll_to_block_end();
+        assert_eq!(edges(&mut feed).1, "f");
+    }
+
+    #[test]
     fn resizing_preserves_the_top_visible_block() {
         let mut feed = Feed::new(Box::new(Responsive('A')));
         for symbol in ['B', 'C', 'D', 'E', 'F'] {
@@ -1384,7 +1456,7 @@ mod tests {
 
         assert_eq!(target[(UI.feed_margin, 0)].symbol(), "B");
 
-        feed.scroll(-i8::MAX);
+        feed.scroll(-isize::MAX);
         feed.render(&context, narrow, &mut target, Style::default());
         assert_eq!(target[(UI.feed_margin, 1)].symbol(), "F");
         assert_eq!(target[(UI.feed_margin, 2)].symbol(), "f");

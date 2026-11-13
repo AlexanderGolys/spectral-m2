@@ -1215,7 +1215,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             net PreviewValue := value -> net "net preview";
             toString PreviewValue := value -> "string preview";
             tex PreviewValue := value -> "$p$";
-            html PreviewValue := value -> "<p>html preview</p>";
+            toExternalString PreviewValue := value -> "external preview";
             expression PreviewValue := value -> symbol p;
             previewEvaluations = 0;
             (previewEvaluations = previewEvaluations + 1; new PreviewValue from {})"#,
@@ -1227,7 +1227,7 @@ x^{2}+1&\frac{1}{3}\mathit{x2}
             (PreviewMode::Net, "net preview"),
             (PreviewMode::String, "string preview"),
             (PreviewMode::Tex, "$p$"),
-            (PreviewMode::Html, "<p>html preview</p>"),
+            (PreviewMode::External, "external preview"),
         ] {
             assert!(response.previews.contains(&ValuePreview {
                 mode,

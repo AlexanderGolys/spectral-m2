@@ -84,6 +84,11 @@ pub trait Block {
         None
     }
 
+    /// The submitted code drawn at local `position`, if any.
+    fn code_at(&self, _: &RenderContext, _: Position) -> Option<CellPoint> {
+        None
+    }
+
     /// Retained link geometry for composing this block inside another document.
     fn links(&self, _: &RenderContext) -> Vec<Link> {
         Vec::new()
@@ -105,6 +110,14 @@ pub trait Block {
         self.local_selection_inclusions(&context.with_width(area.width), &mut local);
         inclusions.merge(local + Offset::new(i32::from(area.x), i32::from(area.y)));
     }
+}
+
+/// A place in submitted code: a cell of a submission and bytes into its source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CellPoint {
+    pub submission: u64,
+    pub index: usize,
+    pub offset: usize,
 }
 
 /// A drawn link: what it points to and the cells it covers, which may run over

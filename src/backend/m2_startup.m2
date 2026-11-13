@@ -222,7 +222,7 @@ announceReady := (() -> (
             ("net", x -> toString net x),
             ("string", toString),
             ("tex", tex),
-            ("html", html)
+            ("external", toExternalString)
         }, (name, formatter) -> (
             text := try formatter value;
             if instance(text, String) then hashTable {"mode" => name, "text" => text}

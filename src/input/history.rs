@@ -13,6 +13,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 /// Input text and cursor position restored from history.
+#[derive(Clone, Debug)]
 pub struct HistoryBuffer {
     pub text: String,
     pub cursor: usize,
@@ -25,31 +26,49 @@ impl HistoryBuffer {
     }
 }
 
-/// The recorded submissions, the browse position (`None` = editing the live draft), and
-/// the draft stashed when browsing began.
+/// Which recorded entries a step through history may land on.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Recall {
+    /// Only entries beginning with what was typed when browsing began.
+    Prefixed,
+    /// Every entry, whatever was typed.
+    Any,
+}
+
+/// One walk through history: the entry shown, and the draft it began from with
+/// the prefix that draft fixed. Only a submission ends it outright.
+struct Browse {
+    pos: usize,
+    draft: HistoryBuffer,
+    prefix: String,
+    /// Whether the input was edited or its cursor moved since the entry was shown:
+    /// a prefixed step then searches afresh, a forced one walks on.
+    detached: bool,
+}
+
+/// The recorded submissions and the walk through them, if one is under way.
 pub struct History {
     entries: Vec<String>,
     /// Where each distinct entry last occurs, the one occurrence a search visits.
     newest: HashMap<String, usize>,
-    pos: Option<usize>,
-    draft: Option<HistoryBuffer>,
+    browse: Option<Browse>,
     path: Option<PathBuf>,
     /// How many bytes of the history file have been read into `entries`.
     synced: u64,
-    unfiltered: bool,
 }
 
 impl History {
     pub fn browsing(&self, current: &str) -> bool {
-        self.pos.is_some_and(|pos| self.entries[pos] == current)
+        self.browse
+            .as_ref()
+            .is_some_and(|browse| !browse.detached && self.entries[browse.pos] == current)
     }
 
     pub fn stop_browsing(&mut self) {
-        if self.unfiltered {
-            return;
+        if let Some(browse) = &mut self.browse {
+            browse.detached = true;
         }
-        self.pos = None;
-        self.draft = None;
     }
 
     pub fn new() -> Self {
@@ -65,11 +84,9 @@ impl History {
         let mut history = History {
             entries: Vec::new(),
             newest: HashMap::new(),
-            pos: None,
-            draft: None,
+            browse: None,
             path,
             synced: 0,
-            unfiltered: false,
         };
         history.sync();
         history
@@ -91,9 +108,7 @@ impl History {
                 self.push(entry);
             }
         }
-        self.pos = None;
-        self.draft = None;
-        self.unfiltered = false;
+        self.browse = None;
     }
 
     /// Whether `entry` is worth keeping and not a repeat of the newest one.
@@ -149,90 +164,82 @@ impl History {
         !entry.trim().is_empty()
     }
 
-    /// Recall older input without using the current draft as a search prefix.
-    /// Editing recalled input retains the browse position.
-    ///
-    pub fn previous_unfiltered(&mut self, current: &str, cursor: usize) -> Option<HistoryBuffer> {
-        if !self.unfiltered {
-            self.stop_browsing();
-        }
-        self.unfiltered = true;
-        self.prev(current, cursor)
-    }
-
-    pub fn next_unfiltered(&mut self, current: &str) -> Option<HistoryBuffer> {
-        if !self.unfiltered {
-            return None;
-        }
-        self.next(current)
-    }
-
-    /// Recall older input matching the draft prefix.
-    /// As a shell's history search does: the prefix is fixed when browsing begins,
-    /// so typing `R =` and stepping back visits only the entries that begin with it.
-    /// An empty prefix matches everything, which is plain browsing.
-    /// Multiline drafts use their whole text so moving to the first line does
-    /// not discard the rest of the draft from the search.
-    pub fn prev(&mut self, current: &str, cursor: usize) -> Option<HistoryBuffer> {
-        self.end_search_if_edited(current);
-        if self.pos.is_none() {
-            self.sync();
-            self.draft = Some(HistoryBuffer {
+    /// Step to an older entry, as a shell's history search does: the prefix is
+    /// what stood before the cursor when browsing began (the whole draft when it
+    /// spans lines), so typing `R =` and stepping back visits only the entries
+    /// that begin with it. [`Recall::Any`] steps past the prefix to the very
+    /// previous entry without forgetting it for the steps after.
+    pub fn previous(&mut self, current: &str, cursor: usize, recall: Recall) -> Option<HistoryBuffer> {
+        self.end_search_if_edited(current, recall);
+        let end = match &self.browse {
+            Some(browse) => browse.pos,
+            None => {
+                self.sync();
+                self.entries.len()
+            }
+        };
+        let draft = match &self.browse {
+            Some(browse) => browse.draft.clone(),
+            None => HistoryBuffer {
                 text: current.to_string(),
                 cursor,
-            });
-        }
-        let end = self.pos.unwrap_or(self.entries.len());
-        let found = (0..end).rev().find(|&index| self.matches(index));
-        if found.is_none() && self.pos.is_none() {
-            self.draft = None;
-        }
-        self.show(found?)
+            },
+        };
+        let prefix = match &self.browse {
+            Some(browse) => browse.prefix.clone(),
+            None if draft.text.contains('\n') => draft.text.clone(),
+            None => draft.text[..draft.cursor].to_string(),
+        };
+        let filter = Self::filter(&prefix, recall);
+        let found = (0..end).rev().find(|&index| self.matches(index, filter, &draft.text))?;
+        self.browse = Some(Browse {
+            pos: found,
+            draft,
+            prefix,
+            detached: false,
+        });
+        Some(HistoryBuffer::at_end(self.entries[found].clone()))
     }
 
-    /// The next newer matching entry, or the draft once there are none.
-    pub fn next(&mut self, current: &str) -> Option<HistoryBuffer> {
-        self.end_search_if_edited(current);
-        let start = self.pos? + 1;
-        match (start..self.entries.len()).find(|&index| self.matches(index)) {
-            Some(index) => self.show(index),
-            None => {
-                self.pos = None;
-                self.draft.take()
+    /// Step to a newer entry, or back to the draft once there are none.
+    pub fn next(&mut self, current: &str, recall: Recall) -> Option<HistoryBuffer> {
+        self.end_search_if_edited(current, recall);
+        let browse = self.browse.as_ref()?;
+        let filter = Self::filter(&browse.prefix, recall);
+        let found = (browse.pos + 1..self.entries.len())
+            .find(|&index| self.matches(index, filter, &browse.draft.text));
+        match found {
+            Some(index) => {
+                let browse = self.browse.as_mut()?;
+                browse.pos = index;
+                browse.detached = false;
+                Some(HistoryBuffer::at_end(self.entries[index].clone()))
             }
+            None => self.browse.take().map(|browse| browse.draft),
         }
     }
 
-    fn show(&mut self, index: usize) -> Option<HistoryBuffer> {
-        self.pos = Some(index);
-        Some(HistoryBuffer::at_end(self.entries[index].clone()))
-    }
-
-    /// Text edited after it was recalled starts a new search from what it now says,
-    /// rather than stepping on with the prefix it no longer begins with.
-    fn end_search_if_edited(&mut self, current: &str) {
-        if !self.unfiltered && self.pos.is_some_and(|pos| self.entries[pos] != current) {
-            self.pos = None;
-            self.draft = None;
+    fn filter(prefix: &str, recall: Recall) -> &str {
+        match recall {
+            Recall::Prefixed => prefix,
+            Recall::Any => "",
         }
     }
 
-    /// Whether the entry at `index` starts with the search prefix, is the newest
+    /// Text edited after it was recalled starts a new prefixed search from what it
+    /// now says, rather than stepping on with the prefix it no longer begins with.
+    fn end_search_if_edited(&mut self, current: &str, recall: Recall) {
+        if recall == Recall::Prefixed && !self.browsing(current) {
+            self.browse = None;
+        }
+    }
+
+    /// Whether the entry at `index` starts with `prefix`, is the newest
     /// occurrence of its text, and differs from the draft, so every step shows
     /// something new.
-    fn matches(&self, index: usize) -> bool {
-        let Some(draft) = &self.draft else {
-            return false;
-        };
+    fn matches(&self, index: usize, prefix: &str, draft: &str) -> bool {
         let entry = &self.entries[index];
-        let prefix = if self.unfiltered {
-            ""
-        } else if draft.text.contains('\n') {
-            draft.text.as_str()
-        } else {
-            &draft.text[..draft.cursor]
-        };
-        entry.starts_with(prefix) && self.newest.get(entry) == Some(&index) && *entry != draft.text
+        entry.starts_with(prefix) && self.newest.get(entry) == Some(&index) && entry != draft
     }
 }
 
@@ -287,12 +294,12 @@ mod tests {
 
         let mut reloaded = History::from_path(Some(path.clone()));
         assert_eq!(
-            reloaded.prev("", 0).map(|buffer| buffer.text),
+            reloaded.previous("", 0, Recall::Prefixed).map(|buffer| buffer.text),
             Some("  f = i -> (\n  i + 1\n)".to_string())
         );
         assert_eq!(
             reloaded
-                .prev("  f = i -> (\n  i + 1\n)", 0)
+                .previous("  f = i -> (\n  i + 1\n)", 0, Recall::Prefixed)
                 .map(|buffer| buffer.text),
             Some("R = QQ[x]".to_string())
         );
@@ -311,10 +318,10 @@ mod tests {
         second.record("f = x^2");
         first.record("g = 1");
 
-        assert_eq!(text(second.prev("", 0)), Some("g = 1".into()));
-        assert_eq!(text(second.prev("g = 1", 0)), Some("f = x^2".into()));
-        assert_eq!(text(second.prev("f = x^2", 0)), Some("R = QQ[x]".into()));
-        assert_eq!(text(first.prev("f", 1)), Some("f = x^2".into()));
+        assert_eq!(text(second.previous("", 0, Recall::Prefixed)), Some("g = 1".into()));
+        assert_eq!(text(second.previous("g = 1", 0, Recall::Prefixed)), Some("f = x^2".into()));
+        assert_eq!(text(second.previous("f = x^2", 0, Recall::Prefixed)), Some("R = QQ[x]".into()));
+        assert_eq!(text(first.previous("f", 1, Recall::Prefixed)), Some("f = x^2".into()));
 
         let _ = fs::remove_file(path);
     }
@@ -327,21 +334,21 @@ mod tests {
         }
         let text = |buffer: Option<HistoryBuffer>| buffer.map(|buffer| buffer.text);
 
-        assert_eq!(text(history.prev("R =", 3)), Some("R = ZZ[y]".into()));
-        assert_eq!(text(history.prev("R = ZZ[y]", 9)), Some("R = QQ[x]".into()));
-        assert_eq!(text(history.prev("R = QQ[x]", 9)), None);
-        assert_eq!(text(history.next("R = QQ[x]")), Some("R = ZZ[y]".into()));
-        assert_eq!(text(history.next("R = ZZ[y]")), Some("R =".into()));
+        assert_eq!(text(history.previous("R =", 3, Recall::Prefixed)), Some("R = ZZ[y]".into()));
+        assert_eq!(text(history.previous("R = ZZ[y]", 9, Recall::Prefixed)), Some("R = QQ[x]".into()));
+        assert_eq!(text(history.previous("R = QQ[x]", 9, Recall::Prefixed)), None);
+        assert_eq!(text(history.next("R = QQ[x]", Recall::Prefixed)), Some("R = ZZ[y]".into()));
+        assert_eq!(text(history.next("R = ZZ[y]", Recall::Prefixed)), Some("R =".into()));
 
-        assert_eq!(text(history.prev("h", 1)), None);
+        assert_eq!(text(history.previous("h", 1, Recall::Prefixed)), None);
         assert_eq!(
-            text(history.next("h")),
+            text(history.next("h", Recall::Prefixed)),
             None,
             "a failed search leaves the draft alone"
         );
-        assert_eq!(text(history.prev("", 0)), Some("R = ZZ[y]".into()));
-        assert_eq!(text(history.prev("R = ZZ[y]", 9)), Some("g = 2".into()));
-        assert_eq!(text(history.prev("g = 2", 5)), Some("f = 1".into()));
+        assert_eq!(text(history.previous("", 0, Recall::Prefixed)), Some("R = ZZ[y]".into()));
+        assert_eq!(text(history.previous("R = ZZ[y]", 9, Recall::Prefixed)), Some("g = 2".into()));
+        assert_eq!(text(history.previous("g = 2", 5, Recall::Prefixed)), Some("f = 1".into()));
     }
 
     /// Editing a recalled entry ends the search, so the next step searches by what
@@ -354,11 +361,31 @@ mod tests {
         }
         let text = |buffer: Option<HistoryBuffer>| buffer.map(|buffer| buffer.text);
 
-        assert_eq!(text(history.prev("o", 1)), Some("ooo".into()));
-        assert_eq!(text(history.prev("1", 1)), Some("11".into()));
-        assert_eq!(text(history.prev("11", 1)), Some("1/2".into()));
-        assert_eq!(text(history.next("1/2")), Some("11".into()));
-        assert_eq!(text(history.next("11")), Some("1".into()));
+        assert_eq!(text(history.previous("o", 1, Recall::Prefixed)), Some("ooo".into()));
+        assert_eq!(text(history.previous("1", 1, Recall::Prefixed)), Some("11".into()));
+        assert_eq!(text(history.previous("11", 1, Recall::Prefixed)), Some("1/2".into()));
+        assert_eq!(text(history.next("1/2", Recall::Prefixed)), Some("11".into()));
+        assert_eq!(text(history.next("11", Recall::Prefixed)), Some("1".into()));
+    }
+
+    /// A forced step lands on the very previous entry, and the steps after it go
+    /// back to the prefix the search began with, also once a new search starts.
+    #[test]
+    fn a_forced_step_ignores_the_prefix_only_once() {
+        let mut history = History::in_memory();
+        for entry in ["R = QQ[x]", "f = 1", "R = ZZ[y]", "g = 2"] {
+            history.record(entry);
+        }
+        let text = |buffer: Option<HistoryBuffer>| buffer.map(|buffer| buffer.text);
+
+        assert_eq!(text(history.previous("R", 1, Recall::Any)), Some("g = 2".into()));
+        assert_eq!(text(history.previous("g = 2", 5, Recall::Prefixed)), Some("R = ZZ[y]".into()));
+        assert_eq!(text(history.previous("R = ZZ[y]", 9, Recall::Any)), Some("f = 1".into()));
+        assert_eq!(text(history.next("f = 1", Recall::Prefixed)), Some("R = ZZ[y]".into()));
+        assert_eq!(text(history.next("R = ZZ[y]", Recall::Prefixed)), Some("R".into()));
+
+        history.stop_browsing();
+        assert_eq!(text(history.previous("f", 1, Recall::Prefixed)), Some("f = 1".into()));
     }
 
     #[test]
@@ -369,7 +396,7 @@ mod tests {
 
         let mut history = History::from_path(Some(path.clone()));
         assert_eq!(
-            history.prev("", 0).map(|buffer| buffer.text),
+            history.previous("", 0, Recall::Prefixed).map(|buffer| buffer.text),
             Some("valid entry".to_string())
         );
 

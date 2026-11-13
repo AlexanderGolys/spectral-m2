@@ -42,7 +42,7 @@ use crate::ui::cell::OutputBlock;
 use crate::ui::cell::{response_blocks, SourceBlock, TextBlock};
 use crate::ui::config::UI;
 use crate::ui::controller::{
-    CodePoint, CommittedCells, Editor, EditorUpdate, Lookup, Reaction, ReferenceEntry, ViewKind,
+    CodePoint, CodeSource, CommittedCells, Editor, EditorUpdate, Lookup, Reaction, ReferenceEntry, ViewKind,
 };
 use crate::ui::floating::{Anchor, Floating, MarkupContent};
 use crate::ui::fold::FoldRanges;
@@ -58,6 +58,7 @@ const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(80);
 const PICTURE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const NO_LANGUAGE_SERVER: &str = "the language server is not running";
 const NOTHING_KNOWN: &str = "nothing is known about this";
+const CODE_NOT_IN_SESSION: &str = "that code is not part of the running session";
 const NO_DEFINITION: &str = "no definition found";
 
 struct PreviewSnapshot {
@@ -191,6 +192,9 @@ impl App {
         if let Some(action) = editor.resolve_action(key) {
             return self.handle_action(action);
         }
+        if let Some(reaction) = editor.handle_caret_key(key) {
+            return self.handle_reaction(reaction);
+        }
         if !editor.picker_open()
             && self.panes.split()
             && self.previews.active.is_some()
@@ -277,11 +281,19 @@ impl App {
         if self.panes.focused().view == ViewKind::Reference {
             match action {
                 Action::ScrollFeedUp => {
-                    self.workspace.editor.scroll_reference(10);
+                    self.workspace.editor.page_reference(1);
                     return true;
                 }
                 Action::ScrollFeedDown => {
-                    self.workspace.editor.scroll_reference(-10);
+                    self.workspace.editor.page_reference(-1);
+                    return true;
+                }
+                Action::ScrollBlockStart => {
+                    self.workspace.editor.reference_to_block_start();
+                    return true;
+                }
+                Action::ScrollBlockEnd => {
+                    self.workspace.editor.reference_to_block_end();
                     return true;
                 }
                 _ => {}
@@ -349,15 +361,18 @@ impl App {
                 self.panes.focus(index);
             }
         }
+        let wheel_rows = self.workspace.editor.wheel_rows().unsigned_abs();
         let pane = self.panes.focused_mut();
         if pane.view == ViewKind::Reference {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
-                    self.workspace.editor.scroll_reference(1);
+                    let rows = self.workspace.editor.wheel_rows();
+                    self.workspace.editor.scroll_reference(rows);
                     return true;
                 }
                 MouseEventKind::ScrollDown => {
-                    self.workspace.editor.scroll_reference(-1);
+                    let rows = self.workspace.editor.wheel_rows();
+                    self.workspace.editor.scroll_reference(-rows);
                     return true;
                 }
                 _ => {}
@@ -368,11 +383,11 @@ impl App {
         } else {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
-                    pane.viewport.scroll = pane.viewport.scroll.saturating_sub(1);
+                    pane.viewport.scroll = pane.viewport.scroll.saturating_sub(wheel_rows);
                     return true;
                 }
                 MouseEventKind::ScrollDown => {
-                    pane.viewport.scroll += 1;
+                    pane.viewport.scroll += wheel_rows;
                     return true;
                 }
                 _ => self.workspace.editor.handle_preview_mouse(mouse),
@@ -476,11 +491,9 @@ impl App {
                 let pane = self.panes.focused_mut();
                 match pane.view {
                     ViewKind::Shell => workspace.editor.scroll_feed(rows),
+                    ViewKind::Reference => workspace.editor.scroll_reference(rows),
                     _ => {
-                        pane.viewport.scroll = pane
-                            .viewport
-                            .scroll
-                            .saturating_add_signed(-isize::from(rows))
+                        pane.viewport.scroll = pane.viewport.scroll.saturating_add_signed(-rows)
                     }
                 }
                 true
@@ -630,20 +643,22 @@ impl App {
             Lookup::Brief | Lookup::Description => Question::Hover,
             Lookup::Definition => Question::Definition,
         };
-        let asked = point
-            .source
-            .or_else(|| workspace.highlighter.draft())
-            .and_then(|source| workspace.highlighter.ask(source, point.offset, question));
-        match asked {
-            Some(id) => {
+        let source = match point.source {
+            CodeSource::Input => workspace.highlighter.draft(),
+            CodeSource::Cell { submission, index } => workspace.highlighter.cell(submission, index),
+        };
+        let asked = source.and_then(|source| workspace.highlighter.ask(source, point.offset, question));
+        let unanswered = match (asked, workspace.highlighter.serving()) {
+            (Some(id), _) => {
                 self.asked.insert(id, Asked::Lookup(lookup, point.anchor));
+                return;
             }
-            None => {
-                workspace
-                    .editor
-                    .apply(EditorUpdate::Diagnostic(NO_LANGUAGE_SERVER.to_string()));
-            }
-        }
+            (None, false) => NO_LANGUAGE_SERVER,
+            (None, true) => CODE_NOT_IN_SESSION,
+        };
+        workspace
+            .editor
+            .apply(EditorUpdate::Diagnostic(unanswered.to_string()));
     }
 
     /// Ask where the name under the input's cursor occurs whenever the cursor or

@@ -209,7 +209,7 @@ impl WrapPolicy for WordWrap {
 }
 
 /// Parsed-span wrapping that never guesses syntax boundaries.
-struct SpanWrap<'a>(pub &'a [Range<usize>]);
+pub struct SpanWrap<'a>(pub &'a [Range<usize>]);
 
 impl WrapPolicy for SpanWrap<'_> {
     fn wrap_logical_line(

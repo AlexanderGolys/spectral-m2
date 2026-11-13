@@ -20,6 +20,9 @@ Put the cursor on `ideal` and press `Alt+K`: a small panel above the cursor show
 Middle-click
 : A middle click on code in the input asks the same as `Alt+K` about the name under the pointer, the panel floating beside the click.
 
+In the feed
+: Code you already ran answers too. Press `Ctrl+E` to put a cursor in the feed, walk it onto a name in an earlier cell, and `Alt+K`, `Alt+Shift+K` or `Ctrl+]` ask about that name as they do in the input. Cells from before a restart are no longer part of the session, and say so.
+
 ## Go to a definition
 
 `Ctrl+]` (or Shift+click on the name) goes to where the name under the cursor is defined:

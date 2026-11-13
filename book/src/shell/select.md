@@ -18,6 +18,12 @@ Triple-click takes the paragraph: the lines around the click up to the blank one
 
 In the input, `Shift` with the arrows, `Home` or `End` extends a selection, and `Ctrl+A` selects everything. Typing replaces what is selected.
 
+## With the keyboard
+
+`Ctrl+E` puts a cursor into the feed, or into the view when that has focus, on its last line of text; `Esc` takes it back to the input. It moves with the arrows or `h` `j` `k` `l`, by words with `w` and `b`, to the row's ends with `0` and `$`, and scrolls the pane when it walks past an edge. `v` starts selecting, `Shift` with a movement key extends a selection as it does in the input, and `y` copies. `Alt+Shift+Up` selects what a double-click would.
+
+`Enter` opens the link under the cursor beside the session, folds or unfolds a long value, or picks the formatter whose icon the cursor is on, and the language server keys ask about the code under it; see [the view cursor](../reference/keys.md#the-view-cursor).
+
 ## Only the text you mean
 
 A selection reads text only. Cell numbers, gutters, borders and picker rows are left out, code inside a documentation page copies with its own indentation, and blank lines inside printed text are kept.

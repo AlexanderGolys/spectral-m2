@@ -24,7 +24,7 @@ maths
 : `unicode`, `ascii` or `typeset`. Default: `unicode`. See [Read results](../shell/results.md#renderers).
 
 output mode position
-: Place the output mode controls in the border: `upper left`, `upper center`, `upper right`, `lower left`, `lower center` or `lower right`; `off` hides them. Default: `upper right`. The icons select the output representation (`specNet`, `net`, `string`, `tex`, `markup` or `html`). The maths setting controls display within that preview.
+: Place the output mode controls in the border: `upper left`, `upper center`, `upper right`, `lower left`, `lower center` or `lower right`; `off` hides them. Default: `upper right`. The icons select the output representation (`specNet`, `net`, `string`, `tex`, `markup` or `external`). The maths setting controls display within that preview.
 
 maths size
 : Preferred typeset size relative to terminal text, from 50% to 200% in 10% steps. Default: 100%. Long formulas wrap at available break points before shrinking to fit the pane.
@@ -76,7 +76,10 @@ max output height
 : Rows a value shows before its middle folds away. Default: 40 rows, at least 5.
 
 scrolloff
-: Rows kept visible above and below the input cursor. Default: 2.
+: Rows kept visible above and below the input cursor, and of the previous page when `PageUp` or `PageDown` scrolls. Default: 2.
+
+scroll speed
+: Rows one notch of the mouse wheel scrolls the feed or a view. Default: 3, at least 1.
 
 complete after
 : Characters of a name, or of a file name in a string, typed before it completes. Default: 1.

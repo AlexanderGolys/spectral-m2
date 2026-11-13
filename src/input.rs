@@ -26,7 +26,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub use self::completion::Completion;
 use self::hints::Hint;
-use self::history::History;
+use self::history::{History, Recall};
 use self::undo::{EditKind, Snapshot, Undo};
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::query::{Finding, Severity};
@@ -38,7 +38,7 @@ use crate::ui::render::{Highlights, Prompt, RenderContext};
 use crate::ui::settings::editor::EditorSettings;
 #[cfg(test)]
 use crate::ui::settings::keymap::Keymaps;
-use crate::ui::text_object::{Bracket, CharClass};
+use crate::ui::text_object::{bracket_pair_at, Bracket, CharClass, TextDirection, TextMotion};
 use crate::ui::wrap::{offset_at_column, CaretWrap, TextLayout, WrapPolicy};
 
 /// A text-editing operation owned and interpreted by the input field.
@@ -48,6 +48,7 @@ use crate::ui::wrap::{offset_at_column, CaretWrap, TextLayout, WrapPolicy};
 pub enum InputAction {
     InsertNewline = "insert a line break",
     InsertTab = "insert a tab",
+
     NextCompletion = "show completion candidates, insert a hint, or take the next candidate",
     PreviousCompletion = "take the previous completion",
 
@@ -56,6 +57,7 @@ pub enum InputAction {
     DeleteForward = "delete under the cursor",
     DeleteWordBack = "delete back to where a word-wise move left lands",
     DeleteWordForward = "delete on to where a word-wise move right lands",
+    DeleteSpacedWordBack = "delete back to the whitespace before the cursor",
 
     Undo = "undo the last edit",
     Redo = "redo the last undone edit",
@@ -64,26 +66,105 @@ pub enum InputAction {
     MoveRight = "move right",
     MoveUp = "move up, or recall older input",
     MoveDown = "move down, or recall newer input",
+
     HistoryPrevious = "recall older input regardless of the draft",
     HistoryNext = "recall newer input regardless of the draft",
+
     MoveWordLeft = "move left by a word",
     MoveWordRight = "move right by a word",
+    MoveSpacedWordLeft = "move left past whitespace-delimited text",
+    MoveSpacedWordRight = "move right past whitespace-delimited text",
     MoveLineStart = "move to line start",
     MoveLineEnd = "move to line end",
+    MoveParagraphUp = "move up to the blank line before the paragraph",
+    MoveParagraphDown = "move down to the blank line after the paragraph",
+    MoveBlockStart = "move to the bracket opening the enclosing block",
+    MoveBlockEnd = "move past the bracket closing the enclosing block",
+    MoveMatchingBracket = "jump to the bracket matching the one at the cursor",
     MoveTextStart = "move to the start of the input",
     MoveTextEnd = "move to the end of the input",
 
     SelectLeft = "extend selection left",
     SelectRight = "extend selection right",
+    SelectUp = "extend selection up",
+    SelectDown = "extend selection down",
     SelectWordLeft = "extend selection left by a word",
     SelectWordRight = "extend selection right by a word",
+    SelectSpacedWordLeft = "extend selection left past whitespace-delimited text",
+    SelectSpacedWordRight = "extend selection right past whitespace-delimited text",
     SelectLineStart = "extend selection to line start",
     SelectLineEnd = "extend selection to line end",
+    SelectParagraphUp = "extend selection up by a paragraph",
+    SelectParagraphDown = "extend selection down by a paragraph",
     SelectTextStart = "extend selection to the start of the input",
     SelectTextEnd = "extend selection to the end of the input",
     SelectAll = "select the whole input",
+    GrowSelection = "grow the selection to the word, bracketed block, line or paragraph around it",
+    ShrinkSelection = "shrink the selection back to what it grew from",
 
     Clear = "clear input text",
+}
+
+/// What an action stepping over a [`TextMotion`] does with the text it crosses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Traversal {
+    Move,
+    Select,
+    Delete,
+}
+
+impl InputAction {
+    /// The step this action takes over text, when it is one.
+    pub fn traversal(self) -> Option<(Traversal, TextMotion, TextDirection)> {
+        use TextDirection::{Backward, Forward};
+        use TextMotion::*;
+        use Traversal::{Delete, Move, Select};
+        Some(match self {
+            Self::MoveLeft => (Move, Character, Backward),
+            Self::MoveRight => (Move, Character, Forward),
+            Self::MoveWordLeft => (Move, WordAlpha, Backward),
+            Self::MoveWordRight => (Move, WordAlpha, Forward),
+            Self::MoveSpacedWordLeft => (Move, WordAny, Backward),
+            Self::MoveSpacedWordRight => (Move, WordAny, Forward),
+            Self::MoveLineStart => (Move, Line, Backward),
+            Self::MoveLineEnd => (Move, Line, Forward),
+            Self::MoveParagraphUp => (Move, Paragraph, Backward),
+            Self::MoveParagraphDown => (Move, Paragraph, Forward),
+            Self::MoveBlockStart => (Move, DelimitedBlock, Backward),
+            Self::MoveBlockEnd => (Move, DelimitedBlock, Forward),
+            Self::MoveTextStart => (Move, Full, Backward),
+            Self::MoveTextEnd => (Move, Full, Forward),
+            Self::SelectLeft => (Select, Character, Backward),
+            Self::SelectRight => (Select, Character, Forward),
+            Self::SelectWordLeft => (Select, WordAlpha, Backward),
+            Self::SelectWordRight => (Select, WordAlpha, Forward),
+            Self::SelectSpacedWordLeft => (Select, WordAny, Backward),
+            Self::SelectSpacedWordRight => (Select, WordAny, Forward),
+            Self::SelectLineStart => (Select, Line, Backward),
+            Self::SelectLineEnd => (Select, Line, Forward),
+            Self::SelectParagraphUp => (Select, Paragraph, Backward),
+            Self::SelectParagraphDown => (Select, Paragraph, Forward),
+            Self::SelectTextStart => (Select, Full, Backward),
+            Self::SelectTextEnd => (Select, Full, Forward),
+            Self::DeleteBack => (Delete, Character, Backward),
+            Self::DeleteForward => (Delete, Character, Forward),
+            Self::DeleteWordBack => (Delete, WordAlpha, Backward),
+            Self::DeleteWordForward => (Delete, WordAlpha, Forward),
+            Self::DeleteSpacedWordBack => (Delete, WordAny, Backward),
+            _ => return None,
+        })
+    }
+
+    /// Whether this action changes the text.
+    fn edits(self) -> bool {
+        matches!(
+            self.traversal(),
+            Some((Traversal::Delete, ..))
+        ) || matches!(
+            self,
+            Self::InsertNewline | Self::InsertTab | Self::DeleteLine | Self::Undo | Self::Redo | Self::Clear
+        )
+    }
 }
 
 /// Editable source, its byte-offset cursor, submission history, and undo.
@@ -96,6 +177,9 @@ pub struct InputTextField {
     anchor: Option<usize>,
     history: History,
     edits: Undo,
+    /// The selections a run of growing went through, the current one last, so
+    /// shrinking can retrace them. Any edit forgets them.
+    growth: Vec<Range<usize>>,
 }
 
 impl InputTextField {
@@ -107,6 +191,7 @@ impl InputTextField {
             anchor: None,
             history: History::new(),
             edits: Undo::default(),
+            growth: Vec::new(),
         }
     }
 
@@ -195,31 +280,9 @@ impl InputTextField {
     /// Select what a triple click at `cursor` picks out: the lines around it up to the
     /// blank ones either side; nothing on a blank line.
     pub fn select_paragraph(&mut self, cursor: usize) {
-        let mut offset = 0;
-        let lines: Vec<Range<usize>> = self
-            .text
-            .split('\n')
-            .map(|line| {
-                let range = offset..offset + line.len();
-                offset = range.end + 1;
-                range
-            })
-            .collect();
-        let blank = |line: &Range<usize>| self.text[line.clone()].trim().is_empty();
-        let Some(at) = lines
-            .iter()
-            .position(|line| line.start <= cursor && cursor <= line.end)
-            .filter(|&at| !blank(&lines[at]))
-        else {
-            return;
-        };
-        let first = lines[..at].iter().rposition(blank).map_or(0, |gap| gap + 1);
-        let last = lines[at..]
-            .iter()
-            .position(blank)
-            .map_or(lines.len(), |gap| at + gap)
-            - 1;
-        self.select(lines[first].start..lines[last].end);
+        if let Some(paragraph) = TextMotion::Paragraph.around(&self.text, cursor..cursor).pop() {
+            self.select(paragraph);
+        }
     }
 
     fn select(&mut self, range: Range<usize>) {
@@ -247,101 +310,79 @@ impl InputTextField {
         move_cursor(self);
     }
 
-    pub fn select_left(&mut self) {
+    /// Move the cursor one `motion` in `direction`, letting go of any selection.
+    pub fn move_by(&mut self, motion: TextMotion, direction: TextDirection) {
+        self.clear_selection();
+        self.cursor = motion.reach(&self.text, self.cursor, direction);
+    }
+
+    /// Carry the cursor one `motion` in `direction`, selecting what it crosses.
+    pub fn select_by(&mut self, motion: TextMotion, direction: TextDirection) {
         self.extend_selection(|field| {
-            if field.cursor > 0 {
-                field.cursor = field.previous_boundary();
+            field.cursor = motion.reach(&field.text, field.cursor, direction);
+        });
+    }
+
+    /// Delete the selection, else what one `motion` in `direction` would cross.
+    pub fn delete_by(&mut self, motion: TextMotion, direction: TextDirection) {
+        let kind = match direction {
+            TextDirection::Backward => EditKind::DeletingBack,
+            TextDirection::Forward => EditKind::DeletingForward,
+        };
+        self.edit(kind, |field| {
+            if !field.delete_selection() {
+                let target = motion.reach(&field.text, field.cursor, direction);
+                field.delete(field.cursor.min(target)..field.cursor.max(target));
             }
         });
     }
 
-    pub fn select_right(&mut self) {
-        self.extend_selection(|field| {
-            if field.cursor < field.text.len() {
-                field.cursor = field.next_boundary(field.cursor);
-            }
-        });
+    fn traverse(&mut self, (traversal, motion, direction): (Traversal, TextMotion, TextDirection)) {
+        match traversal {
+            Traversal::Move => self.move_by(motion, direction),
+            Traversal::Select => self.select_by(motion, direction),
+            Traversal::Delete => self.delete_by(motion, direction),
+        }
     }
 
-    /// The cursor moved left over any whitespace, then over the run of word or
-    /// punctuation characters before it.
-    fn word_start(&self) -> usize {
-        let before = &self.text[..self.cursor];
-        let trimmed = before.trim_end();
-        let class = trimmed.chars().next_back().map(CharClass::of);
-        let run = trimmed
-            .chars()
-            .rev()
-            .take_while(|&character| Some(CharClass::of(character)) == class)
-            .map(char::len_utf8)
-            .sum::<usize>();
-        trimmed.len() - run
+    pub fn move_to_matching_bracket(&mut self) {
+        if let Some(partner) = TextMotion::matching_bracket(&self.text, self.cursor) {
+            self.clear_selection();
+            self.cursor = partner;
+        }
     }
 
-    /// The cursor moved right over any whitespace, then over the run of word or
-    /// punctuation characters after it.
-    fn word_end(&self) -> usize {
-        let after = &self.text[self.cursor..];
-        let trimmed = after.trim_start();
-        let class = trimmed.chars().next().map(CharClass::of);
-        let run = trimmed
-            .chars()
-            .take_while(|&character| Some(CharClass::of(character)) == class)
-            .map(char::len_utf8)
-            .sum::<usize>();
-        self.text.len() - trimmed.len() + run
+    /// The brackets to mark as a pair: the one at or just before the cursor and
+    /// its partner.
+    pub fn bracket_pair(&self) -> Option<(usize, usize)> {
+        bracket_pair_at(&self.text, self.cursor)
     }
 
-    pub fn move_word_left(&mut self) {
-        self.clear_selection();
-        self.cursor = self.word_start();
+    /// Select the smallest unit around the selection, or around the cursor when
+    /// nothing is selected.
+    pub fn grow_selection(&mut self) {
+        let current = self.selection().unwrap_or(self.cursor..self.cursor);
+        if self.growth.last() != Some(&current) {
+            self.growth = vec![current.clone()];
+        }
+        if let Some(grown) = TextMotion::grow(&self.text, current) {
+            self.growth.push(grown.clone());
+            self.select(grown);
+        }
     }
 
-    pub fn move_word_right(&mut self) {
-        self.clear_selection();
-        self.cursor = self.word_end();
-    }
-
-    pub fn select_word_left(&mut self) {
-        self.extend_selection(|field| field.cursor = field.word_start());
-    }
-
-    pub fn select_word_right(&mut self) {
-        self.extend_selection(|field| field.cursor = field.word_end());
-    }
-
-    pub fn move_text_start(&mut self) {
-        self.clear_selection();
-        self.cursor = 0;
-    }
-
-    pub fn move_text_end(&mut self) {
-        self.clear_selection();
-        self.cursor = self.text.len();
-    }
-
-    pub fn select_text_start(&mut self) {
-        self.extend_selection(|field| field.cursor = 0);
-    }
-
-    pub fn select_text_end(&mut self) {
-        self.extend_selection(|field| field.cursor = field.text.len());
-    }
-
-    pub fn select_home(&mut self) {
-        self.extend_selection(|field| {
-            field.cursor = field.text[..field.cursor]
-                .rfind('\n')
-                .map_or(0, |index| index + 1);
-        });
-    }
-
-    pub fn select_end(&mut self) {
-        self.extend_selection(|field| {
-            field.cursor = field.text[field.cursor..]
-                .find('\n')
-                .map_or(field.text.len(), |index| field.cursor + index);
-        });
+    /// Go back to the selection the last growing step started from.
+    pub fn shrink_selection(&mut self) {
+        let current = self.selection().unwrap_or(self.cursor..self.cursor);
+        if self.growth.len() < 2 || self.growth.last() != Some(&current) {
+            return;
+        }
+        self.growth.pop();
+        let previous = self.growth.last().cloned().unwrap_or(current);
+        match previous.is_empty() {
+            true => self.place_cursor(previous.start),
+            false => self.select(previous),
+        }
     }
 
     /// Remove the selection, if any, leaving the cursor where it stood. Typing
@@ -444,90 +485,32 @@ impl InputTextField {
         });
     }
 
-    pub fn backspace(&mut self) {
-        self.edit(EditKind::DeletingBack, |field| {
-            if !field.delete_selection() {
-                field.delete(field.previous_boundary()..field.cursor);
-            }
-        });
-    }
-
-    pub fn delete_forward(&mut self) {
-        self.edit(EditKind::DeletingForward, |field| {
-            if !field.delete_selection() {
-                field.delete(field.cursor..field.next_boundary(field.cursor));
-            }
-        });
-    }
-
-    /// Delete what a word-wise move left crosses.
-    pub fn delete_word_back(&mut self) {
-        self.edit(EditKind::DeletingBack, |field| {
-            if !field.delete_selection() {
-                field.delete(field.word_start()..field.cursor);
-            }
-        });
-    }
-
-    /// Delete what a word-wise move right crosses.
-    pub fn delete_word_forward(&mut self) {
-        self.edit(EditKind::DeletingForward, |field| {
-            if !field.delete_selection() {
-                field.delete(field.cursor..field.word_end());
-            }
-        });
-    }
-
-    pub fn move_left(&mut self) {
-        self.clear_selection();
-        if self.cursor > 0 {
-            self.cursor = self.previous_boundary();
-        }
-    }
-
-    pub fn move_right(&mut self) {
-        self.clear_selection();
-        if self.cursor < self.text.len() {
-            self.cursor = self.next_boundary(self.cursor);
-        }
-    }
-
-    pub fn move_home(&mut self) {
-        self.clear_selection();
-        self.cursor = self.text[..self.cursor]
-            .rfind('\n')
-            .map(|i| i + 1)
-            .unwrap_or(0);
-    }
-
-    pub fn move_end(&mut self) {
-        self.clear_selection();
-        self.cursor = self.text[self.cursor..]
-            .find('\n')
-            .map(|i| self.cursor + i)
-            .unwrap_or(self.text.len());
-    }
-
-    pub fn move_up(&mut self) {
-        self.clear_selection();
+    /// Where the cursor lands a line up or down, at the column it stands in;
+    /// none at the first or last line.
+    fn line_step(&self, direction: TextDirection) -> Option<usize> {
         let starts = self.line_starts();
         let current = self.current_line(&starts);
-        if current == 0 {
-            return;
-        }
+        let target = match direction {
+            TextDirection::Backward => current.checked_sub(1)?,
+            TextDirection::Forward => Some(current + 1).filter(|&line| line < starts.len())?,
+        };
         let column = self.text[starts[current]..self.cursor].width();
-        self.cursor = self.cursor_at_column(&starts, current - 1, column);
+        Some(self.cursor_at_column(&starts, target, column))
     }
 
-    pub fn move_down(&mut self) {
+    pub fn move_vertically(&mut self, direction: TextDirection) {
         self.clear_selection();
-        let starts = self.line_starts();
-        let current = self.current_line(&starts);
-        if current + 1 == starts.len() {
-            return;
+        if let Some(target) = self.line_step(direction) {
+            self.cursor = target;
         }
-        let column = self.text[starts[current]..self.cursor].width();
-        self.cursor = self.cursor_at_column(&starts, current + 1, column);
+    }
+
+    pub fn select_vertically(&mut self, direction: TextDirection) {
+        self.extend_selection(|field| {
+            if let Some(target) = field.line_step(direction) {
+                field.cursor = target;
+            }
+        });
     }
 
     #[cfg(test)]
@@ -541,46 +524,49 @@ impl InputTextField {
         (line, col)
     }
 
+    /// The current line with its line break, or the one before it on the last line.
+    fn whole_line(&self) -> Range<usize> {
+        let start = self.text[..self.cursor].rfind('\n').map_or(0, |i| i + 1);
+        let end = self.text[self.cursor..]
+            .find('\n')
+            .map_or(self.text.len(), |i| self.cursor + i + 1);
+        let start = if end == self.text.len() && start > 0 && !self.text[start..].ends_with('\n') {
+            start - 1
+        } else {
+            start
+        };
+        start..end
+    }
+
     pub fn delete_line(&mut self) {
         self.edit(EditKind::Replacing, |field| {
             field.clear_selection();
-            let start = field.text[..field.cursor].rfind('\n').map_or(0, |i| i + 1);
-            let end = field.text[field.cursor..]
-                .find('\n')
-                .map_or(field.text.len(), |i| field.cursor + i + 1);
-            let start =
-                if end == field.text.len() && start > 0 && !field.text[start..].ends_with('\n') {
-                    start - 1
-                } else {
-                    start
-                };
-            field.delete(start..end);
+            field.delete(field.whole_line());
         });
     }
 
-    pub fn history_unfiltered(&mut self, previous: bool) {
-        let buffer = if previous {
-            self.history.previous_unfiltered(&self.text, self.cursor)
-        } else {
-            self.history.next_unfiltered(&self.text)
-        };
-        if let Some(buffer) = buffer {
+    /// Take out the selection, or the current line when nothing is selected,
+    /// returning what was taken.
+    pub fn cut(&mut self) -> Option<String> {
+        let range = self.selection().unwrap_or_else(|| self.whole_line());
+        let taken = self.text[range.clone()].to_string();
+        self.edit(EditKind::Replacing, |field| {
+            field.clear_selection();
+            field.delete(range);
+        });
+        (!taken.is_empty()).then_some(taken)
+    }
+
+    pub fn recall_previous(&mut self, recall: Recall) {
+        if let Some(buffer) = self.history.previous(&self.text, self.cursor, recall) {
             self.edit(EditKind::Recalling, |field| {
                 field.load(buffer.text, buffer.cursor)
             });
         }
     }
 
-    pub fn history_prev(&mut self) {
-        if let Some(buffer) = self.history.prev(&self.text, self.cursor) {
-            self.edit(EditKind::Recalling, |field| {
-                field.load(buffer.text, buffer.cursor)
-            });
-        }
-    }
-
-    pub fn history_next(&mut self) {
-        if let Some(buffer) = self.history.next(&self.text) {
+    pub fn recall_next(&mut self, recall: Recall) {
+        if let Some(buffer) = self.history.next(&self.text, recall) {
             self.edit(EditKind::Recalling, |field| {
                 field.load(buffer.text, buffer.cursor)
             });
@@ -619,21 +605,7 @@ impl InputTextField {
 
     fn changed(&mut self) {
         self.revision = self.revision.wrapping_add(1);
-    }
-
-    fn previous_boundary(&self) -> usize {
-        self.text[..self.cursor]
-            .char_indices()
-            .last()
-            .map_or(0, |(index, _)| index)
-    }
-
-    fn next_boundary(&self, from: usize) -> usize {
-        self.text[from..]
-            .char_indices()
-            .nth(1)
-            .map(|(i, _)| from + i)
-            .unwrap_or(self.text.len())
+        self.growth.clear();
     }
 
     fn line_starts(&self) -> Vec<usize> {
@@ -671,6 +643,7 @@ impl InputTextField {
             anchor: None,
             history: History::in_memory(),
             edits: Undo::default(),
+            growth: Vec::new(),
         }
     }
 }
@@ -874,19 +847,7 @@ impl InputCode {
     /// Apply one input-owned editing operation.
     pub fn edit(&mut self, action: InputAction) {
         use InputAction::*;
-        if matches!(
-            action,
-            InsertNewline
-                | InsertTab
-                | DeleteBack
-                | DeleteForward
-                | DeleteLine
-                | DeleteWordBack
-                | DeleteWordForward
-                | Undo
-                | Redo
-                | Clear
-        ) {
+        if action.edits() {
             self.clear_diagnostic();
         }
         if action == Clear {
@@ -899,43 +860,31 @@ impl InputCode {
         if !matches!(action, MoveUp | MoveDown | HistoryPrevious | HistoryNext) {
             field.history.stop_browsing();
         }
+        if let Some(traversal) = action.traversal() {
+            return field.traverse(traversal);
+        }
         let browse = field.history.browsing(&field.text) || !field.text.contains('\n');
+        let on_first_line = !field.text[..field.cursor].contains('\n');
+        let on_last_line = !field.text[field.cursor..].contains('\n');
         match action {
             InsertNewline => field.insert_char('\n'),
             InsertTab => field.insert_char('\t'),
-            DeleteBack => field.backspace(),
-            DeleteForward => field.delete_forward(),
             DeleteLine => field.delete_line(),
-            DeleteWordBack => field.delete_word_back(),
-            DeleteWordForward => field.delete_word_forward(),
             Undo => field.undo(),
             Redo => field.redo(),
-            MoveLeft => field.move_left(),
-            MoveRight => field.move_right(),
-            MoveWordLeft => field.move_word_left(),
-            MoveWordRight => field.move_word_right(),
-            MoveLineStart => field.move_home(),
-            MoveLineEnd => field.move_end(),
-            MoveTextStart => field.move_text_start(),
-            MoveTextEnd => field.move_text_end(),
-            HistoryPrevious => field.history_unfiltered(true),
-            HistoryNext => field.history_unfiltered(false),
-            MoveUp if browse && !field.text[..field.cursor].contains('\n') => field.history_prev(),
-            MoveUp => field.move_up(),
-            MoveDown if browse && !field.text[field.cursor..].contains('\n') => {
-                field.history_next()
-            }
-            MoveDown => field.move_down(),
-            SelectLeft => field.select_left(),
-            SelectRight => field.select_right(),
-            SelectWordLeft => field.select_word_left(),
-            SelectWordRight => field.select_word_right(),
-            SelectLineStart => field.select_home(),
-            SelectLineEnd => field.select_end(),
-            SelectTextStart => field.select_text_start(),
-            SelectTextEnd => field.select_text_end(),
+            HistoryPrevious => field.recall_previous(Recall::Any),
+            HistoryNext => field.recall_next(Recall::Any),
+            MoveUp if browse && on_first_line => field.recall_previous(Recall::Prefixed),
+            MoveUp => field.move_vertically(TextDirection::Backward),
+            MoveDown if browse && on_last_line => field.recall_next(Recall::Prefixed),
+            MoveDown => field.move_vertically(TextDirection::Forward),
+            SelectUp => field.select_vertically(TextDirection::Backward),
+            SelectDown => field.select_vertically(TextDirection::Forward),
+            MoveMatchingBracket => field.move_to_matching_bracket(),
             SelectAll => field.select_all(),
-            Clear | NextCompletion | PreviousCompletion => unreachable!(),
+            GrowSelection => field.grow_selection(),
+            ShrinkSelection => field.shrink_selection(),
+            _ => unreachable!("{action:?} is a traversal, a completion or clearing"),
         }
     }
 
@@ -1176,6 +1125,11 @@ impl InputCode {
                 (row, offset, completion.ghost().to_string())
             });
 
+        let brackets: Vec<usize> = self
+            .field
+            .bracket_pair()
+            .filter(|_| selection.is_none())
+            .map_or_else(Vec::new, |(at, partner)| vec![at, partner]);
         let mut lines = Vec::new();
         for (index, visual_line) in visual_lines.iter().enumerate() {
             let marker = if index + 1 != visual_lines.len() {
@@ -1201,6 +1155,14 @@ impl InputCode {
                         theme.name_occurrence(),
                     );
                 }
+            }
+            for &bracket in &brackets {
+                line = apply_selection(
+                    line,
+                    visual_line.range.start,
+                    &(bracket..bracket + 1),
+                    theme.matching_bracket(),
+                );
             }
             for finding in self.current_findings() {
                 line = apply_selection(
@@ -1666,8 +1628,8 @@ mod tests {
         }
 
         deleted.insert(source);
-        deleted.field_mut().move_text_start();
-        moved.field_mut().move_text_start();
+        deleted.field_mut().move_by(TextMotion::Full, TextDirection::Backward);
+        moved.field_mut().move_by(TextMotion::Full, TextDirection::Backward);
         while !deleted.text().is_empty() {
             moved.handle_key(KeyCode::Right + Ctrl);
             deleted.handle_key(KeyCode::Delete + Ctrl);
@@ -1732,10 +1694,10 @@ mod tests {
     fn shifted_movement_selects_and_typing_replaces_it() {
         let mut field = InputTextField::new_in_memory();
         field.insert_str("abcdef");
-        field.move_home();
+        field.move_by(TextMotion::Line, TextDirection::Backward);
 
-        field.select_right();
-        field.select_right();
+        field.select_by(TextMotion::Character, TextDirection::Forward);
+        field.select_by(TextMotion::Character, TextDirection::Forward);
         assert_eq!(field.selected_text(), Some("ab"));
 
         field.insert_char('X');
@@ -1750,7 +1712,7 @@ mod tests {
     fn a_replaced_buffer_carries_no_selection() {
         let mut input = InputCode::new_in_memory();
         input.field_mut().insert_str("abc");
-        input.field_mut().select_home();
+        input.field_mut().select_by(TextMotion::Line, TextDirection::Backward);
 
         input.accept_submission();
         input.field_mut().insert_char('x');
@@ -1763,9 +1725,9 @@ mod tests {
         let mut field = InputTextField::new_in_memory();
         field.history.record("q");
         field.insert_str("abcdef");
-        field.select_home();
+        field.select_by(TextMotion::Line, TextDirection::Backward);
 
-        field.history_prev();
+        field.recall_previous(Recall::Prefixed);
 
         assert_eq!(field.text(), "q");
         assert_eq!(field.selected_text(), None);
@@ -1851,9 +1813,9 @@ mod tests {
         field.insert_str("top\nbottom");
         field.cursor = 0;
 
-        field.history_prev();
+        field.recall_previous(Recall::Prefixed);
         assert_eq!(field.text(), "top\nbottom + 1");
-        field.history_next();
+        field.recall_next(Recall::Prefixed);
 
         assert_eq!(field.text(), "top\nbottom");
         assert_eq!(field.cursor_line_col(), (0, 0));
@@ -1867,7 +1829,7 @@ mod tests {
         field.insert_str("top\nbottom");
         field.cursor = 0;
 
-        field.history_prev();
+        field.recall_previous(Recall::Prefixed);
 
         assert_eq!(field.text(), "top\nbottom");
         assert_eq!(field.cursor_line_col(), (0, 0));
@@ -1878,10 +1840,10 @@ mod tests {
     fn plain_movement_clears_the_selection() {
         let mut field = InputTextField::new_in_memory();
         field.insert_str("abc");
-        field.select_home();
+        field.select_by(TextMotion::Line, TextDirection::Backward);
         assert!(field.selection().is_some());
 
-        field.move_right();
+        field.move_by(TextMotion::Character, TextDirection::Forward);
         assert!(field.selection().is_none());
     }
 
@@ -1889,9 +1851,9 @@ mod tests {
     fn deleting_a_selection_removes_all_of_it() {
         let mut field = InputTextField::new_in_memory();
         field.insert_str("keep this");
-        field.select_home();
+        field.select_by(TextMotion::Line, TextDirection::Backward);
 
-        field.backspace();
+        field.delete_by(TextMotion::Character, TextDirection::Backward);
         assert_eq!(field.text(), "");
     }
 
@@ -1915,7 +1877,7 @@ mod tests {
         let mut field = InputTextField::new_in_memory();
         field.insert_str("ab\ncd");
 
-        field.move_up();
+        field.move_vertically(TextDirection::Backward);
 
         assert_eq!(field.cursor_line_col(), (0, 2));
     }
@@ -1925,9 +1887,9 @@ mod tests {
         let mut field = InputTextField::new_in_memory();
         field.insert_str("αβ\nγδεζ");
 
-        field.move_up();
+        field.move_vertically(TextDirection::Backward);
         assert_eq!(field.cursor_line_col(), (0, 2));
-        field.move_down();
+        field.move_vertically(TextDirection::Forward);
         assert_eq!(field.cursor_line_col(), (1, 2));
     }
 
@@ -2102,14 +2064,14 @@ mod tests {
         assert!(underlined("a") && underlined("d"));
         assert!(!underlined("bc"));
         // Away from every finding, the first error is told.
-        input.field_mut().move_text_start();
-        input.field_mut().move_right();
-        input.field_mut().move_right();
+        input.field_mut().move_by(TextMotion::Full, TextDirection::Backward);
+        input.field_mut().move_by(TextMotion::Character, TextDirection::Forward);
+        input.field_mut().move_by(TextMotion::Character, TextDirection::Forward);
         assert_eq!(
             input.shown_diagnostic(),
             Some(("an error".to_string(), Severity::Error))
         );
-        input.field_mut().move_text_start();
+        input.field_mut().move_by(TextMotion::Full, TextDirection::Backward);
         assert_eq!(
             input.shown_diagnostic(),
             Some(("a hint".to_string(), Severity::Hint))
@@ -2135,7 +2097,7 @@ mod tests {
     fn the_rest_of_a_completion_is_drawn_after_the_cursor_as_a_hint() {
         let mut input = InputCode::new_in_memory();
         input.field_mut().insert_str("f(ide)");
-        input.field_mut().move_left();
+        input.field_mut().move_by(TextMotion::Character, TextDirection::Backward);
         let candidates = vec!["ideal".to_string()];
         input.offer(Completion::new(input.text(), 2..5, candidates));
         let context = RenderContext::new(40, UI.prompt_width());
@@ -2207,8 +2169,8 @@ mod tests {
     fn cursor_before_a_newline_stays_on_its_own_row() {
         let mut input = InputCode::new_in_memory();
         input.field_mut().insert_str("ab\ncd");
-        input.field_mut().move_up();
-        input.field_mut().move_end();
+        input.field_mut().move_vertically(TextDirection::Backward);
+        input.field_mut().move_by(TextMotion::Line, TextDirection::Forward);
 
         assert_eq!(input.visual_cursor(4), (0, 2));
     }
@@ -2230,12 +2192,12 @@ mod tests {
     fn vertical_moves_keep_the_drawn_column_across_wide_characters() {
         let mut input = InputCode::new_in_memory();
         input.field_mut().insert_str("abcd\n😀x");
-        input.field_mut().move_up();
-        input.field_mut().move_end();
-        input.field_mut().move_down();
+        input.field_mut().move_vertically(TextDirection::Backward);
+        input.field_mut().move_by(TextMotion::Line, TextDirection::Forward);
+        input.field_mut().move_vertically(TextDirection::Forward);
         assert_eq!(input.visual_cursor(80), (1, 3));
-        input.field_mut().move_left();
-        input.field_mut().move_up();
+        input.field_mut().move_by(TextMotion::Character, TextDirection::Backward);
+        input.field_mut().move_vertically(TextDirection::Backward);
         assert_eq!(input.visual_cursor(80), (0, 2));
     }
 
@@ -2297,7 +2259,10 @@ mod tests {
 
 #[cfg(test)]
 mod editing_workflow_tests {
-    use super::{InputAction, InputCode, InputTextField};
+    use super::{InputAction, InputCode, InputTextField, TextDirection, TextMotion};
+    use crate::code::highlight::SyntaxHighlighter;
+    use crate::ui::render::RenderContext;
+    use crate::ui::settings::keymap::Keymaps;
 
     #[test]
     fn forced_history_ignores_multiline_drafts_and_restores_the_cursor() {
@@ -2305,13 +2270,13 @@ mod editing_workflow_tests {
         input.field.history.record("older = 1");
         input.field.history.record("newer = 2");
         input.field.insert_str("unrelated\ndraft");
-        input.field.move_home();
+        input.field.move_by(TextMotion::Line, TextDirection::Backward);
         let draft = input.field.snapshot();
         input.edit(InputAction::HistoryPrevious);
         assert_eq!(input.field.text, "newer = 2");
         input.edit(InputAction::HistoryPrevious);
         assert_eq!(input.field.text, "older = 1");
-        input.field.move_home();
+        input.field.move_by(TextMotion::Line, TextDirection::Backward);
         input.field.insert_str("edited ");
         input.edit(InputAction::HistoryNext);
         assert_eq!(input.field.text, "newer = 2");
@@ -2340,5 +2305,78 @@ mod editing_workflow_tests {
             assert_eq!(field.text, source);
             assert_eq!(field.cursor, cursor);
         }
+    }
+
+    fn pressing(input: &mut InputCode, edit: InputAction) {
+        let key = Keymaps::default().key(edit).expect("the edit is bound");
+        input.handle_key(key);
+    }
+
+    #[test]
+    fn growing_then_shrinking_retraces_the_selections() {
+        let mut input = InputCode::new_in_memory();
+        input.insert("f(a_1, b)");
+        input.field.place_cursor(3);
+        pressing(&mut input, InputAction::GrowSelection);
+        assert_eq!(input.field.selected_text(), Some("a_1"));
+        pressing(&mut input, InputAction::GrowSelection);
+        assert_eq!(input.field.selected_text(), Some("a_1, b"));
+        pressing(&mut input, InputAction::GrowSelection);
+        assert_eq!(input.field.selected_text(), Some("(a_1, b)"));
+        pressing(&mut input, InputAction::ShrinkSelection);
+        pressing(&mut input, InputAction::ShrinkSelection);
+        assert_eq!(input.field.selected_text(), Some("a_1"));
+        pressing(&mut input, InputAction::ShrinkSelection);
+        assert_eq!(input.field.selected_text(), None);
+        assert_eq!(input.field.cursor(), 3);
+    }
+
+    #[test]
+    fn cutting_takes_the_selection_or_else_the_line() {
+        let mut field = InputTextField::new_in_memory();
+        field.insert_str("R = QQ[x]\nI = ideal x");
+        field.select_by(TextMotion::Line, TextDirection::Backward);
+        assert_eq!(field.cut().as_deref(), Some("I = ideal x"));
+        assert_eq!(field.text(), "R = QQ[x]\n");
+        field.move_by(TextMotion::Full, TextDirection::Backward);
+        assert_eq!(field.cut().as_deref(), Some("R = QQ[x]\n"));
+        assert_eq!(field.text(), "");
+        assert_eq!(field.cut(), None);
+    }
+
+    #[test]
+    fn shift_up_and_down_select_across_lines() {
+        let mut input = InputCode::new_in_memory();
+        input.insert("first\nsecond");
+        input.field.move_by(TextMotion::Full, TextDirection::Backward);
+        pressing(&mut input, InputAction::SelectDown);
+        assert_eq!(input.field.selected_text(), Some("first\n"));
+        pressing(&mut input, InputAction::SelectUp);
+        assert_eq!(input.field.selected_text(), None);
+    }
+
+    #[test]
+    fn the_bracket_at_the_cursor_and_its_partner_are_marked() {
+        let mut input = InputCode::new_in_memory();
+        input.insert("f(x)");
+        let context = RenderContext::new(40, 0);
+        let mut highlighter = SyntaxHighlighter::new();
+        let styles_at = |input: &mut InputCode, highlighter: &mut SyntaxHighlighter| {
+            let line = input.highlighted_lines(&context, highlighter, false, None).remove(0);
+            let mut styles = Vec::new();
+            for span in line.spans.iter().skip(1) {
+                styles.extend(span.content.chars().map(|_| span.style));
+            }
+            styles
+        };
+        let marked = context.groups().matching_bracket();
+        let at_end = styles_at(&mut input, &mut highlighter);
+        assert_eq!(at_end[1], at_end[1].patch(marked));
+        assert_eq!(at_end[3], at_end[3].patch(marked));
+        assert_ne!(at_end[2], at_end[2].patch(marked));
+
+        input.field.place_cursor(2);
+        let inside = styles_at(&mut input, &mut highlighter);
+        assert_ne!(inside[1], inside[1].patch(marked));
     }
 }

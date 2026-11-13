@@ -52,8 +52,8 @@ Each output block has one formatter selector on its outer border. It applies to 
 `markup`
 : A documentation page with its semantic layout, links and examples.
 
-`html`
-: The result of M2's `html` method, laid out as HTML.
+`external`
+: The result of M2's `toExternalString`: source that reads the value back in, such as `new HashTable from {1 => 2}`, coloured as code.
 
 The active icon is highlighted and its mode name appears beside the controls. Click another icon to select that preview, or click the active icon or mode name to cycle. This changes every value inside that border. The original input is evaluated once; switching previews uses its retained formatter results. A formatter that fails is omitted without hiding the other previews.
 

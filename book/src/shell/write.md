@@ -43,7 +43,7 @@ Each successfully evaluated cell adds to the counts of the known global symbols 
 
 `Up` and `Down` move within multiline input; at its first or last line they recall older or newer submissions. Like a shell's history search, the text before the cursor when you start is a prefix: type `R =`, press `Up`, and you step only through submissions that start with `R =`, each once.
 
-`Ctrl+Up` and `Ctrl+Down` browse all history from any line, with no prefix and even after you edit a recalled entry. Going past the newest entry gives your draft back.
+`Ctrl+Up` and `Ctrl+Down` step to the very previous or next entry from any line, with no prefix and even after you edit a recalled entry. Only that step skips the prefix: `Up` afterwards carries on through the entries that start with `R =`. Going past the newest entry gives your draft back.
 
 History is shared by every running `sp2`: what you submit in one shell, the others recall next time they browse.
 
@@ -51,7 +51,24 @@ History is shared by every running `sp2`: what you submit in one shell, the othe
 
 The usual keys move and select: `Ctrl` with the arrows by words, `Home` and `End` to the line ends, `Ctrl+Home` and `Ctrl+End` to the ends of the input, `Shift` to extend a selection, `Ctrl+A` for all of it.
 
-`Ctrl+Backspace` and `Ctrl+Delete` delete exactly what `Ctrl+Left` and `Ctrl+Right` move over. `Ctrl+U` deletes the current line and `Ctrl+L` the whole input.
+A few more move the way code is built:
+
+`Alt+Left`, `Alt+Right`
+: Past everything up to whitespace, so `f(x_1,` is one step.
+
+`Ctrl+Alt+Up`, `Ctrl+Alt+Down`
+: To the blank line before or after the paragraph.
+
+`Ctrl+Alt+Left`, `Ctrl+Alt+Right`
+: To the bracket opening the block you are in, or past the one closing it. Pressing again climbs to the block around it.
+
+`Alt+M`
+: To the partner of the bracket at the cursor. The bracket at the cursor, or just before it, and its partner are always marked, so an unclosed one shows at a glance.
+
+`Alt+Shift+Up`
+: Grow the selection step by step: in `ideal(x_1, {y, z})` with the cursor on `y`, it takes `y`, then `y, z`, then `{y, z}`, then `x_1, {y, z}`, the line, the paragraph and everything. `Alt+Shift+Down` shrinks it back the same way.
+
+`Ctrl+Backspace` and `Ctrl+Delete` delete exactly what `Ctrl+Left` and `Ctrl+Right` move over, and `Ctrl+W` back to the whitespace. `Ctrl+X` cuts the selection, or the whole line when nothing is selected. `Ctrl+U` deletes the current line and `Ctrl+L` the whole input.
 
 `Ctrl+Z` undoes and `Ctrl+Shift+Z` redoes. Typing undoes a word at a time and a run of deletions all at once; clearing, pasting, recalling history and taking a completion are one step each. Submitting starts a fresh input with nothing to undo.
 
