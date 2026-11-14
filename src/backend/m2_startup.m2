@@ -147,8 +147,11 @@ spectralShell := (() -> (
 					| ": " | encodeFrame value#key)) | "}"
 		else error "a frame holds only null, booleans, integers, strings, lists, classes and tables"
 	);
+	-- Encoded whole before a byte is written, so a payload that cannot be
+    -- encoded leaves nothing half-sent behind it.
 	emitFrame := payload -> (
-		stdio << frameMark << encodeFrame payload << endl << flush;
+		frame := frameMark | encodeFrame payload;
+		stdio << frame << endl << flush;
 	);
 	-- The names the shell completes, chosen as M2's own readline chooses them:
     -- every symbol in scope whose name begins with a letter or digit. Output
@@ -168,18 +171,29 @@ spectralShell := (() -> (
 	);
 	-- `locals` are the top level's own local dictionaries, holding what a
     -- top-level `x := 1` binds; only the statement typed there can reach them.
-	sendResult := (submission, locals) -> emitFrame hashTable {
+	-- A frame is the cell it closes, which reading the session's counters cannot
+    -- fail to give, and the result it carries, which encoding might.
+	cellFrame := (submission, error) -> hashTable {
 		"submission" => submission,
-		"names" => newNames join(dictionaryPath, locals),
 		"number" => lineNumber,
-		"value" => renderedValue,
-		"previews" => previews,
-		"typeInfo" => typeInfo,
-		"typeParts" => typeParts,
 		"hasValue" => OutputDictionary#?("o" | integerText lineNumber),
 		"depth" => interpreterDepth,
-		"error" => failed or evaluatedLine =!= lineNumber
+		"error" => error
 	};
+	resultFrame := (submission, locals) -> merge(cellFrame(submission,
+		failed or evaluatedLine =!= lineNumber), hashTable {
+			"names" => newNames join(dictionaryPath, locals),
+			"value" => renderedValue,
+			"previews" => previews,
+			"typeInfo" => typeInfo,
+			"typeParts" => typeParts
+		}, last);
+	-- Should the result fail to encode, the cell still closes, as a failure.
+	sendResult := (submission, locals) -> try emitFrame resultFrame(submission, locals)
+	except problem do (
+		reportProblem("sending the result", problem);
+		emitFrame cellFrame(submission, true)
+	);
 	forgetResult := () -> (
 		renderedValue = null;
 		previews = {};
