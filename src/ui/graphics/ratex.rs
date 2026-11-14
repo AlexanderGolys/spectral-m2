@@ -398,11 +398,7 @@ fn is_command(name: &str) -> bool {
         .is_none_or(|error| !error.message.starts_with(UNDEFINED_COMMAND))
 }
 
-fn display(
-    tex: &str,
-    colour: Rgb,
-    matrix_row_spacing_percent: u16,
-) -> Result<DisplayList, Unset> {
+fn display(tex: &str, colour: Rgb, matrix_row_spacing_percent: u16) -> Result<DisplayList, Unset> {
     let arraystretch = f64::from(matrix_row_spacing_percent) / f64::from(PERCENT_PER_ARRAYSTRETCH);
     let stretched = format!(r"\def\arraystretch{{{arraystretch}}}{tex}");
     let ast = parse(&stretched).map_err(|error| Unset(error.to_string()))?;
@@ -463,4 +459,3 @@ fn item_color(item: &mut DisplayItem) -> &mut Color {
         | DisplayItem::Path { color, .. } => color,
     }
 }
-

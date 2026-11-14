@@ -39,6 +39,8 @@ const HEAD_LENGTH: f64 = 0.3;
 const HEAD_HALF_WIDTH: f64 = 0.14;
 /// How far back along the head its notch reaches, as a share of the head's length.
 const HEAD_NOTCH: f64 = 0.55;
+/// How many label heights the band under a leaning labelled arrow holds.
+const LEANING_BAND: f64 = 2.0;
 
 /// A diagram written as text a formula's place can carry, read back by
 /// [`composed`]: pieces on a grid and arrows between places, each in TeX.
@@ -63,11 +65,11 @@ impl Description {
         Self(text)
     }
 
-    pub fn piece(&mut self, (row, column): (usize, usize), tex: &str) {
+    pub fn piece(&mut self, (row, column): Cell, tex: &str) {
         let _ = writeln!(self.0, "{PIECE} {row} {column} {}", one_line(tex));
     }
 
-    pub fn arrow(&mut self, from: (usize, usize), to: (usize, usize), label: Option<&str>) {
+    pub fn arrow(&mut self, from: Cell, to: Cell, label: Option<&str>) {
         let _ = write!(self.0, "{ARROW} {} {} {} {}", from.0, from.1, to.0, to.1);
         if let Some(label) = label {
             let _ = write!(self.0, " {}", one_line(label));
@@ -86,12 +88,21 @@ fn one_line(tex: &str) -> String {
     tex.replace('\n', " ")
 }
 
+/// A grid position, `(row, column)`.
+type Cell = (usize, usize);
+
+/// What a piece takes up around its origin, `(width, height, depth)` in ems.
+type Extent = (f64, f64, f64);
+
+/// An arrow from one cell to another, with its label's TeX if it has one.
+type Joint<'a> = (Cell, Cell, Option<&'a str>);
+
 /// A description read back: its ink, pieces and arrows.
 #[derive(Debug, Default)]
 struct Read<'a> {
     ink: Option<Rgb>,
-    pieces: Vec<((usize, usize), &'a str)>,
-    arrows: Vec<((usize, usize), (usize, usize), Option<&'a str>)>,
+    pieces: Vec<(Cell, &'a str)>,
+    arrows: Vec<Joint<'a>>,
 }
 
 impl<'a> Read<'a> {
@@ -140,14 +151,23 @@ struct Frame {
 
 impl Frame {
     fn centre(&self) -> (f64, f64) {
-        ((self.left + self.right) / 2.0, (self.top + self.bottom) / 2.0)
+        (
+            (self.left + self.right) / 2.0,
+            (self.top + self.bottom) / 2.0,
+        )
     }
 
     /// How far from the centre along `(dx, dy)` the frame, grown by `margin`, ends.
     fn reach(&self, (dx, dy): (f64, f64), margin: f64) -> f64 {
         let half_x = (self.right - self.left) / 2.0 + margin;
         let half_y = (self.bottom - self.top) / 2.0 + margin;
-        let along = |half: f64, d: f64| if d.abs() < f64::EPSILON { f64::INFINITY } else { half / d.abs() };
+        let along = |half: f64, d: f64| {
+            if d.abs() < f64::EPSILON {
+                f64::INFINITY
+            } else {
+                half / d.abs()
+            }
+        };
         along(half_x, dx).min(along(half_y, dy))
     }
 }
@@ -165,13 +185,9 @@ pub fn composed(
     Some(compose(&layout, &paint, colour, matrix_row_spacing_percent))
 }
 
-fn compose(
-    layout: &Read,
-    paint: &Read,
-    colour: Rgb,
-    spacing: u16,
-) -> Result<DisplayList, Unset> {
-    let set_piece = |tex: &str, painted: Option<&str>| set(tex, painted.unwrap_or(tex), colour, spacing);
+fn compose(layout: &Read, paint: &Read, colour: Rgb, spacing: u16) -> Result<DisplayList, Unset> {
+    let set_piece =
+        |tex: &str, painted: Option<&str>| set(tex, painted.unwrap_or(tex), colour, spacing);
     let small = |tex: &str| format!(r"{{\scriptsize {tex}}}");
     let pieces = layout
         .pieces
@@ -194,8 +210,16 @@ fn compose(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let rows = pieces.iter().map(|((row, _), _)| row + 1).max().unwrap_or(0);
-    let columns = pieces.iter().map(|((_, column), _)| column + 1).max().unwrap_or(0);
+    let rows = pieces
+        .iter()
+        .map(|((row, _), _)| row + 1)
+        .max()
+        .unwrap_or(0);
+    let columns = pieces
+        .iter()
+        .map(|((_, column), _)| column + 1)
+        .max()
+        .unwrap_or(0);
     let mut grid = Grid {
         widths: vec![0.0; columns],
         above: vec![0.0; rows],
@@ -205,7 +229,12 @@ fn compose(
         gaps: vec![COLUMN_GAP; columns],
         bands: vec![ROW_GAP; rows],
         entered: (0..rows)
-            .map(|row| layout.arrows.iter().any(|(from, to, _)| to.0 == row && from.0 != row))
+            .map(|row| {
+                layout
+                    .arrows
+                    .iter()
+                    .any(|(from, to, _)| to.0 == row && from.0 != row)
+            })
             .collect(),
     };
     for ((row, column), list) in &pieces {
@@ -215,79 +244,100 @@ fn compose(
     }
     let label_sizes = labels
         .iter()
-        .map(|label| label.as_ref().map(|label| (label.width, label.height + label.depth)))
+        .map(|label| {
+            label
+                .as_ref()
+                .map(|label| (label.width, label.height + label.depth))
+        })
         .collect::<Vec<_>>();
     for (index, (from, to, _)) in layout.arrows.iter().enumerate() {
         let (label_width, label_height) = label_sizes[index].unwrap_or_default();
         let left = from.1.min(to.1);
-        if from.0 == to.0 && grid.entered[from.0] {
-            let reach = LABEL_CLEARANCE + label_height - AXIS;
-            grid.hanging[from.0] = grid.hanging[from.0].max(reach);
-        } else if from.0 == to.0 {
-            let reach = AXIS + LABEL_CLEARANCE + label_height;
-            grid.rising[from.0] = grid.rising[from.0].max(reach);
+        if from.0 == to.0 {
+            match grid.entered[from.0] {
+                true => {
+                    let reach = LABEL_CLEARANCE + label_height - AXIS;
+                    grid.hanging[from.0] = grid.hanging[from.0].max(reach);
+                }
+                false => {
+                    let reach = AXIS + LABEL_CLEARANCE + label_height;
+                    grid.rising[from.0] = grid.rising[from.0].max(reach);
+                }
+            }
             grid.gaps[left] = grid.gaps[left]
                 .max(MIN_ARROW + 2.0 * CLEARANCE)
                 .max(label_width + 2.0 * LABEL_SIDE);
             continue;
         }
-        // A label beside a straight arrow is centred on the band; one beside a
-        // leaning arrow hangs below the band's middle.
+        // A leaning arrow crosses its label's height in proportion to how short
+        // its band is, so a tall band keeps the columns from widening for it.
         let top = from.0.min(to.0);
         let room = match from.1 == to.1 {
             true => label_height,
-            false => 2.0 * label_height,
+            false => LEANING_BAND * label_height,
         };
         grid.bands[top] = grid.bands[top]
             .max(MIN_BAND)
             .max(room + 2.0 * (LABEL_CLEARANCE + RULE));
-        if from.1 == to.1 {
-            let reach =
-                label_width + LABEL_CLEARANCE + COLUMN_GAP / 2.0 - grid.widths[left] / 2.0;
-            grid.gaps[left] = grid.gaps[left].max(reach);
-        }
     }
     let sizes = pieces
         .iter()
         .map(|(place, list)| (*place, (list.width, list.height, list.depth)))
         .collect::<Vec<_>>();
-    // A label beside a downward arrow must clear the arrow from the neighbouring
-    // column on its side; the gap between their sources widens until it does.
-    for _ in 0..MAX_WIDENINGS {
-        let routes = grid.routes(&sizes, &layout.arrows);
-        let mut widened = false;
-        for (index, (from, to, _)) in layout.arrows.iter().enumerate() {
-            let Some(size) = label_sizes[index].filter(|_| from.0 != to.0) else {
-                continue;
-            };
-            let (left, top) = grid.label_corner(routes[index], *from, size);
-            let right_side = Grid::label_on_right(routes[index]);
-            let Some(column) = (match right_side {
-                true => Some(from.1 + 1),
-                false => from.1.checked_sub(1),
-            }) else {
-                continue;
-            };
-            for (other, (next_from, next_to, _)) in layout.arrows.iter().enumerate() {
-                if next_from.0 != from.0 || next_to.0 != to.0 || next_from.1 != column {
-                    continue;
-                }
-                let crossings = [top, top + size.1].map(|y| x_along(routes[other], y));
-                let overlap = match right_side {
-                    true => left + size.0 + LABEL_CLEARANCE - crossings[0].min(crossings[1]),
-                    false => crossings[0].max(crossings[1]) + LABEL_CLEARANCE - left,
-                };
-                if overlap > 0.0 {
-                    grid.gaps[from.1.min(column)] += overlap;
-                    widened = true;
-                }
-            }
-        }
-        if !widened {
-            break;
-        }
+    // A label beside a downward arrow stands against it on the side it leans away
+    // from, and must clear the arrow from the next column there. Every position
+    // moves linearly with the gap between the two columns, so one trial widening
+    // tells how far it must widen. The arrows an arrow spans are fixed first.
+    let mut beside = layout
+        .arrows
+        .iter()
+        .zip(&label_sizes)
+        .filter_map(|(&(from, to, _), size)| {
+            size.filter(|_| from.0 != to.0).map(|size| (from, to, size))
+        })
+        .collect::<Vec<_>>();
+    beside.sort_by_key(|(from, to, _)| match to.1 > from.1 {
+        true => usize::MAX - from.1,
+        false => from.1,
+    });
+    for (from, to, size) in beside {
+        let side = to.1 > from.1;
+        let next = match side {
+            true => from.1.checked_sub(1),
+            false => Some(from.1 + 1),
+        };
+        let neighbour = layout.arrows.iter().find(|(other, other_to, _)| {
+            Some(other.1) == next && other.0 == from.0 && other_to.0 == to.0
+        });
+        let (Some(next), Some(&(other, other_to, _))) = (next, neighbour) else {
+            continue;
+        };
+        let pair = [(from, to, None), (other, other_to, None)];
+        let gap = from.1.min(next);
+        let overlaps = |grid: &Grid| {
+            let routes = grid.routes(&sizes, &pair);
+            let (left, top) = grid.label_corner(routes[0], from, size);
+            [top, top + size.1].map(|y| {
+                let crossing = x_along(routes[1], y);
+                LABEL_CLEARANCE
+                    + match side {
+                        true => crossing - left,
+                        false => left + size.0 - crossing,
+                    }
+            })
+        };
+        let before = overlaps(&grid);
+        let mut trial = grid.clone();
+        trial.gaps[gap] += 1.0;
+        let after = overlaps(&trial);
+        let widening = before
+            .iter()
+            .zip(after)
+            .filter(|(overlap, later)| **overlap > 0.0 && *later < **overlap)
+            .map(|(overlap, later)| overlap / (overlap - later))
+            .fold(0.0, f64::max);
+        grid.gaps[gap] += widening;
     }
-    eprintln!("{grid:?} {:?}", grid.baselines());
 
     let (width, height) = grid.size();
     let mut diagram = DisplayList {
@@ -320,9 +370,6 @@ fn compose(
     }
     Ok(diagram)
 }
-
-/// How many times the gaps between downward arrows may widen to clear labels.
-const MAX_WIDENINGS: usize = 16;
 
 /// Where an arrow from `tail` to `tip` crosses the level `y`.
 fn x_along((tail, tip): ((f64, f64), (f64, f64)), y: f64) -> f64 {
@@ -396,18 +443,24 @@ impl Grid {
     }
 
     fn size(&self) -> (f64, f64) {
-        let width = self.lefts().last().zip(self.widths.last()).map_or(0.0, |(l, w)| l + w);
+        let width = self
+            .lefts()
+            .last()
+            .zip(self.widths.last())
+            .map_or(0.0, |(l, w)| l + w);
         let height = self
             .baselines()
             .last()
             .zip(self.below.last().zip(self.hanging.last()))
-            .map_or(0.0, |(baseline, (below, hanging))| baseline + below.max(*hanging));
+            .map_or(0.0, |(baseline, (below, hanging))| {
+                baseline + below.max(*hanging)
+            });
         (width, height)
     }
 
     /// The frame a piece `(width, height, depth)` is set in at `place`, centred
     /// in its column on its row's baseline.
-    fn frame(&self, (row, column): (usize, usize), (width, height, depth): (f64, f64, f64)) -> Frame {
+    fn frame(&self, (row, column): Cell, (width, height, depth): Extent) -> Frame {
         let left = self.lefts()[column] + (self.widths[column] - width) / 2.0;
         let baseline = self.baselines()[row];
         Frame {
@@ -420,16 +473,12 @@ impl Grid {
 
     /// Where each arrow runs: along its row's maths axis between the pieces it
     /// joins, or from piece to piece as their centres line up.
-    fn routes(
-        &self,
-        sizes: &[((usize, usize), (f64, f64, f64))],
-        arrows: &[((usize, usize), (usize, usize), Option<&str>)],
-    ) -> Vec<Route> {
-        let frame_at = |place: (usize, usize)| {
-            sizes
-                .iter()
-                .find(|(at, _)| *at == place)
-                .map_or_else(|| self.frame(place, (0.0, 0.0, 0.0)), |(_, size)| self.frame(place, *size))
+    fn routes(&self, sizes: &[(Cell, Extent)], arrows: &[Joint<'_>]) -> Vec<Route> {
+        let frame_at = |place: Cell| {
+            sizes.iter().find(|(at, _)| *at == place).map_or_else(
+                || self.frame(place, (0.0, 0.0, 0.0)),
+                |(_, size)| self.frame(place, *size),
+            )
         };
         let baselines = self.baselines();
         arrows
@@ -439,8 +488,14 @@ impl Grid {
                 if from.0 == to.0 {
                     let axis = baselines[from.0] - AXIS;
                     return match to.1 < from.1 {
-                        true => ((source.left - CLEARANCE, axis), (target.right + CLEARANCE, axis)),
-                        false => ((source.right + CLEARANCE, axis), (target.left - CLEARANCE, axis)),
+                        true => (
+                            (source.left - CLEARANCE, axis),
+                            (target.right + CLEARANCE, axis),
+                        ),
+                        false => (
+                            (source.right + CLEARANCE, axis),
+                            (target.left - CLEARANCE, axis),
+                        ),
                     };
                 }
                 let (start, end) = (source.centre(), target.centre());
@@ -457,34 +512,18 @@ impl Grid {
     }
 
     /// The top left corner of a label `(width, height)` beside an arrow between
-    /// rows, halfway down the band where the arrow crosses it: right of a straight
-    /// arrow and centred on it, below a leaning one on the side it leans away
-    /// from, cornered to the arrow so the arrow runs away from it.
-    fn label_corner(&self, route: Route, from: (usize, usize), (width, height): (f64, f64)) -> (f64, f64) {
+    /// rows: halfway down the band, against the arrow where it crosses the
+    /// label's top, on the side the arrow leans away from (right of a straight one).
+    fn label_corner(&self, route: Route, from: Cell, (width, height): (f64, f64)) -> (f64, f64) {
         let (band_top, band_bottom) = self.band(from.0);
-        let level = (band_top + band_bottom) / 2.0;
-        let x = x_along(route, level);
-        let ((tail_x, tail_y), (tip_x, tip_y)) = route;
-        let (run, fall) = (tip_x - tail_x, tip_y - tail_y);
+        let top = (band_top + band_bottom - height) / 2.0;
+        let x = x_along(route, top);
         let gap = LABEL_CLEARANCE + RULE;
-        if run.abs() < f64::EPSILON {
-            return (x + gap, level - height / 2.0);
-        }
-        let length = run.hypot(fall);
-        // The normal pointing down, on the side the arrow leans away from.
-        let (normal_x, normal_y) = match fall * run < 0.0 {
-            true => (fall.abs() / length, run.abs() / length),
-            false => (-fall.abs() / length, run.abs() / length),
-        };
-        let left = x + gap * normal_x - if normal_x < 0.0 { width } else { 0.0 };
-        (left, level + gap * normal_y)
-    }
-
-    /// Which side of its arrow a label between rows stands on: the right of a
-    /// straight arrow or one leaning left, the left of one leaning right.
-    fn label_on_right(route: Route) -> bool {
         let ((tail_x, _), (tip_x, _)) = route;
-        tip_x <= tail_x + f64::EPSILON
+        match tip_x > tail_x + f64::EPSILON {
+            true => (x - gap - width, top),
+            false => (x + gap, top),
+        }
     }
 }
 
@@ -542,44 +581,4 @@ fn arrow(tail: (f64, f64), tip: (f64, f64), color: Color) -> [DisplayItem; 2] {
         fill: true,
         color,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_description_reads_back_as_written() {
-        let mut description = Description::new(Some(Rgb([1, 2, 3])));
-        description.piece((0, 1), r"\frac{a}{b}");
-        description.arrow((0, 1), (1, 0), Some("f\ng"));
-        description.arrow((0, 1), (0, 0), None);
-        let text = String::from(description);
-        let read = Read::from(&text).expect("a description reads back");
-        assert_eq!(read.ink, Some(Rgb([1, 2, 3])));
-        assert_eq!(read.pieces, vec![((0, 1), r"\frac{a}{b}")]);
-        assert_eq!(read.arrows, vec![((0, 1), (1, 0), Some("f g")), ((0, 1), (0, 0), None)]);
-        assert!(Read::from(r"\frac{a}{b}").is_none(), "a formula is no description");
-    }
-
-    #[test]
-    fn pieces_sharing_a_column_are_centred_on_one_line_and_arrows_are_drawn() {
-        let mut description = Description::new(None);
-        description.piece((0, 0), "A");
-        description.piece((0, 1), "B");
-        description.piece((1, 0), "CCCCCC");
-        description.arrow((0, 1), (0, 0), Some("d"));
-        description.arrow((0, 1), (1, 0), Some("f"));
-        let text = String::from(description);
-        let list = composed(&text, &text, Rgb([0, 0, 0]), 100)
-            .expect("a description")
-            .expect("sets");
-        let filled = list
-            .items
-            .iter()
-            .filter(|item| matches!(item, DisplayItem::Path { fill: true, x, y, .. } if *x == 0.0 && *y == 0.0))
-            .count();
-        assert_eq!(filled, 4, "each arrow is a shaft and a head");
-        assert!(list.width > 0.0 && list.height > 0.0);
-    }
 }

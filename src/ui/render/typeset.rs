@@ -97,7 +97,10 @@ fn diagram_array(diagram: &Diagram, groups: Option<&Groups>) -> String {
         .map(|row| row.join(" & "))
         .collect::<Vec<_>>()
         .join(r" \\ ");
-    format!(r"\begin{{array}}{{{}}}{body}\end{{array}}", "c".repeat(columns))
+    format!(
+        r"\begin{{array}}{{{}}}{body}\end{{array}}",
+        "c".repeat(columns)
+    )
 }
 
 fn tex(math: &Math, groups: Option<&Groups>) -> String {
@@ -426,41 +429,4 @@ fn annotation_with_picture(
         ..style
     };
     draw(&row, width, &groups, style, picture).lines
-}
-
-
-#[cfg(test)]
-mod scratch {
-    use super::*;
-    use crate::backend::M2Backend;
-    use crate::ui::graphics::ratex;
-
-    #[test]
-    fn complex_maps_drawn() {
-        let mut backend = M2Backend::spawn_for_examples(None).unwrap();
-        let groups = Groups::default();
-        for (index, source) in [
-            "S = QQ[x,y,z]; C = res coker matrix{{x,y,z}}; C.dd",
-            "S = QQ[x,y,z]; C = res coker matrix{{x,y,z}}; map(C, C, i -> 2*id_(C_i))",
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let response = backend.evaluate(source, Some(index as u32 + 1)).unwrap();
-            let value = response.value.expect("a value");
-            let style = MathStyle::default();
-            for line in maths::spans(&value, 200, style).unwrap_or_default() {
-                eprintln!("{}", line.into_iter().map(|span| span.content).collect::<String>());
-            }
-            let math = Math::from_spec_net(&value, style);
-            let painted = formula(&math, Some(&groups));
-            let typeset = ratex::svg_colored(&painted, &painted, Rgb([200, 200, 200]), 100).unwrap();
-            let tree = resvg::usvg::Tree::from_str(&typeset.svg, &resvg::usvg::Options::default()).unwrap();
-            let size = tree.size().to_int_size().scale_by(4.0).unwrap();
-            let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width(), size.height()).unwrap();
-            pixmap.fill(resvg::tiny_skia::Color::from_rgba8(40, 44, 52, 255));
-            resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(4.0, 4.0), &mut pixmap.as_mut());
-            pixmap.save_png(format!("/home/flux/.claude/jobs/13a28f04/tmp/diagram{index}.png")).unwrap();
-        }
-    }
 }

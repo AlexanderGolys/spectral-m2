@@ -128,7 +128,11 @@ impl Diagram {
             .any(|arrow| matches!(arrow.course(), Some(Course::Down { shift }) if shift != 0));
         Some(match shifted {
             true => Self {
-                straight: Some(Box::new(Self::arranged(value, style, Arrangement::Straight)?)),
+                straight: Some(Box::new(Self::arranged(
+                    value,
+                    style,
+                    Arrangement::Straight,
+                )?)),
                 ..aligned
             },
             false => aligned,
@@ -156,7 +160,14 @@ impl Diagram {
         let column = |degree: i64, offset: i64| usize::try_from(degree - offset - lowest + 1).ok();
         // Each complex's row, and the rows its degrees are numbered on.
         let (rows, numbered) = match arrangement {
-            Arrangement::Aligned => ([0, 1], vec![(2, 0, chains.iter().flat_map(Chain::degrees).collect::<Vec<_>>())]),
+            Arrangement::Aligned => (
+                [0, 1],
+                vec![(
+                    2,
+                    0,
+                    chains.iter().flat_map(Chain::degrees).collect::<Vec<_>>(),
+                )],
+            ),
             Arrangement::Straight => (
                 [1, 2],
                 vec![
@@ -225,7 +236,7 @@ impl Diagram {
                 };
                 diagram
                     .pieces
-                    .push((place, Math::atom(&degree.to_string(), HLGroup::Number)));
+                    .push((place, Math::atom(degree.to_string(), HLGroup::Number)));
             }
         }
         diagram
@@ -240,15 +251,17 @@ impl Diagram {
     }
 
     pub fn columns(&self) -> usize {
-        self.places().map(|place| place.column + 1).max().unwrap_or(0)
+        self.places()
+            .map(|place| place.column + 1)
+            .max()
+            .unwrap_or(0)
     }
 
     fn places(&self) -> impl Iterator<Item = Place> + '_ {
-        self.pieces.iter().map(|(place, _)| *place).chain(
-            self.arrows
-                .iter()
-                .flat_map(|arrow| [arrow.from, arrow.to]),
-        )
+        self.pieces
+            .iter()
+            .map(|(place, _)| *place)
+            .chain(self.arrows.iter().flat_map(|arrow| [arrow.from, arrow.to]))
     }
 
     /// The same diagram with every piece and label passed through `change`.
@@ -263,7 +276,7 @@ impl Diagram {
                 .arrows
                 .into_iter()
                 .map(|arrow| Arrow {
-                    label: arrow.label.map(&change),
+                    label: arrow.label.map(change),
                     ..arrow
                 })
                 .collect(),
@@ -290,8 +303,12 @@ impl Diagram {
             .map(|arrow| arrow.label.as_ref().map(&lay))
             .collect::<Vec<_>>();
         let (rows, columns) = (self.rows(), self.columns());
-        let piece_at =
-            |place: Place| pieces.iter().find(|(at, _)| *at == place).map(|(_, block)| block);
+        let piece_at = |place: Place| {
+            pieces
+                .iter()
+                .find(|(at, _)| *at == place)
+                .map(|(_, block)| block)
+        };
         let label_size = |index: usize| {
             labels[index]
                 .as_ref()
@@ -311,7 +328,9 @@ impl Diagram {
             let (_, height) = label_size(index);
             match arrow.course() {
                 Some(Course::Across) => above[arrow.from.row] = above[arrow.from.row].max(height),
-                Some(_) => bands[arrow.from.row] = bands[arrow.from.row].max(MIN_BAND.max(height + 2)),
+                Some(_) => {
+                    bands[arrow.from.row] = bands[arrow.from.row].max(MIN_BAND.max(height + 2))
+                }
                 None => {}
             }
         }
@@ -366,12 +385,20 @@ impl Diagram {
                 Some(Course::Across) => {
                     let row = baselines[arrow.from.row];
                     let left = arrow.from.column.min(arrow.to.column);
-                    let start = piece_at(Place { row: arrow.from.row, column: left })
-                        .map_or(lefts[left] + widths[left], |block| {
-                            corner(Place { row: arrow.from.row, column: left }, block).0
-                                + block.width()
-                        })
-                        + 1;
+                    let start = piece_at(Place {
+                        row: arrow.from.row,
+                        column: left,
+                    })
+                    .map_or(lefts[left] + widths[left], |block| {
+                        corner(
+                            Place {
+                                row: arrow.from.row,
+                                column: left,
+                            },
+                            block,
+                        )
+                        .0 + block.width()
+                    }) + 1;
                     let right = Place {
                         row: arrow.from.row,
                         column: left + 1,
@@ -396,7 +423,11 @@ impl Diagram {
                     let column = arrow.from.column;
                     let x = lefts[column] + widths[column].saturating_sub(1) / 2;
                     for step in 0..band {
-                        let glyph = if step + 1 == band { DOWN_HEAD } else { DOWN_SHAFT };
+                        let glyph = if step + 1 == band {
+                            DOWN_HEAD
+                        } else {
+                            DOWN_SHAFT
+                        };
                         canvas.text(glyph, x, top + step, HLGroup::MapArrow);
                     }
                     if let Some(label) = label {
@@ -444,9 +475,23 @@ impl Canvas {
                     }
                     continue;
                 }
-                self.put(x, y, TextSpan { content: character.to_string(), ..span.clone() });
+                self.put(
+                    x,
+                    y,
+                    TextSpan {
+                        content: character.to_string(),
+                        ..span.clone()
+                    },
+                );
                 for column in 1..columns {
-                    self.put(x + column, y, TextSpan { content: String::new(), ..span.clone() });
+                    self.put(
+                        x + column,
+                        y,
+                        TextSpan {
+                            content: String::new(),
+                            ..span.clone()
+                        },
+                    );
                 }
                 x += columns;
             }
