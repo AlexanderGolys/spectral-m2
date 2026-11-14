@@ -52,6 +52,9 @@ pub struct UiConfig {
     pub typing_prompt_ms: u64,
     /// How long the status line says what a copy took.
     pub copy_notice_ms: u64,
+    /// How long the input's cursor must rest before the language server is asked
+    /// about where it stands, so a run of moves asks once, about where it stops.
+    pub cursor_question_settle: Duration,
     pub prompt_margin: u16,
     pub cell_margin: u16,
     pub cell_gap: u16,
@@ -139,6 +142,7 @@ pub const UI: UiConfig = UiConfig {
 
     typing_prompt_ms: 200,
     copy_notice_ms: 2000,
+    cursor_question_settle: Duration::from_millis(200),
     prompt_margin: 2,
     cell_margin: 0,
     cell_gap: 3,

@@ -11,7 +11,7 @@ use std::fs;
 use std::io;
 use std::iter;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::clipboard::CopyToClipboard;
 use crossterm::event::{Event, MouseButton, MouseEvent, MouseEventKind};
@@ -132,6 +132,8 @@ struct App {
     asked: HashMap<QueryId, Asked>,
     /// The input's revision and cursor when the server was last asked about them.
     asked_at: Option<(u64, usize)>,
+    /// The input's revision and cursor as last seen, and since when they hold.
+    cursor_seen: Option<((u64, usize), Instant)>,
 }
 
 /// What an answer from the language server is for.
@@ -171,6 +173,7 @@ impl App {
             archived_code: String::new(),
             asked: HashMap::new(),
             asked_at: None,
+            cursor_seen: None,
         }
     }
 
@@ -687,15 +690,20 @@ impl App {
             .apply(EditorUpdate::Diagnostic(unanswered.to_string()));
     }
 
-    /// Ask where the name under the input's cursor occurs whenever the cursor or
-    /// the text moved, and after an edit which call the cursor is in.
+    /// Ask where the name under the input's cursor occurs once the cursor or the
+    /// text has moved and come to rest, and after an edit which call the cursor
+    /// is in.
     fn ask_about_cursor(&mut self) {
-        let workspace = &mut self.workspace;
-        let (draft, _, revision) = workspace.editor.analysis_input();
-        let at = (revision, workspace.editor.input_cursor());
-        if self.asked_at == Some(at) || draft.is_empty() {
+        let (draft, _, revision) = self.workspace.editor.analysis_input();
+        let empty = draft.is_empty();
+        let at = (revision, self.workspace.editor.input_cursor());
+        if self.cursor_seen.is_none_or(|(seen, _)| seen != at) {
+            self.cursor_seen = Some((at, Instant::now()));
+        }
+        if self.asked_at == Some(at) || empty || self.cursor_settles_in().is_some() {
             return;
         }
+        let workspace = &mut self.workspace;
         let edited = self.asked_at.is_none_or(|(asked, _)| asked != revision);
         self.asked_at = Some(at);
         let Some(source) = workspace.highlighter.draft() else {
@@ -1144,6 +1152,15 @@ impl App {
         settled || animated
     }
 
+    /// How much longer the cursor must rest before the server is asked about it,
+    /// while it has moved since last asked.
+    fn cursor_settles_in(&self) -> Option<Duration> {
+        let (at, since) = self.cursor_seen?;
+        (self.asked_at != Some(at))
+            .then(|| UI.cursor_question_settle.saturating_sub(since.elapsed()))
+            .filter(|remaining| !remaining.is_zero())
+    }
+
     /// How long to wait for events before something on screen changes by itself.
     fn event_timeout(&self) -> Duration {
         self.panes
@@ -1151,6 +1168,7 @@ impl App {
             .iter()
             .filter_map(|pane| pane.viewport.width.settles_in())
             .chain(self.workspace.editor.settles_in())
+            .chain(self.cursor_settles_in())
             .min()
             .map_or(EVENT_POLL_INTERVAL, |remaining| {
                 remaining.min(EVENT_POLL_INTERVAL)
