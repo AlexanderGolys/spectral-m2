@@ -26,7 +26,7 @@ A drawing that throws falls back to the value's plain text, so a broken `specNet
 
 Each cell is sent to Macaulay2 exactly once and is never replayed behind your back. Deciding whether input is complete, splitting it into cells, highlighting and diagnostics are all done locally, by parsing the text, before anything is sent. An hour-long computation is never started twice.
 
-Drawing a value calls `specNet` when M2 prints it. By default, it traverses the class's `expression` representation; a value held without further structure keeps its class and textual spelling. Switching renderers uses the data already received. A trailing `;` skips value formatting while `specType` still supplies its type annotation.
+Each result arrives once, complete: drawn by `specNet` with its type from `specType`, and also formatted by M2's own `net`, `toString`, `tex`, `toExternalString` and `peek`, and by Spectral's `speek`. By default `specNet` traverses the class's `expression` representation; a value held without further structure keeps its class and textual spelling. Switching renderers uses the data already received. A result that is `null`, or silenced by a trailing `;`, is not formatted at all; a silenced one is still bound to its `oN`.
 
 ## Other processes
 

@@ -67,7 +67,7 @@ spectralShell := (() -> (
 
 	-- What the statement in flight showed: its drawn value and type annotation.
     -- The hooks only record them; the terminator sends them, because a
-    -- statement that throws or ends in `;` never reaches Print, and the frame
+    -- statement that throws or ends in `;` is never recorded, and the frame
     -- must leave exactly once per cell all the same.
 	renderedValue := null;
 	previews := {};
@@ -75,12 +75,10 @@ spectralShell := (() -> (
 	typeParts := null;
 
 	-- The input number of the latest statement that evaluated, and whether
-    -- showing it failed. BeforePrint runs for every statement that evaluated,
+    -- recording it failed. BeforePrint runs for every statement that evaluated,
     -- `;` or not, once AfterEval has bound its `oN`; one that throws runs no
     -- stage at all. A number rather than a flag, so that in `x = 1; error "e"`
-    -- what the first statement left cannot pass for the second's. Every
-    -- stage runs even after an earlier one failed, so reaching the last does
-    -- not show that the statement came through whole.
+    -- what the first statement left cannot pass for the second's.
     --
     -- Nothing here asks what a failed statement *managed* to do before it failed,
     -- because there is no answer to that. A throw can land anywhere -- part-way
@@ -192,70 +190,56 @@ spectralShell := (() -> (
 		forgetDrawing();
 	);
 
-	-- What each stage records. Recording rather than printing keeps the channel
-    -- free of everything but genuinely printed text. A `;` still suppresses the
-    -- value: NoPrint deliberately skips `net value`, which is the render the
-    -- punctuation exists to avoid on large objects. The type is read either way,
-    -- so the shell can say what a suppressed result is without paying to render
-    -- it.
-    --
-    -- Nothing deliberately has no Print override: an unterminated statement
-    -- reports its result whatever it is, and `net null` is already "null". A `;`
-    -- still silences it, since NoPrint stays identity for every class.
-    --
-    -- Deliberately the same record after both AfterPrint and AfterNoPrint: stock
-    -- M2 reads AfterNoPrint under a `;`, which only some classes define, so the
-    -- type would appear or vanish with the punctuation. Reading AfterPrint
-    -- always gives every class its type.
-	recordType := value -> (
+	-- A result, recorded once and whole: the value under every formatter the
+    -- shell offers -- Spectral's own drawing and `speek`, then M2's `net`,
+    -- `toString`, `tex`, `toExternalString` and `peek` as M2 gives them -- and
+    -- its type, both as Spectral draws it and as M2 annotates it. Which of them
+    -- the shell shows is its own business. Recording rather than printing keeps
+    -- the channel free of everything but genuinely printed text.
+	m2Formatters := {
+		("net", toString@@net),
+		("string", toString),
+		("tex", tex),
+		("external", toExternalString),
+		("peek", toString@@net@@peek)
+	};
+	recordResult := value -> (
+		renderedValue = drawnAs value;
+		previews = select(apply(m2Formatters, (name, formatter) -> (
+			text := try formatter value;
+			if instance(text, String) then
+				hashTable {
+					"mode" => name,
+					"text" => text
+				}
+		)), preview -> preview =!= null);
+		-- speek answers with a value of its own, sent drawn as any value is.
+		structure := try structureOf value;
+		if structure =!= null then
+			previews = append(previews, hashTable {
+				"mode" => "speek",
+				"text" => toString net structure,
+				"value" => drawnAs structure
+			});
 		typeParts = {typedAs value};
-		-- Keep stock text for the explicitly requested original-output view.
+		-- M2's own annotation, for the view that shows M2's own spelling.
 		annotation := annotationPieces((lookup(AfterPrint, class value)) value
 				?? class value);
 		typeInfo = toString horizontalJoin apply(annotation, net);
 	);
-	recordStage := hashTable {
-		BeforePrint => value -> standardStage(BeforePrint, value),
-		Print => value -> (
-			renderedValue = drawnAs value;
-			previews = select(apply({
-				("net", toString@@net),
-				("string", toString),
-				("tex", tex),
-				("external", toExternalString),
-				("peek", toString@@net@@peek)
-			}, (name, formatter) -> (
-				text := try formatter value;
-				if instance(text, String) then
-					hashTable {
-						"mode" => name,
-						"text" => text
-					}
-			)), preview -> preview =!= null);
-			-- speek answers with a value of its own, sent drawn as any value is.
-			structure := try structureOf value;
-			if structure =!= null then
-				previews = append(previews, hashTable {
-					"mode" => "speek",
-					"text" => toString net structure,
-					"value" => drawnAs structure
-				});
-		),
-		NoPrint => identity,
-		AfterPrint => recordType,
-		AfterNoPrint => recordType
-	};
 
-	-- The protocol. A statement's first stage forgets whatever an earlier
-    -- statement of the same cell recorded, since only the last one is sent.
+	-- The protocol. M2 runs BeforePrint for every statement that evaluated, then
+    -- Print with its value unless that is null or a `;` silenced it, which is the
+    -- same thing here: there is nothing to show. BeforePrint opens the statement,
+    -- forgetting what an earlier statement of the same cell recorded, since only
+    -- the last one is sent; Print records the result; every stage prints nothing.
     --
     -- Every call into session code -- `specNet`, `specType`, an `AfterPrint`
-    -- method -- already falls back to plain text when it throws. A stage that
-    -- throws all the same is reported as M2 reports any error, marks the
-    -- statement failed, and hands the next stage the value it was given.
-    -- Left to M2, the error would open the debugger in this file, whose frame
-    -- is the protocol's own: a session typing there could rebind what every
-    -- later frame is built from.
+    -- method -- already falls back to plain text when it throws. A recording that
+    -- throws all the same is reported as M2 reports any error and marks the
+    -- statement failed. Left to M2, the error would open the debugger in this
+    -- file, whose frame is the protocol's own: a session typing there could
+    -- rebind what every later frame is built from.
     --
     -- Only the statement the user typed is recorded. `capture` -- which
     -- `installPackage` and `check` use to run examples -- reads its input through
@@ -265,21 +249,25 @@ spectralShell := (() -> (
     -- example results, captured from what the hooks print, would lose their
     -- values. `capture` forces `stopIfError`, which the shell's own top level
     -- never sets, so under it each stage is M2's stock one instead.
-	scan(pairs recordStage, (stage, record) -> Thing#{shell, stage} = value -> (
-		if stopIfError then
-			standardStage(stage, value)
-		else (
-			if stage === BeforePrint then (forgetResult(); evaluatedLine = lineNumber);
-			try record value
-			except problem do (
-				reportProblem("showing the result", problem);
-				failed = true;
+	scan({BeforePrint, Print, NoPrint, AfterPrint, AfterNoPrint}, stage -> (
+		CellEnd#{shell, stage} = identity;
+		Thing#{shell, stage} = value -> (
+			if stopIfError then
+				standardStage(stage, value)
+			else (
+				if stage === BeforePrint then (forgetResult(); evaluatedLine =
+						lineNumber);
+				if stage === Print and value =!= null then
+					try recordResult value
+				except problem do (
+					reportProblem("showing the result", problem);
+					failed = true
+				);
 				value
 			)
 		)
 	)
 	);
-	scan(keys recordStage, stage -> CellEnd#{shell, stage} = identity);
 
 	-- Sent by the shell after every cell, and the only part of a submission the
     -- user did not write. It is the sole thing that closes an input.
