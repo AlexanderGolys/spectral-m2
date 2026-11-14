@@ -24,8 +24,23 @@
 -- already draw its own classes; named here as what the hooks are built on.
 needsPackage "Spectral"
 
-announceReady := (() -> (
-	mode := global SpectralTopLevelMode;
+-- Installs the shell's mode and announces it; evaluates to the mode, which the
+-- top level switches to last of all.
+spectralShell := (() -> (
+	-- Two modes. `shell` is the one M2 dispatches on: a symbol no session can
+    -- name, whose hooks -- installed on Thing alone -- keep the protocol. Each
+    -- of them runs the same stage's hook from `SpectralTopLevelMode`, looked up
+    -- along the value's class as M2 looks up any mode's hooks. Those are the
+    -- editable ones: `code Thing#{SpectralTopLevelMode, AfterPrint}` shows the
+    -- default, and `X#{SpectralTopLevelMode, AfterPrint} = ...` replaces it for
+    -- the class `X` and its descendants. A replacement that throws, prints
+    -- rather than records, or is removed altogether changes what its cells
+    -- show, never how many frames leave or which number the next cell gets.
+	shell := local SpectralShell;
+	editable := global SpectralTopLevelMode;
+	outputStages := {BeforePrint, Print, NoPrint, AfterPrint, AfterNoPrint};
+	runStage := (mode, stage, value) -> (lookup({mode, stage}, class value)
+			?? identity) value;
 
 	-- Frames are encoded by `encodeFrame` rather than by the JSON package, whose
     -- encoder reaches `toString` through the session's method tables: a user's
@@ -54,8 +69,8 @@ announceReady := (() -> (
 		Function.GlobalReleaseHook = releaseHook;
 	);
 
-	-- The rendered value and type annotation of the statement in flight. The
-    -- hooks below only record them; the terminator sends them, because a
+	-- What the statement in flight showed: its drawn value and type annotation.
+    -- The editable hooks only record them; the terminator sends them, because a
     -- statement that throws or ends in `;` never reaches Print, and the frame
     -- must leave exactly once per cell all the same.
 	renderedValue := null;
@@ -63,16 +78,22 @@ announceReady := (() -> (
 	typeInfo := null;
 	typeParts := null;
 
-	-- Whether the statement in flight ran to completion: the hooks below are the
-    -- last thing a statement does, and one that throws runs none of them.
+	-- The input number of the latest statement that evaluated, and whether
+    -- showing it failed. BeforePrint runs for every statement that evaluated,
+    -- `;` or not, once AfterEval has bound its `oN`; one that throws runs no
+    -- stage at all. A number rather than a flag, so that in `x = 1; error "e"`
+    -- what the first statement left cannot pass for the second's. Every
+    -- stage runs even after an earlier one failed, so reaching the last does
+    -- not show that the statement came through whole.
     --
     -- Nothing here asks what a failed statement *managed* to do before it failed,
     -- because there is no answer to that. A throw can land anywhere -- part-way
     -- through a nested parallel assignment, with some of its targets bound and
     -- the rest not -- so any reading of the session's state afterwards is a
-    -- guess. This flag is only ever allowed to make a frame say the wrong thing,
-    -- never to decide whether a frame is sent.
-	completed := false;
+    -- guess. These are only ever allowed to make a frame say the wrong
+    -- thing, never to decide whether a frame is sent.
+	evaluatedLine := null;
+	failed := false;
 
 	-- What the terminator evaluates to, so the shell's own statement is told
     -- apart by its type rather than by state carried across a statement
@@ -80,20 +101,14 @@ announceReady := (() -> (
     -- `oN`, and leaves `oo`/`ooo`/`oooo` alone. The stock AfterEval rotates that
     -- history on every statement, a null one included, so a terminator valued
     -- `null` duplicated `oo` into `ooo` after every cell.
-	cellEnd := new Type of BasicList;
-	cellEnd#AfterEval = identity;
-	cellEnd#{mode, BeforePrint} = identity;
-	cellEnd#{mode, NoPrint} = identity;
-	cellEnd#{mode, AfterNoPrint} = identity;
+	CellEnd := new Type of BasicList;
+	CellEnd#AfterEval = identity;
+	scan(outputStages, stage -> CellEnd#{shell, stage} = identity);
 	-- An annotation is a sequence of pieces -- a type, a ring, a map's shape --
     -- each of which may be drawn over several rows: `QQ^2` raises its exponent.
     -- Its text joins the pieces' nets along their baselines, as M2 prints it.
 	annotationPieces := value -> select(deepSplice sequence value, item -> item =!= null);
 
-	Thing#{mode, BeforePrint} = value -> (
-		lookupMethod := lookup({Standard, BeforePrint}, class value) ?? identity;
-		lookupMethod value
-	);
 	-- What a value is drawn as is the Spectral package's business: `specNet`,
 	-- which a session may install for a class of its own. The formatting hooks are
 	-- taken once, before any user code runs, so rebinding a name later cannot
@@ -105,10 +120,6 @@ announceReady := (() -> (
 	typedAs := value spectral#"typedAs";
 	forgetDrawing := value spectral#"forgetDrawing";
 	structureOf := value spectral#"speek";
-	-- Whether drawing the statement's value failed. M2 reports an error raised
-	-- while printing and carries on into AfterPrint, so reaching AfterPrint alone
-	-- does not show that the statement came through whole.
-	drawingFailed := false;
 	-- A class in a frame -- the role of a word, the kind of a list -- is sent as
 	-- its ancestors, nearest first, for the shell to read by the first it knows.
 	typeName := lookup(toString, Type);
@@ -119,12 +130,14 @@ announceReady := (() -> (
     -- start with it is the user's own doing and reads back as a frame, which is
     -- the same bargain any in-band marker makes.
 	frameMark := ascii 29;
-	encodeFrame = value -> (
+	encodeFrame := value -> (
 		if value === null then
 			"null"
-		else if instance(value, Boolean) then if value then
+		else if instance(value, Boolean) then
+			if value then
 			"true"
-		else "false" else if instance(value, ZZ) then
+		else "false"
+		else if instance(value, ZZ) then
 			integerText value
 		else if instance(value, String) then
 			stringLiteral value
@@ -171,35 +184,26 @@ announceReady := (() -> (
 		"typeParts" => typeParts,
 		"hasValue" => OutputDictionary#?("o" | integerText lineNumber),
 		"depth" => interpreterDepth,
-		"error" => not completed
+		"error" => failed or evaluatedLine =!= lineNumber
 	};
 	forgetResult := () -> (
 		renderedValue = null;
 		previews = {};
 		typeInfo = null;
 		typeParts = null;
-		completed = false;
-		drawingFailed = false;
+		evaluatedLine = null;
+		failed = false;
 		forgetDrawing();
 	);
-	recordTypeInfo := value -> (
-		completed = false;
-		typeParts = {typedAs value};
-		-- Keep stock text for the explicitly requested original-output view.
-		annotation := annotationPieces((lookup(AfterPrint, class value)) value ?? class value);
-		typeInfo = toString horizontalJoin apply(annotation, net);
-		completed = not drawingFailed;
-	);
 
-	-- Recording rather than printing keeps the channel free of everything but
-    -- genuinely printed text. A `;` still suppresses the value: NoPrint
-    -- deliberately skips `net value`, which is the render the punctuation exists
-    -- to avoid on large objects. The type is read either way, so the shell can
-    -- say what a suppressed result is without paying to render it.
+	-- The protocol. A statement's first stage forgets whatever an earlier
+    -- statement of the same cell recorded, since only the last one is sent.
     --
-    -- Nothing deliberately has no Print override: an unterminated statement
-    -- reports its result whatever it is, and `net null` is already "null". A `;`
-    -- still silences it, since NoPrint stays identity for every class.
+    -- An editable hook that throws is reported as M2 reports any error, marks
+    -- the statement failed, and hands the next stage the value it was given.
+    -- Left to M2, the error would open the debugger in this file, whose frame
+    -- is the protocol's own: a session typing there could rebind what every
+    -- later frame is built from.
     --
     -- Only the statement the user typed is recorded. `capture` -- which
     -- `installPackage` and `check` use to run examples -- reads its input through
@@ -208,43 +212,72 @@ announceReady := (() -> (
     -- later throws as completed, and swap its value for an example's; while the
     -- example results, captured from what the hooks print, would lose their
     -- values. `capture` forces `stopIfError`, which the shell's own top level
-    -- never sets, so under it each hook is M2's stock one instead.
-	atShellTopLevel := (key, hook) -> value -> (
+    -- never sets, so under it each stage is M2's stock one instead.
+	scan(outputStages, stage -> Thing#{shell, stage} = value -> (
 		if stopIfError then
-			(lookup({Standard, key}, class value) ?? identity) value
-		else hook value
+			runStage(Standard, stage, value)
+		else (
+			if stage === BeforePrint then (forgetResult(); evaluatedLine = lineNumber);
+			try runStage(editable, stage, value)
+			except problem do (
+				stderr << locate problem << ": error: in the "
+					<< symbolText editable << " " << symbolText stage
+					<< " hook: " << toString problem << endl;
+				failed = true;
+				value
+			)
+		)
+	)
 	);
-	Thing#{mode, Print} = atShellTopLevel(Print, value -> (
-        completed = false;
-		drawingFailed = true;
+
+	-- The editable defaults. Recording rather than printing keeps the channel
+    -- free of everything but genuinely printed text. A `;` still suppresses the
+    -- value: NoPrint deliberately skips `net value`, which is the render the
+    -- punctuation exists to avoid on large objects. The type is read either way,
+    -- so the shell can say what a suppressed result is without paying to render
+    -- it.
+    --
+    -- Nothing deliberately has no Print override: an unterminated statement
+    -- reports its result whatever it is, and `net null` is already "null". A `;`
+    -- still silences it, since NoPrint stays identity for every class.
+	Thing#{editable, BeforePrint} = value -> runStage(Standard, BeforePrint, value);
+	Thing#{editable, Print} = value -> (
 		renderedValue = drawnAs value;
 		previews = select(apply({
-            ("net", x -> toString net x),
-            ("string", toString),
-            ("tex", tex),
-            ("external", toExternalString),
-            ("peek", x -> toString net peek x)
-        }, (name, formatter) -> (
-            text := try formatter value;
-            if instance(text, String) then hashTable {"mode" => name, "text" => text}
-        )), preview -> preview =!= null);
-        -- speek answers with a value of its own, sent drawn as any value is.
-        structure := try structureOf value;
-        if structure =!= null then previews = append(previews, hashTable {
-            "mode" => "speek",
-            "text" => toString net structure,
-            "value" => drawnAs structure
-        });
-		drawingFailed = false;
-	));
-	Thing#{mode, NoPrint} = atShellTopLevel(NoPrint, identity);
-	-- Deliberately AfterPrint in both branches: stock M2 reads AfterNoPrint under
-    -- a `;`, which only some classes define, so the type would appear or vanish
+			("net", toString@@net),
+			("string", toString),
+			("tex", tex),
+			("external", toExternalString),
+			("peek", toString@@net@@peek)
+		}, (name, formatter) -> (
+			text := try formatter value;
+			if instance(text, String) then
+				hashTable {
+					"mode" => name,
+					"text" => text
+				}
+		)), preview -> preview =!= null);
+		-- speek answers with a value of its own, sent drawn as any value is.
+		structure := try structureOf value;
+		if structure =!= null then
+			previews = append(previews, hashTable {
+				"mode" => "speek",
+				"text" => toString net structure,
+				"value" => drawnAs structure
+			});
+	);
+	Thing#{editable, NoPrint} = identity;
+	-- Deliberately the same hook after both: stock M2 reads AfterNoPrint under a
+    -- `;`, which only some classes define, so the type would appear or vanish
     -- with the punctuation. Reading AfterPrint always gives every class its type.
-    -- These run last for a statement that completed, which is what makes reaching
-    -- them the definition of having completed.
-	Thing#{mode, AfterPrint} = atShellTopLevel(AfterPrint, recordTypeInfo);
-	Thing#{mode, AfterNoPrint} = atShellTopLevel(AfterNoPrint, recordTypeInfo);
+	recordType := value -> (
+		typeParts = {typedAs value};
+		-- Keep stock text for the explicitly requested original-output view.
+		annotation := annotationPieces((lookup(AfterPrint, class value)) value
+				?? class value);
+		typeInfo = toString horizontalJoin apply(annotation, net);
+	);
+	scan({AfterPrint, AfterNoPrint}, stage -> Thing#{editable, stage} = recordType);
 
 	-- Sent by the shell after every cell, and the only part of a submission the
     -- user did not write. It is the sole thing that closes an input.
@@ -261,34 +294,39 @@ announceReady := (() -> (
     -- `stopIfError` -- so this statement runs either way.
     --
     -- Rewinding `lineNumber` costs this statement its own input number, keeping
-    -- the shell's `iN` contiguous. A failed input is rewound past as well, so the
-    -- next cell reuses its number: nothing can refer to it, a statement that
-    -- throws having bound no `oN` and left `oo` where it was.
+    -- the shell's `iN` contiguous. An input that never evaluated is rewound past
+    -- as well, so the next cell reuses its number: nothing can refer to it, a
+    -- statement that throws having bound no `oN` and left `oo` where it was. One
+    -- that evaluated keeps its number even when showing it failed, its `oN`
+    -- being bound already.
     -- `submission` is the shell's own count of what it has sent, echoed back so a
     -- frame that arrives for an earlier submission is recognised and dropped
     -- instead of being filed under the cell now waiting.
     -- Keep interruption from leaving a partial frame or half-reset cell state.
 	User#"spectral end of cell" = (submission, locals) -> shield (
 		lineNumber -= 1;
+		lastEvaluated := evaluatedLine === lineNumber;
+		-- What an earlier statement of the cell recorded is not this input's.
+		if not lastEvaluated then
+			forgetResult();
 		sendResult(submission, locals);
-		if not completed then
+		if not lastEvaluated then
 			lineNumber -= 1;
 		forgetResult();
-		new cellEnd
+		new CellEnd
 	);
 
 	-- Announced once the hooks are installed and before the first cell can be
     -- read, so the shell knows the child is up, which M2 it got, and every name
-    -- the session starts with. Called below.
-	() -> emitFrame hashTable {
+    -- the session starts with.
+	emitFrame hashTable {
 		"ready" => version#"VERSION",
 		"names" => newNames dictionaryPath
-	}
+	};
+	shell
 ))()
-
-announceReady()
 
 -- Last, so that nothing above is echoed: from here the channel carries only what
 -- the session produces.
 echoOff()
-topLevelMode = SpectralTopLevelMode
+topLevelMode = spectralShell

@@ -10,6 +10,21 @@ What the backend changes is only how results come back: instead of printing `oN 
 
 You can read all of it: the backend is written out as `backend.m2` in the [configuration directory](../reference/files.md), so `code` shows Spectral's hooks like any other M2 code.
 
+## Changing the output hooks
+
+Each result passes through the usual output hooks of a top-level mode: `BeforePrint`, then `Print` and `AfterPrint`, or `NoPrint` and `AfterNoPrint` after a `;`. Spectral's are kept under `SpectralTopLevelMode`, and you change them as you would for any mode, in a cell or in your `init.m2`:
+
+```m2
+code Thing#{SpectralTopLevelMode, AfterPrint}   -- the default
+
+-- draw rationals as usual, then say something about them
+QQ#{SpectralTopLevelMode, Print} = q -> (
+    Thing#{SpectralTopLevelMode, Print} q;
+    << "denominator " << denominator q << endl)
+```
+
+A hook set on a class applies to its descendants too, and one that prints rather than draws shows its text in the cell. The bookkeeping that ties a result to its cell stays outside these hooks. So a hook that throws is reported in its cell and marks it failed, but cannot misnumber later cells or leave the shell waiting.
+
 ## Your code runs once
 
 Each cell is sent to Macaulay2 exactly once and is never replayed behind your back. Deciding whether input is complete, splitting it into cells, highlighting and diagnostics are all done locally, by parsing the text, before anything is sent. An hour-long computation is never started twice.
