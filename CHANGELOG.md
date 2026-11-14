@@ -4,6 +4,8 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-14
+
 ### Added
 
 - Three keys jump from the name under the cursor to a tab beside the session: `Ctrl+]` its source, `Alt+]` everything the language server knows about it, `Ctrl+K` its documentation page, which needs no language server. Files opened beside the session number their lines.
