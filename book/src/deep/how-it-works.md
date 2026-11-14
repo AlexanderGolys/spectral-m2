@@ -6,24 +6,21 @@ Spectral is a front end to one real, long-running Macaulay2 process. Knowing a l
 
 When `sp2` starts, it launches `M2` with your startup options, loads its backend, and lets M2 enter its normal top level, reading the whole session from standard input, exactly as an interactive M2 does. So `x := 1` in one cell is visible in the next, `exit` closes the shell, and your packages and `init.m2` behave as usual.
 
-What the backend changes is only how results come back: instead of printing `oN =` and `oN :` lines, M2 hands each value over as an expression tree, preserving the class of every component. Separate `specNet` and `specType` methods describe the value and its type. The shell lays out that structure and applies the theme to its classes. Printed text and errors arrive as M2 produced them, in order.
+What the backend changes is only how results come back: instead of printing `oN =` and `oN :` lines, M2 hands each value over as an expression tree, preserving the class of every component. Separate `specNet` and `specType` methods describe the value and its type; they come from the [Spectral](https://github.com/AlexanderGolys/Spectral) package, which works in a plain M2 too. The shell lays out that structure and applies the theme to its classes. Printed text and errors arrive as M2 produced them, in order.
 
 You can read all of it: the backend is written out as `backend.m2` in the [configuration directory](../reference/files.md), so `code` shows Spectral's hooks like any other M2 code.
 
-## Changing the output hooks
+## Drawing your own types
 
-Each result passes through the usual output hooks of a top-level mode: `BeforePrint`, then `Print` and `AfterPrint`, or `NoPrint` and `AfterNoPrint` after a `;`. Spectral's are kept under `SpectralTopLevelMode`, and you change them as you would for any mode, in a cell or in your `init.m2`:
+How a result is drawn is decided by the [Spectral](https://github.com/AlexanderGolys/Spectral) package alone. The backend only calls it; it doesn't hand you its output hooks. A type that already has an `expression` is drawn from it, keeping the class of every part. Install `specNet` (or `specType`, for the annotation) to draw it some other way. Do it in a cell, or in Spectral's own [`init.m2`](../reference/files.md) to have it in every session:
 
 ```m2
-code Thing#{SpectralTopLevelMode, AfterPrint}   -- the default
-
--- draw rationals as usual, then say something about them
-QQ#{SpectralTopLevelMode, Print} = q -> (
-    Thing#{SpectralTopLevelMode, Print} q;
-    << "denominator " << denominator q << endl)
+Point = new Type of List
+expression Point := p -> new FunctionApplication from (symbol point, toSequence p)
+speek new Point from {1, 1/2}   -- Point => {ZZ => 1, QQ => {ZZ => 1, ZZ => 2}}
 ```
 
-A hook set on a class applies to its descendants too, and one that prints rather than draws shows its text in the cell. The bookkeeping that ties a result to its cell stays outside these hooks. So a hook that throws is reported in its cell and marks it failed, but cannot misnumber later cells or leave the shell waiting.
+A drawing that throws falls back to the value's plain text, so a broken `specNet` can't break the session.
 
 ## Your code runs once
 

@@ -7,7 +7,7 @@ Spectral keeps configuration in one directory and session state in another, foll
 `$XDG_CONFIG_HOME/spectral-m2/`, or `~/.config/spectral-m2/` when the variable is unset.
 
 `init.m2`
-: Your own startup code for Spectral sessions, run after Macaulay2's usual `~/.Macaulay2/init.m2`. Optional; skipped with `-q`.
+: Your own startup code for Spectral sessions, run after Macaulay2's usual `~/.Macaulay2/init.m2` once Spectral is loaded, so it can [draw your own types](../deep/how-it-works.md#drawing-your-own-types). An error in it is reported and the session starts anyway. Optional; skipped with `-q`.
 
 `backend.m2`
 : The Macaulay2 side of the shell, written out from the program so M2's `code` can show you Spectral's hooks. Replaced whenever a new version brings a different one; don't edit it.

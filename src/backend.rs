@@ -37,9 +37,11 @@ const STARTUP_SCRIPT: EmbeddedSource = EmbeddedSource {
     contents: include_str!("backend/m2_startup.m2"),
 };
 /// The package that defines `SpecNet` and `specNet`, which every result is drawn from.
+/// Published on its own as `Spectral`; the shell carries the version its backend was
+/// written against, pinned as the `Spectral` submodule, whatever else M2 has installed.
 const DISPLAY_PACKAGE: EmbeddedSource = EmbeddedSource {
     file_name: "Spectral.m2",
-    contents: include_str!("backend/Spectral.m2"),
+    contents: include_str!("../Spectral/Spectral.m2"),
 };
 /// Introduces a result frame on the child's output stream. ASCII group
 /// separator: no diagnostic, prompt or ordinary value begins with it, and the
@@ -241,7 +243,7 @@ impl M2Backend {
     /// not `--script`, which would evaluate the file and exit rather than going on
     /// to read stdin. Normal M2 initialization is preserved unless `-q` is
     /// requested, which also removes home-directory package paths. Spectral's
-    /// own `init.m2` runs after M2's initialization and before the backend hooks.
+    /// own `init.m2` runs after M2's initialization and after the backend hooks.
     ///
     /// Both output streams are handed the same pipe. Printed text, diagnostics
     /// and result frames then share one ordering, which is what lets a cell's
@@ -266,15 +268,13 @@ impl M2Backend {
             m2_string_literal(DISPLAY_PACKAGE.package_name()),
             m2_string_literal(package_path.display())
         ));
-        // Load Spectral's init file before the hooks, so the startup frame is the
-        // last thing to arrive before the session opens. `load` rather than a
-        // submitted cell: it gives the file its own dictionary, the way every
-        // other loaded file gets one, and costs it no input number -- numbering
-        // starts at the user's first cell, as it does in any M2.
+        // Spectral's init file is loaded by the backend itself, once the hooks it
+        // may edit are installed; it is only told where the file is.
         if let Some(init_file) = init_file.as_deref().filter(|path| path.is_file()) {
-            command
-                .arg("-e")
-                .arg(format!("load {}", m2_string_literal(init_file.display())));
+            command.arg("-e").arg(format!(
+                r#"User#"spectral init file" = {}"#,
+                m2_string_literal(init_file.display())
+            ));
         }
         if let Some(package) = package {
             command

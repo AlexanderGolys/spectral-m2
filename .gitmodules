@@ -1,0 +1,3 @@
+[submodule "Spectral"]
+	path = Spectral
+	url = https://github.com/AlexanderGolys/Spectral.git
