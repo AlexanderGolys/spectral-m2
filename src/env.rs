@@ -24,9 +24,6 @@ const TERM: &str = "TERM";
 const TERMINAL_VARIABLES: [&str; 2] = ["TERM_PROGRAM", TERM];
 /// The `TERM` of a terminal that draws nothing beyond plain text.
 const DUMB_TERMINAL: &str = "dumb";
-/// Set to [`ENABLED`] to draw with plain Unicode characters only.
-const BASIC_GLYPHS: &str = "SPECTRAL_M2_BASIC_GLYPHS";
-const ENABLED: &str = "1";
 
 /// The one way into the process environment.
 pub static ENV: Environment = Environment;
@@ -75,10 +72,9 @@ impl Environment {
             .collect()
     }
 
-    /// Whether the terminal or the user asks for plain Unicode characters only.
-    pub fn basic_glyphs(&self) -> bool {
+    /// Whether the terminal draws nothing beyond plain text.
+    pub fn dumb_terminal(&self) -> bool {
         var(TERM).is_ok_and(|term| term == DUMB_TERMINAL)
-            || var(BASIC_GLYPHS).is_ok_and(|value| value == ENABLED)
     }
 
     fn xdg_home(&self, variable: &str, under_home: &str) -> Option<PathBuf> {

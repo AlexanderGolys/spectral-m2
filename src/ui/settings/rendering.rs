@@ -10,6 +10,7 @@ use super::Settings;
 use crate::ui::config::UI;
 use crate::ui::controller::picker::{PickerItem, PickerOption, PickerValue};
 use crate::ui::cycle::cyclic;
+use crate::ui::glyphs::Glyphs;
 use crate::ui::graphics;
 use crate::ui::render::maths::{FractionStyle, MathDisplay, MathInk, ScriptColor};
 
@@ -93,6 +94,9 @@ pub struct RenderingSettings {
     pub renderer_position: RendererPosition,
     /// Whether text may be drawn in italics.
     pub italics: bool,
+    /// Whether the shell's chrome draws plain Unicode symbols (`>`, `|`) rather
+    /// than ones a Nerd Font provides; a `TERM=dumb` terminal always does.
+    pub basic_glyphs: bool,
     pub fractions: FractionStyle,
     /// Whether rings are drawn as blackboard glyphs (`ℤ`) rather than by name (`ZZ`).
     pub math_fonts: bool,
@@ -115,6 +119,7 @@ impl Default for RenderingSettings {
             exponent_color: ScriptColor::default(),
             renderer_position: RendererPosition::default(),
             italics: true,
+            basic_glyphs: false,
             fractions: FractionStyle::default(),
             math_fonts: false,
             matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
@@ -184,6 +189,7 @@ cyclic! {
         IndexColor = "index colours",
         ExponentColor = "exponent colours",
         Italics = "italics",
+        BasicGlyphs = "basic glyphs",
         Fractions = "fractions",
         MathFonts = "math fonts",
         MatrixRowSpacing = "matrix row spacing",
@@ -219,6 +225,7 @@ impl SettingRow for RenderingSetting {
             Self::IndexColor => "colour of subscripts: their own, their symbol's, or the operator colour; delimiters and punctuation keep theirs",
             Self::ExponentColor => "colour of exponents: their own, their symbol's, or the operator colour; delimiters and punctuation keep theirs",
             Self::Italics => "draw emphasised and commented text in italics",
+            Self::BasicGlyphs => "draw prompts, dividers and the spinner with plain symbols, for fonts without Nerd Font icons",
             Self::Fractions => "how rational values are drawn",
             Self::MathFonts => "use TeX math fonts like mathbb, mathcal",
             Self::MatrixRowSpacing => {
@@ -266,6 +273,7 @@ impl SettingRow for RenderingSetting {
             }
             Self::MathSize => PickerValue::Stepped(format!("{}%", rendering.math_size_percent)),
             Self::Italics => switch(rendering.italics, "on"),
+            Self::BasicGlyphs => switch(rendering.basic_glyphs, "on"),
             Self::Fractions => {
                 PickerValue::among(FractionStyle::CHOICES, &rendering.fractions, |&style| {
                     style.label().into()
@@ -310,6 +318,7 @@ impl SettingRow for RenderingSetting {
             Self::IndexColor => rendering.index_color = rendering.index_color.cycle(delta),
             Self::ExponentColor => rendering.exponent_color = rendering.exponent_color.cycle(delta),
             Self::Italics => rendering.italics = !rendering.italics,
+            Self::BasicGlyphs => rendering.basic_glyphs = !rendering.basic_glyphs,
             Self::Fractions => rendering.fractions = rendering.fractions.cycle(delta),
             Self::MathFonts => rendering.math_fonts = !rendering.math_fonts,
             Self::MatrixRowSpacing => {
@@ -339,6 +348,7 @@ impl SettingRow for RenderingSetting {
         match self {
             Self::Fractions | Self::MathFonts => !rendering.pictured(),
             Self::MathSize | Self::MatrixRowSpacing => rendering.pictured(),
+            Self::BasicGlyphs => !Glyphs::forced_basic(),
             _ => true,
         }
     }

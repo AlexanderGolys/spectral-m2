@@ -38,6 +38,9 @@ index colours, exponent colours
 italics
 : Draw emphasised and commented text in italics. Typeset pictures keep TeX's math italic either way. Default: on.
 
+basic glyphs
+: Draw the prompt, dividers, separators and spinner with plain symbols such as `>` and `|`, for a font without Nerd Font icons. Always on, and greyed out, when `TERM=dumb`. Default: off.
+
 fractions
 : `stacked`, `underlined` or `inline`. Default: `stacked`. Greyed out while maths is typeset.
 

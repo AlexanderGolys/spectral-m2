@@ -1,6 +1,7 @@
 //! Symbols the shell's chrome draws beyond ASCII, each with the spelling a
 //! limited terminal uses instead.
-
+#![allow(clippy::non_ascii_literal)]
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::LazyLock;
 
 use crate::env::ENV;
@@ -22,9 +23,9 @@ impl Glyph {
         }
     }
 
-    /// Select the symbol for this process's terminal.
+    /// Select the symbol the shell draws now.
     pub fn current(self) -> &'static str {
-        self.for_basic(Glyphs::basic_terminal())
+        self.for_basic(Glyphs::basic())
     }
 
     pub const fn new(preferred: &'static str, basic: &'static str) -> Self {
@@ -36,7 +37,7 @@ impl Glyph {
 #[forall(pub, Glyph)]
 #[derive(Clone, Copy)]
 pub struct Glyphs(
-    prompt, // 󱃵 󱪂    
+    prompt, //  󱪂    
     prompt_typing,
     split_divider,
     cell_separator,
@@ -78,11 +79,23 @@ pub struct Glyphs(
     tab_pin,
 );
 
+/// Whether the *basic glyphs* setting is on, published for every drawing.
+static CHOSEN_BASIC: AtomicBool = AtomicBool::new(false);
+
 impl Glyphs {
-    /// `TERM=dumb` and an explicit override use plain Unicode characters.
-    pub fn basic_terminal() -> bool {
-        static BASIC: LazyLock<bool> = LazyLock::new(|| ENV.basic_glyphs());
-        *BASIC
+    /// Whether plain Unicode symbols are drawn: chosen in the settings, or forced.
+    pub fn basic() -> bool {
+        CHOSEN_BASIC.load(Relaxed) || Self::forced_basic()
+    }
+
+    /// Whether the terminal draws nothing but plain symbols, whatever is chosen.
+    pub fn forced_basic() -> bool {
+        static DUMB: LazyLock<bool> = LazyLock::new(|| ENV.dumb_terminal());
+        *DUMB
+    }
+
+    pub fn choose_basic(basic: bool) {
+        CHOSEN_BASIC.store(basic, Relaxed);
     }
 }
 
@@ -92,32 +105,33 @@ pub const GLYPHS: Glyphs = Glyphs {
     prompt_typing: Glyph::new(" ", ">>"),
     split_divider: Glyph::new("│", "|"),
     cell_separator: Glyph::new("│", "|"),
-    pending_separator: Glyph::new("┈", "-"),
+    pending_separator: Glyph::new("󰇘", "-"),
     fold_rule: Glyph::new("─", "-"),
     fold_open: Glyph::new("▾", "v"),
     fold_closed: Glyph::new("▸", ">"),
     folded_lines: Glyph::new("⋯", "..."),
-    unevaluated_cell: Glyph::new(" ", "."),
-    rejected_cell: Glyph::new(" ", "x"),
+    unevaluated_cell: Glyph::new("", "."),
+    rejected_cell: Glyph::new("", "x"),
     renderer_markup: Glyph::new("󱚊", "m"),
-    renderer_external: Glyph::new("󰅩", "e"),
+    renderer_external: Glyph::new("", "e"),
     renderer_tex: Glyph::new("", "t"),
-    renderer_net: Glyph::new("󰧭", "n"),
-    renderer_spec_net: Glyph::new("", "*"),
-    renderer_string: Glyph::new("󰦨", "s"),
+    renderer_net: Glyph::new("󰊉", "n"),
+    renderer_spec_net: Glyph::new("󱨇", "*"),
+    renderer_string: Glyph::new("", "s"),
     renderer_peek: Glyph::new("󰈈", "p"),
     renderer_speek: Glyph::new("󰛐", "P"),
-    trimmed: Glyph::new("󰨾 ", "..."),
-    step_back: Glyph::new("‹", "<"),
-    step_forward: Glyph::new("›", ">"),
+    trimmed: Glyph::new(" ..󰴏", "[..]"),
+    step_back: Glyph::new("", "<"),
+    step_forward: Glyph::new("", ">"),
     picker_rule: Glyph::new("─", "-"),
+
     tab_documentation: Glyph::new("󰗚", "d"),
     tab_hover: Glyph::new("󰋽", "i"),
     tab_source: Glyph::new("󰈮", "f"),
-    tab_bookmark: Glyph::new("★", "*"),
-    tab_code: Glyph::new("󰅩", "c"),
-    tab_output: Glyph::new("󰞷", "o"),
-    tab_syntax_tree: Glyph::new("󰙅", "t"),
+    tab_bookmark: Glyph::new(" ", "*"),
+    tab_code: Glyph::new("󰅩 ", "c"),
+    tab_output: Glyph::new("󰞷 ", "o"),
+    tab_syntax_tree: Glyph::new("󱁉 ", "t"),
     tab_back: Glyph::new("‹", "<"),
-    tab_pin: Glyph::new("☆", "+"),
+    tab_pin: Glyph::new(" ", "+"),
 };

@@ -73,8 +73,8 @@ Documentation examples, when [computed](../shell/documentation.md#examples-compu
 
 ## Environment
 
-`SPECTRAL_M2_BASIC_GLYPHS=1`
-: Use plain prompt, divider, separator and spinner symbols. `TERM=dumb` does the same.
+`TERM=dumb`
+: Use plain prompt, divider, separator and spinner symbols, as the *basic glyphs* [setting](settings.md) does.
 
 `XDG_CONFIG_HOME`, `XDG_STATE_HOME`
 : Where Spectral keeps its files. See [Files and directories](files.md).

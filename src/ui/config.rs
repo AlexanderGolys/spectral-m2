@@ -16,7 +16,7 @@ pub struct SpinnerConfig {
 impl SpinnerConfig {
     /// The spinner chosen for the terminal.
     pub fn active(self) -> Spinner {
-        if Glyphs::basic_terminal() {
+        if Glyphs::basic() {
             self.basic
         } else {
             self.rich

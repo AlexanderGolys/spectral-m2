@@ -80,4 +80,4 @@ CompletionHint = { link = "Muted", italic = true }
 
 ## Plain glyphs for limited terminals
 
-Set `SPECTRAL_M2_BASIC_GLYPHS=1` for simple prompt, divider, separator and spinner symbols. `TERM=dumb` selects them automatically.
+Turn on *basic glyphs* in the rendering tab of the [settings](../reference/settings.md) for simple prompt, divider, separator and spinner symbols, for a font without Nerd Font icons. `TERM=dumb` selects them automatically.

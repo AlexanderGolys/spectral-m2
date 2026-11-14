@@ -51,6 +51,7 @@ use crate::code::semantic::SEMANTIC_GROUPS;
 use crate::env::ENV;
 use crate::input::{InputCode, InputContext};
 use crate::ui::floating::{Anchor, Floating};
+use crate::ui::glyphs::Glyphs;
 use crate::ui::relayout;
 use crate::ui::settings::selection::CopyFormat;
 use crate::ui::settings::statusline::{StatusComponent, StatusLinePosition, StatusSegment};
@@ -347,6 +348,7 @@ impl Editor {
         };
         let mut input = InputCode::new();
         input.set_settings(settings);
+        Glyphs::choose_basic(settings.rendering.basic_glyphs);
         let mut editor = Self {
             feed: Feed::new(Box::new(TextBlock::system(welcome))),
             reference: Feed::new(Box::new(TextBlock::system(String::new()))),
@@ -1643,6 +1645,7 @@ impl Editor {
         self.apply_appearance(settings.appearance);
         self.settings = settings;
         self.input.set_settings(settings);
+        Glyphs::choose_basic(settings.rendering.basic_glyphs);
         self.save_settings();
         self.refresh_settings_picker();
     }
