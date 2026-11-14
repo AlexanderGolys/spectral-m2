@@ -451,6 +451,16 @@ pub(super) struct Painted {
     pub links: Vec<Link>,
 }
 
+impl Painted {
+    /// Drop the bottom row, a margin no link reaches into.
+    fn trim_last_row(&mut self) {
+        if self.lines.pop().is_some() {
+            let rows = u16::try_from(self.lines.len()).unwrap_or(u16::MAX);
+            self.inclusions = self.inclusions.project(0..rows);
+        }
+    }
+}
+
 /// Render a stored example of `page` through the same input, printed, error
 /// and result blocks as a live submission. Its code carries no number or separator: an example's input
 /// numbers are its own, not the session's, while its outputs keep the `oN` the
@@ -472,7 +482,9 @@ pub fn render(
         links: Vec::new(),
         controls: Vec::new(),
     };
-    for example in transcript(source, example_width)? {
+    let examples = transcript(source, example_width)?;
+    let count = examples.len();
+    for (index, example) in examples.into_iter().enumerate() {
         let number = example.number;
         let mut block = match computed(page, example.number) {
             Some(response) => example.computed(page, &response),
@@ -481,7 +493,13 @@ pub fn render(
         let choice =
             MODES.with_borrow_mut(|modes| modes.entry((page, number)).or_default().clone());
         block.share_formatter(choice);
-        let next = painted(&block, context);
+        let mut next = painted(&block, context);
+        // An example with nothing to show keeps its code's bottom margin only
+        // when it ends the transcript: the next example's code opens with its
+        // own margin, and the two together would read as an empty line.
+        if index + 1 < count && block.outputs().next().is_none() {
+            next.trim_last_row();
+        }
         let top = i32::try_from(rendered.lines.len()).unwrap_or(i32::MAX);
         rendered
             .inclusions

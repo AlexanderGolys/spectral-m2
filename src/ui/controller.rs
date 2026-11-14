@@ -61,8 +61,8 @@ use crate::ui::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
 use crate::ui::theme::palette::blend;
 use crate::ui::theme::AppearanceSettings;
 
-/// How far a hovered link's colours move toward the text colour.
-const LINK_HOVER_BRIGHTENING: f32 = 0.35;
+/// How far the background under a hovered link moves toward the text colour.
+const LINK_HOVER_TINT: f32 = 0.15;
 /// What the status line says while the keyboard cursor is in a pane.
 const CARET_STATE: &str = "Cursor in view (Esc returns to the input)";
 
@@ -2180,14 +2180,20 @@ impl Editor {
             } else {
                 HLGroup::MarkupLinkHover
             });
+            // The link keeps its own text colour; the band behind it lights up instead.
             let text = scheme().style(HLGroup::Text).fg;
+            let canvas = scheme().style(HLGroup::Canvas).bg;
             for cells in link.cells {
                 frame.buffer_mut().set_style(cells, hovered);
                 for position in cells.positions() {
                     let cell = &mut frame.buffer_mut()[position];
-                    if let (Some(text), Color::Rgb(..)) = (text, cell.fg) {
-                        if let Ok(brightened) = blend(cell.fg, text, LINK_HOVER_BRIGHTENING) {
-                            cell.set_fg(brightened);
+                    let under = match cell.bg {
+                        Color::Rgb(..) => Some(cell.bg),
+                        _ => canvas,
+                    };
+                    if let (Some(text), Some(under)) = (text, under) {
+                        if let Ok(tinted) = blend(under, text, LINK_HOVER_TINT) {
+                            cell.set_bg(tinted);
                         }
                     }
                 }

@@ -14,6 +14,7 @@ All notable changes to Spectral M2 are documented here.
 
 ### Changed
 
+- A link under the pointer keeps its text colour and lights the background behind it instead, so documentation links drawn in the text colour show the hover too.
 - The language server is asked about the cursor only once it rests, so moving and typing no longer queue a question per step. A slow answer is cancelled instead of stopping the server, a server that stops is restarted after a growing delay, and an answer about a cursor that has moved on is ignored.
 - Settings keep one section per tab: the language-server options form their own `lsp` section and the selection belongs to `editor`. Older settings files are read into the new shape.
 - Hash tables align keys and arrows in columns, each value wrapping beneath where it began; values unfold through their expressions until they reach a name.
@@ -31,6 +32,7 @@ All notable changes to Spectral M2 are documented here.
 
 ### Fixed
 
+- Documentation examples that show nothing leave a single row before the next example instead of an empty line.
 - A documentation example's recorded answer is shown as M2's string, never labelled `specNet`, even when its computed twin uses `specNet`.
 - Code wraps only between tokens, measured in terminal columns; code in documentation table cells stays inside its column and keeps its colours.
 - Content keeps its layout while its pane is resized and follows once the width settles; values are laid out again beside the drawing thread, keeping their old rows until the new ones arrive.
