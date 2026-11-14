@@ -13,7 +13,7 @@ S = QQ[a_1..a_4];
 C = res coker vars S
 ```
 
-A map of complexes, such as a chain map or the differential `C.dd`, shows its two complexes one above the other, source over target, with equal homological degrees in the same column. Its nonzero components run from each source module to its target: straight down, beside their matrices, for a map of degree 0; slanting to the neighbouring column, named only, such as d₁, for a differential or any other map of nonzero degree. In typeset maths the slanting arrows are drawn as they lie; Unicode and ASCII cannot draw a slant, so there the target complex shifts sideways by the degree, keeping every arrow vertical, with the source's degrees above it and the target's beneath:
+A map of complexes, such as a chain map or the differential `C.dd`, shows its two complexes one above the other, source over target, with equal homological degrees in the same column. Its nonzero components run from each source module to its target: straight down for a map of degree 0, slanting to the neighbouring column for a differential or any other map of nonzero degree. Every arrow carries its name, such as d₁ or f₂; set `ComplexMap.valueDepth = 3` to see the matrices on the straight arrows and along the complexes instead. In typeset maths the slanting arrows are drawn as they lie; Unicode and ASCII cannot draw a slant, so there the target complex shifts sideways by the degree, keeping every arrow vertical, with the source's degrees above it and the target's beneath:
 
 ```m2
 R = QQ[x, y, z];

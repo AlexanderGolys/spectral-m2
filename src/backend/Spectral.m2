@@ -43,8 +43,9 @@ UnderExpression = new HeaderType of Expression
 AlignedExpression = new HeaderType of Expression
 net AlignedExpression := aligned -> netList(apply(toList aligned, toList),
 	Boxes => false, HorizontalSpace => 1)
--- A part a drawing introduces for a structure, as {name, part, shape}: spelled
--- by its name until the value depth reaches it, then drawn from its shape.
+-- A part a drawing introduces for a structure, as {name, part, shape} or
+-- {name, part, shape, level}: spelled by its name until the drawing has that
+-- many levels left to unfold (one by default), then drawn from its shape.
 Intermediate = new HeaderType of Expression
 -- A map of complexes as its two complexes, one above the other with each degree
 -- in a column of its own, and the components between them:
@@ -425,8 +426,9 @@ specNet AlignedExpression := aligned -> new SpecNet from (class aligned,
 specNet IndexedVariable := variable -> new SpecNet from (Subscript,
 	apply(toList variable, specNet))
 specNet Intermediate := part -> (
-	(name, component, shape) := toSequence part;
-	if unfoldable =!= null and unfoldable <= 0 then
+	(name, component, shape) := toSequence take(part, 3);
+	level := if #part > 3 then part#3 else 1;
+	if unfoldable =!= null and unfoldable < level then
 		specNet name ++ {symbol Type => class component}
 	else specNet shape ++ {symbol Type => class component}
 )
@@ -456,17 +458,19 @@ specNet Complex := complex -> (
 -- running down from its source to its target, as many columns across as the
 -- map's degree: straight down for a chain map, one column for a differential.
 -- A slanting component has no room beside it for a matrix, only its name.
+-- The matrices, two to each degree, wait one level past the modules.
 specNet ComplexMap := map -> (
+	matrixPart := (name, degree, matrix) -> Intermediate {
+		Subscript {name, degree}, matrix,
+		new Array from {Table entries matrix}, 2
+	};
 	chain := (complex, name) -> (
 		(lo, hi) := concentration complex;
 		apply(toList(lo .. hi), degree -> join({degree,
 			Intermediate {Subscript {name, degree}, complex_degree,
 				Holder {complex_degree}}},
-			if degree == lo then {} else {Intermediate {
-				Subscript {symbol d, degree},
-				complex.dd_degree,
-				new Array from {Table entries complex.dd_degree}
-			}}))
+			if degree == lo then {}
+			else {matrixPart(symbol d, degree, complex.dd_degree)}))
 	);
 	targetName := if source map === target map then symbol C else symbol D;
 	mapName := if map === (source map).dd then symbol d else symbol f;
@@ -476,11 +480,8 @@ specNet ComplexMap := map -> (
 		component := map_degree;
 		if component == 0 then null
 		else if shift != 0 then {degree, Subscript {mapName, degree}}
-		else {degree, Intermediate {
-			Subscript {mapName, degree},
-			component,
-			new Array from {Table entries component}
-		}})), entry -> entry =!= null);
+		else {degree, matrixPart(mapName, degree, component)})),
+		entry -> entry =!= null);
 	unfolding(map, ComplexMapExpression {
 		shift,
 		chain(source map, symbol C),
@@ -654,7 +655,10 @@ Node
       C for a complex. Named values always keep their name. A complex is a
       chain of its modules C_i and differentials d_i between zeros; at the
       next depth these names give way to the modules and matrices, and each
-      further level substitutes one more name.
+      further level substitutes one more name. A map of complexes draws its
+      two complexes the same way, but its matrices wait one level longer than
+      their modules, so at its default depth of 2 its arrows carry names, and
+      ComplexMap.valueDepth = 3 shows the matrices.
       Thing.valueDepth is 1 and Complex.valueDepth is 2. Explicit specNet'
       calls use their supplied depth.
 Node
