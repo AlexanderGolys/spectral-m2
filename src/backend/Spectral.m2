@@ -452,9 +452,10 @@ specNet Complex := complex -> (
 	}, MapExpression {expression 0, module lo}, toList(lo + 1 .. hi));
 	unfolding(complex, MapExpression {chain, expression 0})
 )
--- A map is drawn as its two complexes aligned by degree, each component
+-- A map is drawn as its two complexes aligned by degree, each nonzero component
 -- running down from its source to its target, as many columns across as the
 -- map's degree: straight down for a chain map, one column for a differential.
+-- A slanting component has no room beside it for a matrix, only its name.
 specNet ComplexMap := map -> (
 	chain := (complex, name) -> (
 		(lo, hi) := concentration complex;
@@ -468,17 +469,20 @@ specNet ComplexMap := map -> (
 			}}))
 	);
 	targetName := if source map === target map then symbol C else symbol D;
+	mapName := if map === (source map).dd then symbol d else symbol f;
+	shift := degree map;
 	(lo, hi) := concentration source map;
 	components := select(apply(toList(lo .. hi), degree -> (
 		component := map_degree;
-		if source component == 0 or target component == 0 then null
+		if component == 0 then null
+		else if shift != 0 then {degree, Subscript {mapName, degree}}
 		else {degree, Intermediate {
-			Subscript {symbol f, degree},
+			Subscript {mapName, degree},
 			component,
 			new Array from {Table entries component}
 		}})), entry -> entry =!= null);
 	unfolding(map, ComplexMapExpression {
-		degree map,
+		shift,
 		chain(source map, symbol C),
 		chain(target map, targetName),
 		components
