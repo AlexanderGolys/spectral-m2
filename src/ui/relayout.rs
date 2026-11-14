@@ -89,4 +89,3 @@ pub fn busy() -> bool {
 pub fn delivered() -> u64 {
     DELIVERED.load(Ordering::SeqCst)
 }
-

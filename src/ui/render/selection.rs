@@ -210,4 +210,3 @@ impl<const N: usize> From<[Rect; N]> for Inclusions {
         }
     }
 }
-

@@ -196,4 +196,3 @@ pub fn archived_sessions() -> io::Result<Vec<PathBuf>> {
     paths.sort_by(|left, right| right.cmp(left));
     Ok(paths)
 }
-

@@ -962,4 +962,3 @@ struct Visible {
     rows: u16,
     scroll: usize,
 }
-

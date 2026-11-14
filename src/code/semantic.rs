@@ -775,4 +775,3 @@ pub fn merge(lexical: Vec<HLSpan>, semantic: &[HLSpan]) -> Vec<HLSpan> {
     result.sort_by_key(|span| span.content.start);
     result
 }
-

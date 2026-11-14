@@ -198,4 +198,3 @@ impl UiConfig {
         self.prompt_margin + 1 + self.prompt_text_gap
     }
 }
-

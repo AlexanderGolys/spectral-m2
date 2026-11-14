@@ -249,4 +249,3 @@ pub fn complete(request: Request<'_>) -> Option<Completion> {
         _ => None,
     }
 }
-

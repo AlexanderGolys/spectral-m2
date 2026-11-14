@@ -146,4 +146,3 @@ impl Options {
             .map_err(|error| format!("cannot read {}: {error}", path.display()))
     }
 }
-

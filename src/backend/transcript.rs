@@ -131,4 +131,3 @@ pub fn captured_error(raw: &str, code: &str) -> CapturedError {
         diagnostic: lines[diagnostic..].join("\n"),
     }
 }
-

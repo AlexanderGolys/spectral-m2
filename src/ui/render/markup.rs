@@ -1688,4 +1688,3 @@ fn filled(source: &str, marked: &[HLSpan]) -> Vec<TextSpan> {
     }
     spans
 }
-

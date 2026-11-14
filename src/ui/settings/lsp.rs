@@ -69,5 +69,3 @@ impl SettingRow for LspSetting {
         }
     }
 }
-
-

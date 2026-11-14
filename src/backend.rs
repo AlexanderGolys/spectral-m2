@@ -566,4 +566,3 @@ impl Drop for M2Backend {
         let _ = self.process.wait();
     }
 }
-

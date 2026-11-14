@@ -64,4 +64,3 @@ pub fn lead(markdown: &str) -> &str {
     }
     lead
 }
-

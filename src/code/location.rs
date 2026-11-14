@@ -109,4 +109,3 @@ impl SourceLink {
         format!("code new FilePosition from {{{file}, {coordinates}}}")
     }
 }
-

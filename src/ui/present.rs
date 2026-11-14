@@ -67,4 +67,3 @@ pub fn links(rows: &[SpanLine]) -> Vec<Link> {
     }
     links
 }
-

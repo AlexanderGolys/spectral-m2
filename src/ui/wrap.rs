@@ -313,4 +313,3 @@ impl WrapPolicy for SpanWrap<'_> {
 fn is_word_character(character: char) -> bool {
     character.is_alphanumeric() || character == '\'' || character == '$'
 }
-

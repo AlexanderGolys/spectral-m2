@@ -331,4 +331,3 @@ impl From<StatusLineSettings> for StoredStatusLineSettings {
         }
     }
 }
-

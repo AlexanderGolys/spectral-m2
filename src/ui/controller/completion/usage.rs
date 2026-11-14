@@ -233,4 +233,3 @@ impl<'ast> Visit<'ast> for References {
         }
     }
 }
-

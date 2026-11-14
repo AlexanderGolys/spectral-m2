@@ -122,4 +122,3 @@ impl Highlighter for SyntaxHighlighter {
         spans
     }
 }
-

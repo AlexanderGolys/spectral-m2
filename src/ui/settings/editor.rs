@@ -150,4 +150,3 @@ pub fn rows(settings: Settings) -> Vec<Box<dyn PickerItem>> {
         )
         .collect()
 }
-

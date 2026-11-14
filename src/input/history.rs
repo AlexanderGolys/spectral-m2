@@ -274,4 +274,3 @@ fn history_file_path() -> Option<PathBuf> {
     let state_dir = ENV.state_home()?;
     Some(state_dir.join("spectral-m2").join("history.jsonl"))
 }
-

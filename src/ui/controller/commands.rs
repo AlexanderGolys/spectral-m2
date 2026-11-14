@@ -272,4 +272,3 @@ pub fn picker(commands: &[Command], keymaps: &Keymaps, query: &str) -> Picker {
             .collect(),
     )
 }
-

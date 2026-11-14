@@ -45,4 +45,3 @@ pub fn paste(child: &Buffer, rows: Range<u16>, into: Rect, parent: &mut Buffer) 
         parent.content[to..to + width].clone_from_slice(&child.content[from..from + width]);
     }
 }
-

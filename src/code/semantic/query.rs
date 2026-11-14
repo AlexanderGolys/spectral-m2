@@ -230,4 +230,3 @@ pub fn position_of(text: &str, offset: usize) -> Position {
         before[line_start..].encode_utf16().count() as u32,
     )
 }
-

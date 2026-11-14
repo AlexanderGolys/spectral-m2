@@ -219,4 +219,3 @@ impl Text for [TextSpan] {
             .collect()
     }
 }
-

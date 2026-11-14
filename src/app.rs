@@ -1379,4 +1379,3 @@ pub fn run(backend: M2Backend, startup: Option<String>) -> Result<()> {
     app.keep_session();
     terminal.leave()
 }
-

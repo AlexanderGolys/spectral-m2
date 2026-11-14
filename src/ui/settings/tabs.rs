@@ -54,4 +54,3 @@ pub fn restore_defaults() -> Box<dyn PickerItem> {
         .described("reset settings, keymaps and appearance")
         .into()
 }
-

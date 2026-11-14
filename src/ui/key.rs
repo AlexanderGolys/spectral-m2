@@ -241,4 +241,3 @@ impl From<CrosstermKeyEvent> for KeyEvent {
         key
     }
 }
-

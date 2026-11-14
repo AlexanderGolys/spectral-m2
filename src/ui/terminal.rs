@@ -188,4 +188,3 @@ impl Drop for ReplTerminal {
         let _ = self.restore();
     }
 }
-

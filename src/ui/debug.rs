@@ -91,4 +91,3 @@ pub fn resident_bytes(process: Option<u32>) -> Option<u64> {
 pub fn mebibytes(bytes: u64) -> String {
     format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
 }
-

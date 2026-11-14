@@ -186,4 +186,3 @@ fn ghostty_family(config: &str) -> Option<String> {
             false => primary.or(Some(family)),
         })
 }
-

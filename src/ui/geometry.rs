@@ -187,4 +187,3 @@ forward_binop!(Add::add, AddAssign::add_assign, AffineShift, AffineShift);
 forward_binop!(Sub::sub, SubAssign::sub_assign, AffineShift, AffineShift);
 forward_binop!(Add::add, AddAssign::add_assign, Rect, AffineShift);
 forward_binop!(Sub::sub, SubAssign::sub_assign, Rect, AffineShift);
-

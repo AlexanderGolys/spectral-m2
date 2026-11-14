@@ -4,4 +4,3 @@ pub mod file;
 pub mod highlight;
 pub mod location;
 pub mod semantic;
-

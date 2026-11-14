@@ -740,4 +740,3 @@ fn selectable_columns(symbols: &[String], layers: &[Option<Layer>]) -> Vec<bool>
     }
     selectable
 }
-

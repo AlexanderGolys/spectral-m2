@@ -510,4 +510,3 @@ impl Editor {
         self.place_caret(frame, CaretPane::View);
     }
 }
-

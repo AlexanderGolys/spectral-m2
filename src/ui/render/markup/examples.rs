@@ -575,4 +575,3 @@ fn buffer_lines(buffer: &Buffer) -> Vec<Line<'static>> {
         })
         .collect()
 }
-

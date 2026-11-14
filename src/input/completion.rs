@@ -127,4 +127,3 @@ impl Completion {
         (replaced, &self.candidates[self.chosen])
     }
 }
-

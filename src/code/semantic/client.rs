@@ -1075,4 +1075,3 @@ fn edited(text: &str, edits: Vec<TextEdit>) -> Option<String> {
     }
     Some(result)
 }
-

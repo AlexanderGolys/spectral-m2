@@ -75,4 +75,3 @@ impl Spinner {
         &self.frames[(turns % frame_count) as usize]
     }
 }
-

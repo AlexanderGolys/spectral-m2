@@ -119,4 +119,3 @@ fn known_rebinds<'de, D: Deserializer<'de>>(
 fn section_of<Section: DeserializeOwned + Default>(older: &Map<String, Value>) -> Section {
     serde_json::from_value(Value::Object(older.clone())).unwrap_or_default()
 }
-

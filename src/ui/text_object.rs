@@ -383,4 +383,3 @@ fn line_at(lines: &[Range<usize>], offset: usize) -> usize {
         .position(|line| line.start <= offset && offset <= line.end)
         .unwrap_or(lines.len() - 1)
 }
-

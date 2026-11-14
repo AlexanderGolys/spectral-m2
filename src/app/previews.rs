@@ -179,4 +179,3 @@ impl<T> PreviewTabs<T> {
             .find(|tab| Some(*tab) != self.active && self.label(*tab).is_some())
     }
 }
-

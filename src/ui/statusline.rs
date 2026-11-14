@@ -304,4 +304,3 @@ impl Element for StatusLine {
         }
     }
 }
-

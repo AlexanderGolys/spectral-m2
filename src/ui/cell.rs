@@ -2773,4 +2773,3 @@ impl Block for ErrorMessageBlock {
         ));
     }
 }
-

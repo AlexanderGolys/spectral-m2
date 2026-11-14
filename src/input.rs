@@ -2284,4 +2284,3 @@ mod tests {
         assert_eq!(input.text(), "alpha");
     }
 }
-

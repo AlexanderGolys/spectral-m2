@@ -187,10 +187,7 @@ impl RenderContext {
         }
     }
 
-    pub fn with_renderer_position(
-        self,
-        renderer_position: RendererPosition,
-    ) -> Self {
+    pub fn with_renderer_position(self, renderer_position: RendererPosition) -> Self {
         Self {
             renderer_position,
             ..self
@@ -434,7 +431,6 @@ impl Bordered {
                 || position.y == frame.bottom() - 1)
     }
 }
-
 
 impl Bordered {
     pub fn new(

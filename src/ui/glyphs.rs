@@ -122,4 +122,3 @@ pub const GLYPHS: Glyphs = Glyphs {
     tab_back: Glyph::new("‹", "<"),
     tab_pin: Glyph::new("☆", "+"),
 };
-

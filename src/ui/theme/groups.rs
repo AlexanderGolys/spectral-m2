@@ -596,4 +596,3 @@ impl Default for Groups {
         AppearanceSettings::default().groups()
     }
 }
-

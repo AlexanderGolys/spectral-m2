@@ -75,4 +75,3 @@ fn compute(requested: &Receiver<(ExamplePage, Duration)>, answered: &Sender<Comp
         }
     }
 }
-

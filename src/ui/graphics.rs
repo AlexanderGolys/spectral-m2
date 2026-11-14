@@ -837,4 +837,3 @@ fn wrapped(width: f32, breaks: &[Break], room: f32) -> Vec<Range<f32>> {
     rows.push(start..width);
     rows
 }
-

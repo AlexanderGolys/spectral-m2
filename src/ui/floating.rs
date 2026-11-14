@@ -167,4 +167,3 @@ impl FloatingContent for Vec<Signature> {
             .collect()
     }
 }
-

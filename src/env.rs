@@ -87,4 +87,3 @@ impl Environment {
             .or_else(|| self.home().map(|home| home.join(under_home)))
     }
 }
-

@@ -91,4 +91,3 @@ pub fn copied_together(items: &[Item], format: CopyFormat) -> String {
         .collect::<Vec<_>>()
         .join("\n\n")
 }
-

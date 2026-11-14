@@ -897,4 +897,3 @@ fn separated(source: &str) -> &str {
     let rest = source.trim_start_matches([' ', '\t']);
     rest.strip_prefix('\n').unwrap_or(rest)
 }
-

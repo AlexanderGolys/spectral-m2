@@ -73,4 +73,3 @@ impl SettlingWidth {
         pane
     }
 }
-

@@ -93,4 +93,3 @@ fn record(path: &Path, report: &str) -> std::io::Result<()> {
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(report.as_bytes())
 }
-

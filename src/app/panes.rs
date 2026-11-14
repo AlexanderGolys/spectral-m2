@@ -166,4 +166,3 @@ pub fn pane_layout(
         Some(Rect::new(area.x + left, area.y, 1, area.height)),
     )
 }
-
