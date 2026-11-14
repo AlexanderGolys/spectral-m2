@@ -16,7 +16,6 @@ use std::sync::RwLock;
 
 use ratatui::style::{Color, Modifier, Style};
 use serde::Deserialize;
-use these_macros_should_be_illegal::{enum_fn, forall};
 
 use super::*;
 use palette::{self, Palette};

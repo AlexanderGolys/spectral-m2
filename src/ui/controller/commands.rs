@@ -11,7 +11,6 @@ use std::ops::Range;
 
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use these_macros_should_be_illegal::discriminated_str;
 
 use super::picker::{Picker, PickerInput, PickerItem};
 use super::EditorEvent;

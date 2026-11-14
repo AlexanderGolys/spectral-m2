@@ -4,7 +4,6 @@
 use std::sync::LazyLock;
 
 use crate::env::ENV;
-use these_macros_should_be_illegal::forall;
 
 /// A preferred symbol and a plain Unicode fallback for limited terminals.
 #[derive(Clone, Copy, Debug)]

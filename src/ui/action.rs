@@ -1,7 +1,6 @@
 //! Operations emitted by keymaps and other UI event sources.
 
 use serde::{Deserialize, Serialize};
-use these_macros_should_be_illegal::discriminated_str;
 
 /// A small by-value operation routed through the focused UI hierarchy.
 #[discriminated_str(description)]

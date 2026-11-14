@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use these_macros_should_be_illegal::discriminated_str;
 
 use super::row::SettingRow;
 use super::Settings;

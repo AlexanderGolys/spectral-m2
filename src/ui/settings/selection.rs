@@ -1,7 +1,6 @@
 //! The *selection* tab: what a mouse selection reads and whether it copies itself.
 
 use serde::{Deserialize, Serialize};
-use these_macros_should_be_illegal::discriminated_str;
 
 use super::rendering::switch;
 use super::row::SettingRow;

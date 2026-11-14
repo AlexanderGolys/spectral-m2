@@ -8,7 +8,6 @@ use crossterm::event::{
     ModifierKeyCode,
 };
 use serde::{Deserialize, Serialize};
-use these_macros_should_be_illegal::literally_literal_string;
 
 /// One of the three logical modifiers supported by the UI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

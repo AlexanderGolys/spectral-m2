@@ -17,7 +17,6 @@ use crate::ui::wrap::WordWrap;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use std::sync::Arc;
-use these_macros_should_be_illegal::*;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// A piece of parsed maths, tagged with the role that decides its colour.

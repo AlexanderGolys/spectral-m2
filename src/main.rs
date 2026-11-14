@@ -1,5 +1,8 @@
 //! A syntax-highlighted terminal interface for an interactive Macaulay2 session.
 
+#[macro_use]
+extern crate these_macros_should_be_illegal;
+
 mod app;
 mod backend;
 mod cli;

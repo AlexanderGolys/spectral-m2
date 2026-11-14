@@ -1,7 +1,5 @@
 //! The *appearance* tab: the axes along which [`Appearance`] steps.
 
-use these_macros_should_be_illegal::discriminated_str;
-
 use super::row::SettingRow;
 use super::Settings;
 use crate::ui::controller::picker::PickerValue;

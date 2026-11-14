@@ -9,7 +9,6 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block as TuiBlock, Clear, Widget};
 use ratatui::Frame;
-use these_macros_should_be_illegal::discriminated_str;
 
 use super::screen::CaretPane;
 use super::Editor;

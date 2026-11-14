@@ -21,7 +21,6 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use serde::{Deserialize, Serialize};
-use these_macros_should_be_illegal::discriminated_str;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub use self::completion::Completion;
