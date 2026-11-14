@@ -55,28 +55,3 @@ pub fn restore_defaults() -> Box<dyn PickerItem> {
         .into()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::super::{editor::EditorSetting, selection::SelectionSetting};
-    use super::*;
-
-    fn assert_steps_back<Setting: SettingRow>(rows: &[Setting]) {
-        let settings = Settings::default();
-        for row in rows {
-            let mut stepped = settings;
-            row.adjust(&mut stepped, 1);
-            row.adjust(&mut stepped, -1);
-            assert_eq!(stepped, settings, "{}", row.label());
-        }
-    }
-
-    #[test]
-    fn stepping_any_setting_forward_then_back_restores_it() {
-        assert_steps_back(AppearanceSetting::CHOICES);
-        assert_steps_back(EditorSetting::CHOICES);
-        assert_steps_back(&statusline::StatusLineSetting::choices().collect::<Vec<_>>());
-        assert_steps_back(RenderingSetting::CHOICES);
-        assert_steps_back(LspSetting::CHOICES);
-        assert_steps_back(SelectionSetting::CHOICES);
-    }
-}

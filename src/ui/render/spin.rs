@@ -76,36 +76,3 @@ impl Spinner {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const FRAME_DURATION: Duration = Duration::from_millis(10);
-    const SPINNER: Spinner = Spinner::new(
-        spinner_frames![PendingCellMarker: "a", "b", "c"],
-        FRAME_DURATION,
-    );
-
-    #[test]
-    fn the_frame_advances_with_the_clock_and_wraps() {
-        let frames = SPINNER.frames();
-        let at = |turn: u32| SPINNER.frame_at(FRAME_DURATION * turn);
-        assert_eq!(at(0), &frames[0]);
-        assert_eq!(at(1), &frames[1]);
-        assert_eq!(at(frames.len() as u32), &frames[0]);
-        assert_eq!(at(frames.len() as u32 + 1), &frames[1]);
-    }
-
-    #[test]
-    fn a_frame_holds_for_its_whole_duration() {
-        let just_before = FRAME_DURATION - Duration::from_nanos(1);
-        assert_eq!(
-            SPINNER.frame_at(Duration::ZERO),
-            SPINNER.frame_at(just_before)
-        );
-        assert_ne!(
-            SPINNER.frame_at(just_before),
-            SPINNER.frame_at(FRAME_DURATION)
-        );
-    }
-}

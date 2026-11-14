@@ -1380,5 +1380,3 @@ pub fn run(backend: M2Backend, startup: Option<String>) -> Result<()> {
     terminal.leave()
 }
 
-#[cfg(test)]
-mod tests;

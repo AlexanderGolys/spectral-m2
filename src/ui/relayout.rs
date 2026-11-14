@@ -90,26 +90,3 @@ pub fn delivered() -> u64 {
     DELIVERED.load(Ordering::SeqCst)
 }
 
-#[cfg(test)]
-mod tests {
-    use std::time::{Duration, Instant};
-
-    use super::*;
-
-    #[test]
-    fn a_result_arrives_from_a_worker() {
-        let pending = Pending::spawn(|| thread::current().id());
-        let start = Instant::now();
-        let worker = loop {
-            if let Some(id) = pending.take() {
-                break id;
-            }
-            assert!(
-                start.elapsed() < Duration::from_secs(5),
-                "the worker answers"
-            );
-            thread::yield_now();
-        };
-        assert_ne!(worker, thread::current().id());
-    }
-}

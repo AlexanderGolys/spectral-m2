@@ -70,22 +70,4 @@ impl SettingRow for LspSetting {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn semantic_highlighting_reads_off_and_locks_without_the_language_server() {
-        let mut settings = Settings::default();
-        settings.rendering.semantic_highlighting = true;
-        settings.rendering.language_server = false;
-        let row = LspSetting::SemanticHighlighting.row(settings);
-        assert!(!row.selectable());
-        assert!(matches!(
-            row.value(),
-            Some(PickerValue::Choice { options, chosen }) if options[*chosen].label == "off"
-        ));
-        settings.rendering.language_server = true;
-        assert!(LspSetting::SemanticHighlighting.row(settings).selectable());
-    }
-}

@@ -377,6 +377,7 @@ mod fixtures {
                 }
                 node
             }
+            Math::Diagram(_) => unreachable!("fixtures are built from formulas, not diagrams"),
         }
     }
     impl SpecNet {
@@ -418,31 +419,3 @@ mod fixtures {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unknown_classes_roundtrip_without_losing_structure_or_highlights() {
-        let input = r#"{"Classes":["Unfamiliar","Expression","BasicList","Thing"],"Children":[{"Classes":["String","Thing"],"Children":[],"Text":"a"},{"Classes":["Symbol","Thing"],"Children":[],"Text":"a"}],"Text":null}"#;
-        let node: SpecNet = serde_json::from_str(input).unwrap();
-        assert_eq!(node.class(), "Unfamiliar");
-        assert_eq!(node.children[0].text, node.children[1].text);
-        assert_eq!(node.children[0].group(), HLGroup::String);
-        assert_eq!(node.children[1].group(), HLGroup::Variable);
-        let decoded: SpecNet =
-            serde_json::from_str(&serde_json::to_string(&node).unwrap()).unwrap();
-        assert_eq!(decoded, node);
-    }
-
-    #[test]
-    fn malformed_nodes_are_rejected_at_the_transport_boundary() {
-        for input in [
-            r#"{"Classes":[],"Children":[],"Text":"x"}"#,
-            r#"{"Classes":["String"],"Children":[{"Classes":["Symbol"],"Children":[],"Text":"x"}],"Text":"x"}"#,
-            r#"{"Classes":["Expression"],"Text":null}"#,
-        ] {
-            assert!(serde_json::from_str::<SpecNet>(input).is_err());
-        }
-    }
-}

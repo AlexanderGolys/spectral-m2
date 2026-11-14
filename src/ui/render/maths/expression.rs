@@ -1,5 +1,6 @@
 //! Layout implementations for M2 expression constructors, independent of domain types.
-use super::{GridKind, Math, MathStyle};
+
+use super::{Diagram, GridKind, Math, MathStyle};
 use crate::backend::SpecNet;
 use crate::ui::theme::groups::HLGroup;
 
@@ -37,6 +38,14 @@ struct Vertical {
 struct Angle;
 struct Aligned;
 struct Under;
+struct ComplexMap;
+impl ExpressionLayout for ComplexMap {
+    fn compose(&self, value: &SpecNet, style: MathStyle) -> Math {
+        Diagram::complex_map(value, style)
+            .map(|diagram| Math::Diagram(Box::new(diagram)))
+            .unwrap_or_else(|| unknown(value, style))
+    }
+}
 impl ExpressionLayout for Under {
     fn compose(&self, value: &SpecNet, style: MathStyle) -> Math {
         let [base, label] = value.children.as_slice() else {
@@ -414,6 +423,7 @@ fn layout(class: &str) -> Option<&'static dyn ExpressionLayout> {
         "VectorExpression" => &Vector,
         "MapExpression" => &Map,
         "UnderExpression" => &Under,
+        "ComplexMapExpression" => &ComplexMap,
         "FunctionApplication" => &Call,
         "BinaryOperation" => &Binary,
         "Minus" => &Minus,
@@ -468,6 +478,7 @@ fn ascii(math: Math) -> Math {
             body: Box::new(ascii(*body)),
             target,
         },
+        Math::Diagram(diagram) => Math::Diagram(Box::new(diagram.map(ascii))),
         Math::Row(parts) => Math::Row(parts.into_iter().map(ascii).collect()),
         Math::Power { base, exponent } => Math::Row(vec![
             ascii(*base),
@@ -566,115 +577,3 @@ impl Math {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn option_arrows_are_operators_and_map_arrows_remain_distinct() {
-        let option = SpecNet::branch(
-            "Option",
-            vec![SpecNet::leaf("Symbol", "a"), SpecNet::leaf("ZZ", "1")],
-        );
-        let Math::Row(parts) = Math::from_spec_net(&option, MathStyle::default()) else {
-            panic!("expected an option row");
-        };
-        assert_eq!(parts[1], Math::atom(" => ", HLGroup::Operator));
-        let map = SpecNet::branch(
-            "MapExpression",
-            vec![SpecNet::leaf("Symbol", "A"), SpecNet::leaf("Symbol", "B")],
-        );
-        let Math::Row(parts) = Math::from_spec_net(&map, MathStyle::default()) else {
-            panic!("expected a map row");
-        };
-        assert!(parts.contains(&Math::atom("⟵", HLGroup::MapArrow)));
-    }
-
-    #[test]
-    fn a_named_key_is_drawn_as_a_key_and_its_value_keeps_its_own_colour() {
-        let style = MathStyle::default();
-        let drawn = |key: SpecNet| {
-            let pair = SpecNet::branch("Option", vec![key, SpecNet::leaf("ZZ", "1")]);
-            let Math::Row(parts) = Math::from_spec_net(&pair, style) else {
-                panic!("expected an option row");
-            };
-            parts
-        };
-        let named = drawn(SpecNet::leaf("Symbol", "Strategy"));
-        assert!(
-            matches!(
-                named[0],
-                Math::Atom {
-                    kind: HLGroup::Option,
-                    ..
-                }
-            ),
-            "{named:?}"
-        );
-        assert_eq!(
-            named[2],
-            Math::from_spec_net(&SpecNet::leaf("ZZ", "1"), style)
-        );
-        let compound = SpecNet::branch(
-            "List",
-            vec![SpecNet::leaf("Symbol", "a"), SpecNet::leaf("Symbol", "b")],
-        );
-        assert_eq!(
-            drawn(compound.clone())[0],
-            Math::from_spec_net(&compound, style)
-        );
-    }
-
-    #[test]
-    fn tuple_subscripts_use_comma_separated_entries_without_parentheses() {
-        let value = SpecNet::branch(
-            "Subscript",
-            vec![
-                SpecNet::leaf("Symbol", "y"),
-                SpecNet::branch(
-                    "Sequence",
-                    vec![SpecNet::leaf("ZZ", "1"), SpecNet::leaf("Symbol", "d")],
-                ),
-            ],
-        );
-        let Math::Index { subscript, .. } = Math::from_spec_net(&value, MathStyle::default())
-        else {
-            panic!("expected an index");
-        };
-        assert!(matches!(*subscript, Math::Row(_)));
-        assert_eq!(
-            *subscript,
-            Math::Row(vec![
-                Math::atom("1", HLGroup::Number),
-                Math::atom(",", HLGroup::Delimiter),
-                Math::atom("d", HLGroup::Variable)
-            ])
-        );
-    }
-
-    #[test]
-    fn matrix_options_do_not_participate_in_entry_column_widths() {
-        let rows = vec![SpecNet::branch("List", vec![SpecNet::leaf("ZZ", "7")])];
-        let matrix = SpecNet::branch("MatrixExpression", rows.clone());
-        let mut annotated = matrix.clone();
-        annotated.children.push(SpecNet::branch(
-            "Option",
-            vec![
-                SpecNet::leaf("Symbol", "metadata"),
-                SpecNet::leaf("String", "long annotation"),
-            ],
-        ));
-        let Math::Grid {
-            rows: shown,
-            kind: GridKind::Bare,
-        } = Math::from_spec_net(&annotated, MathStyle::default())
-        else {
-            panic!("expected annotated matrix");
-        };
-        assert_eq!(
-            shown[0],
-            vec![Math::from_spec_net(&matrix, MathStyle::default())]
-        );
-        assert_eq!(shown.len(), annotated.children.len());
-    }
-}

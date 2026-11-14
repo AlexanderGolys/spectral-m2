@@ -7,6 +7,7 @@
 use crate::ui::block::{Element, HLSpan, Text};
 use crate::ui::config::UI;
 use crate::ui::render::maths::{FractionStyle, MathDisplay, MathInk, MathStyle, ScriptColor};
+use crate::ui::settings::rendering::RendererPosition;
 use crate::ui::theme::groups::{scheme, Groups};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -50,7 +51,7 @@ pub struct RenderContext {
     recent_outputs: [Option<u32>; RECENT_OUTPUTS],
     numbers_printed: bool,
     swapped_code_background: bool,
-    renderer_position: crate::ui::settings::rendering::RendererPosition,
+    renderer_position: RendererPosition,
 }
 
 impl RenderContext {
@@ -188,7 +189,7 @@ impl RenderContext {
 
     pub fn with_renderer_position(
         self,
-        renderer_position: crate::ui::settings::rendering::RendererPosition,
+        renderer_position: RendererPosition,
     ) -> Self {
         Self {
             renderer_position,
@@ -196,7 +197,7 @@ impl RenderContext {
         }
     }
 
-    pub fn renderer_position(&self) -> crate::ui::settings::rendering::RendererPosition {
+    pub fn renderer_position(&self) -> RendererPosition {
         self.renderer_position
     }
 
@@ -371,6 +372,15 @@ impl FrameLayout {
     }
 }
 
+/// Styled text decorated by the shared rounded feed border.
+pub struct Bordered {
+    layout: FrameLayout,
+    surface: Style,
+    border_style: Style,
+    title: Option<Line<'static>>,
+    body: Vec<Line<'static>>,
+}
+
 impl Bordered {
     pub fn area(area: Rect, layout: FrameLayout) -> Rect {
         if let BorderPlacement::MiddleThird { content } = layout.placement {
@@ -425,14 +435,6 @@ impl Bordered {
     }
 }
 
-/// Styled text decorated by the shared rounded feed border.
-pub struct Bordered {
-    layout: FrameLayout,
-    surface: Style,
-    border_style: Style,
-    title: Option<Line<'static>>,
-    body: Vec<Line<'static>>,
-}
 
 impl Bordered {
     pub fn new(

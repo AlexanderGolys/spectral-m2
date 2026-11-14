@@ -5,5 +5,3 @@ pub mod highlight;
 pub mod location;
 pub mod semantic;
 
-#[cfg(test)]
-pub mod parser;

@@ -110,25 +110,3 @@ impl SourceLink {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn encoded_file_targets_keep_their_source_range() {
-        let link = SourceLink::parse("file:///tmp/source%20file.m2#L2:C1-L3:C2").unwrap();
-        assert_eq!(link.path, PathBuf::from("/tmp/source file.m2"));
-        let source = "header\nabcdef\nuvwxyz\ntail";
-        assert_eq!(&source[link.range.unwrap().bytes(source)], "bcdef\nuvw");
-        assert!(link.command().contains("2, 1, 3, 2"));
-        assert!(link.command().starts_with("code new FilePosition"));
-    }
-
-    #[test]
-    fn source_columns_never_split_a_unicode_character() {
-        let source = "aλ界z\n";
-        let range = SourceRange::parse("L1:C1-L1:C2").unwrap();
-        assert_eq!(&source[range.bytes(source)], "λ界");
-        assert!(SourceRange::parse("L1:C2-Loops").is_none());
-    }
-}

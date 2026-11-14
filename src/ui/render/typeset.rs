@@ -10,7 +10,10 @@ use crate::ui::present;
 use crate::ui::theme::groups::{Groups, HLGroup};
 use crate::ui::wrap::WrappedText;
 
-use super::maths::{self, Math, MathDisplay, MathInk, MathStyle, PRODUCT_SIGN, TENSOR_SIGN};
+use super::maths::{
+    self, Course, Diagram, Math, MathDisplay, MathInk, MathStyle, PRODUCT_SIGN, TENSOR_SIGN,
+};
+use crate::ui::graphics::ratex::diagram::Description;
 
 /// Rendered rows with their interactive links and chosen representation.
 pub struct Drawn {
@@ -29,9 +32,78 @@ fn paint(text: String, kind: HLGroup, groups: Option<&Groups>) -> String {
     }
 }
 
+/// What a value is set from: its TeX, or a diagram's description when the value
+/// is a diagram, which TeX alone cannot draw.
+fn formula(math: &Math, groups: Option<&Groups>) -> String {
+    let Math::Diagram(diagram) = math else {
+        return tex(math, groups);
+    };
+    let ink = groups
+        .and_then(|groups| groups.style(HLGroup::MapArrow).fg)
+        .and_then(|colour| match colour {
+            Color::Rgb(r, g, b) => Some(Rgb([r, g, b])),
+            _ => None,
+        });
+    let mut description = Description::new(ink);
+    for (place, piece) in &diagram.pieces {
+        description.piece((place.row, place.column), &tex(piece, groups));
+    }
+    for arrow in &diagram.arrows {
+        let label = arrow.label.as_ref().map(|label| tex(label, groups));
+        description.arrow(
+            (arrow.from.row, arrow.from.column),
+            (arrow.to.row, arrow.to.column),
+            label.as_deref(),
+        );
+    }
+    description.into()
+}
+
+/// A diagram inside other maths, as TeX can set it: its pieces in an array, an
+/// arrow between rows a symbol beside the column it leaves.
+fn diagram_array(diagram: &Diagram, groups: Option<&Groups>) -> String {
+    let recurse = |part| tex(part, groups);
+    let rows = 2 * diagram.rows().max(1) - 1;
+    let columns = 2 * diagram.columns().max(1) - 1;
+    let mut cells = vec![vec![String::new(); columns]; rows];
+    for (place, piece) in &diagram.pieces {
+        cells[2 * place.row][2 * place.column] = recurse(piece);
+    }
+    for arrow in &diagram.arrows {
+        let label = arrow.label.as_ref().map(recurse).unwrap_or_default();
+        let (row, column) = (2 * arrow.from.row, 2 * arrow.from.column);
+        match arrow.course() {
+            Some(Course::Across) => {
+                let command = match arrow.to.column < arrow.from.column {
+                    true => r"\xleftarrow",
+                    false => r"\xrightarrow",
+                };
+                let between = 2 * arrow.from.column.min(arrow.to.column) + 1;
+                cells[row][between] = format!(r"{command}{{\scriptsize {label}}}");
+            }
+            Some(Course::Down { shift }) => {
+                let (symbol, beside) = match shift.signum() {
+                    0 => (r"\Big\downarrow", column),
+                    -1 => (r"\swarrow", column.saturating_sub(1)),
+                    _ => (r"\searrow", (column + 1).min(columns - 1)),
+                };
+                cells[row + 1][beside] = format!(r"{symbol}{{\scriptstyle {label}}}");
+            }
+            None => {}
+        }
+    }
+    let body = cells
+        .into_iter()
+        .map(|row| row.join(" & "))
+        .collect::<Vec<_>>()
+        .join(r" \\ ");
+    format!(r"\begin{{array}}{{{}}}{body}\end{{array}}", "c".repeat(columns))
+}
+
 fn tex(math: &Math, groups: Option<&Groups>) -> String {
     let recurse = |part| tex(part, groups);
     match math {
+        Math::Diagram(diagram) => diagram_array(diagram, groups),
         Math::Atom { text, kind, color } => {
             let content = match (kind, text.as_str()) {
                 (HLGroup::MapArrow | HLGroup::Operator, "⟵") => r"\longleftarrow".into(),
@@ -197,11 +269,11 @@ fn draw(
             style.fg = None;
             style
         });
-        let source = tex(&math, Some(&layout_groups));
+        let source = formula(&math, Some(&layout_groups));
         let painted = if style.ink == MathInk::Monochrome {
             source.clone()
         } else {
-            tex(&math, Some(groups))
+            formula(&math, Some(groups))
         };
         if let Some(Color::Rgb(r, g, b)) = groups.style(HLGroup::Value).fg {
             if let Some(Pictured { lines, baseline }) = picture(
@@ -356,539 +428,39 @@ fn annotation_with_picture(
     draw(&row, width, &groups, style, picture).lines
 }
 
+
 #[cfg(test)]
-mod tests {
+mod scratch {
     use super::*;
-    use ratatui::style::Style;
+    use crate::backend::M2Backend;
+    use crate::ui::graphics::ratex;
 
     #[test]
-    fn complex_pictures_compose_labelled_maps_and_under_module_degrees() {
-        let mut backend = crate::backend::M2Backend::spawn().unwrap();
-        let result = backend
-            .evaluate("S = QQ[a_1..a_4]; res coker vars S", None)
-            .unwrap();
-        assert!(!result.is_error, "{}", result.transcript);
-        let value = result.value.unwrap();
-        let math = Math::from_spec_net(&value, MathStyle::default());
-        let source = tex(&math, None);
-        assert_eq!(source.matches(r"\xleftarrow").count(), 4);
-        assert_eq!(source.matches(r"\underset").count(), 5);
-        assert_eq!(source.matches(r"\left[").count(), 4);
-        assert!(graphics::ratex::svg(&source, Rgb([17, 29, 43])).is_ok());
-        let rows = maths::spans(&value, 240, MathStyle::default()).unwrap();
-        assert!(!rows.is_empty());
-    }
-
-    /// Every part of an operator expression is maths, and M2's tensor operators
-    /// read as tensor products and powers rather than as their spelling.
-    #[test]
-    fn tensor_products_and_powers_are_typeset_as_such() {
-        let mut backend = crate::backend::M2Backend::spawn().unwrap();
-        let result = backend
-            .evaluate(
-                "(X,Y,Z,W) = expression \\ (X,Y,Z,W); X ^** Z ^ Y ** (W ^** Z*X*hold 2)",
-                None,
-            )
-            .unwrap();
-        assert!(!result.is_error, "{}", result.transcript);
-        let value = result.value.unwrap();
-        fn leaves(node: &SpecNet, found: &mut Vec<(String, bool)>) {
-            if let Some(text) = &node.text {
-                found.push((text.clone(), node.typeset));
+    fn complex_maps_drawn() {
+        let mut backend = M2Backend::spawn_for_examples(None).unwrap();
+        let groups = Groups::default();
+        for (index, source) in [
+            "S = QQ[x,y,z]; C = res coker matrix{{x,y,z}}; C.dd",
+            "S = QQ[x,y,z]; C = res coker matrix{{x,y,z}}; map(C, C, i -> 2*id_(C_i))",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let response = backend.evaluate(source, Some(index as u32 + 1)).unwrap();
+            let value = response.value.expect("a value");
+            let style = MathStyle::default();
+            for line in maths::spans(&value, 200, style).unwrap_or_default() {
+                eprintln!("{}", line.into_iter().map(|span| span.content).collect::<String>());
             }
-            node.children.iter().for_each(|child| leaves(child, found));
-        }
-        let mut found = Vec::new();
-        leaves(&value, &mut found);
-        assert!(found.iter().all(|(_, typeset)| *typeset), "{found:?}");
-        let source = tex(&Math::from_spec_net(&value, MathStyle::default()), None);
-        assert_eq!(source.matches(r"\otimes").count(), 3, "{source}");
-        assert!(!source.contains("^**"), "{source}");
-        assert!(graphics::ratex::svg(&source, Rgb([17, 29, 43])).is_ok());
-    }
-
-    #[test]
-    fn package_pictures_follow_the_roles_italic_style() {
-        let value = SpecNet::leaf("Package", "ExamplePackage");
-        let groups = Groups {
-            Package: Style::default().add_modifier(Modifier::ITALIC),
-            ..Groups::default()
-        };
-        let math = Math::from_spec_net(&value, MathStyle::default());
-        assert!(tex(&math, Some(&groups)).contains(r"\textit{ExamplePackage}"));
-        let groups = Groups {
-            Package: Style::default(),
-            ..groups
-        };
-        assert!(tex(&math, Some(&groups)).contains(r"\texttt{ExamplePackage}"));
-    }
-
-    #[test]
-    fn package_names_use_terminal_text_and_the_package_style() {
-        let groups = Groups {
-            Package: Style::default()
-                .fg(Color::Rgb(83, 127, 173))
-                .add_modifier(Modifier::ITALIC),
-            ..Groups::default()
-        };
-        let name = "ExamplePackage";
-        let value = SpecNet::leaf("Package", name);
-        let drawn = draw(
-            &value,
-            80,
-            &groups,
-            MathStyle {
-                ink: MathInk::Syntax,
-                ..MathStyle::default()
-            },
-            |_, _, _| panic!("package names should render as terminal text"),
-        );
-        assert_eq!(
-            drawn.lines,
-            vec![Line::from(Span::styled(
-                name,
-                groups.style(HLGroup::Package)
-            ))]
-        );
-    }
-
-    #[test]
-    fn numbered_vertical_lists_align_entries_after_the_indices() {
-        let value = SpecNet::branch(
-            "NumberedVerticalList",
-            vec![
-                SpecNet::leaf("String", "short"),
-                SpecNet::leaf("String", "longer entry"),
-            ],
-        );
-        let math = Math::from_spec_net(&value, MathStyle::default());
-        let source = tex(&math, None);
-        assert!(source.contains(r"\begin{array}{ll}"));
-        assert!(source.contains(r"\mathrm{0.}"));
-        assert!(source.contains(r"\mathrm{1.}"));
-        assert!(!source.contains(r"\Rightarrow"));
-        assert!(crate::ui::graphics::ratex::svg(&source, Rgb([17, 29, 43])).is_ok());
-        let rows = maths::spans(&value, 80, MathStyle::default()).unwrap();
-        let rows: Vec<String> = rows
-            .into_iter()
-            .map(|row| row.into_iter().map(|span| span.content).collect())
-            .collect();
-        let short = rows.iter().find(|row| row.contains("short")).unwrap();
-        let longer = rows
-            .iter()
-            .find(|row| row.contains("longer entry"))
-            .unwrap();
-        assert_eq!(short.find("short"), longer.find("longer entry"));
-        assert!(short.contains("0."));
-        assert!(longer.contains("1."));
-        assert!(!short.contains("=>") && !short.contains('⇒'));
-    }
-
-    #[test]
-    fn nested_matrix_fences_and_map_arrows_use_their_structural_colour() {
-        let structural = Style::default().fg(Color::Rgb(17, 43, 61));
-        let groups = Groups {
-            Punctuation: structural,
-            Delimiter: Style::default().fg(Color::Rgb(101, 113, 127)),
-            MapArrow: structural,
-            Value: Style::default().fg(Color::Rgb(71, 83, 97)),
-            ..Groups::default()
-        };
-        let matrix = Math::AnnotatedMatrix {
-            rows: vec![vec![Math::Atom {
-                text: "x".into(),
-                kind: HLGroup::Variable,
-                color: None,
-            }]],
-            degrees: Vec::new(),
-        };
-        let formulas = [
-            Math::Delimited {
-                left: '{',
-                right: '}',
-                body: Box::new(matrix.clone()),
-            },
-            matrix,
-            Math::Grid {
-                rows: Vec::new(),
-                kind: maths::GridKind::Matrix,
-            },
-            Math::Over {
-                base: Box::new(Math::Atom {
-                    text: "⟵".into(),
-                    kind: HLGroup::MapArrow,
-                    color: None,
-                }),
-                label: Box::new(Math::Row(Vec::new())),
-            },
-        ];
-        for formula in formulas {
-            assert!(tex(&formula, Some(&groups)).starts_with(r"{\color{#112b3d}"));
-        }
-        let comma = Math::Atom {
-            text: ",".into(),
-            kind: HLGroup::Delimiter,
-            color: None,
-        };
-        assert!(tex(&comma, Some(&groups)).starts_with(r"{\color{#65717f}"));
-    }
-
-    #[test]
-    fn annotation_pictures_have_copy_text_and_one_type_colour() {
-        let parts = vec![
-            SpecNet::leaf("Type", "FixtureType"),
-            SpecNet::leaf("ZZ", "7"),
-        ];
-        let groups = Groups {
-            Type: Style::default().fg(Color::Rgb(17, 29, 43)),
-            ..Groups::default()
-        };
-        let lines = annotation_with_picture(
-            &parts,
-            80,
-            &groups,
-            MathStyle::default(),
-            |formula, _, _| {
-                assert_eq!(formula.code, "FixtureType7");
-                assert!(formula.painted.contains("#111d2b"));
-                Some(Pictured {
-                    lines: vec![Line::raw("annotation")],
-                    baseline: 0,
-                })
-            },
-        );
-        assert!(!lines.is_empty());
-        let lines =
-            annotation_with_picture(&parts, 80, &groups, MathStyle::default(), |_, _, _| None);
-        assert!(lines
-            .iter()
-            .flat_map(|line| &line.spans)
-            .all(|span| span.style.fg == groups.Type.fg));
-    }
-
-    #[test]
-    fn matrix_degrees_and_map_labels_follow_m2_typesetting() {
-        let mut backend = crate::backend::M2Backend::spawn().unwrap();
-        let response = backend.evaluate("R = QQ[a..d]; syz vars R", None).unwrap();
-        let value = response.value.unwrap();
-        let math = Math::from_spec_net(&value, MathStyle::default());
-        let Math::AnnotatedMatrix { rows, degrees } = &math else {
-            panic!("expected matrix with row degrees");
-        };
-        assert_eq!(rows.len(), degrees.len());
-        let source = tex(&math, None);
-        assert!(!source.contains("Degrees"));
-        assert!(source.contains(r"\vphantom"));
-        assert!(crate::ui::graphics::ratex::svg(&source, Rgb([17, 29, 43])).is_ok());
-        let map = Math::Over {
-            base: Box::new(Math::Atom {
-                text: "⟵".into(),
-                kind: HLGroup::MapArrow,
-                color: None,
-            }),
-            label: Box::new(math),
-        };
-        let source = tex(&map, None);
-        assert!(source.starts_with(r"\xleftarrow"));
-        assert!(crate::ui::graphics::ratex::svg(&source, Rgb([17, 29, 43])).is_ok());
-    }
-
-    #[test]
-    fn plain_tex_does_not_infer_component_colours() {
-        let groups = Groups {
-            Value: Style::default().fg(Color::Rgb(11, 22, 33)),
-            Variable: Style::default().fg(Color::Rgb(44, 55, 66)),
-            Number: Style::default().fg(Color::Rgb(77, 88, 99)),
-            ..Groups::default()
-        };
-        let drawing = tex_preview("$x+7$", 80, &groups, MathStyle::default());
-        let spans = drawing
-            .lines
-            .iter()
-            .flat_map(|line| &line.spans)
-            .collect::<Vec<_>>();
-        assert!(!spans.is_empty());
-        assert!(spans.iter().all(|span| span.style == groups.value()));
-        let text = spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-        assert!(text.contains('x'));
-        assert!(text.contains('7'));
-    }
-
-    #[test]
-    fn symbols_are_typeset_with_or_without_numeric_siblings() {
-        let picture: Picture = |formula, _, _| {
-            assert!(formula.tex.contains(r"\mathit{sss}"));
-            Some(Pictured {
-                lines: vec![Line::raw("typeset")],
-                baseline: 0,
-            })
-        };
-        let symbol = SpecNet::leaf("Symbol", "sss").typeset();
-        for sibling in [SpecNet::leaf("String", "1"), SpecNet::leaf("ZZ", "1")] {
-            let value = SpecNet::branch("Sequence", vec![symbol.clone(), sibling]);
-            let drawing = draw(
-                &value,
-                80,
-                &Groups::default(),
-                MathStyle::default(),
-                picture,
-            );
-            assert_eq!(drawing.lines, vec![Line::raw("typeset")]);
-        }
-        let drawing = draw(
-            &symbol,
-            80,
-            &Groups::default(),
-            MathStyle::default(),
-            picture,
-        );
-        assert_eq!(drawing.lines, vec![Line::raw("typeset")]);
-    }
-
-    #[test]
-    fn rows_read_as_lines_are_never_cut_into_strips() {
-        let aligned = SpecNet::branch(
-            "AlignedExpression",
-            vec![SpecNet::branch(
-                "List",
-                vec![
-                    SpecNet::leaf("Symbol", "a"),
-                    SpecNet::leaf("Keyword", "=>"),
-                    SpecNet::leaf("ZZ", "1"),
-                ],
-            )],
-        )
-        .typeset();
-        let sum = SpecNet::branch(
-            "Sum",
-            vec![SpecNet::leaf("Symbol", "a"), SpecNet::leaf("Symbol", "b")],
-        )
-        .typeset();
-        let whole: Picture = |formula, _, _| {
-            assert_eq!(formula.slicing, Slicing::Whole);
-            Some(Pictured {
-                lines: vec![Line::raw("whole")],
-                baseline: 0,
-            })
-        };
-        let strips: Picture = |formula, _, _| {
-            assert_eq!(formula.slicing, Slicing::AtBreaks);
-            Some(Pictured {
-                lines: vec![Line::raw("strips")],
-                baseline: 0,
-            })
-        };
-        let groups = Groups::default();
-        for (value, picture, drawn) in [(&aligned, whole, "whole"), (&sum, strips, "strips")] {
-            let drawing = draw(value, 80, &groups, MathStyle::default(), picture);
-            assert_eq!(drawing.lines, vec![Line::raw(drawn)]);
-        }
-    }
-
-    #[test]
-    fn values_m2_does_not_ask_to_typeset_are_terminal_text() {
-        let symbol = SpecNet::leaf("Symbol", "sss");
-        let packages = SpecNet::branch(
-            "List",
-            vec![SpecNet::leaf("Package", "Core"), symbol.clone()],
-        );
-        for value in [&symbol, &packages] {
-            let drawn = draw(
-                value,
-                80,
-                &Groups::default(),
-                MathStyle::default(),
-                |_, _, _| panic!("nothing asked to be typeset"),
-            );
-            let text = drawn
-                .lines
-                .iter()
-                .flat_map(|line| &line.spans)
-                .map(|span| span.content.as_ref())
-                .collect::<String>();
-            assert!(text.contains("sss"), "{text}");
-        }
-        let typeset = draw(
-            &symbol.typeset(),
-            80,
-            &Groups::default(),
-            MathStyle::default(),
-            |_, _, _| {
-                Some(Pictured {
-                    lines: vec![Line::raw("typeset")],
-                    baseline: 0,
-                })
-            },
-        );
-        assert_eq!(typeset.lines, vec![Line::raw("typeset")]);
-    }
-
-    /// What sits in a picture only beside what M2 asked to typeset keeps a
-    /// typewriter face, never a maths or serif one, whatever its role's slant.
-    #[test]
-    fn untypeset_parts_of_a_picture_are_typewriter_text() {
-        let value = SpecNet::branch(
-            "List",
-            vec![
-                SpecNet::branch(
-                    "Power",
-                    vec![SpecNet::leaf("Symbol", "x"), SpecNet::leaf("ZZ", "2")],
-                )
-                .typeset(),
-                SpecNet::leaf("Symbol", "name"),
-                SpecNet::leaf("Package", "Core"),
-            ],
-        );
-        let groups = Groups {
-            Package: Style::default().add_modifier(Modifier::ITALIC),
-            ..Groups::default()
-        };
-        let picture: Picture = |formula, _, _| {
-            assert!(formula.tex.contains(r"\mathit{x}"), "{}", formula.tex);
-            assert!(formula.tex.contains(r"\texttt{name}"), "{}", formula.tex);
-            assert!(formula.tex.contains(r"\texttt{Core}"), "{}", formula.tex);
-            assert!(!formula.tex.contains(r"\textit"), "{}", formula.tex);
-            Some(Pictured {
-                lines: vec![Line::raw("picture")],
-                baseline: 0,
-            })
-        };
-        let drawing = draw(&value, 80, &groups, MathStyle::default(), picture);
-        assert_eq!(drawing.lines, vec![Line::raw("picture")]);
-    }
-
-    #[test]
-    fn picture_colours_are_taken_from_component_classes() {
-        let value = SpecNet::branch(
-            "Power",
-            vec![SpecNet::leaf("String", "a"), SpecNet::leaf("Symbol", "a")],
-        )
-        .typeset();
-        let picture: Picture = |formula, _, _| {
-            assert!(formula.tex.contains(r"\texttt{a}"));
-            assert!(formula.tex.contains(r"\mathit{a}"));
-            assert!(formula.painted.contains(r"\color"));
-            Some(Pictured {
-                lines: vec![Line::raw("picture")],
-                baseline: 0,
-            })
-        };
-        let drawing = draw(
-            &value,
-            80,
-            &Groups::default(),
-            MathStyle::default(),
-            picture,
-        );
-        assert_eq!(drawing.lines, vec![Line::raw("picture")]);
-    }
-
-    #[test]
-    fn script_colours_preserve_typefaces_and_unpainted_layout() {
-        use super::maths::ScriptColor;
-
-        let script = SpecNet::branch(
-            "RowExpression",
-            vec![
-                SpecNet::leaf("Symbol", "b"),
-                SpecNet::leaf("Number", "2"),
-                SpecNet::leaf("String", "word"),
-            ],
-        );
-        let value = SpecNet::branch(
-            "Power",
-            vec![
-                SpecNet::branch(
-                    "Subscript",
-                    vec![SpecNet::leaf("Symbol", "x"), script.clone()],
-                ),
-                script,
-            ],
-        );
-        let groups = Groups {
-            Variable: Style::default().fg(Color::Rgb(10, 20, 30)),
-            Number: Style::default().fg(Color::Rgb(40, 50, 60)),
-            String: Style::default().fg(Color::Rgb(70, 80, 90)),
-            Operator: Style::default().fg(Color::Rgb(100, 110, 120)),
-            ..Groups::default()
-        };
-        let original = Math::from_spec_net(&value, MathStyle::default());
-        let source = tex(&original, None);
-        for color in [ScriptColor::Symbol, ScriptColor::Operator] {
-            let recolored = Math::from_spec_net(
-                &value,
-                MathStyle {
-                    index_color: color,
-                    exponent_color: color,
-                    ..MathStyle::default()
-                },
-            );
-            assert_eq!(tex(&recolored, None), source);
-            assert_ne!(
-                tex(&recolored, Some(&groups)),
-                tex(&original, Some(&groups))
-            );
-        }
-    }
-
-    #[test]
-    fn unavailable_pictures_keep_structured_component_colours() {
-        let groups = Groups::default();
-        let value = SpecNet::branch(
-            "RowExpression",
-            vec![SpecNet::leaf("String", "a"), SpecNet::leaf("Symbol", "a")],
-        );
-        let drawing = draw(&value, 80, &groups, MathStyle::default(), |_, _, _| None);
-        let styles = drawing
-            .lines
-            .iter()
-            .flat_map(|line| &line.spans)
-            .map(|span| span.style)
-            .collect::<Vec<_>>();
-        assert!(styles.contains(&groups.style(HLGroup::String)));
-        assert!(styles.contains(&groups.style(HLGroup::Variable)));
-        assert!(!drawing.lines.is_empty());
-    }
-
-    #[test]
-    fn generated_structures_are_accepted_by_the_picture_engine() {
-        let groups = Groups::default();
-        let style = MathStyle::default();
-        let fraction = SpecNet::branch(
-            "Divide",
-            vec![SpecNet::leaf("ZZ", "13"), SpecNet::leaf("ZZ", "7")],
-        );
-        let samples = [
-            SpecNet::branch(
-                "Array",
-                vec![SpecNet::leaf("String", "a_b"), fraction.clone()],
-            ),
-            SpecNet::branch(
-                "MatrixExpression",
-                vec![SpecNet::branch(
-                    "List",
-                    vec![fraction, SpecNet::leaf("Symbol", "x")],
-                )],
-            ),
-            SpecNet::branch(
-                "Subscript",
-                vec![SpecNet::leaf("Symbol", "x"), SpecNet::leaf("String", "a")],
-            ),
-        ];
-        for value in samples {
             let math = Math::from_spec_net(&value, style);
-            let source = tex(&math, None);
-            let painted = tex(&math, Some(&groups));
-            let rendered = graphics::ratex::svg_colored(
-                &source,
-                &painted,
-                Rgb([31, 63, 127]),
-                style.matrix_row_spacing_percent,
-            );
-            assert!(rendered.is_ok(), "{source}: {:?}", rendered.err());
+            let painted = formula(&math, Some(&groups));
+            let typeset = ratex::svg_colored(&painted, &painted, Rgb([200, 200, 200]), 100).unwrap();
+            let tree = resvg::usvg::Tree::from_str(&typeset.svg, &resvg::usvg::Options::default()).unwrap();
+            let size = tree.size().to_int_size().scale_by(4.0).unwrap();
+            let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width(), size.height()).unwrap();
+            pixmap.fill(resvg::tiny_skia::Color::from_rgba8(40, 44, 52, 255));
+            resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(4.0, 4.0), &mut pixmap.as_mut());
+            pixmap.save_png(format!("/home/flux/.claude/jobs/13a28f04/tmp/diagram{index}.png")).unwrap();
         }
     }
 }

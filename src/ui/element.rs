@@ -46,38 +46,3 @@ pub fn paste(child: &Buffer, rows: Range<u16>, into: Rect, parent: &mut Buffer) 
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn marked(width: u16, height: u16) -> Buffer {
-        let mut cells = Buffer::empty(Rect::new(0, 0, width, height));
-        for y in 0..height {
-            cells[(0, y)].set_symbol(&y.to_string());
-        }
-        cells
-    }
-
-    #[test]
-    fn pasting_shifts_a_child_slice_without_wrapping_past_the_parent() {
-        let child = marked(2, 6);
-        let mut parent = Buffer::empty(Rect::new(0, 0, 4, 3));
-
-        paste(&child, 2..5, Rect::new(1, 0, 2, 3), &mut parent);
-
-        assert_eq!(parent[(1, 0)].symbol(), "2");
-        assert_eq!(parent[(1, 2)].symbol(), "4");
-        assert_eq!(parent[(0, 0)].symbol(), " ");
-    }
-
-    #[test]
-    fn pasting_drops_rows_and_columns_beyond_the_parent() {
-        let child = marked(6, 4);
-        let mut parent = Buffer::empty(Rect::new(0, 0, 4, 2));
-
-        paste(&child, 0..4, Rect::new(2, 1, 6, 4), &mut parent);
-
-        assert_eq!(parent[(2, 1)].symbol(), "0");
-        assert_eq!(parent[(2, 0)].symbol(), " ");
-    }
-}

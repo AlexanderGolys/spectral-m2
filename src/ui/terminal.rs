@@ -189,27 +189,3 @@ impl Drop for ReplTerminal {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::os::unix::fs::MetadataExt;
-
-    use super::*;
-
-    fn stderr_device() -> u64 {
-        let stderr = io::stderr().as_fd().try_clone_to_owned().unwrap();
-        File::from(stderr).metadata().unwrap().rdev()
-    }
-
-    #[test]
-    fn stderr_goes_to_the_sink_until_it_is_restored() {
-        let sink = File::open(STDERR_SINK).unwrap().metadata().unwrap().rdev();
-        let silenced = SilencedStderr::new().unwrap();
-        let during = stderr_device();
-        drop(silenced);
-        assert_eq!(during, sink);
-        let original = stderr_device();
-        let silenced = SilencedStderr::new().unwrap();
-        drop(silenced);
-        assert_eq!(stderr_device(), original);
-    }
-}

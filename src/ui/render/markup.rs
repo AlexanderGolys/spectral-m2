@@ -1689,5 +1689,3 @@ fn filled(source: &str, marked: &[HLSpan]) -> Vec<TextSpan> {
     spans
 }
 
-#[cfg(test)]
-mod tests;

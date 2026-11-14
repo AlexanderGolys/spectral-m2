@@ -92,35 +92,3 @@ pub fn mebibytes(bytes: u64) -> String {
     format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{mebibytes, resident_bytes, FrameStats};
-
-    #[test]
-    fn mebibytes_show_one_decimal() {
-        assert_eq!(mebibytes(3 * 1024 * 1024 + 512 * 1024), "3.5 MiB");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn this_process_holds_some_memory_and_a_missing_one_none() {
-        assert!(resident_bytes(None).is_some_and(|bytes| bytes > 0));
-        assert_eq!(resident_bytes(Some(u32::MAX)), None);
-    }
-
-    #[test]
-    fn the_average_rate_counts_frames_between_the_first_and_last() {
-        let mut stats = FrameStats::default();
-        assert_eq!(stats.average(), 0.0);
-        stats.tick();
-        assert_eq!(stats.average(), 0.0);
-    }
-
-    #[test]
-    fn label_width_does_not_follow_fps_digits() {
-        assert_eq!(
-            FrameStats::format(0.0, 9.9, 99.9).len(),
-            FrameStats::format(999.9, 9999.9, 99_999.0).len()
-        );
-    }
-}

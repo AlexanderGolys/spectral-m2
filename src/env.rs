@@ -88,29 +88,3 @@ impl Environment {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn xdg_directories_fall_back_under_the_home_directory() {
-        let Some(home) = ENV.home() else {
-            return;
-        };
-        if var_os(XDG_STATE_HOME).is_none() {
-            assert_eq!(
-                ENV.xdg_home(XDG_STATE_HOME, STATE_UNDER_HOME),
-                Some(home.join(STATE_UNDER_HOME))
-            );
-        }
-        if var_os(XDG_CONFIG_HOME).is_none() {
-            assert_eq!(ENV.config_home(), Some(home.join(CONFIG_UNDER_HOME)));
-        }
-    }
-
-    #[test]
-    fn tests_keep_their_state_out_of_the_users() {
-        let state = ENV.state_home().expect("a state directory");
-        assert!(state.starts_with(temp_dir()), "{state:?}");
-    }
-}

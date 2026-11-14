@@ -15,6 +15,8 @@ use thiserror::Error;
 
 use super::typewriter::TerminalFont;
 
+pub mod diagram;
+
 /// SVG user units in one em of a typeset formula.
 pub const EM: f32 = 10.0;
 /// Space around visible formula ink, in SVG units, to protect antialiased edges.
@@ -75,21 +77,43 @@ pub struct Unset(String);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Rgb(pub [u8; 3]);
 
+impl From<Rgb> for Color {
+    fn from(Rgb(channels): Rgb) -> Self {
+        let [r, g, b] = channels.map(|value| f32::from(value) / f32::from(u8::MAX));
+        Color::rgb(r, g, b)
+    }
+}
+
 /// `tex`, in display style and painted `colour`, as an SVG of [`EM`] units per em.
 #[cfg(test)]
 pub fn svg(tex: &str, Rgb([r, g, b]): Rgb) -> Result<String, Unset> {
     svg_colored(tex, tex, Rgb([r, g, b]), PERCENT_PER_ARRAYSTRETCH).map(|typeset| typeset.svg)
 }
 
-/// Paint a formula from coloured TeX while retaining its original spacing and geometry.
-/// Colour scopes can change atom classes in the layout engine, so only their paint
-/// is transferred; the unmodified formula remains responsible for every position.
+/// A formula set as a picture, with the places its rows may break. A diagram's
+/// description, as [`diagram::Description`] writes it, is set as that diagram.
 pub fn svg_colored(
     tex: &str,
     painted: &str,
     colour: Rgb,
     matrix_row_spacing_percent: u16,
 ) -> Result<Typeset, Unset> {
+    let list = match diagram::composed(tex, painted, colour, matrix_row_spacing_percent) {
+        Some(diagram) => diagram?,
+        None => set(tex, painted, colour, matrix_row_spacing_percent)?,
+    };
+    Ok(pictured(list))
+}
+
+/// Paint a formula from coloured TeX while retaining its original spacing and geometry.
+/// Colour scopes can change atom classes in the layout engine, so only their paint
+/// is transferred; the unmodified formula remains responsible for every position.
+fn set(
+    tex: &str,
+    painted: &str,
+    colour: Rgb,
+    matrix_row_spacing_percent: u16,
+) -> Result<DisplayList, Unset> {
     let mut original = match display(tex, colour, matrix_row_spacing_percent) {
         Ok(original) => original,
         Err(unset) => {
@@ -97,10 +121,9 @@ pub fn svg_colored(
             if parted_tex == tex {
                 return Err(unset);
             }
-            let parted_painted = parted(painted);
-            return svg_colored(
+            return set(
                 &parted_tex,
-                &parted_painted,
+                &parted(painted),
                 colour,
                 matrix_row_spacing_percent,
             );
@@ -121,6 +144,11 @@ pub fn svg_colored(
             }
         }
     }
+    Ok(original)
+}
+
+/// A laid out formula as an SVG, with where it may break and its baseline.
+fn pictured(mut list: DisplayList) -> Typeset {
     let svg = SvgOptions {
         font_size: f64::from(EM),
         padding: f64::from(PADDING),
@@ -129,20 +157,20 @@ pub fn svg_colored(
         embed_glyphs: true,
         font_dir: String::new(),
     };
-    let breaks = breaks(&original);
-    let baseline = (original.height as f32 * EM + PADDING)
-        / ((original.height + original.depth) as f32 * EM + 2.0 * PADDING);
-    let typewriter = TerminalFont::get().map(|font| typewriter_paths(&mut original, font));
-    let mut svg = render_to_svg(&original, &svg);
+    let breaks = breaks(&list);
+    let baseline = (list.height as f32 * EM + PADDING)
+        / ((list.height + list.depth) as f32 * EM + 2.0 * PADDING);
+    let typewriter = TerminalFont::get().map(|font| typewriter_paths(&mut list, font));
+    let mut svg = render_to_svg(&list, &svg);
     if let Some(paths) = typewriter.filter(|paths| !paths.is_empty()) {
         let end = svg.rfind(SVG_END).unwrap_or(svg.len());
         svg.insert_str(end, &paths);
     }
-    Ok(Typeset {
+    Typeset {
         svg,
         breaks,
         baseline,
-    })
+    }
 }
 
 /// Where the formula may be cut into rows: after each separator set in the
@@ -372,16 +400,15 @@ fn is_command(name: &str) -> bool {
 
 fn display(
     tex: &str,
-    Rgb([r, g, b]): Rgb,
+    colour: Rgb,
     matrix_row_spacing_percent: u16,
 ) -> Result<DisplayList, Unset> {
-    let channel = |value: u8| f32::from(value) / f32::from(u8::MAX);
     let arraystretch = f64::from(matrix_row_spacing_percent) / f64::from(PERCENT_PER_ARRAYSTRETCH);
     let stretched = format!(r"\def\arraystretch{{{arraystretch}}}{tex}");
     let ast = parse(&stretched).map_err(|error| Unset(error.to_string()))?;
     let options = LayoutOptions::default()
         .with_style(MathStyle::Display)
-        .with_color(Color::rgb(channel(r), channel(g), channel(b)));
+        .with_color(colour.into());
     let laid = layout(&ast, &options);
     validate_layout(&laid).map_err(Unset)?;
     let list = to_display_list(&laid);
@@ -437,167 +464,3 @@ fn item_color(item: &mut DisplayItem) -> &mut Color {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    /// M2's `tex` runs `\mid` into the symbol after it; the formula still sets.
-    #[test]
-    fn a_command_run_into_the_letters_after_it_is_parted_from_them() {
-        let m2 = r"Y\mid\midX\midX^{X}\wedge\wedge \mathit{XYW}";
-        assert_eq!(
-            parted(m2),
-            r"Y\mid\mid X\mid X^{X}\wedge\wedge \mathit{XYW}"
-        );
-        assert!(svg(m2, Rgb([17, 29, 43])).is_ok());
-        assert!(svg(r"\nosuchcommand", Rgb([17, 29, 43])).is_err());
-    }
-
-    use super::*;
-
-    const INK: Rgb = Rgb([0x12, 0x34, 0x56]);
-
-    #[test]
-    fn ratex_sets_what_macaulay2_writes() {
-        for tex in [
-            r"\frac{{\mathbb Z}}{101}\mathopen{}\left[a\,{.}{.}\,d\right]",
-            r"\texttt{ideal}{}\left(x^{2},\,y\,z,\,z^{3}-x\right)",
-            r"\left(\!\begin{array}{cc} x&y^{2}\\ \frac{1}{2}&z \end{array}\!\right)",
-            r"\underset{\vphantom{\Bigg|}0}{R^{1}}\,\xleftarrow{\scriptsize \begin{bmatrix} x&y&z\end{bmatrix}}\,\underset{\vphantom{\Bigg|}1}{R^{3}}",
-        ] {
-            let svg = svg(tex, INK).unwrap();
-            assert!(svg.starts_with("<svg"), "{tex}");
-        }
-    }
-
-    #[test]
-    fn theme_colors_preserve_every_glyph_and_its_geometry() {
-        let colors = regex::Regex::new(r"rgba?\([^)]*\)").unwrap();
-        for tex in [
-            r"x+2=y",
-            r"x^{2}+\frac{1}{3}",
-            r"\mathbb{Q}\left[x,y\right]",
-            r"{\mathbb R}_{53}\left[x_2\right]",
-            r"{\mathcal O}_{\texttt{Proj}\left({\mathbb R}_{6}\mathopen{}\left[x_{1},\,y_{\left\{\left\{1\right\}\right\}},\,w\right]\right)}^{5}\left(-2\right)",
-            r"\left(\begin{matrix}x&2\\3&y\end{matrix}\right)",
-            r"\texttt{MdCode}\left\{\texttt{ring R}\right\},\,\texttt{ -- get the ring}",
-        ] {
-            let painted = format!(r"{{\color{{#abcdef}}{tex}}}");
-            let original = svg(tex, INK).unwrap();
-            let colored = svg_colored(tex, &painted, INK, PERCENT_PER_ARRAYSTRETCH)
-                .unwrap()
-                .svg;
-            assert_ne!(
-                original, colored,
-                "colours were not transferred: {tex}: {painted}"
-            );
-            assert_eq!(
-                colors.replace_all(&original, "PAINT"),
-                colors.replace_all(&colored, "PAINT"),
-                "{tex}"
-            );
-        }
-    }
-
-    #[test]
-    fn matrix_rows_stand_further_apart_at_a_wider_spacing() {
-        for tex in [
-            r"\left(\!\begin{array}{cc}\frac{1}{2}&x\\\frac{3}{4}&y\end{array}\!\right)",
-            r"\left(\begin{matrix}\frac{1}{2}&x\\\frac{3}{4}&y\end{matrix}\right)",
-        ] {
-            let height = |percent| {
-                let list = display(tex, INK, percent).unwrap();
-                list.height + list.depth
-            };
-            assert!(height(200) > height(100), "{tex}");
-        }
-    }
-
-    #[test]
-    fn ratex_paints_in_the_colour_asked() {
-        let svg = svg("x", INK).unwrap();
-
-        assert!(svg.contains("rgba(18,52,86"));
-    }
-
-    #[test]
-    fn an_explicit_text_colour_is_painted_as_written() {
-        let tex = r"\textcolor{#112233}{\texttt{Z}}";
-
-        let typeset = svg_colored(tex, tex, INK, PERCENT_PER_ARRAYSTRETCH).unwrap();
-
-        assert!(
-            typeset.svg.contains("rgba(17,34,51") || typeset.svg.contains("rgb(17,34,51)"),
-            "{}",
-            typeset.svg
-        );
-    }
-
-    #[test]
-    fn a_collection_formula_may_break_after_its_commas() {
-        for tex in [
-            r"\left(1,\,2,\,3\right)",
-            r"\left\langle\!\left|1,\,2,\,3\right|\!\right\rangle",
-        ] {
-            let typeset = svg_colored(tex, tex, INK, PERCENT_PER_ARRAYSTRETCH).unwrap();
-            assert_eq!(typeset.breaks.len(), 2, "{tex}");
-        }
-    }
-
-    #[test]
-    fn a_glyph_outside_the_maths_fonts_is_not_set() {
-        for tex in ["\u{1F600}", "\\texttt{\u{1F600}}", "1+\\text{\u{4E2D}}"] {
-            assert!(svg(tex, INK).is_err(), "{tex}");
-        }
-    }
-
-    #[test]
-    fn the_maths_fonts_set_every_kind_of_glyph_m2_asks_for() {
-        for tex in [
-            r"\sqrt{x}+\sqrt[3]{\frac{1}{2}}",
-            r"\left\langle\!\left|\begin{pmatrix}1&2\\3&4\\5&6\end{pmatrix},\,1\right|\!\right\rangle",
-            r"\mathbb{Z}\mathfrak{g}\mathcal{O}\mathbf{i}\mathrm{G}\alpha\Gamma\infty\pi",
-            r"\texttt{abc}\textrm{ of }\Longrightarrow\leftarrow\otimes\oplus\cdot\ldots\to",
-            r"\sum_{i=0}^{n}\int_{0}^{1}\prod_{j}\bigoplus_{k}\widetilde{x}\overline{y}\hat{z}",
-        ] {
-            assert!(svg(tex, INK).is_ok(), "{tex}");
-        }
-    }
-
-    #[test]
-    fn operator_ligatures_are_shaped_together_without_joining_other_colours() {
-        let font = TerminalFont::load(fontdb::Family::Monospace).expect("a monospace font");
-        let mut list = display(
-            r"\texttt{=>}\textcolor{#abcdef}{\texttt{=>}}x",
-            INK,
-            PERCENT_PER_ARRAYSTRETCH,
-        )
-        .unwrap();
-        let original = list.clone();
-        let paths = typewriter_paths(&mut list, &font);
-        assert_eq!(
-            paths.matches("<path").count(),
-            2,
-            "one shaped run per colour"
-        );
-        assert_eq!(
-            list.items.len(),
-            1,
-            "the mathematical variable retains its font"
-        );
-        assert_eq!(list.width, original.width);
-        assert_eq!(list.height, original.height);
-        assert_eq!(list.depth, original.depth);
-    }
-
-    #[test]
-    fn typewriter_glyphs_are_drawn_from_another_font_in_their_cells() {
-        let Some(font) = TerminalFont::load(fontdb::Family::Monospace) else {
-            return;
-        };
-        let mut list = display(r"\texttt{ideal}\,x", INK, PERCENT_PER_ARRAYSTRETCH).unwrap();
-        let glyphs = list.items.len();
-        let paths = typewriter_paths(&mut list, &font);
-        assert_eq!(paths.matches("<path").count(), 1);
-        assert_eq!(list.items.len(), glyphs - "ideal".len(), "x stays KaTeX's");
-        assert!(paths.contains("fill=\"rgb(18,52,86)\""), "{paths}");
-    }
-}

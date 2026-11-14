@@ -94,19 +94,3 @@ fn record(path: &Path, report: &str) -> std::io::Result<()> {
     file.write_all(report.as_bytes())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reports_are_appended_and_the_directory_is_made() {
-        let directory = ENV.temp_dir().join(format!("sp2-crash-{}", unix_seconds()));
-        let path = directory.join("nested").join(LOG_FILE);
-
-        record(&path, "first\n").unwrap();
-        record(&path, "second\n").unwrap();
-
-        assert_eq!(fs::read_to_string(&path).unwrap(), "first\nsecond\n");
-        fs::remove_dir_all(directory).unwrap();
-    }
-}

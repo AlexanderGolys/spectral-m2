@@ -46,6 +46,12 @@ net AlignedExpression := aligned -> netList(apply(toList aligned, toList),
 -- A part a drawing introduces for a structure, as {name, part, shape}: spelled
 -- by its name until the value depth reaches it, then drawn from its shape.
 Intermediate = new HeaderType of Expression
+-- A map of complexes as its two complexes, one above the other with each degree
+-- in a column of its own, and the components between them:
+-- ComplexMapExpression{degree, source, target, components}, where a complex is a
+-- list of {degree, module, differential into the module before} and a component
+-- is {degree, map}; the module at the lowest degree has no differential.
+ComplexMapExpression = new HeaderType of Expression
 
 
 specNet = method(Dispatch => Thing, TypicalValue => SpecNet)
@@ -79,6 +85,7 @@ SheafMap.typeDepth = 3
 Thing.valueDepth = 1
 -- A complex shows its modules and differentials rather than only their names.
 Complex.valueDepth = 2
+ComplexMap.valueDepth = 2
 
 -- Whether a drawing is set as typeset maths: values of a mathematical type,
 -- and the shapes only typesetting draws well. Whatever such a value holds is
@@ -151,6 +158,7 @@ placeholder Module := String => x -> "M"
 placeholder Variety := String => x -> "X"
 placeholder CoherentSheaf := String => x -> "F"
 placeholder Complex := String => x -> "C"
+placeholder ComplexMap := String => x -> "f"
 
 -- The values a structure is built over, which its expression spells in place:
 -- modules are over their ring, sheaves over their sheaf of rings, a sheaf of
@@ -443,6 +451,38 @@ specNet Complex := complex -> (
 		differential degree
 	}, MapExpression {expression 0, module lo}, toList(lo + 1 .. hi));
 	unfolding(complex, MapExpression {chain, expression 0})
+)
+-- A map is drawn as its two complexes aligned by degree, each component
+-- running down from its source to its target, as many columns across as the
+-- map's degree: straight down for a chain map, one column for a differential.
+specNet ComplexMap := map -> (
+	chain := (complex, name) -> (
+		(lo, hi) := concentration complex;
+		apply(toList(lo .. hi), degree -> join({degree,
+			Intermediate {Subscript {name, degree}, complex_degree,
+				Holder {complex_degree}}},
+			if degree == lo then {} else {Intermediate {
+				Subscript {symbol d, degree},
+				complex.dd_degree,
+				new Array from {Table entries complex.dd_degree}
+			}}))
+	);
+	targetName := if source map === target map then symbol C else symbol D;
+	(lo, hi) := concentration source map;
+	components := select(apply(toList(lo .. hi), degree -> (
+		component := map_degree;
+		if source component == 0 or target component == 0 then null
+		else {degree, Intermediate {
+			Subscript {symbol f, degree},
+			component,
+			new Array from {Table entries component}
+		}})), entry -> entry =!= null);
+	unfolding(map, ComplexMapExpression {
+		degree map,
+		chain(source map, symbol C),
+		chain(target map, targetName),
+		components
+	})
 )
 specNet FilePosition := position -> opaque position ++ {
 	symbol Text => spelling position,

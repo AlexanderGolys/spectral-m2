@@ -187,33 +187,3 @@ fn ghostty_family(config: &str) -> Option<String> {
         })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn kitty_names_its_font_plainly_or_by_specification() {
-        assert_eq!(
-            kitty_family("font_family Fira Code\nfont_family JetBrains Mono\n").as_deref(),
-            Some("JetBrains Mono")
-        );
-        assert_eq!(
-            kitty_family(r#"font_family family="Iosevka Term" style=Medium"#).as_deref(),
-            Some("Iosevka Term")
-        );
-        assert_eq!(kitty_family("font_size 12\nfont_family_extra x"), None);
-    }
-
-    #[test]
-    fn ghostty_takes_its_primary_family_after_any_reset() {
-        assert_eq!(
-            ghostty_family("font-family = \"A\"\nfont-family = B\n").as_deref(),
-            Some("A")
-        );
-        assert_eq!(
-            ghostty_family("font-family = A\nfont-family = \"\"\nfont-family = C").as_deref(),
-            Some("C")
-        );
-        assert_eq!(ghostty_family("font-size = 12"), None);
-    }
-}

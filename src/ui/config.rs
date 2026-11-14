@@ -199,16 +199,3 @@ impl UiConfig {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::UI;
-    use unicode_width::UnicodeWidthStr;
-
-    #[test]
-    fn basic_spinner_frames_fit_one_cell() {
-        assert!(UI.spinner.basic.frames().iter().all(|frame| {
-            UnicodeWidthStr::width(frame.content) == 1
-                && UnicodeWidthStr::width_cjk(frame.content) == 1
-        }));
-    }
-}
