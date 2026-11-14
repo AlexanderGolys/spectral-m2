@@ -371,7 +371,7 @@ impl Editor {
         let (to, scroll) = capture.step(at, step);
         let area = capture.area;
         let layer = capture.cell(at).and_then(|cell| cell.layer);
-        let raw = self.settings.selection.raw;
+        let raw = self.settings.editor.selection.raw;
         if let Some(caret) = self.caret.as_mut() {
             caret.at = Some(to);
         }
@@ -406,7 +406,7 @@ impl Editor {
         let Some((region, reach)) = capture.pick(at).or_else(|| capture.paragraph(at)) else {
             return;
         };
-        let reach = match self.settings.selection.raw {
+        let reach = match self.settings.editor.selection.raw {
             true => Reach::Verbatim,
             false => reach,
         };

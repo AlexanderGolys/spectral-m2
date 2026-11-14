@@ -20,7 +20,7 @@ use ratatui::widgets::{Block as TuiBlock, Clear, Paragraph, Widget};
 use ratatui::Frame;
 
 use self::highlight_debug::{DebugEntry, DebugSection};
-use self::picker::{Picker, PickerController, PickerMode};
+use self::picker::{Picker, PickerController, PickerMode, PickerTab};
 use self::screen::{CaretPane, ScreenCapture, ScreenCaret, ScreenSelection};
 pub use self::view::{CommittedCells, ReferenceEntry, ViewKind, Viewport};
 use self::{
@@ -54,7 +54,7 @@ use crate::ui::floating::{Anchor, Floating};
 use crate::ui::relayout;
 use crate::ui::settings::selection::CopyFormat;
 use crate::ui::settings::statusline::{StatusComponent, StatusLinePosition, StatusSegment};
-use crate::ui::settings::{tabs as settings_tabs, *};
+use crate::ui::settings::*;
 use crate::ui::settling::SettlingWidth;
 use crate::ui::text_object::{TextDirection, TextMotion};
 use crate::ui::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
@@ -341,20 +341,18 @@ impl Editor {
         let appearance = AppearanceSettings::load();
         publish(appearance.groups());
         let saved = SavedSettings::load();
+        let settings = Settings {
+            appearance,
+            ..saved.settings
+        };
         let mut input = InputCode::new();
-        input.set_settings(saved.layout);
+        input.set_settings(settings);
         let mut editor = Self {
             feed: Feed::new(Box::new(TextBlock::system(welcome))),
             reference: Feed::new(Box::new(TextBlock::system(String::new()))),
             reference_file: None,
             input,
-            settings: Settings {
-                appearance,
-                editor: saved.layout,
-                statusline: saved.statusline,
-                rendering: saved.rendering,
-                selection: saved.selection,
-            },
+            settings,
             keymaps: Keymaps::replaying(&saved.rebinds),
             status_line: StatusLine::default(),
             status_runtime: StatusRuntime::default(),
@@ -502,17 +500,17 @@ impl Editor {
 
     /// Whether the persisted settings run the language server.
     pub fn language_server(&self) -> bool {
-        self.settings.rendering.language_server
+        self.settings.lsp.language_server
     }
 
     /// Whether automatic signature-help popups are enabled.
     pub fn signature_hints(&self) -> bool {
-        self.settings.rendering.language_server && self.settings.rendering.signature_hints
+        self.settings.lsp.language_server && self.settings.lsp.signature_hints
     }
 
     /// Whether source takes semantic colors from the language server.
     pub fn semantic_highlighting(&self) -> bool {
-        self.settings.rendering.semantic_colors()
+        self.settings.lsp.semantic_colors()
     }
 
     /// Source and revision for the current draft, excluding shell commands.
@@ -791,7 +789,9 @@ impl Editor {
     /// What finishing a mouse selection does: copy it, or leave it to the copy key.
     fn copied_on_select(&self, reaction: Reaction) -> Reaction {
         match reaction {
-            Reaction::Copy(_) if !self.settings.selection.copy_on_select => Reaction::Continue,
+            Reaction::Copy(_) if !self.settings.editor.selection.copy_on_select => {
+                Reaction::Continue
+            }
             reaction => reaction,
         }
     }
@@ -960,7 +960,7 @@ impl Editor {
         self.input.field_mut().clear_selection();
         Some(
             self.feed
-                .selected_text(self.settings.selection.copy_format)
+                .selected_text(self.settings.editor.selection.copy_format)
                 .map_or(Reaction::Continue, Reaction::Copy),
         )
     }
@@ -1060,7 +1060,7 @@ impl Editor {
             }
             KeyCode::Char('y') => self
                 .feed
-                .selected_text(self.settings.selection.copy_format)
+                .selected_text(self.settings.editor.selection.copy_format)
                 .map_or(Reaction::Continue, Reaction::Copy),
             _ => return None,
         })
@@ -1142,7 +1142,7 @@ impl Editor {
         }
         if action == Action::CopySelection {
             return self
-                .selected_text(self.settings.selection.copy_format)
+                .selected_text(self.settings.editor.selection.copy_format)
                 .map_or(Reaction::Continue, Reaction::Copy);
         }
         if self.previewing {
@@ -1437,16 +1437,20 @@ impl Editor {
         self.screen_selection = None;
     }
 
+    /// Every section's tab, then the keymap's.
+    fn settings_tabs(&self) -> Vec<PickerTab> {
+        let mut tabs = self.settings.tabs();
+        tabs.push(self.keymaps.tab());
+        tabs
+    }
+
     fn settings_picker(&self) -> Picker {
-        Picker::tabbed(
-            settings_tabs::tabs(self.settings, &self.keymaps),
-            Some(settings_tabs::restore_defaults()),
-        )
+        Picker::tabbed(self.settings_tabs(), Some(Settings::restore_button()))
     }
 
     /// Show the current settings in the settings picker on top.
     fn refresh_settings_picker(&mut self) {
-        let tabs = settings_tabs::tabs(self.settings, &self.keymaps);
+        let tabs = self.settings_tabs();
         self.pickers.last_mut().unwrap().picker.set_tabs(tabs);
     }
 
@@ -1626,19 +1630,19 @@ impl Editor {
     }
 
     fn set_settings(&mut self, settings: Settings) {
-        if settings.rendering.language_server != self.settings.rendering.language_server {
+        if settings.lsp.language_server != self.settings.lsp.language_server {
             self.status_runtime.language_server = LanguageServerState::Starting;
         }
         if settings.reformats(&self.settings) {
             self.feed.on_event(&Reformatted);
             self.reference.on_event(&Reformatted);
         }
-        if !settings.rendering.signature_hints {
+        if !settings.lsp.signature_hints {
             self.floating = None;
         }
         self.apply_appearance(settings.appearance);
         self.settings = settings;
-        self.input.set_settings(settings.editor);
+        self.input.set_settings(settings);
         self.save_settings();
         self.refresh_settings_picker();
     }
@@ -1646,10 +1650,7 @@ impl Editor {
     /// Keep what the settings and keymap pickers changed for the next session.
     fn save_settings(&self) {
         SavedSettings {
-            layout: self.settings.editor,
-            statusline: self.settings.statusline,
-            rendering: self.settings.rendering,
-            selection: self.settings.selection,
+            settings: self.settings,
             rebinds: self.keymaps.rebinds().to_vec(),
         }
         .save();
@@ -1974,7 +1975,7 @@ impl Editor {
                 )
             },
             runtime: StatusRuntime {
-                language_server: if self.settings.rendering.language_server {
+                language_server: if self.settings.lsp.language_server {
                     self.status_runtime.language_server.clone()
                 } else {
                     LanguageServerState::Off

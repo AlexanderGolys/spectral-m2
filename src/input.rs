@@ -34,9 +34,9 @@ use crate::ui::config::UI;
 use crate::ui::graphics::kitty::PLACEHOLDER;
 use crate::ui::key::KeyEvent;
 use crate::ui::render::{Highlights, Prompt, RenderContext};
-use crate::ui::settings::editor::EditorSettings;
 #[cfg(test)]
 use crate::ui::settings::keymap::Keymaps;
+use crate::ui::settings::Settings;
 use crate::ui::text_object::{bracket_pair_at, Bracket, CharClass, TextDirection, TextMotion};
 use crate::ui::wrap::{offset_at_column, CaretWrap, TextLayout, WrapPolicy};
 
@@ -661,7 +661,7 @@ pub struct InputCode {
     /// The revision and cursor the completion was offered for; once either
     /// moves it no longer applies.
     completed_for: Option<(u64, usize)>,
-    settings: EditorSettings,
+    settings: Settings,
     diagnostic: Option<String>,
     diagnostic_range: Option<Range<usize>>,
     /// What the language server found in the input as it last saw it.
@@ -706,7 +706,7 @@ impl InputCode {
             hint: Hint::default(),
             completion: None,
             completed_for: None,
-            settings: EditorSettings::default(),
+            settings: Settings::default(),
             diagnostic: None,
             diagnostic_range: None,
             findings: Vec::new(),
@@ -762,12 +762,12 @@ impl InputCode {
 
     /// Return the component's adjustable layout policy.
     #[cfg(test)]
-    pub const fn settings(&self) -> EditorSettings {
+    pub const fn settings(&self) -> Settings {
         self.settings
     }
 
     /// Replace the component's adjustable layout policy.
-    pub fn set_settings(&mut self, settings: EditorSettings) {
+    pub fn set_settings(&mut self, settings: Settings) {
         self.settings = settings;
     }
 
@@ -798,7 +798,7 @@ impl InputCode {
     fn current_findings(&self) -> impl Iterator<Item = &Finding> {
         let text = self.field.text();
         self.findings.iter().filter(move |finding| {
-            if !self.settings.diagnostics {
+            if !self.settings.lsp.diagnostics {
                 return false;
             }
             finding.range.end <= text.len()
@@ -902,7 +902,7 @@ impl InputCode {
         let Some(completion) = self.completion.as_mut() else {
             return;
         };
-        if completion.reveal(self.settings.hint_completion_below) {
+        if completion.reveal(self.settings.editor.hint_completion_below) {
             return;
         }
         let (range, chosen) = completion.take(action == InputAction::NextCompletion);
@@ -1067,7 +1067,7 @@ impl InputCode {
             hint: Hint::default(),
             completion: None,
             completed_for: None,
-            settings: EditorSettings::default(),
+            settings: Settings::default(),
             diagnostic: None,
             diagnostic_range: None,
             findings: Vec::new(),
@@ -1123,7 +1123,7 @@ impl InputCode {
         let visual_lines = self.lines(width);
         let ghost = self
             .offered()
-            .filter(|completion| completion.hinted(self.settings.hint_completion_below))
+            .filter(|completion| completion.hinted(self.settings.editor.hint_completion_below))
             .map(|completion| {
                 let (row, _) = self.visual_cursor(width);
                 let offset = self.field.cursor() - visual_lines[row].range.start;
@@ -1215,7 +1215,7 @@ impl InputCode {
         let rows = self.visual_rows(width.saturating_sub(prefix)) as u16;
         let chrome = 2 + u16::from(self.shown_diagnostic().is_some());
         let cap = editor_height
-            .saturating_mul(self.settings.max_input_height_percent.into())
+            .saturating_mul(self.settings.editor.max_input_height_percent.into())
             .saturating_div(100)
             .max(UI.min_input_height);
         rows.saturating_add(chrome).clamp(UI.min_input_height, cap)
@@ -1326,7 +1326,7 @@ impl InputCode {
 
     fn scroll_start(&self, cursor: usize, rows: usize, viewport: usize) -> usize {
         let last = rows.saturating_sub(viewport);
-        let scrolloff = usize::from(self.settings.scrolloff);
+        let scrolloff = usize::from(self.settings.editor.scrolloff);
         if viewport <= 2 * scrolloff + 1 {
             return cursor.saturating_sub(viewport / 2).min(last);
         }
@@ -1479,13 +1479,13 @@ mod tests {
     #[test]
     fn disabling_automatic_diagnostics_preserves_input_height() {
         let mut input = InputCode::new();
-        input.settings.diagnostics = false;
+        input.settings.lsp.diagnostics = false;
         input.insert("fixture");
         let height = input.height(80, 3, 30);
         input.set_findings(vec![finding(0..7, Severity::Error, "unresolved fixture")]);
         assert!(input.shown_diagnostic().is_none());
         assert_eq!(input.height(80, 3, 30), height);
-        input.settings.diagnostics = true;
+        input.settings.lsp.diagnostics = true;
         assert!(input.shown_diagnostic().is_some());
     }
 
@@ -1575,7 +1575,7 @@ mod tests {
     fn a_long_paste_grows_the_input_to_its_max_height() {
         let mut input = InputCode::new_in_memory();
         let editor_height = 100;
-        let cap = editor_height * u16::from(input.settings().max_input_height_percent) / 100;
+        let cap = editor_height * u16::from(input.settings().editor.max_input_height_percent) / 100;
         input.insert(&vec!["f(x)"; usize::from(editor_height)].join("\n"));
 
         assert_eq!(input.height(80, UI.prompt_width(), editor_height), cap);
@@ -2058,7 +2058,7 @@ mod tests {
     #[test]
     fn server_findings_underline_their_range_and_tell_the_one_under_the_cursor() {
         let mut input = InputCode::new_in_memory();
-        input.settings.diagnostics = true;
+        input.settings.lsp.diagnostics = true;
         input.field_mut().insert_str("abcd");
         input.set_findings(vec![
             finding(0..1, Severity::Hint, "a hint"),

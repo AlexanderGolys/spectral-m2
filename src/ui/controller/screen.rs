@@ -481,7 +481,7 @@ impl Editor {
             MouseEventKind::Down(MouseButton::Left) if !self.input.contains(event) => {
                 self.input.field_mut().clear_selection();
                 self.screen_selection = None;
-                let raw = self.settings.selection.raw;
+                let raw = self.settings.editor.selection.raw;
                 let pointer = Position::new(event.column, event.row);
                 let capture = self
                     .captures
@@ -546,7 +546,7 @@ impl Editor {
     /// under it: a word, a bracketed block or a picture, typed annotations
     /// included, for the second, and the paragraph for the third.
     pub fn pick_screen_text(&mut self, event: MouseEvent, clicks: u8) -> Option<Reaction> {
-        let raw = self.settings.selection.raw;
+        let raw = self.settings.editor.selection.raw;
         let pointer = Position::new(event.column, event.row);
         let capture = self
             .captures

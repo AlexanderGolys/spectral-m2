@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::row::SettingRow;
+use super::row::{SettingRow, SettingsTab};
 use super::Settings;
 use crate::ui::action::Action;
 use crate::ui::controller::picker::{PickerInput, PickerItem, PickerValue, Row};
@@ -145,10 +145,14 @@ impl StatusLineSetting {
 }
 
 /// The statusline's checklist, with one row per available component.
-pub fn rows(settings: Settings) -> Vec<Box<dyn PickerItem>> {
-    StatusLineSetting::choices()
-        .map(|row| row.row(settings))
-        .collect()
+impl SettingsTab for StatusLineSettings {
+    const LABEL: &'static str = "statusline";
+
+    fn rows(settings: Settings) -> Vec<Box<dyn PickerItem>> {
+        StatusLineSetting::choices()
+            .map(|row| row.row(settings))
+            .collect()
+    }
 }
 
 impl SettingRow for StatusLineSetting {

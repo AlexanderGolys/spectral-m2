@@ -107,14 +107,50 @@ struct Keymap {
     alias: bool,
 }
 
+/// A shortcut and the key it sits on, such as submitting on `Enter`: a rebind
+/// the user made, or a binding as it stands.
+pub type ShortcutKey = (Shortcut, KeyEvent);
+
 /// The editor's exact normalized-key bindings.
 #[derive(Clone)]
 pub struct Keymaps {
     bindings: HashMap<KeyEvent, Keymap>,
-    rebinds: Vec<(Shortcut, KeyEvent)>,
+    rebinds: Vec<ShortcutKey>,
 }
 
 impl Keymaps {
+    /// The *keymap* tab: every remappable shortcut, grouped by context, and the
+    /// button putting them back.
+    pub fn tab(&self) -> PickerTab {
+        let remappable = self.remappable();
+        let mut items = self
+            .contexts()
+            .into_iter()
+            .flat_map(|context| {
+                remappable
+                    .iter()
+                    .filter(move |(shortcut, _)| shortcut.context() == context)
+                    .map(|&(shortcut, key)| {
+                        Box::new(KeymapRow::new(shortcut, key)) as Box<dyn PickerItem>
+                    })
+            })
+            .collect::<Vec<_>>();
+        items.push(Self::restore_button());
+        PickerTab {
+            mode: Some(PickerMode::Keymaps),
+            label: "keymap",
+            items,
+        }
+    }
+
+    /// The button putting every shortcut back on its default key.
+    pub fn restore_button() -> Box<dyn PickerItem> {
+        let label = Span::styled("restore keymaps", scheme().settings_button());
+        Row::enter(vec![label.into()], || EditorEvent::RestoreKeymaps)
+            .described("put every shortcut back on its default key")
+            .into()
+    }
+
     /// Resolve a terminal key to a command, after which the key is discarded.
     pub fn action(&self, key: KeyEvent, remapping: bool) -> Option<Action> {
         let binding = self.bindings.get(&key.binding())?;
@@ -152,7 +188,7 @@ impl Keymaps {
     }
 
     /// The default keymaps with `rebinds` made over them, in order.
-    pub fn replaying(rebinds: &[(Shortcut, KeyEvent)]) -> Self {
+    pub fn replaying(rebinds: &[ShortcutKey]) -> Self {
         let mut keymaps = Self::default();
         for &(shortcut, key) in rebinds {
             keymaps.rebind(shortcut, key);
@@ -161,12 +197,12 @@ impl Keymaps {
     }
 
     /// Every rebind that took effect, in the order made.
-    pub fn rebinds(&self) -> &[(Shortcut, KeyEvent)] {
+    pub fn rebinds(&self) -> &[ShortcutKey] {
         &self.rebinds
     }
 
     /// The bindings the user may move, with their current keys, in shortcut order.
-    pub fn remappable(&self) -> Vec<(Shortcut, KeyEvent)> {
+    pub fn remappable(&self) -> Vec<ShortcutKey> {
         let mut remappable: Vec<_> = self
             .bindings
             .iter()
@@ -241,37 +277,6 @@ impl Keymaps {
         self.rebinds.push((shortcut, key));
         true
     }
-}
-
-/// The keymaps page of the settings picker, grouped by shortcut context.
-pub fn settings_tab(keymaps: &Keymaps) -> PickerTab {
-    let remappable = keymaps.remappable();
-    let mut items = keymaps
-        .contexts()
-        .into_iter()
-        .flat_map(|context| {
-            remappable
-                .iter()
-                .filter(move |(shortcut, _)| shortcut.context() == context)
-                .map(|&(shortcut, key)| {
-                    Box::new(KeymapRow::new(shortcut, key)) as Box<dyn PickerItem>
-                })
-        })
-        .collect::<Vec<_>>();
-    items.push(restore_defaults());
-    PickerTab {
-        mode: Some(PickerMode::Keymaps),
-        label: "keymap",
-        items,
-    }
-}
-
-/// The button putting every shortcut back on its default key.
-pub fn restore_defaults() -> Box<dyn PickerItem> {
-    let label = Span::styled("restore keymaps", scheme().settings_button());
-    Row::enter(vec![label.into()], || EditorEvent::RestoreKeymaps)
-        .described("put every shortcut back on its default key")
-        .into()
 }
 
 /// A shortcut row that captures a replacement only after Enter.

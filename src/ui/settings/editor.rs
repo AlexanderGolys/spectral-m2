@@ -1,11 +1,11 @@
-//! The *editor* tab: how much room the input and returned values take, and how
-//! completion offers itself in the input.
+//! The *editor* tab: how much room the input and returned values take, how
+//! completion offers itself in the input, and what a selection copies.
 
 use crate::ui::cycle::cyclic;
 use serde::{Deserialize, Serialize};
 
-use super::row::SettingRow;
-use super::selection::SelectionSetting;
+use super::row::{SettingRow, SettingsTab};
+use super::selection::{SelectionSetting, SelectionSettings};
 use super::Settings;
 use crate::ui::config::UI;
 use crate::ui::controller::picker::{PickerItem, PickerValue};
@@ -21,8 +21,6 @@ const MIN_SCROLL_ROWS: u8 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EditorSettings {
-    /// Show automatic language-server diagnostics and their underlines.
-    pub diagnostics: bool,
     /// Maximum editor-height percentage occupied by the input.
     #[serde(alias = "max_height_percent")]
     pub max_input_height_percent: u8,
@@ -37,18 +35,20 @@ pub struct EditorSettings {
     /// Show an inline completion hint only below this many candidates.
     #[serde(rename = "hintCompletionBelow", alias = "hint_completion_below")]
     pub hint_completion_below: u16,
+    /// What a mouse selection reads and copies.
+    pub selection: SelectionSettings,
 }
 
 impl Default for EditorSettings {
     fn default() -> Self {
         Self {
-            diagnostics: false,
             max_input_height_percent: 75,
             output_rows: UI.max_output_rows,
             scrolloff: 2,
             scroll_rows: 3,
             complete_after: 1,
             hint_completion_below: 10,
+            selection: SelectionSettings::default(),
         }
     }
 }
@@ -137,15 +137,12 @@ impl SettingRow for EditorSetting {
     }
 }
 
-/// Editor rows, including mouse selection and copying behavior.
-pub fn rows(settings: Settings) -> Vec<Box<dyn PickerItem>> {
-    EditorSetting::CHOICES
-        .iter()
-        .map(|row| row.row(settings))
-        .chain(
-            SelectionSetting::CHOICES
-                .iter()
-                .map(|row| row.row(settings)),
-        )
-        .collect()
+impl SettingsTab for EditorSettings {
+    const LABEL: &'static str = "editor";
+
+    fn rows(settings: Settings) -> Vec<Box<dyn PickerItem>> {
+        EditorSetting::rows(EditorSetting::CHOICES, settings)
+            .chain(SelectionSetting::rows(SelectionSetting::CHOICES, settings))
+            .collect()
+    }
 }

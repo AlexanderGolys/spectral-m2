@@ -4,8 +4,20 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Three keys jump from the name under the cursor to a tab beside the session: `Ctrl+]` its source, `Alt+]` everything the language server knows about it, `Ctrl+K` its documentation page, which needs no language server. Files opened beside the session number their lines.
+- `Ctrl+E` puts a cursor into the feed or the view beside it: it moves, selects and copies, follows links, folds values, switches formatters, and asks the language server about the session code under it. Input motions share one model of words, paragraphs and brackets, with the bracket at the cursor and its partner marked; `Alt+PageUp`/`Alt+PageDown` jump to the start or end of a block.
+- `peek` and `speek` join the output formatters, and `toExternalString` takes the place of HTML.
+- The pane beside the session names what it shows on a title row and lists its tabs beneath as icons.
+- Maps of complexes draw as their two complexes aligned by degree, labelled arrows between them, slanting components named and zero components left out.
+
 ### Changed
 
+- The language server is asked about the cursor only once it rests, so moving and typing no longer queue a question per step. A slow answer is cancelled instead of stopping the server, a server that stops is restarted after a growing delay, and an answer about a cursor that has moved on is ignored.
+- Settings keep one section per tab: the language-server options form their own `lsp` section and the selection belongs to `editor`. Older settings files are read into the new shape.
+- Hash tables align keys and arrows in columns, each value wrapping beneath where it began; values unfold through their expressions until they reach a name.
+- Operators typeset their operands, tensor products draw as such, and numbers typeset.
 - Complexes compose labelled map expressions, with differential matrices above arrows and homological degrees beneath modules, in structured Unicode and typeset previews.
 
 - Output mode controls sit in the value border as icons, the current one bold and the alternatives dimmed; clicking an icon selects that mode. Their position is configurable.
@@ -18,6 +30,11 @@ All notable changes to Spectral M2 are documented here.
 - Mathematical output uses the transmitted classes for highlighting in Unicode and typeset rendering, without recovering roles from TeX. Type annotations use a uniform type colour; map arrows have their own theme group.
 
 ### Fixed
+
+- A documentation example's recorded answer is shown as M2's string, never labelled `specNet`, even when its computed twin uses `specNet`.
+- Code wraps only between tokens, measured in terminal columns; code in documentation table cells stays inside its column and keeps its colours.
+- Content keeps its layout while its pane is resized and follows once the width settles; values are laid out again beside the drawing thread, keeping their old rows until the new ones arrive.
+- A language server that exits reports its status and recent stderr.
 
 - Map types name the modules they go between, as M2 does: a matrix is typed `Matrix[N ⟵ M]` and a sheaf map `SheafMap[G ⟵ F]`, shown by default. A sheaf's type is over its sheaf of rings, as `CoherentSheaf[OO_X]` for a sheaf of `OO_X`-modules, and an ideal's over its ring.
 

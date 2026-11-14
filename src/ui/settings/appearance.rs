@@ -1,8 +1,8 @@
 //! The *appearance* tab: the axes along which [`Appearance`] steps.
 
-use super::row::SettingRow;
+use super::row::{SettingRow, SettingsTab};
 use super::Settings;
-use crate::ui::controller::picker::PickerValue;
+use crate::ui::controller::picker::{PickerItem, PickerValue};
 use crate::ui::cycle::{cycled, cyclic};
 use crate::ui::theme::AppearanceSettings;
 
@@ -64,5 +64,13 @@ impl SettingRow for AppearanceSetting {
     fn adjust(self, settings: &mut Settings, delta: i8) {
         let appearance = settings.appearance;
         settings.appearance = cycled(&self.choices(appearance), appearance, delta);
+    }
+}
+
+impl SettingsTab for AppearanceSettings {
+    const LABEL: &'static str = "appearance";
+
+    fn rows(settings: Settings) -> Vec<Box<dyn PickerItem>> {
+        AppearanceSetting::rows(AppearanceSetting::CHOICES, settings).collect()
     }
 }

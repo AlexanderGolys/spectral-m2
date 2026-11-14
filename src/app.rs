@@ -779,7 +779,9 @@ impl App {
                 Some(place) => self.go_to(place),
                 None => editor.apply(EditorUpdate::Diagnostic(NO_DEFINITION.to_string())),
             },
-            (Asked::Occurrences(at @ (revision, _)), Answer::Highlights(places)) if at == cursor => {
+            (Asked::Occurrences(at @ (revision, _)), Answer::Highlights(places))
+                if at == cursor =>
+            {
                 let draft = self.workspace.highlighter.draft();
                 let ranges = places
                     .into_iter()

@@ -1,14 +1,14 @@
-//! The *rendering* tab: what colours source and how returned maths is drawn.
+//! The *rendering* tab: how returned values and their maths are drawn.
 
 use ratatui::layout::Rect;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::row::SettingRow;
+use super::row::{SettingRow, SettingsTab};
 use super::Settings;
 use crate::ui::config::UI;
-use crate::ui::controller::picker::{PickerOption, PickerValue};
+use crate::ui::controller::picker::{PickerItem, PickerOption, PickerValue};
 use crate::ui::cycle::cyclic;
 use crate::ui::graphics;
 use crate::ui::render::maths::{FractionStyle, MathDisplay, MathInk, ScriptColor};
@@ -78,13 +78,6 @@ cyclic! {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RenderingSettings {
-    /// Whether an installed language server analyses the session's source.
-    pub language_server: bool,
-    /// Show automatic signature-help popups while typing.
-    pub signature_hints: bool,
-    /// Whether the language server enriches source colors, which it can only do
-    /// while it runs.
-    pub semantic_highlighting: bool,
     /// Swap code and canvas backgrounds in the reference pane.
     pub reference_code_background: bool,
     pub maths: MathDisplay,
@@ -114,9 +107,6 @@ pub struct RenderingSettings {
 impl Default for RenderingSettings {
     fn default() -> Self {
         Self {
-            language_server: true,
-            signature_hints: false,
-            semantic_highlighting: true,
             reference_code_background: false,
             maths: MathDisplay::default(),
             math_size_percent: UI.math_size_percent,
@@ -134,12 +124,15 @@ impl Default for RenderingSettings {
     }
 }
 
-impl RenderingSettings {
-    /// Whether source takes semantic colors: chosen, and the server providing them runs.
-    pub const fn semantic_colors(&self) -> bool {
-        self.language_server && self.semantic_highlighting
-    }
+impl SettingsTab for RenderingSettings {
+    const LABEL: &'static str = "rendering";
 
+    fn rows(settings: Settings) -> Vec<Box<dyn PickerItem>> {
+        RenderingSetting::rows(RenderingSetting::CHOICES, settings).collect()
+    }
+}
+
+impl RenderingSettings {
     /// How long each documentation example may take to be computed again; zero
     /// when they are not.
     pub fn example_timeout(&self) -> Duration {

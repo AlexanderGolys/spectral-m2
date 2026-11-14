@@ -1,4 +1,5 @@
-//! The *selection* tab: what a mouse selection reads and whether it copies itself.
+//! The *editor* tab's selection rows: what a mouse selection reads and whether
+//! it copies itself.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +24,7 @@ cyclic! {
     }
 }
 
-/// The values of the *selection* tab.
+/// The *editor* tab's selection values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SelectionSettings {
@@ -48,7 +49,7 @@ impl Default for SelectionSettings {
 }
 
 cyclic! {
-    /// One row of the *selection* tab.
+    /// One selection row of the *editor* tab.
     #[discriminated_str(label)]
     #[derive(Clone, Copy, PartialEq)]
     pub enum SelectionSetting {
@@ -78,7 +79,7 @@ impl SettingRow for SelectionSetting {
     }
 
     fn value(self, settings: Settings) -> PickerValue {
-        let selection = settings.selection;
+        let selection = settings.editor.selection;
         match self {
             Self::CopyOnSelect => switch(selection.copy_on_select, "on"),
             Self::Raw => switch(selection.raw, "on"),
@@ -91,7 +92,7 @@ impl SettingRow for SelectionSetting {
     }
 
     fn adjust(self, settings: &mut Settings, delta: i8) {
-        let selection = &mut settings.selection;
+        let selection = &mut settings.editor.selection;
         match self {
             Self::CopyOnSelect => selection.copy_on_select = !selection.copy_on_select,
             Self::Raw => selection.raw = !selection.raw,

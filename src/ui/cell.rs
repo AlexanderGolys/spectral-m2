@@ -179,10 +179,9 @@ impl CellMarker {
     }
 
     fn width(self, layout: CellLayout) -> u16 {
-        if matches!(self, Self::Bare) {
-            0
-        } else {
-            layout.prefix()
+        match self {
+            Self::Bare => 0,
+            _ => layout.prefix(),
         }
     }
 

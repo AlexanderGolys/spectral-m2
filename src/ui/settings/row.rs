@@ -3,7 +3,7 @@
 use ratatui::text::Span;
 
 use super::Settings;
-use crate::ui::controller::picker::{PickerItem, PickerValue, Row};
+use crate::ui::controller::picker::{PickerItem, PickerTab, PickerValue, Row};
 use crate::ui::controller::EditorEvent;
 use crate::ui::theme::groups::scheme;
 
@@ -25,6 +25,11 @@ pub trait SettingRow: Copy + Send + 'static {
         true
     }
 
+    /// A row for each of `rows`, in order, showing `settings`.
+    fn rows(rows: &[Self], settings: Settings) -> impl Iterator<Item = Box<dyn PickerItem>> {
+        rows.iter().map(move |row| row.row(settings))
+    }
+
     fn row(self, settings: Settings) -> Box<dyn PickerItem> {
         let label = Span::styled(self.label(), scheme().settings_item_label());
         Row::adjust(vec![label.into()], move |delta| {
@@ -36,5 +41,22 @@ pub trait SettingRow: Copy + Send + 'static {
         .described(self.description(settings))
         .selectable_if(self.applies(settings))
         .into()
+    }
+}
+
+/// A section of [`Settings`], shown as one tab of the settings picker: the
+/// section owns its tab, so neither can exist without the other.
+pub trait SettingsTab {
+    /// The tab's name in the picker.
+    const LABEL: &'static str;
+
+    fn rows(settings: Settings) -> Vec<Box<dyn PickerItem>>;
+
+    fn tab(settings: Settings) -> PickerTab {
+        PickerTab {
+            mode: None,
+            label: Self::LABEL,
+            items: Self::rows(settings),
+        }
     }
 }
