@@ -1530,8 +1530,31 @@ impl OutputCell {
         }
     }
 
+    /// The formatter chosen, unless this cell has nothing from it: a recorded
+    /// example's answer is M2's string even when its computed twin shares a
+    /// choice of `specNet`.
     fn preview_mode(&self) -> PreviewMode {
-        self.chosen.get().unwrap_or_else(|| self.default_preview())
+        self.chosen
+            .get()
+            .filter(|mode| self.offers(*mode))
+            .unwrap_or_else(|| self.default_preview())
+    }
+
+    fn offers(&self, mode: PreviewMode) -> bool {
+        match mode {
+            PreviewMode::SpecNet => self
+                .source
+                .value
+                .as_ref()
+                .is_some_and(maths::Math::supports_spec_net),
+            PreviewMode::Speek => self.preview_value(PreviewMode::Speek).is_some(),
+            PreviewMode::Markup => self
+                .source
+                .value
+                .as_ref()
+                .is_some_and(|value| value.html.is_some()),
+            _ => self.preview_text(mode).is_some(),
+        }
     }
 
     fn preview_value(&self, mode: PreviewMode) -> Option<&SpecNet> {
@@ -2165,21 +2188,7 @@ impl OutputBlock {
         PreviewMode::CHOICES
             .iter()
             .copied()
-            .filter(|mode| match mode {
-                PreviewMode::SpecNet => cell
-                    .source
-                    .value
-                    .as_ref()
-                    .is_some_and(maths::Math::supports_spec_net),
-                PreviewMode::Net => cell.preview_text(PreviewMode::Net).is_some(),
-                PreviewMode::Speek => cell.preview_value(PreviewMode::Speek).is_some(),
-                PreviewMode::Markup => cell
-                    .source
-                    .value
-                    .as_ref()
-                    .is_some_and(|value| value.html.is_some()),
-                _ => cell.preview_text(*mode).is_some(),
-            })
+            .filter(|mode| cell.offers(*mode))
             .collect()
     }
 
