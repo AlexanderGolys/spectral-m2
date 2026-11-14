@@ -6,6 +6,7 @@ pub mod query;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use lsp_types::{
     SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokensLegend, ServerInfo,
@@ -22,6 +23,11 @@ use crate::ui::theme::groups::HLGroup;
 /// decides what is wrong with the syntax: an input left open is a continuation,
 /// not an error.
 const SYNTAX_ERROR: &str = "X01";
+/// The wait before a server that stopped after starting is started again,
+/// doubled with each further stop up to [`RESTART_LIMIT`], so a server that
+/// keeps failing is not restarted in a tight loop.
+const RESTART_DELAY: Duration = Duration::from_secs(1);
+const RESTART_LIMIT: Duration = Duration::from_secs(60);
 /// Characters other than letters and digits that continue a Macaulay2 name.
 const NAME_PUNCTUATION: &[char] = &['\'', '_', '$'];
 const OPTION: SemanticTokenModifier = SemanticTokenModifier::new("option");
@@ -166,6 +172,13 @@ pub struct SemanticHighlighter {
     pages: Vec<Arc<Document>>,
     /// Whether the language server should be running.
     server: bool,
+    /// Whether the running server finished starting, so that its failing is a
+    /// stop worth restarting from rather than a server unable to start at all.
+    started: bool,
+    /// When the server that stopped starts again.
+    restart: Option<Instant>,
+    /// How many times the server stopped since it was switched on.
+    stops: u32,
     /// Whether its semantic tokens color source.
     semantic: bool,
     version: i32,
@@ -182,6 +195,8 @@ pub struct Polled {
     pub started: Option<ServerInfo>,
     /// Why the language server stopped.
     pub failure: Option<String>,
+    /// When the stopped server starts again, if it had been running.
+    pub restart_in: Option<Duration>,
     /// Documentation pages whose analysis finished.
     pub pages: Vec<PageColors>,
     /// Answers to questions put with [`SemanticHighlighter::ask`] and
@@ -214,6 +229,9 @@ impl SemanticHighlighter {
             client: None,
             pages: Vec::new(),
             server: false,
+            started: false,
+            restart: None,
+            stops: 0,
             semantic: false,
             version: 0,
             next_query: 0,
@@ -298,13 +316,32 @@ impl SemanticHighlighter {
         let restarted = self.server != server;
         if restarted {
             self.server = server;
-            self.client = server.then(Client::start);
+            self.client = None;
+            self.restart = None;
+            self.stops = 0;
+            if server {
+                self.start();
+            }
         }
         if !restarted && self.semantic == semantic {
             return false;
         }
         self.semantic = semantic;
-        if let Some(client) = self.client.as_ref().filter(|_| semantic) {
+        self.feed();
+        if !semantic {
+            self.clear_current();
+        }
+        restarted || !semantic
+    }
+
+    fn start(&mut self) {
+        self.client = Some(Client::start());
+        self.started = false;
+    }
+
+    /// Hand the server everything it colours: the session and every page shown.
+    fn feed(&self) {
+        if let Some(client) = self.client.as_ref().filter(|_| self.semantic) {
             if let Some(document) = &self.document {
                 client.update(document.clone());
             }
@@ -312,10 +349,13 @@ impl SemanticHighlighter {
                 client.analyse_page(page.clone());
             }
         }
-        if !semantic {
-            self.clear_current();
-        }
-        restarted || !semantic
+    }
+
+    /// How long to wait before starting again a server that just stopped.
+    fn restart_delay(&self) -> Duration {
+        RESTART_DELAY
+            .checked_mul(2u32.saturating_pow(self.stops))
+            .map_or(RESTART_LIMIT, |delay| delay.min(RESTART_LIMIT))
     }
 
     /// Replace the analysis source only when its text or source identities changed.
@@ -372,11 +412,19 @@ impl SemanticHighlighter {
     /// Apply current responses; report a repaint, the server's startup, and at
     /// most one server failure.
     pub fn poll(&mut self) -> Polled {
+        if self.restart.is_some_and(|at| at <= Instant::now()) {
+            self.restart = None;
+            self.start();
+            self.feed();
+        }
         let events = self.client.as_ref().map_or_else(Vec::new, Client::poll);
         let mut polled = Polled::default();
         for event in events {
             match event {
-                Event::Started(info) => polled.started = Some(info),
+                Event::Started(info) => {
+                    self.started = true;
+                    polled.started = Some(info);
+                }
                 Event::Tokens {
                     document,
                     legend,
@@ -437,6 +485,12 @@ impl SemanticHighlighter {
                     self.clear_current();
                     polled.recolored = true;
                     polled.failure = Some(message);
+                    if self.started {
+                        let delay = self.restart_delay();
+                        self.stops = self.stops.saturating_add(1);
+                        self.restart = Some(Instant::now() + delay);
+                        polled.restart_in = Some(delay);
+                    }
                 }
             }
         }

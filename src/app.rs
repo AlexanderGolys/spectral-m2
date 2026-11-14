@@ -130,11 +130,15 @@ struct App {
     archived_code: String,
     /// Questions put to the language server, by what their answers are for.
     asked: HashMap<QueryId, Asked>,
-    /// The input's revision and cursor when the server was last asked about them.
-    asked_at: Option<(u64, usize)>,
-    /// The input's revision and cursor as last seen, and since when they hold.
-    cursor_seen: Option<((u64, usize), Instant)>,
+    /// The cursor when the server was last asked about it.
+    asked_at: Option<CursorAt>,
+    /// The cursor as last seen, and since when it holds.
+    cursor_seen: Option<(CursorAt, Instant)>,
 }
+
+/// Where a question about the input's cursor stands: the input's revision and
+/// the cursor's byte offset in it. An answer about any other is out of date.
+type CursorAt = (u64, usize);
 
 /// What an answer from the language server is for.
 #[derive(Clone, Debug)]
@@ -145,10 +149,10 @@ enum Asked {
         anchor: Anchor,
         name: Option<String>,
     },
-    /// Where the name under the cursor occurs, in the input at a revision.
-    Occurrences(u64),
-    /// The call the cursor is in, in the input at a revision.
-    Signature(u64),
+    /// Where the name under the cursor occurs, asked with the cursor `at`.
+    Occurrences(CursorAt),
+    /// The call the cursor is in, asked with the cursor `at`.
+    Signature(CursorAt),
     /// Formatting the input, which then read this.
     Format(String),
     /// The stretches of a file shown beside the session that fold.
@@ -694,9 +698,9 @@ impl App {
     /// text has moved and come to rest, and after an edit which call the cursor
     /// is in.
     fn ask_about_cursor(&mut self) {
-        let (draft, _, revision) = self.workspace.editor.analysis_input();
-        let empty = draft.is_empty();
-        let at = (revision, self.workspace.editor.input_cursor());
+        let empty = self.workspace.editor.analysis_input().0.is_empty();
+        let at = self.cursor_at();
+        let (revision, _) = at;
         if self.cursor_seen.is_none_or(|(seen, _)| seen != at) {
             self.cursor_seen = Some((at, Instant::now()));
         }
@@ -714,14 +718,20 @@ impl App {
                 self.asked.insert(id, asked);
             }
         };
-        ask(Question::Highlights, Asked::Occurrences(revision));
+        ask(Question::Highlights, Asked::Occurrences(at));
         if edited && workspace.editor.signature_hints() {
-            ask(Question::Signature, Asked::Signature(revision));
+            ask(Question::Signature, Asked::Signature(at));
         }
+    }
+
+    fn cursor_at(&self) -> CursorAt {
+        let editor = &self.workspace.editor;
+        (editor.analysis_input().2, editor.input_cursor())
     }
 
     /// Carry out what the language server answered to a question asked for `asked`.
     fn answered(&mut self, asked: Asked, answer: Answer) -> bool {
+        let cursor = self.cursor_at();
         let editor = &mut self.workspace.editor;
         match (asked, answer) {
             (
@@ -769,7 +779,7 @@ impl App {
                 Some(place) => self.go_to(place),
                 None => editor.apply(EditorUpdate::Diagnostic(NO_DEFINITION.to_string())),
             },
-            (Asked::Occurrences(revision), Answer::Highlights(places)) => {
+            (Asked::Occurrences(at @ (revision, _)), Answer::Highlights(places)) if at == cursor => {
                 let draft = self.workspace.highlighter.draft();
                 let ranges = places
                     .into_iter()
@@ -778,8 +788,8 @@ impl App {
                     .collect();
                 editor.apply(EditorUpdate::InputOccurrences { revision, ranges })
             }
-            (Asked::Signature(revision), Answer::Signature(signatures))
-                if revision == editor.analysis_input().2 && editor.signature_hints() =>
+            (Asked::Signature(at), Answer::Signature(signatures))
+                if at == cursor && editor.signature_hints() =>
             {
                 match signatures.is_empty() {
                     false => editor.apply(EditorUpdate::Float(Floating::new(
@@ -1317,11 +1327,16 @@ impl App {
         }
         if let Some(message) = polled.failure {
             workspace.editor.set_language_server_info(None);
+            let note = match polled.restart_in {
+                Some(delay) => format!(
+                    "Language server stopped: {message}\nRestarting it in {} s.",
+                    delay.as_secs()
+                ),
+                None => format!("Language server unavailable: {message}"),
+            };
             running &= workspace
                 .editor
-                .apply(EditorUpdate::Message(Box::new(TextBlock::system(format!(
-                    "Language server unavailable: {message}"
-                )))));
+                .apply(EditorUpdate::Message(Box::new(TextBlock::system(note))));
             dirty = true;
         }
         (running, dirty)

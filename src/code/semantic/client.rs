@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use lsp_server::{Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{
-    DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Exit, Initialized,
+    Cancel, DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Exit, Initialized,
     Notification as NotificationMethod, PublishDiagnostics,
 };
 use lsp_types::request::{
@@ -40,7 +40,12 @@ pub const SERVER_EXECUTABLE: &str = "m2-ls";
 const STDERR_CAPACITY: usize = 16 * 1024;
 const FAILURE_LOG: &str = "language-server.log";
 const DEBOUNCE: Duration = Duration::from_millis(100);
+/// How long a request may wait for its answer before it is cancelled and,
+/// when it was a question, answered with nothing.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a server may say nothing at all while asked something before it
+/// counts as hung: a busy server still answers or cancels within this.
+const SILENCE_LIMIT: Duration = Duration::from_secs(30);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const WORKER_INTERVAL: Duration = Duration::from_millis(10);
 /// The longest a question about a document apart waits for the server to have
@@ -423,6 +428,8 @@ struct Worker<'a> {
     reading: HashMap<String, (Query, Instant)>,
     next_id: i32,
     in_flight: HashMap<RequestId, (Pending, Instant)>,
+    /// Since when the server has said nothing while asked something.
+    silent_since: Option<Instant>,
 }
 
 fn serve(
@@ -449,6 +456,7 @@ fn serve(
         reading: HashMap::new(),
         next_id: 1,
         in_flight: HashMap::new(),
+        silent_since: None,
     };
     let result = (|| {
         worker.process.request(
@@ -499,11 +507,19 @@ impl Worker<'_> {
     /// Send what is due, then handle at most one message from the server.
     fn step(&mut self) -> Result<(), String> {
         if self
-            .in_flight
-            .values()
-            .any(|(_, sent)| sent.elapsed() >= self.timeout)
+            .silent_since
+            .is_some_and(|since| since.elapsed() >= SILENCE_LIMIT)
         {
-            return Err("language-server request timed out".to_string());
+            return Err("language server stopped answering".to_string());
+        }
+        let overdue: Vec<RequestId> = self
+            .in_flight
+            .iter()
+            .filter(|(_, (_, sent))| sent.elapsed() >= self.timeout)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in overdue {
+            self.abandon(id)?;
         }
         if self.initialized {
             if self.legend.is_none() && (self.pending.is_some() || !self.pages.is_empty()) {
@@ -512,10 +528,13 @@ impl Worker<'_> {
             self.send_due()?;
         }
         match self.process.incoming.recv_timeout(WORKER_INTERVAL) {
-            Ok(WireEvent::Message(Message::Response(response))) => self.receive(response),
-            Ok(WireEvent::Message(Message::Request(request))) => self.answer(request),
-            Ok(WireEvent::Message(Message::Notification(notification))) => {
-                self.notified(notification)
+            Ok(WireEvent::Message(message)) => {
+                self.silent_since = None;
+                match message {
+                    Message::Response(response) => self.receive(response),
+                    Message::Request(request) => self.answer(request),
+                    Message::Notification(notification) => self.notified(notification),
+                }
             }
             Ok(WireEvent::Closed(error)) => Err(error),
             Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
@@ -703,6 +722,39 @@ impl Worker<'_> {
             .ok_or("LSP request identifiers exhausted")?;
         self.process.request(id, method, params)?;
         self.in_flight.insert(id.into(), (pending, Instant::now()));
+        self.silent_since.get_or_insert_with(Instant::now);
+        Ok(())
+    }
+
+    /// Give up waiting for request `id`: the server is told to drop it, and a
+    /// question is answered with nothing, as one it cannot answer is.
+    fn abandon(&mut self, id: RequestId) -> Result<(), String> {
+        let Some((pending, _)) = self.in_flight.remove(&id) else {
+            return Ok(());
+        };
+        self.process.notify(Cancel::METHOD, json!({ "id": id }))?;
+        match pending {
+            Pending::Tokens {
+                page_uri: Some(uri),
+                ..
+            } => self.close(&uri),
+            Pending::Tokens { page_uri: None, .. } | Pending::Bindings(_) => Ok(()),
+            Pending::Query { query, apart_uri } => self.settle(query, apart_uri, Value::Null),
+        }
+    }
+
+    /// Deliver what the server answered `query`, closing its document apart.
+    fn settle(
+        &mut self,
+        query: Query,
+        apart_uri: Option<String>,
+        result: Value,
+    ) -> Result<(), String> {
+        if let Some(uri) = &apart_uri {
+            self.close(uri)?;
+        }
+        let answer = answer(&query, apart_uri.as_deref(), self.open_uri(), result);
+        let _ = self.events.send(Event::Answered { query, answer });
         Ok(())
     }
 
@@ -760,14 +812,10 @@ impl Worker<'_> {
                 }
             }
             Pending::Query { query, apart_uri } => {
-                if let Some(uri) = &apart_uri {
-                    self.close(uri)?;
-                }
                 // A question the server cannot answer is answered with nothing,
                 // never with a failure of the whole server.
                 let result = response.response_result.unwrap_or(Value::Null);
-                let answer = answer(&query, apart_uri.as_deref(), self.open_uri(), result);
-                let _ = self.events.send(Event::Answered { query, answer });
+                self.settle(query, apart_uri, result)?;
             }
         }
         Ok(())
