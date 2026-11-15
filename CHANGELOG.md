@@ -4,6 +4,15 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- The arrows in every combination, `Shift+Enter`, `Ctrl+C`, `Ctrl+U` and `Ctrl+W` are fixed like the other editing keys and leave the keymaps list.
+
+### Fixed
+
+- The wheel over a picker moves through its rows instead of scrolling the feed beneath it.
+- Clicking the formatter icon of a documentation example's output in the view beside the session switches its formatter, as it does in the feed.
+
 ## [1.3.1] - 2026-11-14
 
 ### Added
@@ -329,7 +338,8 @@ First crates.io release.
 - Reorganized the shell around workspace sessions, typed feed blocks, responsive panes, and independently rendered previews.
 - Made installation Cargo-managed and removed manual binary copying and local-bin symlinks.
 
-[Unreleased]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.1...v1.2.2

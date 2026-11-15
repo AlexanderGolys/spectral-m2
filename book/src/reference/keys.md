@@ -1,13 +1,13 @@
 # Default keys
 
-Every key below can be [rebound](../custom/keymaps.md) unless marked *fixed*. The groups are the contexts of the keymaps picker; fixed keys, the ones every editor gives the same meaning, stay out of it so the shortcuts worth learning are easy to find.
+Every key below can be [rebound](../custom/keymaps.md) unless marked *fixed*. The groups are the contexts of the keymaps picker; fixed keys, the arrows in every combination and the keys every editor or shell gives the same meaning, stay out of it so the shortcuts worth learning are easy to find.
 
 ## Global
 
 | Key | Action |
 | --- | --- |
 | `Enter` | Evaluate the input, or add a line to an unfinished construct. *Fixed.* |
-| `Ctrl+C` | Cancel the computation and queued work; when idle, discard a continuation or draft, then quit. |
+| `Ctrl+C` | Cancel the computation and queued work; when idle, discard a continuation or draft, then quit. *Fixed.* |
 | `Ctrl+/` | Open the commands. |
 | `Ctrl+O` | Open the settings. |
 | `Ctrl+Shift+K` | Open the keymaps. |
@@ -23,7 +23,7 @@ Every key below can be [rebound](../custom/keymaps.md) unless marked *fixed*. Th
 | `Ctrl+Y` | Copy the selection. |
 | `Ctrl+X` | Cut the input's selection, or its current line when nothing is selected. *Fixed.* |
 | `Ctrl+E` | Move the cursor into the feed or the focused view, and back; see [the view cursor](#the-view-cursor). |
-| `Alt+Up`, `Alt+Down` | Select the previous or next cell or result. |
+| `Alt+Up`, `Alt+Down` | Select the previous or next cell or result. *Fixed.* |
 | `Alt+K` | Tell what the name at the cursor is, in a panel beside it. |
 | `Ctrl+]` (`Ctrl+5`) | Go to where the name at the cursor is defined. |
 | `Alt+]` | Describe the name at the cursor beside the session, in a tab of its own. |
@@ -41,10 +41,10 @@ Every key below can be [rebound](../custom/keymaps.md) unless marked *fixed*. Th
 | `Left`, `Right` | Move left or right. *Fixed.* |
 | `Up`, `Down` | Move up or down; at the first or last line, recall older or newer input. *Fixed.* |
 | `Ctrl+Left`, `Ctrl+Right` | Move by a word. *Fixed.* |
-| `Alt+Left`, `Alt+Right` | Move past text up to whitespace, brackets and punctuation included. |
+| `Alt+Left`, `Alt+Right` | Move past text up to whitespace, brackets and punctuation included. *Fixed.* |
 | `Home`, `End` | Move to the start or end of the line. *Fixed.* |
-| `Ctrl+Alt+Up`, `Ctrl+Alt+Down` | Move to the blank line before or after the paragraph. |
-| `Ctrl+Alt+Left`, `Ctrl+Alt+Right` | Move to the bracket opening the block the cursor is in, or past the one closing it; again, to the block around that. |
+| `Ctrl+Alt+Up`, `Ctrl+Alt+Down` | Move to the blank line before or after the paragraph. *Fixed.* |
+| `Ctrl+Alt+Left`, `Ctrl+Alt+Right` | Move to the bracket opening the block the cursor is in, or past the one closing it; again, to the block around that. *Fixed.* |
 | `Alt+M` | Jump to the partner of the bracket at the cursor. |
 | `Ctrl+Home`, `Ctrl+End` | Move to the start or end of the input. *Fixed.* |
 
@@ -53,22 +53,22 @@ Every key below can be [rebound](../custom/keymaps.md) unless marked *fixed*. Th
 | Key | Action |
 | --- | --- |
 | `Shift` with any fixed movement key | Extend the selection the same way. *Fixed.* |
-| `Alt+Shift+Left`, `Alt+Shift+Right` | Extend the selection up to whitespace. |
-| `Ctrl+Alt+Shift+Up`, `Ctrl+Alt+Shift+Down` | Extend the selection by a paragraph. |
-| `Alt+Shift+Up` | Grow the selection: the word, then what the brackets around it hold, the brackets too, the line, the paragraph, everything. |
-| `Alt+Shift+Down` | Shrink it back the way it grew. |
+| `Alt+Shift+Left`, `Alt+Shift+Right` | Extend the selection up to whitespace. *Fixed.* |
+| `Ctrl+Alt+Shift+Up`, `Ctrl+Alt+Shift+Down` | Extend the selection by a paragraph. *Fixed.* |
+| `Alt+Shift+Up` | Grow the selection: the word, then what the brackets around it hold, the brackets too, the line, the paragraph, everything. *Fixed.* |
+| `Alt+Shift+Down` | Shrink it back the way it grew. *Fixed.* |
 | `Ctrl+A` | Select the whole input. *Fixed.* |
 
 ## Editing
 
 | Key | Action |
 | --- | --- |
-| `Shift+Enter` | Insert a line break. `Alt+Enter`, `Shift+Space` and `Ctrl+J` do the same, for terminals that cannot report `Shift+Enter`. |
+| `Shift+Enter` | Insert a line break. `Alt+Enter`, `Shift+Space` and `Ctrl+J` do the same, for terminals that cannot report `Shift+Enter`. *Fixed.* |
 | `Alt+Tab` | Insert a tab. |
 | `Backspace`, `Delete` | Delete before or under the cursor. *Fixed.* |
 | `Ctrl+Backspace`, `Ctrl+Delete` | Delete back or on by a word. `Alt` works too, and so does `Ctrl+H`, which some terminals send for `Ctrl+Backspace`. *Fixed.* |
-| `Ctrl+W` | Delete back to the whitespace before the cursor. |
-| `Ctrl+U` | Delete the current line. |
+| `Ctrl+W` | Delete back to the whitespace before the cursor. *Fixed.* |
+| `Ctrl+U` | Delete the current line. *Fixed.* |
 | `Ctrl+L` | Clear the input. |
 | `Ctrl+Z`, `Ctrl+Shift+Z` | Undo, redo. *Fixed.* |
 
@@ -78,7 +78,7 @@ Every key below can be [rebound](../custom/keymaps.md) unless marked *fixed*. Th
 | --- | --- |
 | `Tab` | Show completion candidates, take the hint, or take the next candidate. *Fixed.* |
 | `Shift+Tab`, `Ctrl+Tab` | Take the previous candidate. *Fixed.* |
-| `Ctrl+Up`, `Ctrl+Down` | Step to the very previous or next entry, whatever was typed and from any line. |
+| `Ctrl+Up`, `Ctrl+Down` | Step to the very previous or next entry, whatever was typed and from any line. *Fixed.* |
 
 ## In views and pickers
 

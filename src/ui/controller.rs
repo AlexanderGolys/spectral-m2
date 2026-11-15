@@ -887,6 +887,27 @@ impl Editor {
         Reaction::Continue
     }
 
+    /// Turn the wheel over the picker: its rows move instead of whatever lies
+    /// beneath it. False when the wheel is not over an open picker.
+    pub fn scroll_picker(&mut self, event: MouseEvent) -> bool {
+        let delta = match event.kind {
+            MouseEventKind::ScrollUp => -self.wheel_rows(),
+            MouseEventKind::ScrollDown => self.wheel_rows(),
+            _ => return false,
+        };
+        let pointer = Position::new(event.column, event.row);
+        let Some(controller) = self
+            .pickers
+            .last_mut()
+            .filter(|_| self.pane_focused && self.picker_area.contains(pointer))
+        else {
+            return false;
+        };
+        controller.picker.scroll(delta);
+        self.refresh_status_line();
+        true
+    }
+
     /// Show the picker tab clicked at `pointer`, if one is drawn there.
     fn click_picker_tab(&mut self, pointer: Position) -> bool {
         let area = self.picker_area;
@@ -984,6 +1005,12 @@ impl Editor {
                 self.screen_selection = None;
                 return Self::open_link(link.target.to_string(), in_feed);
             }
+        }
+        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
+            && self.reference.cycle_renderer(pointer)
+        {
+            self.screen_selection = None;
+            return Reaction::Continue;
         }
         let clicks = self.clicks(event);
         if clicks >= 2 && self.reference.toggle_fold(pointer) {

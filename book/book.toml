@@ -24,6 +24,8 @@ bash = { aliases = ["bash", "sh", "shell", "console"] }
 toml = {}
 
 [output.html]
+# Where the book is served, so the 404 page finds its assets.
+site-url = "/docs/spectral-m2/"
 git-repository-url = "https://github.com/AlexanderGolys/spectral-m2"
 git-repository-icon = "fab-github"
 edit-url-template = "https://github.com/AlexanderGolys/spectral-m2/edit/master/book/{path}"
