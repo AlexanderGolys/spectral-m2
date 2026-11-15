@@ -8,7 +8,7 @@ newPackage(
 	Authors => {{
 		Name => "Alexander Golys",
 		Email => "alexandergolys@gmail.com",
-		HomePage => "https://github.com/AlexanderGolys/spectral-m2"
+		HomePage => "https://eigenflux.dev/docs/spectral-m2"
 	}},
 	DebuggingMode => false
 )

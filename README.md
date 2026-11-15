@@ -65,7 +65,7 @@ Spectral preserves normal Macaulay2 initialization, including `~/.Macaulay2/init
 
 ## Documentation
 
-The [book](https://github.com/AlexanderGolys/spectral-m2/tree/master/book) shows how to work in the shell, how to make it yours, and lists every command, key, setting and option. From a source checkout:
+The [book](https://eigenflux.dev/docs/spectral-m2) shows how to work in the shell, how to make it yours, and lists every command, key, setting and option. To read it offline from a source checkout:
 
 ```sh
 cargo install mdbook mdbook-tsitter
