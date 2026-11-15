@@ -12,6 +12,7 @@ mod env;
 mod errors;
 mod input;
 mod ui;
+mod updates;
 
 pub(crate) mod macros;
 

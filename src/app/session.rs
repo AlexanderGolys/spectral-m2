@@ -103,6 +103,8 @@ pub struct Session {
     restarting: bool,
     /// Code to run in the fresh session once the restart it waits for succeeds.
     after_restart: Option<String>,
+    /// A restart has completed since [`Self::take_restarted`] last asked.
+    restarted: bool,
     /// Documentation examples computed again, apart from the session.
     examples: ExampleRunner,
     /// How long each example may take; zero computes none.
@@ -150,6 +152,7 @@ impl Session {
             evaluations: VecDeque::new(),
             restarting: false,
             after_restart: None,
+            restarted: false,
             examples: ExampleRunner::new(),
             example_timeout: Duration::ZERO,
             computed_pages: HashSet::new(),
@@ -381,6 +384,10 @@ impl Session {
             self.after_restart = Some(code);
         }
         update
+    }
+
+    pub fn take_restarted(&mut self) -> bool {
+        mem::take(&mut self.restarted)
     }
 
     /// The code kept by [`Self::restart_with`], once its restart has succeeded.
@@ -775,6 +782,7 @@ impl Session {
             Ok((version, names, startup_output)) => {
                 // Empty unless M2 restarted itself, from a cell still pending.
                 let mut updates = self.stop_for_restart();
+                self.restarted = true;
                 self.version = version;
                 self.in_debugger = false;
                 self.next_input_number = 1;

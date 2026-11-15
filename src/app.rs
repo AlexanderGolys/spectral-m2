@@ -55,6 +55,7 @@ use crate::ui::render::markdown;
 use crate::ui::render::markup;
 use crate::ui::terminal::ReplTerminal;
 use crate::ui::theme::groups::{scheme, HLGroup};
+use crate::updates::{UpdateChecks, LANGUAGE_SERVER, SHELL};
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(80);
 /// How often to look for pictures or layouts workers have finished while any remain.
@@ -134,6 +135,7 @@ struct App {
     asked_at: Option<CursorAt>,
     /// The cursor as last seen, and since when it holds.
     cursor_seen: Option<(CursorAt, Instant)>,
+    updates: UpdateChecks,
 }
 
 /// Where a question about the input's cursor stands: the input's revision and
@@ -162,7 +164,7 @@ enum Asked {
 impl App {
     fn new(backend: M2Backend) -> Self {
         let _ = code_file::archive_previous_session();
-        Self {
+        let app = Self {
             workspace: Workspace::new(backend),
             panes: Panes::new(),
             split_ratio: 500,
@@ -178,7 +180,10 @@ impl App {
             asked: HashMap::new(),
             asked_at: None,
             cursor_seen: None,
-        }
+            updates: UpdateChecks::new(),
+        };
+        app.check_for_updates();
+        app
     }
 
     fn handle_event(&mut self, event: Event) -> bool {
@@ -1193,6 +1198,13 @@ impl App {
         }
     }
 
+    /// Look for newer versions of sp2 and of the language server it runs.
+    fn check_for_updates(&self) {
+        self.updates.check(SHELL, Some(env!("CARGO_PKG_VERSION")));
+        let server = self.workspace.editor.language_server_version();
+        self.updates.check(LANGUAGE_SERVER, server);
+    }
+
     fn poll(&mut self) -> (bool, bool) {
         let mut dirty = false;
         let mut running = true;
@@ -1235,6 +1247,18 @@ impl App {
         for update in self.workspace.session.poll() {
             dirty = true;
             running &= self.workspace.editor.apply(update);
+        }
+        if self.workspace.session.take_restarted() {
+            self.check_for_updates();
+        }
+        for update in self.updates.found() {
+            dirty = true;
+            running &=
+                self.workspace
+                    .editor
+                    .apply(EditorUpdate::Message(Box::new(TextBlock::system(
+                        update.to_string(),
+                    ))));
         }
         if let Some(code) = self.workspace.session.take_after_restart() {
             dirty = true;
@@ -1316,6 +1340,8 @@ impl App {
             dirty = true;
         }
         if let Some(server) = polled.started {
+            self.updates
+                .check(LANGUAGE_SERVER, server.version.as_deref());
             workspace
                 .editor
                 .set_language_server_info(Some(server.clone()));

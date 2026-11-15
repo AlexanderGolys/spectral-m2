@@ -410,6 +410,14 @@ impl Editor {
         );
     }
 
+    /// The version the running language server reported, if it did.
+    pub fn language_server_version(&self) -> Option<&str> {
+        match &self.status_runtime.language_server {
+            LanguageServerState::Running(server) => server.version.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Reflect whether this editor's backend currently owns unfinished work.
     pub fn set_processing(&mut self, processing: bool) {
         if self.processing != processing {

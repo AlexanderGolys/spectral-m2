@@ -45,6 +45,10 @@ sp2 -q --no-randomize --resume
 
 `-E` runs an expression before M2 initialises and `-e` after; both repeat. The full list is in [Command-line options](../reference/cli.md).
 
+## Stay up to date
+
+When it starts, and after every restart, `sp2` looks for a newer version of itself and of `m2-ls`. It checks the copy installed on your `PATH`, which may be newer than the one running if you reinstalled since starting it, and the latest release on crates.io. If either is newer, a note in the feed names the newest version and how to get it. Without a network connection or `cargo` the check is skipped silently.
+
 ## Leave
 
 `Ctrl+C` quits when nothing is running and the input is empty. During a computation it cancels the computation instead and keeps the session; see [A first session](first-session.md#cancel). Macaulay2's own `exit`, `quit` and `end` close the shell too.
