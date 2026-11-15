@@ -116,7 +116,7 @@ pub struct Session {
 
 impl Session {
     pub fn new(backend: M2Backend) -> Self {
-        let version = backend.version().unwrap_or_else(|_| "unknown".to_string());
+        let version = backend.version().to_string();
         let (request_tx, request_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
         let m2_process = Arc::new(AtomicU32::new(backend.process_id()));
@@ -210,8 +210,8 @@ impl Session {
         }
     }
 
-    pub fn version(&self) -> Result<String, Error> {
-        Ok(self.version.clone())
+    pub fn version(&self) -> &str {
+        &self.version
     }
 
     #[cfg(test)]
@@ -344,20 +344,7 @@ impl Session {
             return EditorUpdate::Ignore;
         }
         self.restart_requested.store(true, Ordering::Release);
-        let pending = self
-            .evaluations
-            .drain(..)
-            .map(|evaluation| {
-                evaluation.cancelled.store(true, Ordering::Release);
-                EditorUpdate::CellFailed {
-                    id: evaluation.id,
-                    index: 0,
-                    number: self.next_input_number,
-                    printed: None,
-                    message: "Computation stopped for restart".to_string(),
-                }
-            })
-            .collect();
+        let pending = self.stop_for_restart();
         // Wake the worker even when the interpreter no longer handles interrupts.
         let _ = killpg(Pid::from_raw(self.m2_process() as i32), Signal::SIGKILL);
         if self.requests.send(WorkerRequest::Restart).is_err() {
@@ -366,6 +353,24 @@ impl Session {
         }
         self.restarting = true;
         Self::batch(pending)
+    }
+
+    /// Cancel every evaluation still pending, as a restart ends them.
+    fn stop_for_restart(&mut self) -> Vec<EditorUpdate> {
+        let number = self.next_input_number;
+        self.evaluations
+            .drain(..)
+            .map(|evaluation| {
+                evaluation.cancelled.store(true, Ordering::Release);
+                EditorUpdate::CellFailed {
+                    id: evaluation.id,
+                    index: 0,
+                    number,
+                    printed: None,
+                    message: "Computation stopped for restart".to_string(),
+                }
+            })
+            .collect()
     }
 
     /// Restart, keeping `code` to run in the fresh session once the restart
@@ -768,6 +773,8 @@ impl Session {
         self.restarting = false;
         match result {
             Ok((version, names, startup_output)) => {
+                // Empty unless M2 restarted itself, from a cell still pending.
+                let mut updates = self.stop_for_restart();
                 self.version = version;
                 self.in_debugger = false;
                 self.next_input_number = 1;
@@ -776,12 +783,12 @@ impl Session {
                 self.committed_revision = self.committed_revision.wrapping_add(1);
                 self.leading_whitespace.clear();
                 self.parser.reset_active();
-                let mut updates = vec![
+                updates.extend([
                     EditorUpdate::Message(Box::new(TextBlock::system(
                         "Macaulay2 restarted -- the session is empty and numbering begins again",
                     ))),
                     EditorUpdate::KnownNames(names),
-                ];
+                ]);
                 if !startup_output.is_empty() {
                     updates.push(EditorUpdate::Message(Box::new(TextBlock::printed(
                         startup_output,
@@ -838,9 +845,19 @@ fn worker(
                     if restart_requested.load(Ordering::Acquire) {
                         break;
                     }
-                    if matches!(result, Err(Error::Exited(_))) {
-                        let _ = events.send(WorkerEvent::Exited);
-                        return;
+                    match result {
+                        Err(Error::Exited(_)) => {
+                            let _ = events.send(WorkerEvent::Exited);
+                            return;
+                        }
+                        Err(Error::Restarted) => {
+                            let announced = Ok(backend.take_announcement());
+                            if events.send(WorkerEvent::Restarted(announced)).is_err() {
+                                return;
+                            }
+                            break;
+                        }
+                        _ => {}
                     }
                     let result = result.map_err(|error| error.to_string());
                     // M2 numbers its own inputs, so the number a cell is labelled
@@ -865,15 +882,10 @@ fn worker(
                 }
             }
             WorkerRequest::Restart => {
-                let result = backend.restarted().and_then(|mut replacement| {
-                    let started = (
-                        replacement.version()?,
-                        replacement.take_names(),
-                        replacement.take_startup_output(),
-                    );
+                let result = backend.restarted().map(|replacement| {
                     backend = replacement;
                     process.store(backend.process_id(), Ordering::Relaxed);
-                    Ok(started)
+                    backend.take_announcement()
                 });
                 restart_requested.store(false, Ordering::Release);
                 if events

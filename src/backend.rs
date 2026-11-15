@@ -303,9 +303,7 @@ impl M2Backend {
             startup_options: options.clone(),
             submission: 0,
         };
-        let ready = backend.wait_for_ready()?;
-        backend.version = ready.ready.unwrap_or_default();
-        backend.names = ready.names;
+        backend.wait_for_ready()?;
         Ok(backend)
     }
 
@@ -330,17 +328,16 @@ impl M2Backend {
     /// M2 sends it once the hooks are installed and before it can read a cell, so
     /// receiving it is the readiness signal. A child that dies during startup
     /// closes the pipe instead, which arrives here as a disconnect.
-    fn wait_for_ready(&mut self) -> Result<Frame> {
+    fn wait_for_ready(&mut self) -> Result<()> {
         let mut said = String::new();
         loop {
             match self.chunks.recv_timeout(STARTUP_TIMEOUT) {
                 Ok(Chunk::Text(text)) => said.push_str(&text),
                 Ok(Chunk::Frame(frame)) => {
                     let frame: Frame = serde_json::from_str(&frame)?;
-                    self.startup_output = said.trim().to_string();
-                    return match frame.ready {
-                        Some(_) => Ok(frame),
-                        None => Err(Error::Process(
+                    return match self.adopt_ready(frame, &said) {
+                        true => Ok(()),
+                        false => Err(Error::Process(
                             "Macaulay2 answered before it was ready".to_string(),
                         )),
                     };
@@ -353,6 +350,18 @@ impl M2Backend {
                 }
             }
         }
+    }
+
+    /// Take over what a startup frame announces, with the text printed before it;
+    /// false when `frame` is not a startup frame.
+    fn adopt_ready(&mut self, frame: Frame, said: &str) -> bool {
+        let Some(version) = frame.ready else {
+            return false;
+        };
+        self.version = version;
+        self.names = frame.names;
+        self.startup_output = said.trim().to_string();
+        true
     }
 
     /// How the child ended, with whatever it said on the way out.
@@ -450,6 +459,12 @@ impl M2Backend {
                 Ok(Chunk::Text(text)) => transcript.push_str(&text),
                 Ok(Chunk::Frame(frame)) => {
                     let frame: Frame = serde_json::from_str(&frame)?;
+                    // A startup frame mid-cell: M2 ran its own `restart`, which
+                    // re-executes it in place, on the same process and pipes.
+                    if frame.ready.is_some() {
+                        self.adopt_ready(frame, &transcript);
+                        return Err(Error::Restarted);
+                    }
                     if frame.submission != self.submission {
                         // Closes an earlier submission: its output is not ours.
                         transcript.clear();
@@ -477,8 +492,14 @@ impl M2Backend {
     }
 
     /// The M2 version, as reported by the startup frame.
-    pub fn version(&self) -> Result<String> {
-        Ok(self.version.clone())
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    /// What M2 announced on becoming ready: its version, every name it started
+    /// with, and what it printed on the way.
+    pub fn take_announcement(&mut self) -> (String, Vec<String>, String) {
+        (self.version.clone(), self.take_names(), self.take_startup_output())
     }
 
     /// Every name M2 started with; later names arrive with each response.

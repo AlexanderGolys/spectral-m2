@@ -15,6 +15,8 @@ pub enum Error {
     Process(String),
     #[error("Macaulay2 exited: {0}")]
     Exited(std::process::ExitStatus),
+    #[error("Macaulay2 restarted itself")]
+    Restarted,
     #[error("Computation cancelled")]
     Cancelled,
     #[error("timed out after {0} seconds")]

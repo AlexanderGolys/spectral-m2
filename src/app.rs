@@ -95,7 +95,7 @@ impl Workspace {
         let names = backend.take_names();
         let startup_output = backend.take_startup_output();
         let session = Session::new(backend);
-        let version = session.version().unwrap_or_else(|_| "unknown".to_string());
+        let version = session.version().to_string();
         let mut editor = Editor::new(welcome_message(&version, None));
         editor.set_m2_version(version.clone());
         editor.apply(EditorUpdate::KnownNames(names));

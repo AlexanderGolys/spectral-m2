@@ -39,7 +39,7 @@ Type `/` into an empty input for the command picker, filtered as you type. `Ctrl
 
 When nothing is running, `Ctrl+C` first throws away an unfinished continuation or draft, and only quits once the input is empty. After three seconds of computing, the status line shows the cancel key, in case you rebound it.
 
-`Ctrl+N` restarts Macaulay2 with the same startup options, even during a computation that does not respond to `Ctrl+C`. Restart discards the running computation and starts an empty session. If cancellation gets no response, the shell reports it after a short wait so you can restart. `Alt+L` clears the feed without touching the session.
+`Ctrl+N` restarts Macaulay2 with the same startup options, even during a computation that does not respond to `Ctrl+C`. Restart discards the running computation and starts an empty session. Typing M2's own `restart` in a cell does the same. If cancellation gets no response, the shell reports it after a short wait so you can restart. `Alt+L` clears the feed without touching the session.
 
 > [!TIP]
 > Only one submission runs at a time. Submitting another while M2 is busy shows a diagnostic in the input instead of queueing it, so nothing runs in an order you did not expect.
