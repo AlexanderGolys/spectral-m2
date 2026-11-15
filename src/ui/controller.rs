@@ -1006,6 +1006,12 @@ impl Editor {
                 return Self::open_link(link.target.to_string(), in_feed);
             }
         }
+        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
+            && self.reference.cycle_renderer(pointer)
+        {
+            self.screen_selection = None;
+            return Reaction::Continue;
+        }
         let clicks = self.clicks(event);
         if clicks >= 2 && self.reference.toggle_fold(pointer) {
             self.last_click = None;
