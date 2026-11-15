@@ -283,6 +283,21 @@ spectralShell := (() -> (
 	)
 	);
 
+	-- The prompts follow the same rule: the session shows none, while `capture`
+    -- reads its examples back by the `iN :` prompts it prints, so under it they
+    -- are M2's stock ones, read when asked for since M2 swaps them at will. The
+    -- interpreter keys them by symbols of its own, not the `InputPrompt` Core
+    -- exports, so the keys are taken from the stock prompts themselves.
+	promptNames := {"InputPrompt", "InputContinuationPrompt"};
+	scan(keys ZZ, key -> if instance(key, List) and first key === Standard
+			and member(toString last key, promptNames) then
+				ZZ#{shell, last key} = number -> (
+					if stopIfError then
+						ZZ#key number
+					else ""
+				)
+	);
+
 	-- Sent by the shell after every cell, and the only part of a submission the
     -- user did not write. It is the sole thing that closes an input.
     --
