@@ -480,6 +480,24 @@ impl Picker {
         }
     }
 
+    /// Move `delta` rows for a turn of the wheel: like the arrow keys, but stopping
+    /// at the first and last rows instead of wrapping round or climbing onto the
+    /// row of tabs.
+    pub fn scroll(&mut self, delta: isize) {
+        for _ in 0..delta.unsigned_abs() {
+            let (selected, on_tab_bar) = (self.selected, self.on_tab_bar);
+            self.move_selection(delta.signum());
+            let wrapped = match delta > 0 {
+                true => !on_tab_bar && self.selected < selected,
+                false => !on_tab_bar && self.selected > selected,
+            };
+            if self.on_tab_bar || wrapped {
+                (self.selected, self.on_tab_bar) = (selected, on_tab_bar);
+                return;
+            }
+        }
+    }
+
     /// Whether the row, or the button past them, at `position` can be selected.
     fn selectable_at(&self, position: usize) -> bool {
         self.items()

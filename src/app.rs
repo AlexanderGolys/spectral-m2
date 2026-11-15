@@ -383,6 +383,9 @@ impl App {
                 self.panes.focus(index);
             }
         }
+        if self.workspace.editor.scroll_picker(mouse) {
+            return true;
+        }
         let wheel_rows = self.workspace.editor.wheel_rows().unsigned_abs();
         let pane = self.panes.focused_mut();
         if pane.view == ViewKind::Reference {
