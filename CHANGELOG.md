@@ -4,6 +4,15 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- The arrows in every combination, `Shift+Enter`, `Ctrl+C`, `Ctrl+U` and `Ctrl+W` are fixed like the other editing keys and leave the keymaps list.
+
+### Fixed
+
+- The wheel over a picker moves through its rows instead of scrolling the feed beneath it.
+- Clicking the formatter icon of a documentation example's output in the view beside the session switches its formatter, as it does in the feed.
+
 ## [1.3.1] - 2026-11-14
 
 ### Added
