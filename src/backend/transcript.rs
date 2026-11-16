@@ -27,10 +27,12 @@ pub struct CapturedError {
     pub diagnostic: String,
 }
 
-/// A warning's opening line, carried beside otherwise successful output: stamped
-/// with M2's location, or bare as Core's `warningMessage` writes it.
-static WARNING: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(&format!("^(?:{LOCATION})?warning: ")).expect("valid pattern"));
+/// A warning's opening line, up to its message: stamped with M2's location, bare
+/// as Core's `warningMessage` writes it, or commented out with a `-- *** ` mark
+/// as the documentation tools write theirs.
+static WARNING: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"^(?:{LOCATION}|-- \*\*\* )?warning: ")).expect("valid pattern")
+});
 
 /// A line continuing the warning above it, indented to the keyword's colon:
 /// `       : debug with expression   debug 365   or with command line option …`.
@@ -49,10 +51,6 @@ static LOCATION_PREFIX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(&format!("^{LOCATION}")).expect("valid pattern"));
 const LOCATION: &str = r"[^\s:]*:\d+:\d+:\(\d+\):\[\d+\]: ";
 
-/// The `warning: ` / `error: ` keyword introducing a diagnostic's message.
-static DIAGNOSTIC_KEYWORD: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[a-z]+: ").expect("valid pattern"));
-
 /// Strip M2's cryptic source-location prefix (`currentString:1:6:(3):[8]: `),
 /// keeping only the message (`warning: …` / `error: …`). The prefix is slated
 /// for removal upstream, so we drop it rather than render it. Returns the input
@@ -61,13 +59,6 @@ pub fn strip_m2_location(s: &str) -> &str {
     LOCATION_PREFIX
         .find(s)
         .map_or(s, |location| &s[location.end()..])
-}
-
-/// Drop the introducing keyword, leaving the message itself.
-fn diagnostic_message(s: &str) -> &str {
-    DIAGNOSTIC_KEYWORD
-        .find(s)
-        .map_or(s, |keyword| &s[keyword.end()..])
 }
 
 /// The text `capture` produced for `code`.
@@ -112,8 +103,8 @@ fn take_warnings(text: &str) -> (String, Vec<String>) {
     for line in text.split('\n') {
         if BACKTRACE.is_match(line.trim()) {
             continuing = false;
-        } else if WARNING.is_match(line) {
-            warnings.push(diagnostic_message(strip_m2_location(line)).to_string());
+        } else if let Some(opening) = WARNING.find(line) {
+            warnings.push(line[opening.end()..].to_string());
             continuing = true;
         } else if let Some(more) = CONTINUATION.find(line).filter(|_| continuing) {
             let warning = warnings

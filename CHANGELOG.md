@@ -14,13 +14,14 @@ All notable changes to Spectral M2 are documented here.
 
 ### Changed
 
+- The input's diagnostic line stands above its code instead of below it.
 - Contrast is a continuous slider through native theme variants; saved native-variant choices migrate to their matching stops.
 - Picker tabs have separators, the side pane has a frame, palette names use their own colours, and key hints take priority when statusline space is tight.
 - `Descent` values retain their hierarchy and render one branch per row.
 
 ### Fixed
 
-- Every `warning:` M2 writes gets its own warning block, with the indented `: …` lines that continue it, including Core's unlocated warnings and warnings raised before an error.
+- Every `warning:` M2 writes gets its own warning block, with the indented `: …` lines that continue it, including Core's unlocated warnings, the documentation tools' `-- *** warning:` lines and warnings raised before an error.
 - Smoother while anything moves: the screen redraws at up to 60 frames a second during a run or background work (80 ms when idle), keys are read on a thread of their own so none waits on a frame, and the spinner turns on its own clock.
 - A huge result no longer freezes sp2: values are laid out and turned into text on worker threads, showing `… laying out …` until ready, so the spinner keeps moving and Ctrl+C cancels the run.
 - A Ctrl+C arriving within half a second after a run ends is ignored instead of clearing the input or quitting, and input left unread at exit no longer spills into the shell.

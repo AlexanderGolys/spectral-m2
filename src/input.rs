@@ -815,7 +815,7 @@ impl InputCode {
         })
     }
 
-    /// The message under the input: the shell's own diagnostic, else what the
+    /// The message above the input's code: the shell's own diagnostic, else what the
     /// server found under the cursor, else its first error.
     fn shown_diagnostic(&self) -> Option<(String, Severity)> {
         if let Some(diagnostic) = &self.diagnostic {
@@ -1262,10 +1262,9 @@ impl InputCode {
             }
         }
 
-        let viewport = area
-            .height
-            .saturating_sub(2 + u16::from(diagnostic.is_some()))
-            .max(1) as usize;
+        // The diagnostic stands between the top row and the code it is about.
+        let code_top = 1 + u16::from(diagnostic.is_some());
+        let viewport = area.height.saturating_sub(code_top + 1).max(1) as usize;
         let (cursor_row, cursor_column) = self.visual_cursor(text_width);
         let clipped = rows.len() > viewport;
         self.pinned_first_row = clipped && viewport >= 3;
@@ -1277,7 +1276,7 @@ impl InputCode {
         }
         self.text_area = Rect::new(
             area.x + context.render.prefix(),
-            area.y + 1,
+            area.y + code_top,
             text_width,
             viewport as u16,
         );
@@ -1291,6 +1290,13 @@ impl InputCode {
         } else {
             vec![Line::default()]
         };
+        if let Some((message, severity)) = diagnostic {
+            let error = groups.style(severity.message_group()).patch(code);
+            lines.push(Line::from(vec![
+                Prompt::new("", error).spans(&())[0].clone(),
+                Span::styled(message, error),
+            ]));
+        }
         if self.pinned_first_row {
             lines.push(rows[0].clone());
             lines.push(Line::from(Span::styled(
@@ -1302,13 +1308,6 @@ impl InputCode {
             )));
         }
         lines.extend(rows.into_iter().skip(self.scroll).take(body_height));
-        if let Some((message, severity)) = diagnostic {
-            let error = groups.style(severity.message_group()).patch(code);
-            lines.push(Line::from(vec![
-                Prompt::new("", error).spans(&())[0].clone(),
-                Span::styled(message, error),
-            ]));
-        }
         lines.push(Line::default());
         Paragraph::new(lines).style(code).render(area, buffer);
         if clipped && !self.pinned_first_row && area.height > 1 {
@@ -1322,7 +1321,7 @@ impl InputCode {
             Position::new(
                 area.x + context.render.prefix() + cursor_column as u16,
                 area.y
-                    + 1
+                    + code_top
                     + if self.pinned_first_row && cursor_row == 0 {
                         0
                     } else {
