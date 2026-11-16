@@ -33,7 +33,6 @@ fn main() {
     let startup = options
         .startup_code()
         .unwrap_or_else(|message| Options::command().error(ErrorKind::Io, message).exit());
-    M2Backend::install_display_package();
     match M2Backend::spawn_with_options(&options.m2) {
         Ok(backend) => {
             // Unwinding restores the terminal, so what stopped the program can be

@@ -36,20 +36,15 @@ const STARTUP_SCRIPT: EmbeddedSource = EmbeddedSource {
     file_name: "backend.m2",
     contents: include_str!("backend/m2_startup.m2"),
 };
-/// Installs the shipped package for M2's own documentation when none as recent is.
-const PACKAGE_INSTALLER: EmbeddedSource = EmbeddedSource {
-    file_name: "install-spectral.m2",
-    contents: include_str!("backend/m2_install_spectral.m2"),
+/// Loads the `Spectral` package, which defines `SpecNet` and `specNet` that every
+/// result is drawn from, installing it first when M2 has none. Published on its
+/// own; the shell carries none of it, only this step.
+const DISPLAY_PACKAGE: EmbeddedSource = EmbeddedSource {
+    file_name: "spectral-package.m2",
+    contents: include_str!("backend/m2_spectral_package.m2"),
 };
 /// The Macaulay2 executable, as found on `PATH`.
 const M2: &str = "M2";
-/// The package that defines `SpecNet` and `specNet`, which every result is drawn from.
-/// Published on its own as `Spectral`; the shell carries the version its backend was
-/// written against, pinned as the `Spectral` submodule, whatever else M2 has installed.
-const DISPLAY_PACKAGE: EmbeddedSource = EmbeddedSource {
-    file_name: "Spectral.m2",
-    contents: include_str!("../Spectral/Spectral.m2"),
-};
 /// Introduces a result frame on the child's output stream. ASCII group
 /// separator: no diagnostic, prompt or ordinary value begins with it, and the
 /// M2 side writes it immediately before the frame's JSON.
@@ -85,13 +80,6 @@ struct EmbeddedSource {
 }
 
 impl EmbeddedSource {
-    /// The name M2 knows the file by when it is a package: its name, less `.m2`.
-    fn package_name(self) -> &'static str {
-        self.file_name
-            .strip_suffix(".m2")
-            .expect("an M2 source file is named *.m2")
-    }
-
     /// Materialize the file under `config` at a stable path, so source positions
     /// in it stay readable. Replacement through a same-directory staging file
     /// keeps parallel launches atomic.
@@ -221,31 +209,6 @@ impl M2Backend {
         Self::spawn_in(&config, init, None, options)
     }
 
-    /// Install the shipped Spectral in the background when M2 has none as recent,
-    /// so `help`, `viewHelp` and the language server document what the shell runs.
-    /// Startup never waits for it; whatever stops it only leaves the docs as they were.
-    pub fn install_display_package() {
-        let Ok(config) = Self::config_dir() else {
-            return;
-        };
-        let (Ok(package), Ok(installer)) = (
-            DISPLAY_PACKAGE.sync_into(&config),
-            PACKAGE_INSTALLER.sync_into(&config),
-        ) else {
-            return;
-        };
-        let install = Command::new(M2)
-            .arg("--script")
-            .args([installer, package])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-        if let Ok(mut install) = install {
-            thread::spawn(move || install.wait());
-        }
-    }
-
     /// Start a fresh process with this session's original M2 configuration.
     pub fn restarted(&self) -> Result<Self> {
         Self::spawn_with_options(&self.startup_options)
@@ -296,8 +259,7 @@ impl M2Backend {
         // The display package comes first, so the init file and a requested
         // package can already install `specNet` for classes of their own.
         command.arg("-e").arg(format!(
-            "needsPackage({}, FileName => {}, LoadDocumentation => true)",
-            m2_string_literal(DISPLAY_PACKAGE.package_name()),
+            "load {}",
             m2_string_literal(package_path.display())
         ));
         // Spectral's init file is loaded by the backend itself, once the hooks it

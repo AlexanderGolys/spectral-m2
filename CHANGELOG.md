@@ -6,7 +6,7 @@ All notable changes to Spectral M2 are documented here.
 
 ### Added
 
-- At startup sp2 installs its `Spectral` package in the background when Macaulay2 has none or an older one, keeping `help`, `viewHelp` and m2-ls documentation current.
+- sp2 no longer carries its `Spectral` package inside the binary: the first start installs it from [its repository](https://github.com/AlexanderGolys/Spectral) when Macaulay2 has none, with its documentation and source files, and later starts only load it.
 - The running sp2 and m2-ls versions show a `*` wherever they appear once a newer one is found; the installed binaries are checked every minute and crates.io every half hour, not only at startup.
 - Completion enable, ordering, candidate-list visibility and height settings, plus independent input and source wrapping policies.
 - Repository-local session/history storage, `/recent` for inspecting the previous session, and an automatically saved editable `/notes` pane.
@@ -21,6 +21,7 @@ All notable changes to Spectral M2 are documented here.
 
 ### Fixed
 
+- A power of an indexed variable, such as `x_2^2`, stacks its exponent over the index in typeset maths, as TeX sets it, instead of after it.
 - Every `warning:` M2 writes gets its own warning block, with the indented `: …` lines that continue it, including Core's unlocated warnings, the documentation tools' `-- *** warning:` lines and warnings raised before an error.
 - Smoother while anything moves: the screen redraws at up to 60 frames a second during a run or background work (80 ms when idle), keys are read on a thread of their own so none waits on a frame, and the spinner turns on its own clock.
 - A huge result no longer freezes sp2: values are laid out and turned into text on worker threads, showing `… laying out …` until ready, so the spinner keeps moving and Ctrl+C cancels the run.

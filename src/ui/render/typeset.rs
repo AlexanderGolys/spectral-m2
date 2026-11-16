@@ -156,9 +156,17 @@ fn tex(math: &Math, groups: Option<&Groups>) -> String {
         } => paint(tex.clone(), color.unwrap_or(*kind), groups),
         Math::Space => r"\,".into(),
         Math::Row(parts) => parts.iter().map(recurse).collect(),
-        Math::Power { base, exponent } => {
-            format!("{{{}}}^{{{}}}", recurse(base), recurse(exponent))
-        }
+        // Both scripts of an indexed base sit on its nucleus, stacked as in `x_2^2`:
+        // a braced `{x_2}` would be one finished box, its exponent set after the index.
+        Math::Power { base, exponent } => match base.as_ref() {
+            Math::Index { base, subscript } => format!(
+                "{{{}}}_{{{}}}^{{{}}}",
+                recurse(base),
+                recurse(subscript),
+                recurse(exponent)
+            ),
+            base => format!("{{{}}}^{{{}}}", recurse(base), recurse(exponent)),
+        },
         Math::Index { base, subscript } => {
             format!("{{{}}}_{{{}}}", recurse(base), recurse(subscript))
         }
