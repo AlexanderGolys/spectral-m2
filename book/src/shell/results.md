@@ -47,7 +47,7 @@ The *maths* setting picks how values are drawn:
 Each output block has one formatter selector on its outer border. It applies to every value in the block, without separators between values, and offers the representations available throughout the block:
 
 `specNet`
-: The structured expression produced by Spectral's formatter, retaining the expression tree and resolved component classes down to its leaves. These classes supply the highlighting.
+: Spectral's drawing of the value: a layout of rows, scripts, fractions, fences, grids and diagrams, as TeX lays out a formula, each piece of text coloured by its class.
 
 `net`
 : Macaulay2's two-dimensional terminal spelling.
@@ -68,11 +68,11 @@ Each output block has one formatter selector on its outer border. It applies to 
 : The result of M2's `peek`: one level of the value's inner structure, such as the entries of a hash table, without its usual presentation.
 
 `speek`
-: The structure Spectral's `speek` finds: the class of each part of the value and what it holds, two levels deep, coloured and set as `specNet` sets a value. Use it to see how a value is built, or what to give a type of your own.
+: The drawing one level deep, as Spectral's `speek` spells it, the way `peek` shows an object: `Fraction{Atom{"1", ZZ}, Atom{"2", ZZ}}` for `1/2`. Use it to see how a value is laid out, or what to give a type of your own.
 
 The active icon is highlighted and its mode name appears beside the controls. Click another icon to select that preview, or click the active icon or mode name to cycle. This changes every value inside that border. The original input is evaluated once; switching previews uses its retained formatter results. A formatter that fails is omitted without hiding the other previews.
 
-The *maths* setting controls how mathematical content is displayed within a preview. Changing between typeset, Unicode and ASCII leaves the selected preview and its icons unchanged, including when pictures are unavailable. Supported structured results start in `specNet`; documentation pages start in `markup`. A result without a supported structured layout starts in `net`, with no `specNet` option. Archived examples use `net` until a computed structured result is available. Choose `net` to compare a preview with M2's own terminal spelling.
+The *maths* setting controls how mathematical content is displayed within a preview. Changing between typeset, Unicode and ASCII leaves the selected preview and its icons unchanged, including when pictures are unavailable. Results start in `specNet`; documentation pages start in `markup`. A result drawn as plain text of no particular class starts in `net`, with no `specNet` option. Archived examples use `net` until a computed structured result is available. Choose `net` to compare a preview with M2's own terminal spelling.
 
 Place the controls with *output mode position* in the rendering settings: upper or lower, aligned left, center or right; `off` hides them. Icon positions stay fixed when the mode label changes. The same controls work inside documentation examples.
 

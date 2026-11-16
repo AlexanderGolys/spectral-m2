@@ -38,6 +38,7 @@ use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::settings::rendering::RendererPosition;
 use super::wrap::{offset_at_column, SpanWrap, WrapPolicy, WrappedText};
 use crate::backend::transcript::{captured_error, captured_output, strip_m2_location};
+use crate::backend::spec_net::Shape;
 use crate::backend::{M2Response, PreviewMode, SpecNet, ValuePreview};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::SourceId;
@@ -90,7 +91,7 @@ pub fn response_blocks(
     let value = response
         .value
         .as_ref()
-        .map(|value| value.plain_text().unwrap_or(""));
+        .map(|value| value.text().unwrap_or(""));
     let output = captured_output(
         &response.transcript,
         code,
@@ -103,7 +104,7 @@ pub fn response_blocks(
         (Some(value), Some(rendered), true) => Some(
             OutputBlock::rendered(value, rendered.type_info)
                 .with_previews(response.previews.clone())
-                .annotated(response.type_parts.clone())
+                .annotated(response.type_drawing.clone())
                 .drawing_text(),
         ),
         _ => None,
@@ -1546,7 +1547,7 @@ struct OutputCell {
     number: Option<u32>,
     ty: Option<String>,
     /// The annotation's pieces, set from their structure when M2 sent them.
-    type_parts: Vec<SpecNet>,
+    type_drawing: Option<SpecNet>,
     /// The formatter choice shared by every value in the enclosing block.
     chosen: Rc<Cell<Option<PreviewMode>>>,
 }
@@ -1570,7 +1571,7 @@ impl OutputCell {
     fn default_preview(&self) -> PreviewMode {
         match self.source.value.as_ref() {
             Some(value) if value.html.is_some() => PreviewMode::Markup,
-            Some(value) if maths::Math::supports_spec_net(value) => PreviewMode::SpecNet,
+            Some(value) if value.is_structured() => PreviewMode::SpecNet,
             Some(_) => PreviewMode::Net,
             None => PreviewMode::Net,
         }
@@ -1592,8 +1593,7 @@ impl OutputCell {
                 .source
                 .value
                 .as_ref()
-                .is_some_and(maths::Math::supports_spec_net),
-            PreviewMode::Speek => self.preview_value(PreviewMode::Speek).is_some(),
+                .is_some_and(SpecNet::is_structured),
             PreviewMode::Markup => self
                 .source
                 .value
@@ -1601,10 +1601,6 @@ impl OutputCell {
                 .is_some_and(|value| value.html.is_some()),
             _ => self.preview_text(mode).is_some(),
         }
-    }
-
-    fn preview_value(&self, mode: PreviewMode) -> Option<&SpecNet> {
-        self.source.preview_value(mode)
     }
 
     fn preview_text(&self, mode: PreviewMode) -> Option<&str> {
@@ -1715,7 +1711,7 @@ impl ValueSource {
         self.text.get_or_init(|| {
             self.value.as_ref().map_or_else(String::new, |value| {
                 value
-                    .plain_text()
+                    .text()
                     .map_or_else(|| value.render(), output_preview)
             })
         })
@@ -1724,14 +1720,6 @@ impl ValueSource {
     /// The plain text if a worker has drawn it, else a placeholder.
     fn text_drawn(&self) -> &str {
         self.text.get().map_or(LAYING_OUT, String::as_str)
-    }
-
-    /// The drawing a structured formatter answered with, as `speek` does.
-    fn preview_value(&self, mode: PreviewMode) -> Option<&SpecNet> {
-        self.previews
-            .iter()
-            .find(|preview| preview.mode == mode)
-            .and_then(|preview| preview.value.as_ref())
     }
 
     fn preview_text(&self, mode: PreviewMode) -> Option<&str> {
@@ -1748,7 +1736,7 @@ impl ValueSource {
                 .preview_text(PreviewMode::Net)
                 .map(str::to_owned)
                 .or_else(|| self.value.as_ref().map(SpecNet::ascii)),
-            mode @ (PreviewMode::String | PreviewMode::Peek) => {
+            mode @ (PreviewMode::String | PreviewMode::Peek | PreviewMode::Speek) => {
                 self.preview_text(mode).map(str::to_owned)
             }
             _ => None,
@@ -1782,16 +1770,13 @@ impl ValueSource {
             );
             links = drawn.links;
             drawn.lines
-        } else if matches!(renderer, PreviewMode::SpecNet | PreviewMode::Speek) {
-            let mut preview = match renderer {
-                PreviewMode::SpecNet => self.value.clone(),
-                _ => self.preview_value(renderer).cloned(),
-            };
-            if let Some(value) = preview
-                .as_mut()
-                .filter(|value| renderer == PreviewMode::SpecNet && value.text.is_some())
+        } else if renderer == PreviewMode::SpecNet {
+            let mut preview = self.value.clone();
+            // A value drawn as one atom shows the text cut as every text formatter cuts it.
+            if let Some(Shape::Atom { text, .. }) =
+                preview.as_mut().map(|value| &mut value.drawing.shape)
             {
-                value.text = Some(self.text().to_string());
+                *text = self.text().to_string();
             }
             match preview.as_ref() {
                 Some(value) if style.display == MathDisplay::Typeset => {
@@ -1881,7 +1866,7 @@ impl OutputBlock {
                 pictures: RefCell::default(),
                 number: None,
                 ty: ty.map(|ty| ty.trim_end().to_string()),
-                type_parts: Vec::new(),
+                type_drawing: None,
                 chosen: Rc::default(),
             }],
             expanded: false,
@@ -1901,8 +1886,8 @@ impl OutputBlock {
                 source: Arc::new(ValueSource {
                     previews: value
                         .fallback
-                        .as_ref()
-                        .or(value.text.as_ref())
+                        .as_deref()
+                        .or(value.text())
                         .map(|text| ValuePreview::new(PreviewMode::Net, output_preview(text)))
                         .into_iter()
                         .collect(),
@@ -1912,7 +1897,7 @@ impl OutputBlock {
                 pictures: RefCell::default(),
                 number: None,
                 ty,
-                type_parts: Vec::new(),
+                type_drawing: None,
                 chosen: Rc::default(),
             }],
             expanded: false,
@@ -1943,6 +1928,7 @@ impl OutputBlock {
                         | PreviewMode::String
                         | PreviewMode::External
                         | PreviewMode::Peek
+                        | PreviewMode::Speek
                 ) {
                     preview.text = output_preview(&preview.text);
                 }
@@ -1958,9 +1944,9 @@ impl OutputBlock {
         self
     }
 
-    /// Set the type annotation from its pieces rather than its text.
-    pub fn annotated(mut self, parts: Vec<SpecNet>) -> Self {
-        self.cells[0].type_parts = parts;
+    /// Set the type annotation from its drawing rather than its text.
+    pub fn annotated(mut self, drawing: Option<SpecNet>) -> Self {
+        self.cells[0].type_drawing = drawing;
         self
     }
 
@@ -2332,12 +2318,12 @@ impl OutputBlock {
         let theme = context.groups();
         let width = usize::from(self.text_width(context));
         let math = context.math();
-        let rendered = !cell.type_parts.is_empty() && !math.original_text;
-        if math.display == MathDisplay::Typeset && rendered {
-            return typeset::annotation(&cell.type_parts, width, theme, context.math());
+        let drawing = cell.type_drawing.as_ref().filter(|_| !math.original_text);
+        if let Some(drawing) = drawing.filter(|_| math.display == MathDisplay::Typeset) {
+            return typeset::annotation(drawing, width, theme, context.math());
         }
-        if rendered {
-            return maths::annotation(&cell.type_parts, width, context.math())
+        if let Some(drawing) = drawing {
+            return maths::annotation(drawing, width, context.math())
                 .into_iter()
                 .map(|row| {
                     let mut spans = row.spans(theme);
@@ -2453,7 +2439,7 @@ impl OutputBlock {
             .filter(|_| {
                 context.math().display == MathDisplay::Ascii || context.math().original_text
             })
-            .and_then(|value| value.target.as_ref())?;
+            .and_then(|value| value.drawing.target.as_ref())?;
         let cells = self
             .unfolded_lines(cell, context)
             .iter()
@@ -2590,10 +2576,9 @@ impl Block for OutputBlock {
                     cell.source.text_drawn().to_string(),
                 )
                 .with_type(
-                    if cell.type_parts.is_empty() || context.math().original_text {
-                        cell.ty.clone()
-                    } else {
-                        Some(cell.type_parts.iter().map(SpecNet::render).collect())
+                    match &cell.type_drawing {
+                        Some(drawing) if !context.math().original_text => Some(drawing.render()),
+                        _ => cell.ty.clone(),
                     },
                 ),
             );

@@ -72,7 +72,7 @@ spectralShell := (() -> (
 	renderedValue := null;
 	previews := {};
 	typeInfo := null;
-	typeParts := null;
+	typeDrawing := null;
 
 	-- The input number of the latest statement that evaluated, and whether
     -- recording it failed. BeforePrint runs for every statement that evaluated,
@@ -186,7 +186,7 @@ spectralShell := (() -> (
 			"value" => renderedValue,
 			"previews" => previews,
 			"typeInfo" => typeInfo,
-			"typeParts" => typeParts
+			"typeDrawing" => typeDrawing
 		}, last);
 	-- Should the result fail to encode, the cell still closes, as a failure.
 	sendResult := (submission, locals) -> try emitFrame resultFrame(submission, locals)
@@ -198,7 +198,7 @@ spectralShell := (() -> (
 		renderedValue = null;
 		previews = {};
 		typeInfo = null;
-		typeParts = null;
+		typeDrawing = null;
 		evaluatedLine = null;
 		failed = false;
 		forgetDrawing();
@@ -210,7 +210,8 @@ spectralShell := (() -> (
     -- its type, both as Spectral draws it and as M2 annotates it. Which of them
     -- the shell shows is its own business. Recording rather than printing keeps
     -- the channel free of everything but genuinely printed text.
-	m2Formatters := {
+	formatters := {
+		("speek", structureOf),
 		("net", toString@@net),
 		("string", toString),
 		("tex", tex),
@@ -219,7 +220,7 @@ spectralShell := (() -> (
 	};
 	recordResult := value -> (
 		renderedValue = drawnAs value;
-		previews = select(apply(m2Formatters, (name, formatter) -> (
+		previews = select(apply(formatters, (name, formatter) -> (
 			text := try formatter value;
 			if instance(text, String) then
 				hashTable {
@@ -227,15 +228,7 @@ spectralShell := (() -> (
 					"text" => text
 				}
 		)), preview -> preview =!= null);
-		-- speek answers with a value of its own, sent drawn as any value is.
-		structure := try structureOf value;
-		if structure =!= null then
-			previews = append(previews, hashTable {
-				"mode" => "speek",
-				"text" => toString net structure,
-				"value" => drawnAs structure
-			});
-		typeParts = {typedAs value};
+		typeDrawing = typedAs value;
 		-- M2's own annotation, for the view that shows M2's own spelling.
 		annotation := annotationPieces((lookup(AfterPrint, class value)) value
 				?? class value);

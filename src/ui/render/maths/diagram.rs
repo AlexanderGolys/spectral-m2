@@ -7,8 +7,8 @@
 #![allow(clippy::non_ascii_literal)]
 use unicode_width::UnicodeWidthChar;
 
-use super::{Math, MathBlock, MathStyle};
-use crate::backend::SpecNet;
+use super::{Math, MathBlock};
+use serde::Deserialize;
 use crate::ui::block::TextSpan;
 use crate::ui::present::SpanLine;
 use crate::ui::theme::groups::HLGroup;
@@ -26,8 +26,9 @@ const SHAFT: &str = "─";
 const DOWN_SHAFT: &str = "│";
 const DOWN_HEAD: &str = "↓";
 
-/// A cell of a diagram's grid.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// A cell of a diagram's grid, sent as `[row, column]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize)]
+#[serde(from = "(usize, usize)")]
 pub struct Place {
     pub row: usize,
     pub column: usize,
@@ -49,6 +50,12 @@ pub enum Course {
     /// From one row to the next, `shift` columns to the right; to the left when
     /// negative.
     Down { shift: isize },
+}
+
+impl From<(usize, usize)> for Place {
+    fn from((row, column): (usize, usize)) -> Self {
+        Self { row, column }
+    }
 }
 
 impl Arrow {
@@ -75,179 +82,7 @@ pub struct Diagram {
     pub straight: Option<Box<Diagram>>,
 }
 
-/// Where a map of complexes puts its target complex.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Arrangement {
-    /// Under the source, degree under degree.
-    Aligned,
-    /// Shifted by the map's degree, each module under the one mapping to it.
-    Straight,
-}
-
-/// One complex of a map as M2 sent it: each degree's module, and the
-/// differential from it into the module a degree below, absent at the lowest.
-struct Chain<'a> {
-    entries: Vec<(i64, &'a SpecNet, Option<&'a SpecNet>)>,
-}
-
-impl<'a> Chain<'a> {
-    fn read(value: &'a SpecNet) -> Option<Self> {
-        let entries = value
-            .children
-            .iter()
-            .map(|entry| match entry.children.as_slice() {
-                [degree, module] => Some((degree_of(degree)?, module, None)),
-                [degree, module, differential] => {
-                    Some((degree_of(degree)?, module, Some(differential)))
-                }
-                _ => None,
-            })
-            .collect::<Option<Vec<_>>>()?;
-        (!entries.is_empty()).then_some(Self { entries })
-    }
-
-    fn degrees(&self) -> impl Iterator<Item = i64> + '_ {
-        self.entries.iter().map(|(degree, ..)| *degree)
-    }
-}
-
-fn degree_of(value: &SpecNet) -> Option<i64> {
-    value.ascii().trim().parse().ok()
-}
-
 impl Diagram {
-    /// A map of complexes from M2's `ComplexMapExpression{degree, source, target,
-    /// components}`: the source complex above the target, between zeros, each
-    /// component an arrow from its source module to its target module. Degrees
-    /// share columns, numbered beneath, so a map of nonzero degree runs across;
-    /// characters cannot draw that, so a layout in them gets the target shifted
-    /// under the components' sources instead, each complex numbered on its own.
-    pub fn complex_map(value: &SpecNet, style: MathStyle) -> Option<Self> {
-        let aligned = Self::arranged(value, style, Arrangement::Aligned)?;
-        let shifted = aligned
-            .arrows
-            .iter()
-            .any(|arrow| matches!(arrow.course(), Some(Course::Down { shift }) if shift != 0));
-        Some(match shifted {
-            true => Self {
-                straight: Some(Box::new(Self::arranged(
-                    value,
-                    style,
-                    Arrangement::Straight,
-                )?)),
-                ..aligned
-            },
-            false => aligned,
-        })
-    }
-
-    fn arranged(value: &SpecNet, style: MathStyle, arrangement: Arrangement) -> Option<Self> {
-        let [degree, source, target, components] = value.children.as_slice() else {
-            return None;
-        };
-        let shift = degree_of(degree)?;
-        let chains = [Chain::read(source)?, Chain::read(target)?];
-        // How far left of its degree's column each complex's modules sit.
-        let offsets = match arrangement {
-            Arrangement::Aligned => [0, 0],
-            Arrangement::Straight => [0, shift],
-        };
-        let columns = chains
-            .iter()
-            .zip(offsets)
-            .flat_map(|(chain, offset)| chain.degrees().map(move |degree| degree - offset))
-            .collect::<Vec<_>>();
-        let lowest = *columns.iter().min()?;
-        // A column for the zero before the lowest degree.
-        let column = |degree: i64, offset: i64| usize::try_from(degree - offset - lowest + 1).ok();
-        // Each complex's row, and the rows its degrees are numbered on.
-        let (rows, numbered) = match arrangement {
-            Arrangement::Aligned => (
-                [0, 1],
-                vec![(
-                    2,
-                    0,
-                    chains.iter().flat_map(Chain::degrees).collect::<Vec<_>>(),
-                )],
-            ),
-            Arrangement::Straight => (
-                [1, 2],
-                vec![
-                    (0, offsets[0], chains[0].degrees().collect()),
-                    (3, offsets[1], chains[1].degrees().collect()),
-                ],
-            ),
-        };
-        let mut diagram = Self {
-            pieces: Vec::new(),
-            arrows: Vec::new(),
-            straight: None,
-        };
-        let zero = || Math::atom("0", HLGroup::Number);
-        for ((chain, row), offset) in chains.iter().zip(rows).zip(offsets) {
-            let at = |degree| column(degree, offset).map(|column| Place { row, column });
-            let (first, last) = (chain.degrees().min()?, chain.degrees().max()?);
-            diagram.pieces.push((at(first - 1)?, zero()));
-            diagram.pieces.push((at(last + 1)?, zero()));
-            diagram.arrows.push(Arrow {
-                from: at(first)?,
-                to: at(first - 1)?,
-                label: None,
-            });
-            diagram.arrows.push(Arrow {
-                from: at(last + 1)?,
-                to: at(last)?,
-                label: None,
-            });
-            for (degree, module, differential) in &chain.entries {
-                diagram
-                    .pieces
-                    .push((at(*degree)?, Math::from_spec_net(module, style)));
-                if let Some(differential) = differential {
-                    diagram.arrows.push(Arrow {
-                        from: at(*degree)?,
-                        to: at(degree - 1)?,
-                        label: Some(Math::from_spec_net(differential, style)),
-                    });
-                }
-            }
-        }
-        for component in &components.children {
-            let [degree, map] = component.children.as_slice() else {
-                return None;
-            };
-            let degree = degree_of(degree)?;
-            diagram.arrows.push(Arrow {
-                from: Place {
-                    row: rows[0],
-                    column: column(degree, offsets[0])?,
-                },
-                to: Place {
-                    row: rows[1],
-                    column: column(degree + shift, offsets[1])?,
-                },
-                label: Some(Math::from_spec_net(map, style)),
-            });
-        }
-        for (row, offset, degrees) in numbered {
-            let (first, last) = (*degrees.iter().min()?, *degrees.iter().max()?);
-            for degree in first..=last {
-                let place = Place {
-                    row,
-                    column: column(degree, offset)?,
-                };
-                diagram
-                    .pieces
-                    .push((place, Math::atom(degree.to_string(), HLGroup::Number)));
-            }
-        }
-        diagram
-            .arrows
-            .iter()
-            .all(|arrow| arrow.course().is_some())
-            .then_some(diagram)
-    }
-
     pub fn rows(&self) -> usize {
         self.places().map(|place| place.row + 1).max().unwrap_or(0)
     }

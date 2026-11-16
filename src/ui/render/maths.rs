@@ -3,12 +3,13 @@
 // Keep mathematical notation and interface symbols legible in their native spelling.
 #![allow(clippy::non_ascii_literal)]
 mod diagram;
-mod expression;
-pub use diagram::{Course, Diagram};
-pub use expression::{PRODUCT_SIGN, TENSOR_SIGN};
+mod drawing;
+pub use diagram::{Course, Diagram, Place};
+pub use drawing::{Reading, DIRECT_SUM_SIGN, PRODUCT_SIGN, TENSOR_SIGN};
 
 use super::markup;
-use crate::backend::{CollectionKind, SpecNet, OPTION_ARROW};
+use crate::backend::spec_net::{Node, Shape};
+use crate::backend::{SpecNet, OPTION_ARROW};
 use crate::ui::block::TextSpan;
 use crate::ui::config::UI;
 use crate::ui::cycle::cyclic;
@@ -89,7 +90,7 @@ pub enum Math {
 /// Following LaTeX rather than appearance: `matrix` and `array` are *unfenced* grids,
 /// and M2 wraps them in an explicit `\left( … \right)` of its own. Supplying fences
 /// here as well is what drew every matrix inside two sets of brackets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize)]
 pub enum GridKind {
     /// Aligned columns and nothing around them; the source says what fences them.
     Bare,
@@ -279,20 +280,21 @@ fn role_spans(
         return markup::spans(html, width)
             .ok_or_else(|| UnsupportedTeX("markup that does not read as HTML".into()));
     }
-    if value.is("Descent") && value.text.is_none() {
-        return Ok(hierarchy_rows(value, width));
-    }
-    let mut rows = if let Some(text) = &value.text {
-        prose(text, value.group(), width)
-    } else if let Some(kind) = value.collection_kind() {
-        MathBlock::fitted(
-            MathBlock::listed(kind, &value.children, width, style),
-            width,
-        )
-    } else {
-        Math::from_spec_net(value, style).wrapped(width, style.fractions)
+    let reading = Reading::new(value, style);
+    let drawing = &value.drawing;
+    let mut rows = match &drawing.shape {
+        Shape::Tree { branches } => return Ok(hierarchy_rows(branches, width)),
+        Shape::Atom { text, .. } => prose(text, reading.group(drawing), width),
+        Shape::Fence { left, right, body } => match &body.shape {
+            Shape::Join { items, .. } => MathBlock::fitted(
+                MathBlock::listed(&reading, (*left, *right), items, width, style),
+                width,
+            ),
+            _ => reading.math().wrapped(width, style.fractions),
+        },
+        _ => reading.math().wrapped(width, style.fractions),
     };
-    if let Some(target) = &value.target {
+    if let Some(target) = &drawing.target {
         link(rows.iter_mut().flatten(), target);
     }
     Ok(rows)
@@ -308,13 +310,10 @@ fn link<'a>(spans: impl IntoIterator<Item = &'a mut TextSpan>, target: &str) {
 
 /// Lay out a class hierarchy a branch at a time, so no subtree forces its
 /// siblings into a shared wide column. Wrapped labels keep their branch indent.
-fn hierarchy_rows(tree: &SpecNet, width: usize) -> Vec<SpanLine> {
-    fn append(tree: &SpecNet, prefix: &str, width: usize, rows: &mut Vec<SpanLine>) {
-        for (index, entry) in tree.children.iter().enumerate() {
-            let [label, subtree] = entry.children.as_slice() else {
-                continue;
-            };
-            let last = index + 1 == tree.children.len();
+fn hierarchy_rows(branches: &[(Node, Node)], width: usize) -> Vec<SpanLine> {
+    fn append(branches: &[(Node, Node)], prefix: &str, width: usize, rows: &mut Vec<SpanLine>) {
+        for (index, (label, subtree)) in branches.iter().enumerate() {
+            let last = index + 1 == branches.len();
             let branch = if last {
                 Glyphs::TreeLast
             } else {
@@ -331,13 +330,8 @@ fn hierarchy_rows(tree: &SpecNet, width: usize) -> Vec<SpanLine> {
             .current();
             let indent = format!("{prefix}{branch}");
             let room = width.saturating_sub(indent.width()).max(1);
-            let label = label
-                .fallback
-                .as_deref()
-                .or(label.text.as_deref())
-                .map(str::to_string)
-                .unwrap_or_else(|| label.render());
-            for (line, content) in prose(&label, HLGroup::Type, room).into_iter().enumerate() {
+            let label = label.text().unwrap_or_default();
+            for (line, content) in prose(label, HLGroup::Type, room).into_iter().enumerate() {
                 let leading = if line == 0 {
                     indent.clone()
                 } else {
@@ -360,12 +354,13 @@ fn hierarchy_rows(tree: &SpecNet, width: usize) -> Vec<SpanLine> {
                 }
                 rows.push(row);
             }
-            let prefix = format!("{prefix}{}", continuation);
-            append(subtree, &prefix, width, rows);
+            if let Shape::Tree { branches } = &subtree.shape {
+                append(branches, &format!("{prefix}{continuation}"), width, rows);
+            }
         }
     }
     let mut rows = Vec::new();
-    append(tree, "", width, &mut rows);
+    append(branches, "", width, &mut rows);
     rows
 }
 
@@ -379,9 +374,9 @@ fn prose(text: &str, group: HLGroup, width: usize) -> Vec<SpanLine> {
 
 /// A value's type annotation as rows no wider than `width`, its pieces set side by
 /// side in the type colour.
-pub fn annotation(parts: &[SpecNet], width: usize, style: impl Into<MathStyle>) -> Vec<SpanLine> {
+pub fn annotation(value: &SpecNet, width: usize, style: impl Into<MathStyle>) -> Vec<SpanLine> {
     let style = style.into();
-    let line = MathBlock::row(parts.iter().map(|part| MathBlock::value(part, style)));
+    let line = MathBlock::value(&Reading::new(value, style), &value.drawing, style);
     let mut rows = MathBlock::fitted(vec![line], width);
     for span in rows.iter_mut().flatten() {
         if !matches!(
@@ -1755,13 +1750,12 @@ impl MathBlock {
     /// A value M2 sent, laid out whole: TeX from its structure, a container from its
     /// entries, a token in its role's colour, and whatever M2 drew as plain text as
     /// a string.
-    fn value(value: &SpecNet, style: MathStyle) -> Self {
-        let block = if let Some(text) = &value.text {
-            Self::text(text, value.group())
-        } else {
-            Math::from_spec_net(value, style).layout(style.fractions)
+    fn value(reading: &Reading, node: &Node, style: MathStyle) -> Self {
+        let block = match node.text() {
+            Some(text) => Self::text(text, reading.group(node)),
+            None => reading.part(node).layout(style.fractions),
         };
-        match &value.target {
+        match &node.target {
             Some(target) => block.linked(target),
             None => block,
         }
@@ -1774,18 +1768,20 @@ impl MathBlock {
     /// collection, the last closes it, and a line between is indented to sit under
     /// the first entry.
     fn listed(
-        kind: CollectionKind,
-        items: &[SpecNet],
+        reading: &Reading,
+        (open, close): (char, char),
+        items: &[Node],
         width: usize,
         style: MathStyle,
     ) -> Vec<Self> {
-        let (open, close) = kind.drawn_delimiters();
+        let (open, close) = (open.to_string(), close.to_string());
+        let (open, close) = (open.as_str(), close.as_str());
         let last = items.len().saturating_sub(1);
         let entries = items
             .iter()
             .enumerate()
             .map(|(index, item)| {
-                let entry = Self::value(item, style);
+                let entry = Self::value(reading, item, style);
                 match index == last {
                     true => entry,
                     false => Self::row([entry, Self::atom(",", HLGroup::Delimiter), Self::gap()]),

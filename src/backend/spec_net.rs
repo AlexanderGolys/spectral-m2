@@ -1,195 +1,260 @@
-//! Recursive formatting data produced by M2's value and type methods.
+//! The drawing M2's Spectral package sends for a value: a tree of shapes laid out
+//! as TeX lays out a formula, every atom coloured by a class from the drawing's
+//! own table.
 
-// Keep mathematical notation and interface symbols legible in their native spelling.
-#![allow(clippy::non_ascii_literal)]
-use crate::ui::render::maths::{self, MathStyle};
+use crate::ui::render::maths::{self, GridKind, MathStyle, Place};
 use crate::ui::theme::groups::HLGroup;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-/// A class-tagged expression node. Classes are transmitted nearest ancestor first.
-/// Unknown classes remain data and never prevent a result from being decoded.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "PascalCase", try_from = "NodeData")]
+/// One shaped node of a drawing, with what any node may carry.
+///
+/// `x_1^2` arrives as
+/// `{"Shape": "Script", "Base": {"Shape": "Script", "Base": x, "Sub": 1}, "Sup": 2}`,
+/// each of `x`, `1` and `2` an atom.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "PascalCase")]
+pub struct Node {
+    #[serde(flatten)]
+    pub shape: Shape,
+    /// The class this node and its parts are coloured as, in place of their own.
+    pub highlight: Option<usize>,
+    /// How many levels below this node its highlight reaches; all when absent.
+    pub reach: Option<usize>,
+    /// Where the node links to.
+    pub target: Option<String>,
+}
+
+/// The layout constructs a drawing is built from.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
+#[serde(tag = "Shape", rename_all_fields = "PascalCase")]
+#[non_exhaustive]
+pub enum Shape {
+    /// Text of the class at `class` in the drawing's table, with its own TeX when
+    /// it has one; `typeset` when M2 sets it as maths.
+    Atom {
+        text: String,
+        class: usize,
+        tex: Option<String>,
+        #[serde(default)]
+        typeset: bool,
+    },
+    Row {
+        items: Vec<Node>,
+    },
+    /// Items with the separator between each two, as a list's entries are.
+    Join {
+        items: Vec<Node>,
+        separator: Box<Node>,
+    },
+    Script {
+        base: Box<Node>,
+        sub: Option<Box<Node>>,
+        sup: Option<Box<Node>>,
+    },
+    Fraction {
+        numerator: Box<Node>,
+        denominator: Box<Node>,
+    },
+    Fence {
+        left: char,
+        right: char,
+        body: Box<Node>,
+    },
+    /// Rows of cells; a matrix may carry its rows' degrees.
+    Grid {
+        rows: Vec<Vec<Node>>,
+        align: GridKind,
+        degrees: Option<Vec<Node>>,
+    },
+    Over {
+        base: Box<Node>,
+        label: Box<Node>,
+    },
+    Under {
+        base: Box<Node>,
+        label: Box<Node>,
+    },
+    /// Pieces on a grid joined by arrows, each `(from, to, label)`; `straight` is
+    /// the same diagram for a layout in characters when this one runs arrows across.
+    Diagram {
+        pieces: Vec<(Place, Node)>,
+        arrows: Vec<(Place, Place, Option<Node>)>,
+        straight: Option<Box<Node>>,
+    },
+    /// A hierarchy, each branch a label over its subtree.
+    Tree {
+        branches: Vec<(Node, Node)>,
+    },
+}
+
+impl Node {
+    /// An atom of the class at `class`.
+    pub fn atom(text: impl Into<String>, class: usize) -> Self {
+        Self {
+            shape: Shape::Atom {
+                text: text.into(),
+                class,
+                tex: None,
+                typeset: false,
+            },
+            highlight: None,
+            reach: None,
+            target: None,
+        }
+    }
+
+    /// The text of an atom.
+    pub fn text(&self) -> Option<&str> {
+        match &self.shape {
+            Shape::Atom { text, .. } => Some(text),
+            _ => None,
+        }
+    }
+
+    /// The nodes this one is built from, in reading order.
+    pub fn parts(&self) -> Vec<&Self> {
+        match &self.shape {
+            Shape::Atom { .. } => Vec::new(),
+            Shape::Row { items } => items.iter().collect(),
+            Shape::Join { items, separator } => items.iter().chain([&**separator]).collect(),
+            Shape::Script { base, sub, sup } => [Some(base), sub.as_ref(), sup.as_ref()]
+                .into_iter()
+                .flatten()
+                .map(|part| &**part)
+                .collect(),
+            Shape::Fraction {
+                numerator,
+                denominator,
+            } => vec![numerator, denominator],
+            Shape::Fence { body, .. } => vec![body],
+            Shape::Grid { rows, degrees, .. } => {
+                rows.iter().flatten().chain(degrees.iter().flatten()).collect()
+            }
+            Shape::Over { base, label } | Shape::Under { base, label } => vec![base, label],
+            Shape::Diagram {
+                pieces,
+                arrows,
+                straight,
+            } => pieces
+                .iter()
+                .map(|(_, piece)| piece)
+                .chain(arrows.iter().filter_map(|(.., label)| label.as_ref()))
+                .chain(straight.as_deref())
+                .collect(),
+            Shape::Tree { branches } => branches
+                .iter()
+                .flat_map(|(label, subtree)| [label, subtree])
+                .collect(),
+        }
+    }
+
+    /// Whether this node or any below it satisfies `test`.
+    pub fn any(&self, test: &impl Fn(&Self) -> bool) -> bool {
+        test(self) || self.parts().into_iter().any(|part| part.any(test))
+    }
+}
+
+/// A drawing as M2 sends it: the tree, the classes its atoms and highlights point
+/// into, each as its ancestry nearest first, and what is sent for the value whole.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "PascalCase")]
 pub struct SpecNet {
-    /// The concrete M2 class followed by its ancestors.
-    pub classes: Vec<String>,
-    /// An explicit semantic highlight class when it differs from the runtime class.
-    pub highlight: Option<Vec<String>>,
-    /// Ordered components; matrix rows remain separate child nodes.
-    pub children: Vec<Self>,
-    /// Text of an opaque leaf, absent on structural nodes.
-    pub text: Option<String>,
-    /// Native TeX spelling of an opaque mathematical leaf.
-    pub tex: Option<String>,
-    /// M2's original two-dimensional spelling.
+    #[serde(flatten)]
+    pub drawing: Node,
+    #[serde(default)]
+    pub classes: Vec<Vec<String>>,
+    /// M2's own two-dimensional spelling.
     pub fallback: Option<String>,
     /// M2's copyable input spelling.
     pub code: Option<String>,
-    /// An optional source or documentation link.
-    pub target: Option<String>,
-    /// Semantic documentation HTML, independent of expression layout.
+    /// A documentation page, laid out apart from any drawing.
     pub html: Option<String>,
-    /// Width used to produce archived documentation examples.
+    /// The width the page's archived examples were produced at.
+    #[serde(default)]
     pub example_width: usize,
-    /// Names resolved by M2 as types in this documentation page's environment.
+    /// Names M2 resolves as types where the page was written.
+    #[serde(default)]
     pub type_names: Vec<String>,
-    /// Whether M2 asks for this part to be set as typeset maths.
-    pub typeset: bool,
-}
-
-impl Default for SpecNet {
-    fn default() -> Self {
-        Self {
-            classes: vec!["Thing".into()],
-            highlight: None,
-            children: Vec::new(),
-            text: None,
-            tex: None,
-            fallback: None,
-            code: None,
-            target: None,
-            html: None,
-            example_width: 0,
-            type_names: Vec::new(),
-            typeset: false,
-        }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct NodeData {
-    classes: Vec<String>,
-    highlight: Option<Vec<String>>,
-    children: Vec<SpecNet>,
-    text: Option<String>,
-    tex: Option<String>,
-    fallback: Option<String>,
-    code: Option<String>,
-    target: Option<String>,
-    html: Option<String>,
-    #[serde(default)]
-    example_width: usize,
-    #[serde(default)]
-    type_names: Vec<String>,
-    #[serde(default)]
-    typeset: bool,
-}
-
-impl TryFrom<NodeData> for SpecNet {
-    type Error = &'static str;
-
-    fn try_from(node: NodeData) -> Result<Self, Self::Error> {
-        if node.classes.is_empty() {
-            return Err("an expression node needs its M2 class");
-        }
-        if node.text.is_some() && !node.children.is_empty() {
-            return Err("an opaque leaf cannot also have children");
-        }
-        Ok(Self {
-            classes: node.classes,
-            highlight: node.highlight,
-            children: node.children,
-            text: node.text,
-            tex: node.tex,
-            fallback: node.fallback,
-            code: node.code,
-            target: node.target,
-            html: node.html,
-            example_width: node.example_width,
-            type_names: node.type_names,
-            typeset: node.typeset,
-        })
-    }
 }
 
 impl SpecNet {
-    /// Construct an opaque component in an explicitly supplied M2 class.
-    pub fn leaf(class: impl Into<String>, text: impl Into<String>) -> Self {
+    /// Plain text, a single atom of M2's `Net`.
+    pub fn plain(text: String) -> Self {
         Self {
-            classes: vec![class.into()],
-            text: Some(text.into()),
-            ..Self::default()
+            drawing: Node::atom(text, 0),
+            classes: vec![vec!["Net".into()]],
+            fallback: None,
+            code: None,
+            html: None,
+            example_width: 0,
+            type_names: Vec::new(),
         }
     }
 
-    /// Compose ordered children under an M2 expression or container class.
-    pub fn branch(class: impl Into<String>, children: Vec<Self>) -> Self {
+    /// A documentation page with its original text and archived example width.
+    pub fn document(html: String, fallback: String, example_width: usize) -> Self {
         Self {
-            classes: vec![class.into()],
-            children,
-            ..Self::default()
+            html: Some(html),
+            example_width,
+            ..Self::plain(fallback)
         }
     }
 
-    /// Whether M2 asks for any part of this to be set as typeset maths.
-    pub fn wants_typesetting(&self) -> bool {
-        self.typeset || self.children.iter().any(Self::wants_typesetting)
-    }
-
-    /// The same drawing with this part and everything in it marked typeset, as M2
-    /// marks what a typeset part holds.
-    #[cfg(test)]
-    pub fn typeset(mut self) -> Self {
-        self.typeset = true;
-        self.children = self.children.into_iter().map(Self::typeset).collect();
-        self
-    }
-
-    /// Whether the node belongs to an M2 class, including through inheritance.
-    pub fn is(&self, class: &str) -> bool {
-        self.classes.iter().any(|ancestor| ancestor == class)
-    }
-
-    /// The concrete class name, retained even for unsupported expressions.
-    pub fn class(&self) -> &str {
-        self.classes.first().map_or("Thing", String::as_str)
-    }
-
-    /// The theme role supplied by the component's class ancestry.
-    pub fn group(&self) -> HLGroup {
-        self.highlight
-            .as_ref()
-            .unwrap_or(&self.classes)
-            .iter()
-            .find_map(|class| match class.as_str() {
-                "Delimiter" => Some(HLGroup::Delimiter),
-                "Punctuation" => Some(HLGroup::Punctuation),
-                "Nothing" => Some(HLGroup::Builtin),
-                "Boolean" => Some(HLGroup::Boolean),
-                "String" => Some(HLGroup::String),
-                "ZZ" | "QQ" | "RR" | "CC" | "Number" => Some(HLGroup::Number),
-                "Symbol" | "RingElement" | "RawRingElement" | "Variety" => Some(HLGroup::Variable),
-                "Function" | "ScriptedFunctor" => Some(HLGroup::Function),
-                "Type" | "Ring" | "RingFamily" => Some(HLGroup::Type),
-                "Package" => Some(HLGroup::Package),
-                "Operator" => Some(HLGroup::Operator),
-                "Option" => Some(HLGroup::Option),
-                "Keyword" => Some(HLGroup::Keyword),
-                "Command" => Some(HLGroup::Macro),
-                "FilePosition" => Some(HLGroup::MarkupLink),
-                _ => None,
+    /// The colour of the class at `class` in the table: the role of the nearest
+    /// ancestor that has one.
+    pub fn group(&self, class: usize) -> HLGroup {
+        self.classes
+            .get(class)
+            .into_iter()
+            .flatten()
+            .find_map(|name| {
+                Some(match name.as_str() {
+                    "Delimiter" => HLGroup::Delimiter,
+                    "Punctuation" => HLGroup::Punctuation,
+                    "Operator" => HLGroup::Operator,
+                    "MapArrow" => HLGroup::MapArrow,
+                    "Canvas" => HLGroup::Canvas,
+                    "Nothing" => HLGroup::Builtin,
+                    "Boolean" => HLGroup::Boolean,
+                    "String" => HLGroup::String,
+                    "Number" => HLGroup::Number,
+                    "Symbol" | "RingElement" | "RawRingElement" | "Variety" => {
+                        HLGroup::Variable
+                    }
+                    "Function" | "ScriptedFunctor" => HLGroup::Function,
+                    "Type" | "Ring" | "RingFamily" => HLGroup::Type,
+                    "Package" => HLGroup::Package,
+                    "Option" => HLGroup::Option,
+                    "Keyword" => HLGroup::Keyword,
+                    "Command" => HLGroup::Macro,
+                    "FilePosition" => HLGroup::MarkupLink,
+                    _ => return None,
+                })
             })
             .unwrap_or(HLGroup::Text)
     }
 
-    /// Collection layout inherited from the nearest visible container class.
-    pub fn collection_kind(&self) -> Option<CollectionKind> {
-        self.classes
-            .iter()
-            .find_map(|class| match class.as_str() {
-                "List" | "VisibleList" | "MutableList" => Some(CollectionKind::List),
-                "Array" => Some(CollectionKind::Array),
-                "Sequence" => Some(CollectionKind::Sequence),
-                "AngleBarList" => Some(CollectionKind::AngleBarList),
-                _ => None,
-            })
-            .filter(|_| {
-                self.text.is_none()
-                    && !self.is("Expression")
-                    && !self.is("RingElement")
-                    && !self.is("VerticalList")
-            })
+    /// The text of a value drawn as a single atom.
+    pub fn text(&self) -> Option<&str> {
+        self.drawing.text()
+    }
+
+    /// Whether M2 asks for any part of this to be set as typeset maths.
+    pub fn wants_typesetting(&self) -> bool {
+        self.drawing
+            .any(&|node| matches!(node.shape, Shape::Atom { typeset: true, .. }))
+    }
+
+    /// Whether any part of this links somewhere.
+    pub fn has_links(&self) -> bool {
+        self.drawing.any(&|node| node.target.is_some())
+    }
+
+    /// Whether the drawing tells more than M2's own text: anything but a page or
+    /// one atom of no particular class.
+    pub fn is_structured(&self) -> bool {
+        self.html.is_none()
+            && !matches!(&self.drawing.shape, Shape::Atom { class, .. } if self.group(*class) == HLGroup::Text)
     }
 
     /// Documentation content and the width of its recorded examples.
@@ -197,14 +262,9 @@ impl SpecNet {
         self.html.as_deref().map(|html| (html, &self.example_width))
     }
 
-    /// Borrow an opaque value's text without building a character grid.
-    pub fn plain_text(&self) -> Option<&str> {
-        self.text.as_deref()
-    }
-
-    /// Render the structure as Unicode terminal text without inferring semantics.
+    /// The drawing as Unicode terminal text.
     pub fn render(&self) -> String {
-        if let Some(text) = self.plain_text() {
+        if let Some(text) = self.text() {
             return text
                 .lines()
                 .map(str::trim_end)
@@ -227,196 +287,16 @@ impl SpecNet {
             .join("\n")
     }
 
-    /// Preserve M2's original spelling when ASCII output is requested.
+    /// M2's own spelling, for when ASCII output is asked for.
     pub fn ascii(&self) -> String {
         self.fallback
             .clone()
-            .or_else(|| self.text.clone())
+            .or_else(|| self.text().map(str::to_owned))
             .unwrap_or_else(|| {
                 self.render_with(MathStyle {
                     display: maths::MathDisplay::Ascii,
                     ..MathStyle::default()
                 })
             })
-    }
-
-    /// Plain text without a domain-specific drawing case.
-    pub fn plain(text: String) -> Self {
-        Self::leaf("Net", text)
-    }
-
-    /// A documentation page with its original text and archived example width.
-    pub fn document(html: String, fallback: String, example_width: usize) -> Self {
-        Self {
-            html: Some(html),
-            example_width,
-            ..Self::plain(fallback)
-        }
-    }
-}
-
-/// Delimiters of M2's built-in visible collections.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-pub enum CollectionKind {
-    /// Braces.
-    List,
-    /// Square brackets.
-    Array,
-    /// Parentheses.
-    Sequence,
-    /// Angle bars.
-    AngleBarList,
-    /// Vertically stacked entries.
-    VerticalList,
-}
-
-impl CollectionKind {
-    /// The plain delimiters of this collection.
-    pub const fn delimiters(self) -> (&'static str, &'static str) {
-        match self {
-            Self::List | Self::VerticalList => ("{", "}"),
-            Self::Array => ("[", "]"),
-            Self::Sequence => ("(", ")"),
-            Self::AngleBarList => ("<|", "|>"),
-        }
-    }
-    /// Delimiters suitable for terminal character layout.
-    pub const fn drawn_delimiters(self) -> (&'static str, &'static str) {
-        match self {
-            Self::AngleBarList => ("⟨|", "|⟩"),
-            _ => self.delimiters(),
-        }
-    }
-}
-
-#[cfg(test)]
-mod fixtures {
-    use super::*;
-    use crate::ui::render::maths::{GridKind, Math};
-
-    fn from_math(math: Math) -> SpecNet {
-        match math {
-            Math::Atom { text, kind, .. } => SpecNet::leaf(
-                match kind {
-                    HLGroup::Number => "Number",
-                    HLGroup::Variable => "Symbol",
-                    HLGroup::Operator => "Operator",
-                    HLGroup::Type => "Type",
-                    HLGroup::Delimiter => "Delimiter",
-                    HLGroup::Punctuation => "Punctuation",
-                    HLGroup::Function => "Function",
-                    HLGroup::Builtin => "Nothing",
-                    HLGroup::Boolean => "Boolean",
-                    _ => "Thing",
-                },
-                text,
-            ),
-            Math::Over { base, label } => SpecNet::branch(
-                "Table",
-                vec![
-                    SpecNet::branch("List", vec![from_math(*label)]),
-                    SpecNet::branch("List", vec![from_math(*base)]),
-                ],
-            ),
-            Math::Under { base, label } => {
-                SpecNet::branch("UnderExpression", vec![from_math(*base), from_math(*label)])
-            }
-            Math::Linked { body, target } => {
-                let mut node = from_math(*body);
-                node.target = Some(target);
-                node
-            }
-            Math::Native {
-                text,
-                tex,
-                kind,
-                color,
-            } => {
-                let mut node = from_math(Math::Atom { text, kind, color });
-                node.tex = Some(tex);
-                node
-            }
-            Math::Space => SpecNet::leaf("Thing", ""),
-            Math::Row(parts) => {
-                SpecNet::branch("RowExpression", parts.into_iter().map(from_math).collect())
-            }
-            Math::Power { base, exponent } => {
-                SpecNet::branch("Power", vec![from_math(*base), from_math(*exponent)])
-            }
-            Math::Index { base, subscript } => {
-                SpecNet::branch("Subscript", vec![from_math(*base), from_math(*subscript)])
-            }
-            Math::Fraction {
-                numerator,
-                denominator,
-            } => SpecNet::branch(
-                "Divide",
-                vec![from_math(*numerator), from_math(*denominator)],
-            ),
-            Math::Delimited { left, right, body } => SpecNet::branch(
-                "RowExpression",
-                vec![
-                    SpecNet::leaf("Delimiter", left.to_string()),
-                    from_math(*body),
-                    SpecNet::leaf("Delimiter", right.to_string()),
-                ],
-            ),
-            Math::AnnotatedMatrix { .. } => {
-                unreachable!("TeX fixtures do not produce structured matrix metadata")
-            }
-            Math::Grid { rows, kind } => {
-                let mut node = SpecNet::branch(
-                    "MatrixExpression",
-                    rows.into_iter()
-                        .map(|row| {
-                            SpecNet::branch("List", row.into_iter().map(from_math).collect())
-                        })
-                        .collect(),
-                );
-                if kind == GridKind::Bare {
-                    node.classes = vec!["Table".into()];
-                }
-                node
-            }
-            Math::Diagram(_) => unreachable!("fixtures are built from formulas, not diagrams"),
-        }
-    }
-    impl SpecNet {
-        pub fn tex_fixture(source: String, fallback: String, code: String) -> Self {
-            let mut node = source
-                .strip_prefix('$')
-                .and_then(|x| x.strip_suffix('$'))
-                .and_then(|x| Math::parse(x).ok())
-                .map(from_math)
-                .unwrap_or_else(|| Self::plain(fallback.clone()));
-            node.fallback = Some(fallback);
-            node.code = Some(code);
-            node
-        }
-        pub fn token_fixture(text: String, role: &str) -> Self {
-            Self::leaf(role, text)
-        }
-        pub fn collection_fixture(kind: CollectionKind, items: Vec<Self>) -> Self {
-            Self::branch(format!("{kind:?}"), items)
-        }
-        pub fn table_fixture(rows: Vec<[Self; 2]>) -> Self {
-            Self::branch(
-                "HashTable",
-                rows.into_iter()
-                    .map(|[key, value]| Self::branch("Option", vec![key, value]))
-                    .collect(),
-            )
-        }
-        pub fn linked_fixture(mut value: Box<Self>, target: String) -> Self {
-            value.target = Some(target);
-            *value
-        }
-        pub fn location_fixture(text: String, target: String) -> Self {
-            Self {
-                target: Some(target),
-                ..Self::leaf("FilePosition", text)
-            }
-        }
     }
 }

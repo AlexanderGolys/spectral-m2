@@ -15,6 +15,7 @@ All notable changes to Spectral M2 are documented here.
 ### Changed
 
 - The input's diagnostic line stands above its code instead of below it.
+- Spectral now sends each result already laid out, as a tree of rows, scripts, fractions, fences, grids and diagrams with each piece of text tagged by its class, so how every class of value and expression is formatted lives in the package, where a session can change it with `formatted`, `specNet` and the shape constructors; a `Highlight` recolours any part, as deep as its `Reach`. sp2 only fits the layout to the pane and colours it. `speek` spells the drawing one level deep, as `peek` spells an object.
 - Contrast is a continuous slider through native theme variants; saved native-variant choices migrate to their matching stops.
 - Picker tabs have separators, the side pane has a frame, palette names use their own colours, and key hints take priority when statusline space is tight.
 - `Descent` values retain their hierarchy and render one branch per row.

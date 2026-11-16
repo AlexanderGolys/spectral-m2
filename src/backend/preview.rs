@@ -2,7 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::SpecNet;
 use crate::ui::cycle::cyclic;
 
 cyclic! {
@@ -29,8 +28,8 @@ cyclic! {
         /// M2's re-readable spelling, `toExternalString`.
         #[serde(rename = "external")]
         External = "external",
-        /// The value's structure as `speek` draws it: each part's class and
-        /// what it holds, coloured and set as `specNet` sets a value.
+        /// The value's drawing one level deep, as `speek` spells it, the way
+        /// `peek` shows an object.
         #[serde(rename = "speek")]
         Speek = "speek",
         /// One level of the value's inner structure, as M2's `peek` shows it.
@@ -46,10 +45,6 @@ pub struct ValuePreview {
     pub mode: PreviewMode,
     /// The formatter's complete text, before terminal wrapping or typesetting.
     pub text: String,
-    /// The drawing of a formatter that answers with a value of its own to show,
-    /// as `speek` does, which the text only spells.
-    #[serde(default)]
-    pub value: Option<SpecNet>,
 }
 
 impl ValuePreview {
@@ -57,7 +52,6 @@ impl ValuePreview {
         Self {
             mode,
             text: text.into(),
-            value: None,
         }
     }
 }

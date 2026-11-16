@@ -5,7 +5,7 @@ pub mod spec_net;
 pub mod transcript;
 
 pub use preview::{PreviewMode, ValuePreview};
-pub use spec_net::{CollectionKind, SpecNet};
+pub use spec_net::SpecNet;
 use std::fmt::Display;
 use std::io::{BufRead, BufReader, PipeReader, Write};
 use std::os::unix::process::CommandExt;
@@ -131,7 +131,7 @@ struct Frame {
     #[serde(default)]
     previews: Vec<ValuePreview>,
     type_info: Option<String>,
-    type_parts: Option<Vec<SpecNet>>,
+    type_drawing: Option<SpecNet>,
     #[serde(default)]
     has_value: bool,
     #[serde(default)]
@@ -161,8 +161,8 @@ pub struct M2Response {
     /// Independent M2 formatter results available to the preview selector.
     pub previews: Vec<ValuePreview>,
     pub type_info: Option<String>,
-    /// The pieces of the type annotation, each rendered as a value is.
-    pub type_parts: Vec<SpecNet>,
+    /// The type annotation as Spectral draws it.
+    pub type_drawing: Option<SpecNet>,
     /// Whether M2 bound an `oN` for this input. Not implied by `value`: a
     /// suppressed result binds one without producing rendered text.
     pub has_value: bool,
@@ -474,7 +474,7 @@ impl M2Backend {
                         value: frame.value,
                         previews: frame.previews,
                         type_info: frame.type_info,
-                        type_parts: frame.type_parts.unwrap_or_default(),
+                        type_drawing: frame.type_drawing,
                         has_value: frame.has_value,
                         depth: frame.depth,
                         names: frame.names,

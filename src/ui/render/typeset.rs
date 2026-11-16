@@ -1,4 +1,4 @@
-//! Typesetting from class-tagged expression data, with Unicode fallback.
+//! Typesetting the drawings M2 sends, with Unicode fallback.
 
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
@@ -11,7 +11,8 @@ use crate::ui::theme::groups::{Groups, HLGroup};
 use crate::ui::wrap::WrappedText;
 
 use super::maths::{
-    self, Course, Diagram, Math, MathDisplay, MathInk, MathStyle, PRODUCT_SIGN, TENSOR_SIGN,
+    self, Course, Diagram, Math, MathDisplay, MathInk, MathStyle, Reading, DIRECT_SUM_SIGN,
+    PRODUCT_SIGN, TENSOR_SIGN,
 };
 use crate::ui::graphics::ratex::diagram::Description;
 
@@ -113,6 +114,7 @@ fn tex(math: &Math, groups: Option<&Groups>) -> String {
                 (HLGroup::Delimiter, "," | ", " | ";") => text.clone(),
                 (HLGroup::Operator, PRODUCT_SIGN) => r"\,".into(),
                 (HLGroup::Operator, TENSOR_SIGN) => r"\otimes ".into(),
+                (HLGroup::Operator, DIRECT_SUM_SIGN) => r"\oplus ".into(),
                 (HLGroup::Operator, "+" | "-" | "=") => text.clone(),
                 (HLGroup::Number, _) => maths::typewriter(text).replacen("texttt", "mathrm", 1),
                 (HLGroup::Variable, _) => maths::typewriter(text).replacen("texttt", "mathit", 1),
@@ -274,8 +276,8 @@ fn draw(
     picture: Picture,
 ) -> Drawn {
     let width = width.max(1);
-    if value.wants_typesetting() && value.html.is_none() && !has_links(value) {
-        let math = Math::from_spec_net(&typewritten_where_unmarked(value), style);
+    if value.wants_typesetting() && value.html.is_none() && !value.has_links() {
+        let math = Reading::new(value, style).typewritten().math();
         let layout_groups = groups.map_styles(|_, mut style| {
             style.fg = None;
             style
@@ -318,29 +320,6 @@ fn draw(
         .map(|row| Line::from(row.spans(groups)))
         .collect();
     Drawn { lines, links }
-}
-
-/// `value` with each text M2 did not ask to typeset, which a picture holds only
-/// for sitting beside what it did, spelled in a typewriter face as the text it is.
-fn typewritten_where_unmarked(value: &SpecNet) -> SpecNet {
-    let mut value = value.clone();
-    match &value.text {
-        Some(text) if !value.typeset && value.tex.is_none() => {
-            value.tex = Some(maths::typewriter(text));
-        }
-        _ => {
-            value.children = value
-                .children
-                .iter()
-                .map(typewritten_where_unmarked)
-                .collect();
-        }
-    }
-    value
-}
-
-fn has_links(value: &SpecNet) -> bool {
-    value.target.is_some() || value.children.iter().any(has_links)
 }
 
 /// Preview M2's TeX formatter using the display selected in settings.
@@ -405,23 +384,15 @@ pub fn drawn(value: &SpecNet, width: usize, groups: &Groups, style: MathStyle) -
 
 /// Render the type method's output with each component's supplied highlight class.
 pub fn annotation(
-    parts: &[SpecNet],
+    value: &SpecNet,
     width: usize,
     groups: &Groups,
     style: MathStyle,
 ) -> Vec<Line<'static>> {
-    annotation_with_picture(parts, width, groups, style, graphics::typeset)
-}
-
-fn annotation_with_picture(
-    parts: &[SpecNet],
-    width: usize,
-    groups: &Groups,
-    style: MathStyle,
-    picture: Picture,
-) -> Vec<Line<'static>> {
-    let mut row = SpecNet::branch("RowExpression", parts.to_vec());
-    row.code = Some(parts.iter().map(SpecNet::render).collect::<String>());
+    let value = SpecNet {
+        code: Some(value.render()),
+        ..value.clone()
+    };
     let groups = groups.map_styles(|group, mut style| {
         style.bg = None;
         if !matches!(
@@ -436,5 +407,5 @@ fn annotation_with_picture(
         ink: MathInk::Syntax,
         ..style
     };
-    draw(&row, width, &groups, style, picture).lines
+    draw(&value, width, &groups, style, graphics::typeset).lines
 }
