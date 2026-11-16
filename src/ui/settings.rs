@@ -14,6 +14,7 @@ pub mod lsp;
 pub mod rendering;
 pub mod row;
 pub mod selection;
+pub mod session;
 pub mod statusline;
 
 use ratatui::text::Span;
@@ -62,12 +63,14 @@ sections! {
     lsp: LspSettings,
     editor: EditorSettings,
     statusline: StatusLineSettings,
+    session: session::SessionSettings,
 }
 
 impl Settings {
     /// Whether returned values lay out differently, moving their heights.
     pub fn reformats(&self, other: &Self) -> bool {
         self.editor.output_rows != other.editor.output_rows
+            || self.editor.code_wrap != other.editor.code_wrap
             || self.rendering.reformats(&other.rendering)
     }
 

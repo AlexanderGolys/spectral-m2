@@ -12,7 +12,7 @@ Every key below can be [rebound](../custom/keymaps.md) unless marked *fixed*. Th
 | `Ctrl+O` | Open the settings. |
 | `Ctrl+Shift+K` | Open the keymaps. |
 | `Alt+L` | Clear the feed. |
-| `F2` … `F6` | Show code, values, printed output, all output, or the syntax tree beside the session. |
+| `F2`, `F5`, `F6` | Show committed code, output, or the syntax tree beside the session. |
 | `F7` | Browse saved sessions. |
 | `F8` | Restart and run the viewed file. |
 | `Ctrl+N` | Restart Macaulay2. |
@@ -126,3 +126,13 @@ After `Ctrl+E` the cursor sits on the last text of the focused pane, the feed or
 | `Ctrl`+click a link | Submit `help` or `get` for it to the session. |
 | Click an output's icon | Draw that value the next available way. |
 | Click a pane | Focus it; drag the divider to resize. |
+
+## Mathematical operators
+
+| Key | Inserted operator |
+| --- | --- |
+| `Alt+S` | `⧢` (shuffle product) |
+| `Alt+.` | `·` (dot operator) |
+| `Alt+T` | `⊗` (tensor product, M2's `**`) |
+
+These edit the input and can be rebound in the keymaps picker. They also work in the notebook.

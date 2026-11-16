@@ -10,6 +10,7 @@ mod hints;
 mod history;
 mod undo;
 
+use crate::ui::glyphs::Glyphs;
 use std::iter;
 use std::ops::Range;
 use std::time::{Duration, Instant};
@@ -38,7 +39,7 @@ use crate::ui::render::{Highlights, Prompt, RenderContext};
 use crate::ui::settings::keymap::Keymaps;
 use crate::ui::settings::Settings;
 use crate::ui::text_object::{bracket_pair_at, Bracket, CharClass, TextDirection, TextMotion};
-use crate::ui::wrap::{offset_at_column, CaretWrap, TextLayout, WrapPolicy};
+use crate::ui::wrap::{offset_at_column, CaretWrap, TextLayout};
 
 /// A text-editing operation owned and interpreted by the input field.
 #[discriminated_str(description)]
@@ -47,6 +48,9 @@ use crate::ui::wrap::{offset_at_column, CaretWrap, TextLayout, WrapPolicy};
 pub enum InputAction {
     InsertNewline = "insert a line break",
     InsertTab = "insert a tab",
+    InsertShuffle = "insert the shuffle operator",
+    InsertDot = "insert the dot operator",
+    InsertTensor = "insert the tensor product operator",
 
     NextCompletion = "show completion candidates, insert a hint, or take the next candidate",
     PreviousCompletion = "take the previous completion",
@@ -161,6 +165,9 @@ impl InputAction {
                 self,
                 Self::InsertNewline
                     | Self::InsertTab
+                    | Self::InsertShuffle
+                    | Self::InsertDot
+                    | Self::InsertTensor
                     | Self::DeleteLine
                     | Self::Undo
                     | Self::Redo
@@ -768,6 +775,7 @@ impl InputCode {
 
     /// Replace the component's adjustable layout policy.
     pub fn set_settings(&mut self, settings: Settings) {
+        self.forget_completion();
         self.settings = settings;
     }
 
@@ -874,6 +882,9 @@ impl InputCode {
         match action {
             InsertNewline => field.insert_char('\n'),
             InsertTab => field.insert_char('\t'),
+            InsertShuffle => field.insert_char('\u{29e2}'),
+            InsertDot => field.insert_char('\u{b7}'),
+            InsertTensor => field.insert_char('\u{2297}'),
             DeleteLine => field.delete_line(),
             Undo => field.undo(),
             Redo => field.redo(),
@@ -902,7 +913,10 @@ impl InputCode {
         let Some(completion) = self.completion.as_mut() else {
             return;
         };
-        if completion.reveal(self.settings.editor.hint_completion_below) {
+        if completion.reveal(
+            self.settings.editor.hint_completion_below,
+            self.settings.editor.completion_list,
+        ) {
             return;
         }
         let (range, chosen) = completion.take(action == InputAction::NextCompletion);
@@ -1140,9 +1154,9 @@ impl InputCode {
             let marker = if index + 1 != visual_lines.len() {
                 ""
             } else if self.typing() {
-                UI.glyphs.prompt_typing.current()
+                Glyphs::PromptTyping.glyph().current()
             } else {
-                UI.glyphs.prompt.current()
+                Glyphs::Prompt.glyph().current()
             };
             let mut spans = Prompt::new(marker, prompt).spans(&());
             let mut line = self.highlights.paint(
@@ -1280,8 +1294,8 @@ impl InputCode {
         if self.pinned_first_row {
             lines.push(rows[0].clone());
             lines.push(Line::from(Span::styled(
-                UI.glyphs
-                    .pending_separator
+                Glyphs::PendingSeparator
+                    .glyph()
                     .current()
                     .repeat(usize::from(area.width)),
                 groups.pending_separator().patch(code),
@@ -1300,7 +1314,7 @@ impl InputCode {
         if clipped && !self.pinned_first_row && area.height > 1 {
             for x in area.x..area.right() {
                 buffer[(x, area.bottom() - 1)]
-                    .set_symbol(UI.glyphs.pending_separator.current())
+                    .set_symbol(Glyphs::PendingSeparator.glyph().current())
                     .set_style(groups.pending_separator().patch(code));
             }
         }
@@ -1434,6 +1448,13 @@ impl TextLayout for InputCode {
     fn text(&self) -> &str {
         self.field.text()
     }
+
+    fn lines(&self, width: u16) -> Vec<crate::ui::wrap::VisualLine> {
+        self.settings
+            .editor
+            .input_wrap
+            .caret_lines(self.text(), width)
+    }
 }
 
 impl InputCode {
@@ -1446,7 +1467,7 @@ impl InputCode {
     pub fn visual_cursor(&self, width: u16) -> (usize, usize) {
         let text = self.text();
         let cursor = self.field.cursor();
-        let rows = CaretWrap.wrap(text, width);
+        let rows = self.lines(width);
         let row = rows
             .iter()
             .rposition(|row| row.range.start <= cursor)
@@ -1461,7 +1482,7 @@ impl InputCode {
     }
 
     pub fn cursor_at_visual(&self, width: u16, row: usize, column: usize) -> usize {
-        let rows = CaretWrap.wrap(self.text(), width);
+        let rows = self.lines(width);
         let line = &rows[row.min(rows.len().saturating_sub(1))];
         line.range.start + offset_at_column(&self.text()[line.range.clone()], column)
     }
@@ -1809,7 +1830,7 @@ mod tests {
         assert!(row(1).contains("first"));
         assert!(row(2)
             .chars()
-            .all(|symbol| symbol.to_string() == UI.glyphs.pending_separator.current()));
+            .all(|symbol| symbol.to_string() == Glyphs::PendingSeparator.glyph().current()));
         assert!(row(cursor.y).contains("last"));
         assert!(cursor.y < area.bottom() - 1);
         assert!(input.pinned_first_row);
@@ -1922,13 +1943,13 @@ mod tests {
         assert_eq!(lines.len(), 3);
         assert!(!lines[0].spans[0]
             .content
-            .contains(UI.glyphs.prompt.current()));
+            .contains(Glyphs::Prompt.glyph().current()));
         assert!(!lines[1].spans[0]
             .content
-            .contains(UI.glyphs.prompt.current()));
+            .contains(Glyphs::Prompt.glyph().current()));
         assert!(lines[2].spans[0]
             .content
-            .contains(UI.glyphs.prompt.current()));
+            .contains(Glyphs::Prompt.glyph().current()));
     }
 
     #[test]
@@ -1940,8 +1961,8 @@ mod tests {
             let lines = input.highlighted_lines(&context, &mut highlighter, false, None);
             lines[0].spans[0].content.to_string()
         };
-        let typing = UI.glyphs.prompt_typing.current();
-        let resting = UI.glyphs.prompt.current();
+        let typing = Glyphs::PromptTyping.glyph().current();
+        let resting = Glyphs::Prompt.glyph().current();
 
         input.handle_key(KeyCode::Left.into());
         assert!(prompt(&mut input).contains(resting), "moving is not typing");
@@ -1959,8 +1980,9 @@ mod tests {
 
     #[test]
     fn a_typing_prompt_keeps_the_text_in_place() {
-        let resting = Prompt::new(UI.glyphs.prompt.current(), Style::default()).spans(&());
-        let typing = Prompt::new(UI.glyphs.prompt_typing.current(), Style::default()).spans(&());
+        let resting = Prompt::new(Glyphs::Prompt.glyph().current(), Style::default()).spans(&());
+        let typing =
+            Prompt::new(Glyphs::PromptTyping.glyph().current(), Style::default()).spans(&());
         assert_eq!(typing[0].width(), resting[0].width());
     }
 

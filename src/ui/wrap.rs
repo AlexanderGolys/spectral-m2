@@ -3,7 +3,62 @@
 use std::iter;
 use std::ops::Range;
 
+use crate::ui::cycle::cyclic;
+use serde::{Deserialize, Serialize};
 use unicode_width::UnicodeWidthChar;
+
+cyclic! {
+    /// Where a long line breaks: at word/token boundaries or at terminal columns.
+    /// For example, character wrapping can split `polynomial` across two rows.
+    #[discriminated_str(label)]
+    #[non_exhaustive]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum WrapMode {
+        #[default]
+        Word = "word",
+        Character = "character",
+    }
+}
+
+/// Wrap at terminal columns, preserving every source character.
+#[derive(Default)]
+pub struct CharacterWrap;
+
+impl WrapPolicy for CharacterWrap {
+    fn wrap_logical_line(&self, line: &str, width: u16, offset: usize) -> Vec<VisualLine> {
+        let mut rows = Vec::new();
+        let mut start = 0;
+        let mut columns = 0;
+        for (byte, character) in line.char_indices() {
+            let cells = character.width().unwrap_or(0);
+            if byte > start && columns + cells > usize::from(width.max(1)) {
+                rows.push(VisualLine {
+                    range: offset + start..offset + byte,
+                    hard_continuation: start > 0,
+                });
+                start = byte;
+                columns = 0;
+            }
+            columns += cells;
+        }
+        rows.push(VisualLine {
+            range: offset + start..offset + line.len(),
+            hard_continuation: start > 0,
+        });
+        rows
+    }
+}
+
+impl WrapMode {
+    /// Wrap editable input and retain an empty row for a caret at a full edge.
+    pub fn caret_lines(self, text: &str, width: u16) -> Vec<VisualLine> {
+        match self {
+            Self::Word => CaretWrap(WordWrap).wrap(text, width),
+            Self::Character => CaretWrap(CharacterWrap).wrap(text, width),
+        }
+    }
+}
 
 /// A visual row represented as a byte range into its source text.
 pub struct VisualLine {
@@ -77,8 +132,12 @@ impl WrappedText {
     }
 
     /// Wrap code at whitespace and parsed span boundaries.
-    pub fn code(source: &str, width: u16, spans: &[Range<usize>]) -> Self {
-        Self::from_lines(source, SpanWrap(spans).wrap(source, width))
+    pub fn code(source: &str, width: u16, spans: &[Range<usize>], mode: WrapMode) -> Self {
+        let lines = match mode {
+            WrapMode::Word => SpanWrap(spans).wrap(source, width),
+            WrapMode::Character => CharacterWrap.wrap(source, width),
+        };
+        Self::from_lines(source, lines)
     }
 
     fn from_lines(source: &str, lines: Vec<VisualLine>) -> Self {
@@ -115,15 +174,15 @@ impl WrappedText {
     }
 }
 
-/// Word wrapping for text being edited. A line ending exactly on the width gets
+/// A wrapping policy for text being edited. A line ending exactly on the width gets
 /// an empty row after it, so the caret has somewhere inside the pane to sit and
 /// the next character appears where the caret already is.
 #[derive(Default)]
-pub struct CaretWrap;
+pub struct CaretWrap<P = WordWrap>(pub P);
 
-impl WrapPolicy for CaretWrap {
+impl<P: WrapPolicy> WrapPolicy for CaretWrap<P> {
     fn wrap_logical_line(&self, line: &str, width: u16, offset: usize) -> Vec<VisualLine> {
-        let mut rows = WordWrap.wrap_logical_line(line, width, offset);
+        let mut rows = self.0.wrap_logical_line(line, width, offset);
         let ends_on_width = rows.last().is_some_and(|row| {
             let columns: usize = line[row.range.start - offset..row.range.end - offset]
                 .chars()

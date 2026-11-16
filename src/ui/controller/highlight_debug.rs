@@ -1,5 +1,7 @@
 //! Rows of the highlight debug panel.
 
+// Keep mathematical notation and interface symbols legible in their native spelling.
+#![allow(clippy::non_ascii_literal)]
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 
@@ -40,7 +42,7 @@ impl DebugEntry {
         Self {
             swatch: Some(color),
             label: name.into(),
-            style: scheme().value(),
+            style: scheme().value().fg(color),
         }
     }
 

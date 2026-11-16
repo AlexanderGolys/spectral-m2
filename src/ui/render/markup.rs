@@ -1,5 +1,7 @@
 //! Documentation markup, as M2 sends it in HTML, drawn as coloured rows.
 
+// Keep mathematical notation and interface symbols legible in their native spelling.
+#![allow(clippy::non_ascii_literal)]
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;

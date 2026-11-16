@@ -1,6 +1,7 @@
 //! Views of the session shown beside its shell: what each shows, the pane state
 //! it scrolls with, and how the editor draws it.
 
+use crate::ui::glyphs::Glyphs;
 use crate::ui::settling::SettlingWidth;
 use std::fs;
 use std::path::PathBuf;
@@ -18,7 +19,6 @@ use crate::ui::action::Action;
 use crate::ui::block::{Block, Element, TextSpan};
 use crate::ui::block::{Reformatted, Rethemed};
 use crate::ui::cell::{CodeBlock, M2CodeCell, TextBlock};
-use crate::ui::config::UI;
 use crate::ui::cycle::cycled;
 use crate::ui::element::EventListener;
 use crate::ui::feed::BlockView;
@@ -40,6 +40,8 @@ pub enum ViewKind {
     /// selects it.
     Output = "output",
     SyntaxTree = "syntax tree",
+    /// A persistent, editable notebook kept with this scope's session files.
+    Notes = "notes",
     /// Documentation and source files opened for reference.
     Reference = "reference",
 }
@@ -47,7 +49,7 @@ pub enum ViewKind {
 impl ViewKind {
     /// The views shown beside the session, in the order `Left` and `Right` step
     /// through them.
-    pub const PREVIEWS: [Self; 3] = [Self::Code, Self::Output, Self::SyntaxTree];
+    pub const PREVIEWS: [Self; 4] = [Self::Code, Self::Output, Self::SyntaxTree, Self::Notes];
 
     pub fn is_preview(self) -> bool {
         Self::PREVIEWS.contains(&self)
@@ -349,7 +351,7 @@ impl Editor {
         let buffer = frame.buffer_mut();
         for y in area.top()..area.bottom() {
             buffer[(area.x, y)]
-                .set_symbol(UI.glyphs.split_divider.current())
+                .set_symbol(Glyphs::SplitDivider.glyph().current())
                 .set_style(style);
         }
     }
@@ -416,6 +418,7 @@ impl Editor {
         self.picker_area = sections[1];
 
         match view {
+            ViewKind::Notes => self.draw_notes(frame, sections[0], &context),
             ViewKind::Reference => {
                 let (_, inclusions) = self.reference.render(
                     &context.full_output(),

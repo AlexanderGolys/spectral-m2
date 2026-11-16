@@ -1,9 +1,11 @@
 //! Compile-time presentation configuration for the complete interface.
 
+// Keep mathematical notation and interface symbols legible in their native spelling.
+#![allow(clippy::non_ascii_literal)]
 use std::time::Duration;
 
 use crate::spinner_frames;
-use crate::ui::glyphs::{Glyphs, GLYPHS};
+use crate::ui::glyphs::Glyphs;
 use crate::ui::render::spin::Spinner;
 
 /// The pending-cell spinner, with its fallback for terminals without rich glyphs.
@@ -43,8 +45,8 @@ pub struct UiConfig {
     /// Columns kept clear down the whole screen's left edge, around every pane.
     pub screen_margin: u16,
     pub feed_margin: u16,
-    /// Symbols used in shell chrome and their compatibility fallbacks.
-    pub glyphs: Glyphs,
+    /// Number of cells in a settings slider track.
+    pub slider_width: usize,
     /// Animation of a pending cell marker.
     pub spinner: SpinnerConfig,
     /// How long after the last keystroke that changed the input it keeps the
@@ -55,6 +57,18 @@ pub struct UiConfig {
     /// How long the input's cursor must rest before the language server is asked
     /// about where it stands, so a run of moves asks once, about where it stops.
     pub cursor_question_settle: Duration,
+    /// The time between frames while anything moves: 60 a second. Whatever moves
+    /// changes its own state at its own rate; a frame draws the state it finds.
+    pub frame_interval: Duration,
+    /// How long a run goes before the status line offers Ctrl+C to cancel it.
+    pub cancel_hint_delay: Duration,
+    /// How long after a run ends a cancel still counts as meant for it, and is
+    /// ignored rather than clearing the input or quitting.
+    pub cancel_grace: Duration,
+    /// How often sp2 asks the installed sp2 and m2-ls for their versions.
+    pub installed_check_interval: Duration,
+    /// How often sp2 asks crates.io for the published sp2 and m2-ls versions.
+    pub published_check_interval: Duration,
     pub prompt_margin: u16,
     pub cell_margin: u16,
     pub cell_gap: u16,
@@ -124,9 +138,9 @@ pub struct FloatingConfig {
 
 /// Presentation configuration used by every UI element.
 pub const UI: UiConfig = UiConfig {
+    slider_width: 12,
     screen_margin: 1,
     feed_margin: 1,
-    glyphs: GLYPHS,
 
     spinner: SpinnerConfig {
         rich: Spinner::new(
@@ -143,6 +157,11 @@ pub const UI: UiConfig = UiConfig {
     typing_prompt_ms: 200,
     copy_notice_ms: 2000,
     cursor_question_settle: Duration::from_millis(200),
+    frame_interval: Duration::from_nanos(1_000_000_000 / 60),
+    cancel_hint_delay: Duration::from_secs(3),
+    cancel_grace: Duration::from_millis(500),
+    installed_check_interval: Duration::from_secs(60),
+    published_check_interval: Duration::from_secs(30 * 60),
     prompt_margin: 2,
     cell_margin: 0,
     cell_gap: 3,

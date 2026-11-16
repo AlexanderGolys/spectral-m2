@@ -1,5 +1,7 @@
 //! Structured expression layout and explicit TeX rendering for documentation.
 
+// Keep mathematical notation and interface symbols legible in their native spelling.
+#![allow(clippy::non_ascii_literal)]
 mod diagram;
 mod expression;
 pub use diagram::{Course, Diagram};
@@ -10,6 +12,7 @@ use crate::backend::{CollectionKind, SpecNet, OPTION_ARROW};
 use crate::ui::block::TextSpan;
 use crate::ui::config::UI;
 use crate::ui::cycle::cyclic;
+use crate::ui::glyphs::Glyphs;
 use crate::ui::graphics;
 use crate::ui::present::{wrap, SpanLine};
 use crate::ui::theme::groups::HLGroup;
@@ -276,6 +279,9 @@ fn role_spans(
         return markup::spans(html, width)
             .ok_or_else(|| UnsupportedTeX("markup that does not read as HTML".into()));
     }
+    if value.is("Descent") && value.text.is_none() {
+        return Ok(hierarchy_rows(value, width));
+    }
     let mut rows = if let Some(text) = &value.text {
         prose(text, value.group(), width)
     } else if let Some(kind) = value.collection_kind() {
@@ -298,6 +304,69 @@ fn link<'a>(spans: impl IntoIterator<Item = &'a mut TextSpan>, target: &str) {
     for span in spans {
         span.target = Some(target.clone());
     }
+}
+
+/// Lay out a class hierarchy a branch at a time, so no subtree forces its
+/// siblings into a shared wide column. Wrapped labels keep their branch indent.
+fn hierarchy_rows(tree: &SpecNet, width: usize) -> Vec<SpanLine> {
+    fn append(tree: &SpecNet, prefix: &str, width: usize, rows: &mut Vec<SpanLine>) {
+        for (index, entry) in tree.children.iter().enumerate() {
+            let [label, subtree] = entry.children.as_slice() else {
+                continue;
+            };
+            let last = index + 1 == tree.children.len();
+            let branch = if last {
+                Glyphs::TreeLast
+            } else {
+                Glyphs::TreeBranch
+            }
+            .glyph()
+            .current();
+            let continuation = if last {
+                Glyphs::TreeIndent
+            } else {
+                Glyphs::TreeContinue
+            }
+            .glyph()
+            .current();
+            let indent = format!("{prefix}{branch}");
+            let room = width.saturating_sub(indent.width()).max(1);
+            let label = label
+                .fallback
+                .as_deref()
+                .or(label.text.as_deref())
+                .map(str::to_string)
+                .unwrap_or_else(|| label.render());
+            for (line, content) in prose(&label, HLGroup::Type, room).into_iter().enumerate() {
+                let leading = if line == 0 {
+                    indent.clone()
+                } else {
+                    format!("{prefix}{}", continuation)
+                };
+                let mut row = vec![TextSpan::new(leading, HLGroup::Punctuation)];
+                row.extend(content);
+                // A hierarchy can be deeper than the terminal is wide. Clip only
+                // its indentation, leaving at least one column for the label.
+                if row[0].content.width() >= width {
+                    row[0].content = row[0]
+                        .content
+                        .chars()
+                        .rev()
+                        .take(width.saturating_sub(1))
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect();
+                }
+                rows.push(row);
+            }
+            let prefix = format!("{prefix}{}", continuation);
+            append(subtree, &prefix, width, rows);
+        }
+    }
+    let mut rows = Vec::new();
+    append(tree, "", width, &mut rows);
+    rows
 }
 
 /// Text that can run long, so it breaks at words, in `group`'s colour.

@@ -1,5 +1,7 @@
 //! Layout implementations for M2 expression constructors, independent of domain types.
 
+// Keep mathematical notation and interface symbols legible in their native spelling.
+#![allow(clippy::non_ascii_literal)]
 use super::{Diagram, GridKind, Math, MathStyle};
 use crate::backend::SpecNet;
 use crate::ui::theme::groups::HLGroup;

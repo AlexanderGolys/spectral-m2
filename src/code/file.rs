@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::env::ENV;
+#[cfg(not(test))]
+use crate::ui::settings::session::SessionSettings;
 use m2_syn::{lex_str_recovering, CommentTrivia, LexErrorKind, Spanned};
 
 /// The extension a file of Macaulay2 code carries.
@@ -129,10 +131,8 @@ pub fn write(path: &Path, code: &str) -> io::Result<()> {
 /// Where the code of the previous session is kept.
 #[cfg(not(test))]
 pub fn previous_session() -> Option<PathBuf> {
-    let state = ENV.state_home()?;
     Some(
-        state
-            .join(env!("CARGO_PKG_NAME"))
+        SessionSettings::directory()?
             .join("previous-session")
             .with_extension(EXTENSION),
     )

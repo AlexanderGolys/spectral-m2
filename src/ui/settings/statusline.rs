@@ -1,5 +1,7 @@
 //! Five independently configurable, evenly anchored statusline positions.
 
+// Keep mathematical notation and interface symbols legible in their native spelling.
+#![allow(clippy::non_ascii_literal)]
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};

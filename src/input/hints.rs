@@ -1,3 +1,5 @@
+// Keep mathematical notation and interface symbols legible in their native spelling.
+#![allow(clippy::non_ascii_literal)]
 use std::fmt::{self, Display, Formatter};
 
 use rand::seq::IteratorRandom;

@@ -1,6 +1,7 @@
 //! Configurable content at fixed, evenly spaced statusline anchors.
 
 use crate::code::semantic::SERVER_EXECUTABLE;
+use crate::updates::{shell_version, LANGUAGE_SERVER};
 use lsp_types::ServerInfo;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -99,9 +100,9 @@ impl StatusComponent {
         state_keys: Option<&[TextSpan]>,
     ) -> Vec<TextSpan> {
         let text = |value: String, group| vec![TextSpan::new(value, group)];
-        let version = |name: &str, value: Option<&str>| {
+        let version = |name: &str, value: Option<String>| {
             text(
-                format!("{name} {}", value.unwrap_or("unknown")),
+                format!("{name} {}", value.as_deref().unwrap_or("unknown")),
                 HLGroup::Statusline1,
             )
         };
@@ -135,12 +136,16 @@ impl StatusComponent {
                 },
                 HLGroup::StatuslineState,
             ),
-            Self::M2Version => version("M2", context.runtime.m2_version.as_deref()),
-            Self::Sp2Version => version("sp2", Some(env!("CARGO_PKG_VERSION"))),
+            Self::M2Version => version("M2", context.runtime.m2_version.clone()),
+            Self::Sp2Version => version("sp2", Some(shell_version())),
             Self::LanguageServerVersion => match &context.runtime.language_server {
-                LanguageServerState::Running(server) => {
-                    version(&server.name, server.version.as_deref())
-                }
+                LanguageServerState::Running(server) => version(
+                    &server.name,
+                    server
+                        .version
+                        .as_deref()
+                        .map(|version| LANGUAGE_SERVER.version(version)),
+                ),
                 _ => version(SERVER_EXECUTABLE, None),
             },
             Self::Debug => {
@@ -148,11 +153,7 @@ impl StatusComponent {
                 let memory = |bytes: Option<u64>| bytes.map_or_else(|| "n/a".into(), mebibytes);
                 let separator = TextSpan::new(" / ", HLGroup::StatuslineSeparator);
                 [
-                    format!(
-                        "sp2 {} {}",
-                        env!("CARGO_PKG_VERSION"),
-                        memory(diagnostics.sp2_memory)
-                    ),
+                    format!("sp2 {} {}", shell_version(), memory(diagnostics.sp2_memory)),
                     format!("M2 {}", memory(diagnostics.m2_memory)),
                     format!(
                         "pictures {} ({})",
@@ -277,13 +278,40 @@ impl Element for StatusLine {
         }
         let contents = context.segments(self.state_keys.as_deref());
         let groups = scheme();
-        for (slot, region) in SlotRegion::occupied(usize::from(area.width), &contents) {
+        let width = usize::from(area.width);
+        let mut regions = SlotRegion::occupied(width, &contents);
+        let priority = context.layout.placement(StatusComponent::KeyHints).slot();
+        if let Some(priority) = priority {
+            if let Some((_, region)) = regions.iter().find(|(slot, _)| *slot == priority) {
+                let length = Self::line(&contents[priority], groups, HLGroup::Statusline1)
+                    .width()
+                    .min(width);
+                let start = region.start(priority, length).max(0) as usize;
+                let start = start.min(width - length);
+                let end = start + length;
+                for (slot, region) in &mut regions {
+                    if *slot == priority {
+                        region.left = start;
+                        region.right = end;
+                    } else if *slot < priority {
+                        region.right = region.right.min(start);
+                    } else {
+                        region.left = region.left.max(end);
+                    }
+                }
+            }
+        }
+        for (slot, region) in regions {
             let line = Self::line(&contents[slot], groups, HLGroup::Statusline1);
             let width = line.width().min(usize::from(u16::MAX));
             if width == 0 {
                 continue;
             }
-            let start = region.start(slot, width);
+            let start = if Some(slot) == priority {
+                region.left as isize
+            } else {
+                region.start(slot, width)
+            };
             let mut source = Buffer::empty(Rect::new(0, 0, width as u16, 1));
             let visible = region.left.max(start.max(0) as usize)
                 ..region.right.min((start + width as isize).max(0) as usize);

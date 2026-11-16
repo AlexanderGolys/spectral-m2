@@ -3,6 +3,8 @@
 //! An action binding consumes its terminal key and emits an [`Action`]. Keys
 //! without a binding continue to the focused component as ordinary input.
 
+// Keep mathematical notation and interface symbols legible in their native spelling.
+#![allow(clippy::non_ascii_literal)]
 use std::collections::{BTreeSet, HashMap};
 
 use crossterm::event::KeyCode;
@@ -464,6 +466,9 @@ impl Default for Keymaps {
                 keymap!(alias I::InsertNewline => Char(' ') + Shift),
                 keymap!(alias I::InsertNewline => Char('j') + Ctrl),
                 keymap!(I::InsertTab => Tab + Alt),
+                keymap!(I::InsertShuffle => Char('s') + Alt),
+                keymap!(I::InsertDot => Char('.') + Alt),
+                keymap!(I::InsertTensor => Char('t') + Alt),
                 keymap!(I::DeleteLine => Char('u') + Ctrl),
                 keymap!(I::DeleteSpacedWordBack => Char('w') + Ctrl),
                 keymap!(I::Clear => Char('l') + Ctrl),

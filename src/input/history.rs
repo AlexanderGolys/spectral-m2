@@ -4,7 +4,8 @@
 //! Every session appends to one history file and takes in what the others appended,
 //! so input submitted in any session can be recalled in all of them.
 
-use crate::env::ENV;
+#[cfg(not(test))]
+use crate::ui::settings::session::SessionSettings;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -127,6 +128,14 @@ impl History {
     /// last read. A file shorter than what was read has been rewritten, so it is
     /// read again from the start. Malformed records are skipped.
     fn sync(&mut self) {
+        let path = history_file_path();
+        if path != self.path {
+            self.path = path;
+            self.entries.clear();
+            self.newest.clear();
+            self.browse = None;
+            self.synced = 0;
+        }
         let Some(path) = &self.path else {
             return;
         };
@@ -175,13 +184,11 @@ impl History {
         cursor: usize,
         recall: Recall,
     ) -> Option<HistoryBuffer> {
+        self.sync();
         self.end_search_if_edited(current, recall);
         let end = match &self.browse {
             Some(browse) => browse.pos,
-            None => {
-                self.sync();
-                self.entries.len()
-            }
+            None => self.entries.len(),
         };
         let draft = match &self.browse {
             Some(browse) => browse.draft.clone(),
@@ -210,6 +217,7 @@ impl History {
 
     /// Step to a newer entry, or back to the draft once there are none.
     pub fn next(&mut self, current: &str, recall: Recall) -> Option<HistoryBuffer> {
+        self.sync();
         self.end_search_if_edited(current, recall);
         let browse = self.browse.as_ref()?;
         let filter = Self::filter(&browse.prefix, recall);
@@ -271,6 +279,5 @@ fn history_file_path() -> Option<PathBuf> {
 
 #[cfg(not(test))]
 fn history_file_path() -> Option<PathBuf> {
-    let state_dir = ENV.state_home()?;
-    Some(state_dir.join("spectral-m2").join("history.jsonl"))
+    Some(SessionSettings::directory()?.join("history.jsonl"))
 }

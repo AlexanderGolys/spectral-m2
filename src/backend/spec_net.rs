@@ -1,5 +1,7 @@
 //! Recursive formatting data produced by M2's value and type methods.
 
+// Keep mathematical notation and interface symbols legible in their native spelling.
+#![allow(clippy::non_ascii_literal)]
 use crate::ui::render::maths::{self, MathStyle};
 use crate::ui::theme::groups::HLGroup;
 use serde::{Deserialize, Serialize};

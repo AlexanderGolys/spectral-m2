@@ -272,7 +272,7 @@ impl<'a> BlockView<'a> {
             let start = skip as u16;
             skip = 0;
             let rows = (height - start).min(area.height - y);
-            let mut rendered = Feed::buffer(Rect::new(0, 0, area.width, height), canvas);
+            let mut rendered = Feed::buffer(Rect::new(0, 0, context.width(), height), canvas);
             block.render_local(context, &mut rendered);
             paste(
                 &rendered,
@@ -695,7 +695,9 @@ impl Feed {
             self.surface = None;
             return (true, Inclusions::default());
         }
-        let context = context.with_width(area.width);
+        // Content keeps the width it was given, settled behind a dragged border; the
+        // viewport crops or pads it to the area meanwhile.
+        let context = context.with_width(context.width().saturating_sub(UI.feed_margin));
         if std::mem::take(&mut self.focus_pending) {
             self.anchor = self.blocks.iter().enumerate().find_map(|(index, block)| {
                 block

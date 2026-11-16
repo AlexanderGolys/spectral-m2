@@ -1,4 +1,4 @@
-//! The *appearance* tab: the axes along which [`Appearance`] steps.
+//! The *appearance* tab: a palette slider and cyclic scheme, mode and background choices.
 
 use super::row::{SettingRow, SettingsTab};
 use super::Settings;
@@ -7,7 +7,7 @@ use crate::ui::cycle::{cycled, cyclic};
 use crate::ui::theme::AppearanceSettings;
 
 cyclic! {
-    /// One independently cyclic axis of a colour appearance.
+    /// One independently adjustable axis of a colour appearance.
     #[discriminated_str(label)]
     #[derive(Clone, Copy, PartialEq)]
     pub enum AppearanceSetting {
@@ -23,7 +23,7 @@ impl AppearanceSetting {
     fn choices(self, appearance: AppearanceSettings) -> Vec<AppearanceSettings> {
         match self {
             Self::Theme => appearance.themes(),
-            Self::Contrast => appearance.contrasts(),
+            Self::Contrast => Vec::new(),
             Self::Mode => appearance.modes(),
             Self::Background => appearance.backgrounds(),
         }
@@ -33,7 +33,7 @@ impl AppearanceSetting {
     fn shown(self, appearance: AppearanceSettings) -> String {
         match self {
             Self::Theme => appearance.scheme().label().to_string(),
-            Self::Contrast => appearance.variant().label().to_string(),
+            Self::Contrast => format!("{}%", appearance.contrast),
             Self::Mode => appearance.mode().to_string(),
             Self::Background => appearance.background_label().to_string(),
         }
@@ -48,7 +48,7 @@ impl SettingRow for AppearanceSetting {
     fn description(self, _: Settings) -> &'static str {
         match self {
             Self::Theme => "colour scheme family",
-            Self::Contrast => "the theme's variants for the current mode",
+            Self::Contrast => "interpolate continuously between the theme's native variants",
             Self::Mode => "dark or light palette",
             Self::Background => "paint empty canvas or let the terminal show through",
         }
@@ -56,6 +56,9 @@ impl SettingRow for AppearanceSetting {
 
     fn value(self, settings: Settings) -> PickerValue {
         let appearance = settings.appearance;
+        if self == Self::Contrast {
+            return PickerValue::Slider(appearance.contrast);
+        }
         PickerValue::among(&self.choices(appearance), &appearance, |&appearance| {
             self.shown(appearance).into()
         })
@@ -63,7 +66,11 @@ impl SettingRow for AppearanceSetting {
 
     fn adjust(self, settings: &mut Settings, delta: i8) {
         let appearance = settings.appearance;
-        settings.appearance = cycled(&self.choices(appearance), appearance, delta);
+        settings.appearance = if self == Self::Contrast {
+            appearance.with_contrast(delta)
+        } else {
+            cycled(&self.choices(appearance), appearance, delta)
+        };
     }
 }
 

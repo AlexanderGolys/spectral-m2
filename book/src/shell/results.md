@@ -108,3 +108,5 @@ The *rendering* settings shape the details; each is in the [settings reference](
 - *index colours* and *exponent colours*: their own colour, their symbol's, or the operator colour;
 - *matrix row spacing* for typeset matrices;
 - *output mode position*: where the mode controls sit in each output border.
+
+`showClassStructure()` returns a hierarchy rather than a flat table summary. The structured preview draws each branch on its own row and wraps labels within the pane, so large `Descent` objects remain readable. Choose the `net` preview for Macaulay2's original two-dimensional layout.

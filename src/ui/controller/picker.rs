@@ -1,5 +1,8 @@
 //! Stateful text pickers rendered above the input.
 
+// Keep mathematical notation and interface symbols legible in their native spelling.
+use crate::ui::glyphs::Glyphs;
+use crate::ui::theme::AppearanceSettings;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Position, Rect};
@@ -64,6 +67,8 @@ pub enum PickerValue {
     },
     /// A value stepped through a range too long to list, between step arrows.
     Stepped(String),
+    /// Continuous percentage value, shown as a track and its exact position.
+    Slider(u8),
     /// Destinations shown together, with the current one checked.
     Checklist {
         options: Vec<PickerOption>,
@@ -104,8 +109,8 @@ impl PickerValue {
 
     fn arrows() -> (String, String) {
         (
-            format!("{} ", UI.glyphs.step_back.current()),
-            format!(" {}", UI.glyphs.step_forward.current()),
+            format!("{} ", Glyphs::StepBack.glyph().current()),
+            format!(" {}", Glyphs::StepForward.glyph().current()),
         )
     }
 
@@ -128,7 +133,7 @@ impl PickerValue {
                 .flat_map(|(index, option)| {
                     let gap = match index {
                         0 => String::new(),
-                        1 => format!("   {}   ", UI.glyphs.split_divider.current()),
+                        1 => format!("   {}   ", Glyphs::SplitDivider.glyph().current()),
                         _ => "  ".into(),
                     };
                     let checked = index == *chosen;
@@ -155,6 +160,7 @@ impl PickerValue {
                 ))
             };
         }
+        let slider;
         let (shown, style, note) = match self {
             Self::Choice { options, chosen } => {
                 let option = &options[*chosen];
@@ -168,6 +174,17 @@ impl PickerValue {
                 }
             }
             Self::Stepped(shown) => (shown, value, None),
+            Self::Slider(percent) => {
+                let cells = UI.slider_width;
+                let filled =
+                    usize::from(*percent) * cells / usize::from(AppearanceSettings::CONTRAST_MAX);
+                slider = format!(
+                    "[{}{}] {percent}%",
+                    "=".repeat(filled),
+                    " ".repeat(cells - filled)
+                );
+                (&slider, value, None)
+            }
             Self::Checklist { .. } => unreachable!("checklists are rendered together above"),
         };
         let (back, forward) = Self::arrows();
@@ -190,7 +207,7 @@ fn trimmed(text: &str, width: usize) -> String {
     if text.width() <= width {
         return text.to_string();
     }
-    let glyph = UI.glyphs.trimmed.current();
+    let glyph = Glyphs::Trimmed.glyph().current();
     let mut used = glyph.width();
     let kept = text
         .chars()
@@ -524,7 +541,7 @@ impl Picker {
         self.tabs.iter().position(|tab| {
             let right = left + Self::tab_label(tab).width() as u16;
             let hit = (left..right).contains(&position.x);
-            left = right;
+            left = right + Glyphs::SplitDivider.glyph().current().width() as u16;
             hit
         })
     }
@@ -756,7 +773,7 @@ impl Picker {
         if let Some(button) = &self.button {
             let selected = !self.on_tab_bar && self.selected == self.items().len();
             lines.push(Self::line(button.as_ref(), selected, None, width));
-            let rule = UI.glyphs.picker_rule.current().repeat(width);
+            let rule = Glyphs::PickerRule.glyph().current().repeat(width);
             lines.push(Span::styled(rule, groups.picker_border()).into());
         }
         let mut description = self
@@ -812,13 +829,19 @@ impl Picker {
         };
         let (marker, emphasis) = Self::marker(self.on_tab_bar);
         let mut spans = vec![Span::styled(marker, row.patch(emphasis))];
-        spans.extend(self.tabs.iter().enumerate().map(|(index, tab)| {
+        for (index, tab) in self.tabs.iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::styled(
+                    Glyphs::SplitDivider.glyph().current(),
+                    row.patch(groups.picker_tab()),
+                ));
+            }
             let style = match index == self.tab {
                 true => groups.picker_tab_selected(),
                 false => groups.picker_tab(),
             };
-            Span::styled(Self::tab_label(tab), row.patch(style))
-        }));
+            spans.push(Span::styled(Self::tab_label(tab), row.patch(style)));
+        }
         let used = Line::from(spans.clone()).width();
         spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), row));
         Line::from(spans)

@@ -2,17 +2,28 @@
 //! started, or published on crates.io. Purely a courtesy: whatever cannot be
 //! asked (no network, no cargo) is skipped without a word.
 
+use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use semver::Version;
 
 use crate::code::semantic::SERVER_EXECUTABLE;
+use crate::ui::config::UI;
 
 /// `cargo search <crate> --limit 1`: the crate itself is the first hit.
 const CARGO_SEARCH: [&str; 3] = ["search", "--limit", "1"];
+
+/// Follows a running version wherever it is shown once a newer one is known.
+const OUTDATED_MARK: &str = "*";
+
+/// The newest version found of each program, by executable; what is already here
+/// is not announced again.
+static NEWEST: Mutex<BTreeMap<&str, Version>> = Mutex::new(BTreeMap::new());
 
 /// A program whose updates are announced.
 #[derive(Clone, Copy, Debug)]
@@ -40,6 +51,27 @@ enum Source {
     Installed,
 }
 
+impl Source {
+    /// Every source, ordered so installed wins a tie, being one relaunch away.
+    const EACH: [Self; 2] = [Self::Published, Self::Installed];
+
+    fn find(self, program: Program) -> Option<Version> {
+        match self {
+            Self::Published => program.published(),
+            Self::Installed => program.installed(),
+        }
+    }
+
+    /// How long one look holds: asking the installed binary is a local
+    /// `--version`, asking crates.io a network search.
+    fn interval(self) -> Duration {
+        match self {
+            Self::Published => UI.published_check_interval,
+            Self::Installed => UI.installed_check_interval,
+        }
+    }
+}
+
 /// A version of `program` newer than the one running, e.g. displayed as
 /// `m2-ls 2.8.0 is out (running 2.7.0): cargo install m2-ls`.
 #[derive(Debug)]
@@ -51,6 +83,38 @@ pub struct Update {
 }
 
 impl Program {
+    /// `running` as every view shows it: `1.3.2*` once a newer version is known.
+    pub fn version(self, running: &str) -> String {
+        let outdated = Version::parse(running)
+            .is_ok_and(|running| self.newest().is_some_and(|newest| newest > running));
+        match outdated {
+            true => format!("{running}{OUTDATED_MARK}"),
+            false => running.to_string(),
+        }
+    }
+
+    fn newest(self) -> Option<Version> {
+        Self::known().get(self.executable).cloned()
+    }
+
+    /// Record `found` as the newest version; whether it is news.
+    fn learn(self, found: &Version) -> bool {
+        let mut known = Self::known();
+        let news = known
+            .get(self.executable)
+            .is_none_or(|newest| found > newest);
+        if news {
+            known.insert(self.executable, found.clone());
+        }
+        news
+    }
+
+    fn known() -> MutexGuard<'static, BTreeMap<&'static str, Version>> {
+        NEWEST
+            .lock()
+            .expect("the newest versions are never held across a panic")
+    }
+
     /// The version `PATH`'s binary reports as the last word of `--version`.
     fn installed(self) -> Option<Version> {
         let output = Command::new(self.executable)
@@ -84,16 +148,11 @@ impl Program {
         Version::parse(&quoted[..quoted.find('"')?]).ok()
     }
 
-    /// The newest version this machine could run instead of `running`, if any is
-    /// newer; installed wins a tie, being one relaunch away.
-    fn update(self, running: Version) -> Option<Update> {
-        let found = [
-            (self.published(), Source::Published),
-            (self.installed(), Source::Installed),
-        ];
-        let (newer, source) = found
-            .into_iter()
-            .filter_map(|(version, source)| Some((version?, source)))
+    /// The newest version `sources` offer instead of `running`, if any is newer.
+    fn update(self, running: Version, sources: &[Source]) -> Option<Update> {
+        let (newer, source) = sources
+            .iter()
+            .filter_map(|&source| Some((source.find(self)?, source)))
             .max()?;
         (newer > running).then_some(Update {
             program: self,
@@ -124,27 +183,70 @@ impl Display for Update {
     }
 }
 
-/// Updates found by checks running in the background, collected as they finish.
+/// The version of sp2 itself, as every view shows it.
+pub fn shell_version() -> String {
+    SHELL.version(env!("CARGO_PKG_VERSION"))
+}
+
+/// Updates found by checks running in the background, collected as they finish;
+/// each newer version is reported once, however often it is found again.
 #[derive(Debug)]
 pub struct UpdateChecks {
     found: Receiver<Update>,
     report: Sender<Update>,
+    /// When each source was last looked at; one never looked at is due.
+    checked: BTreeMap<Source, Instant>,
 }
 
 impl UpdateChecks {
     pub fn new() -> Self {
         let (report, found) = channel();
-        Self { found, report }
+        Self {
+            found,
+            report,
+            checked: BTreeMap::new(),
+        }
     }
 
-    /// Look for an update of `program`, running `version`; a version that is not
-    /// semver (or unknown) has nothing to compare against.
-    pub fn check(&self, program: Program, version: Option<&str>) {
+    /// Look for updates of each program, paired with the version of it running, in
+    /// every source whose last look is older than its interval.
+    pub fn poll(&mut self, programs: &[(Program, Option<&str>)]) {
+        let due = Source::EACH
+            .into_iter()
+            .filter(|source| {
+                self.checked
+                    .get(source)
+                    .is_none_or(|at| at.elapsed() >= source.interval())
+            })
+            .collect::<Vec<_>>();
+        if due.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        self.checked.extend(due.iter().map(|&source| (source, now)));
+        for &(program, version) in programs {
+            self.check(program, version, due.clone());
+        }
+    }
+
+    /// Make every source due at the next poll, as when what runs has changed.
+    pub fn forget(&mut self) {
+        self.checked.clear();
+    }
+
+    /// Look in `sources` for an update of `program`, running `version`; a version
+    /// that is not semver (or unknown) has nothing to compare against.
+    fn check(&self, program: Program, version: Option<&str>, sources: Vec<Source>) {
         let Some(running) = version.and_then(|version| Version::parse(version).ok()) else {
             return;
         };
         let report = self.report.clone();
-        thread::spawn(move || program.update(running).map(|update| report.send(update)));
+        thread::spawn(move || {
+            program
+                .update(running, &sources)
+                .filter(|update| program.learn(&update.newer))
+                .map(|update| report.send(update))
+        });
     }
 
     /// Updates found since last asked.

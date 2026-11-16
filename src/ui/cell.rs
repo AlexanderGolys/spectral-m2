@@ -5,12 +5,15 @@
 //! receives its highlighter separately because highlighting is an application-wide
 //! service rather than editor state.
 
+// Keep mathematical notation and interface symbols legible in their native spelling.
+#![allow(clippy::non_ascii_literal)]
+use crate::ui::glyphs::Glyphs;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Range;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::{iter, ptr};
 
 use ratatui::buffer::Buffer;
@@ -27,14 +30,14 @@ use super::graphics::cell_size;
 use super::graphics::{self, kitty::ImageId};
 use super::item::{Item, ItemKind};
 use super::present;
-use super::relayout::Pending;
+use super::relayout::{self, Pending};
 use super::render::maths::MathDisplay;
 use super::render::selection::Inclusions;
-use super::render::{markup, maths, typeset};
+use super::render::{markup, maths, spin, typeset};
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::settings::rendering::RendererPosition;
 use super::wrap::{offset_at_column, SpanWrap, WrapPolicy, WrappedText};
-use crate::backend::transcript::{captured_output, strip_m2_location};
+use crate::backend::transcript::{captured_error, captured_output, strip_m2_location};
 use crate::backend::{M2Response, PreviewMode, SpecNet, ValuePreview};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::SourceId;
@@ -46,6 +49,9 @@ use crate::ui::theme::groups::Groups;
 /// A source file's gutter is as wide as its last line number times this: two
 /// columns more, for a space and the fold marker after the number.
 const LINE_NUMBER_ROOM: u32 = 100;
+/// Stands in for a value a worker is still laying out, or for its text before a
+/// worker has drawn it.
+const LAYING_OUT: &str = "… laying out …";
 
 macro_rules! row_count {
     ($rows:expr) => {
@@ -91,21 +97,36 @@ pub fn response_blocks(
         value,
         response.type_info.as_deref(),
     );
-    let warnings: Vec<Box<dyn Block>> = output
-        .warnings
-        .into_iter()
-        .map(|text| Box::new(WarningBlock { text }) as Box<dyn Block>)
-        .collect();
+    let warnings = warning_blocks(output.warnings);
     let printed = (!output.printed.is_empty()).then(|| TextBlock::printed(output.printed));
     let value = match (response.value.clone(), output.value, response.has_value) {
         (Some(value), Some(rendered), true) => Some(
             OutputBlock::rendered(value, rendered.type_info)
                 .with_previews(response.previews.clone())
-                .annotated(response.type_parts.clone()),
+                .annotated(response.type_parts.clone())
+                .drawing_text(),
         ),
         _ => None,
     };
     (warnings, printed, value)
+}
+
+/// The blocks a failed `response` to `code` adds after it: warnings raised before
+/// the error, the text printed before it, and the error's own message.
+pub fn error_blocks(
+    response: &M2Response,
+    code: &str,
+) -> (Vec<Box<dyn Block>>, Option<TextBlock>, String) {
+    let error = captured_error(&response.transcript, code);
+    let printed = (!error.printed.is_empty()).then(|| TextBlock::printed(error.printed));
+    (warning_blocks(error.warnings), printed, error.diagnostic)
+}
+
+fn warning_blocks(warnings: Vec<String>) -> Vec<Box<dyn Block>> {
+    warnings
+        .into_iter()
+        .map(|text| Box::new(WarningBlock { text }) as Box<dyn Block>)
+        .collect()
 }
 
 /// Content displayed before one submitted source cell.
@@ -164,7 +185,7 @@ impl CellLayout {
         let x = self.0.inset();
         for y in 0..height {
             buf[(x, y)]
-                .set_symbol(UI.glyphs.cell_separator.current())
+                .set_symbol(Glyphs::CellSeparator.glyph().current())
                 .set_style(style);
         }
     }
@@ -202,16 +223,16 @@ impl CellMarker {
                 },
             ),
             Self::Pending => {
-                let frame = UI.spinner.active().current_frame();
+                let frame = spin::clock().current_frame();
                 (frame.content.into(), frame.style(groups))
             }
             Self::Queued => (
-                UI.glyphs.unevaluated_cell.current().into(),
+                Glyphs::UnevaluatedCell.glyph().current().into(),
                 groups.queued_cell_marker(),
             ),
             Self::Failed(number) => (number.to_string(), groups.failed_cell_marker()),
             Self::Invalid => (
-                UI.glyphs.rejected_cell.current().into(),
+                Glyphs::RejectedCell.glyph().current().into(),
                 groups.rejected_cell_marker(),
             ),
             Self::Bare | Self::Empty => return None,
@@ -289,8 +310,8 @@ impl M2CodeCell {
         true
     }
 
-    fn wrapped(&self, width: u16) -> WrappedText {
-        WrappedText::code(&self.text, width, &self.wrap_ranges)
+    fn wrapped(&self, width: u16, mode: crate::ui::wrap::WrapMode) -> WrappedText {
+        WrappedText::code(&self.text, width, &self.wrap_ranges, mode)
     }
 
     fn marker(&self) -> CellMarker {
@@ -355,7 +376,7 @@ impl SourceBlock {
         let code = self.code.borrow();
         let cell = &code.cells[0];
         let gutter = cell.marker().width(code.layout());
-        cell.wrapped(context.width().saturating_sub(gutter))
+        cell.wrapped(context.width().saturating_sub(gutter), context.code_wrap())
             .source_lines()
             .enumerate()
             .filter_map(|(row, (range, _))| {
@@ -380,7 +401,7 @@ impl SourceBlock {
         let gutter = cell.marker().width(code.layout());
         let mut rows = vec![None];
         rows.extend(
-            cell.wrapped(context.width().saturating_sub(gutter))
+            cell.wrapped(context.width().saturating_sub(gutter), context.code_wrap())
                 .source_lines()
                 .map(|(range, _)| {
                     Some(SourceRow {
@@ -494,8 +515,8 @@ impl Block for SourceBlock {
             };
             let folded = self.folds.is_folded(row.line);
             let glyph = match folded {
-                true => UI.glyphs.fold_closed,
-                false => UI.glyphs.fold_open,
+                true => Glyphs::FoldClosed.glyph(),
+                false => Glyphs::FoldOpen.glyph(),
             };
             buffer.set_string(
                 area.x + separator.saturating_sub(1),
@@ -509,7 +530,7 @@ impl Block for SourceBlock {
                 buffer.set_stringn(
                     x,
                     y,
-                    format!("{} {hidden} lines", UI.glyphs.folded_lines.current()),
+                    format!("{} {hidden} lines", Glyphs::FoldedLines.glyph().current()),
                     usize::from(area.right().saturating_sub(x)),
                     style,
                 );
@@ -568,8 +589,11 @@ impl CodeBlock {
         self.cells
             .iter()
             .map(|cell| {
-                cell.wrapped(context.width().saturating_sub(cell.marker().width(layout)))
-                    .height()
+                cell.wrapped(
+                    context.width().saturating_sub(cell.marker().width(layout)),
+                    context.code_wrap(),
+                )
+                .height()
             })
             .fold(0, u16::saturating_add)
     }
@@ -676,8 +700,11 @@ impl Block for CodeBlock {
             let marker = cell.marker();
             marker.render(context, style, area, row, buf);
             row = row.saturating_add(
-                cell.wrapped(context.width().saturating_sub(marker.width(layout)))
-                    .height(),
+                cell.wrapped(
+                    context.width().saturating_sub(marker.width(layout)),
+                    context.code_wrap(),
+                )
+                .height(),
             );
         }
     }
@@ -691,7 +718,7 @@ impl Block for CodeBlock {
         let mut row = 1;
         for cell in &self.cells {
             let width = context.width().saturating_sub(cell.marker().width(layout));
-            let wrapped = cell.wrapped(width);
+            let wrapped = cell.wrapped(width, context.code_wrap());
             inclusions.mark_wrapped_rows(
                 row,
                 context.width(),
@@ -718,7 +745,7 @@ fn cell_lines(
     highlight: bool,
 ) -> Vec<Line<'static>> {
     let width = marker.width(layout);
-    cell.wrapped(context.width().saturating_sub(width))
+    cell.wrapped(context.width().saturating_sub(width), context.code_wrap())
         .source_lines()
         .enumerate()
         .map(|(index, (range, _))| {
@@ -983,10 +1010,19 @@ impl EvaluationBlock {
     }
 
     /// Mark one cell failed and append its error while later cells remain queued.
-    pub fn fail(&mut self, index: usize, number: u32, printed: Option<TextBlock>, message: String) {
+    pub fn fail(
+        &mut self,
+        index: usize,
+        number: u32,
+        outputs: Vec<Box<dyn Block>>,
+        printed: Option<TextBlock>,
+        message: String,
+    ) {
         if let Some((_, state)) = self.cells.get_mut(index) {
             *state = EvaluationState::Failed(number);
         }
+        self.outputs
+            .extend(outputs.into_iter().map(EvaluationOutput::Evaluation));
         self.outputs
             .extend(printed.map(|text| EvaluationOutput::Printed(text.numbered(number))));
         self.outputs
@@ -1034,8 +1070,11 @@ impl EvaluationBlock {
         self.cells.iter().fold(1, |height, (cell, state)| {
             let marker = state.marker();
             height.saturating_add(
-                cell.wrapped(width.saturating_sub(marker.width(layout)))
-                    .height(),
+                cell.wrapped(
+                    width.saturating_sub(marker.width(layout)),
+                    context.code_wrap(),
+                )
+                .height(),
             )
         })
     }
@@ -1147,7 +1186,7 @@ impl Block for EvaluationBlock {
         let mut row = 1;
         for (index, (cell, state)) in self.cells.iter().enumerate() {
             let prefix = state.marker().width(layout);
-            let wrapped = cell.wrapped(code_width.saturating_sub(prefix));
+            let wrapped = cell.wrapped(code_width.saturating_sub(prefix), context.code_wrap());
             let next = row + wrapped.height();
             if (row..next).contains(&position.y) {
                 let (range, _) = wrapped.source_lines().nth(usize::from(position.y - row))?;
@@ -1190,8 +1229,11 @@ impl Block for EvaluationBlock {
             let style = Self::code_style(state, after_error, context);
             after_error |= failed;
             let next = row.saturating_add(
-                cell.wrapped(code_width.saturating_sub(marker.width(layout)))
-                    .height(),
+                cell.wrapped(
+                    code_width.saturating_sub(marker.width(layout)),
+                    context.code_wrap(),
+                )
+                .height(),
             );
             if after_error {
                 // Without any code run cleanly before it, the error claims the top
@@ -1247,7 +1289,10 @@ impl Block for EvaluationBlock {
         for (cell, state) in &self.cells {
             let marker = state.marker();
             let height = cell
-                .wrapped(code_width.saturating_sub(marker.width(layout)))
+                .wrapped(
+                    code_width.saturating_sub(marker.width(layout)),
+                    context.code_wrap(),
+                )
                 .height();
             items.push(Item::new(
                 ItemKind::Input,
@@ -1302,7 +1347,10 @@ impl Block for EvaluationBlock {
         let code_width = self.code_width(context);
         let mut row = 1;
         for (cell, state) in &self.cells {
-            let wrapped = cell.wrapped(code_width.saturating_sub(state.marker().width(layout)));
+            let wrapped = cell.wrapped(
+                code_width.saturating_sub(state.marker().width(layout)),
+                context.code_wrap(),
+            );
             inclusions.mark_wrapped_rows(
                 row,
                 context.width(),
@@ -1505,16 +1553,15 @@ struct OutputCell {
 
 impl PreviewMode {
     fn glyph(self) -> Glyph {
-        let glyphs = UI.glyphs;
         match self {
-            Self::SpecNet => glyphs.renderer_spec_net,
-            Self::Net => glyphs.renderer_net,
-            Self::String => glyphs.renderer_string,
-            Self::Tex => glyphs.renderer_tex,
-            Self::Markup => glyphs.renderer_markup,
-            Self::External => glyphs.renderer_external,
-            Self::Peek => glyphs.renderer_peek,
-            Self::Speek => glyphs.renderer_speek,
+            Self::SpecNet => Glyphs::RendererSpecNet.glyph(),
+            Self::Net => Glyphs::RendererNet.glyph(),
+            Self::String => Glyphs::RendererString.glyph(),
+            Self::Tex => Glyphs::RendererTex.glyph(),
+            Self::Markup => Glyphs::RendererMarkup.glyph(),
+            Self::External => Glyphs::RendererExternal.glyph(),
+            Self::Peek => Glyphs::RendererPeek.glyph(),
+            Self::Speek => Glyphs::RendererSpeek.glyph(),
         }
     }
 }
@@ -1649,7 +1696,9 @@ impl LayoutKey {
 #[derive(Clone, Debug)]
 struct ValueSource {
     previews: Vec<ValuePreview>,
-    text: String,
+    /// The value as plain text, which without M2's own may take a whole drawing;
+    /// filled on a worker, so the drawing thread only reads it once there.
+    text: OnceLock<String>,
     value: Option<SpecNet>,
 }
 
@@ -1661,6 +1710,22 @@ struct Laid {
 }
 
 impl ValueSource {
+    /// The plain text, drawn here when no one has yet: never on the drawing thread.
+    fn text(&self) -> &str {
+        self.text.get_or_init(|| {
+            self.value.as_ref().map_or_else(String::new, |value| {
+                value
+                    .plain_text()
+                    .map_or_else(|| value.render(), output_preview)
+            })
+        })
+    }
+
+    /// The plain text if a worker has drawn it, else a placeholder.
+    fn text_drawn(&self) -> &str {
+        self.text.get().map_or(LAYING_OUT, String::as_str)
+    }
+
     /// The drawing a structured formatter answered with, as `speek` does.
     fn preview_value(&self, mode: PreviewMode) -> Option<&SpecNet> {
         self.previews
@@ -1688,7 +1753,7 @@ impl ValueSource {
             }
             _ => None,
         }
-        .unwrap_or_else(|| self.text.clone());
+        .unwrap_or_else(|| self.text().to_string());
         word_lines(&text, width)
     }
 
@@ -1706,7 +1771,7 @@ impl ValueSource {
         let lines = if renderer == PreviewMode::External {
             let source = self
                 .preview_text(PreviewMode::External)
-                .unwrap_or(&self.text);
+                .unwrap_or(self.text());
             code_lines(source, width as u16, theme)
         } else if renderer == PreviewMode::Tex {
             let drawn = typeset::tex_preview(
@@ -1726,7 +1791,7 @@ impl ValueSource {
                 .as_mut()
                 .filter(|value| renderer == PreviewMode::SpecNet && value.text.is_some())
             {
-                value.text = Some(self.text.clone());
+                value.text = Some(self.text().to_string());
             }
             match preview.as_ref() {
                 Some(value) if style.display == MathDisplay::Typeset => {
@@ -1810,7 +1875,7 @@ impl OutputBlock {
                         PreviewMode::Net,
                         text.trim_end().to_string(),
                     )],
-                    text: text.trim_end().to_string(),
+                    text: OnceLock::from(text.trim_end().to_string()),
                     value: None,
                 }),
                 pictures: RefCell::default(),
@@ -1841,9 +1906,7 @@ impl OutputBlock {
                         .map(|text| ValuePreview::new(PreviewMode::Net, output_preview(text)))
                         .into_iter()
                         .collect(),
-                    text: value
-                        .plain_text()
-                        .map_or_else(|| value.render(), output_preview),
+                    text: OnceLock::new(),
                     value: Some(value),
                 }),
                 pictures: RefCell::default(),
@@ -1855,6 +1918,18 @@ impl OutputBlock {
             expanded: false,
             framed: true,
         }
+    }
+
+    /// Draw each value's plain text on a worker, once the block is whole and its
+    /// sources are shared rather than copied on change.
+    fn drawing_text(self) -> Self {
+        for cell in &self.cells {
+            let source = cell.source.clone();
+            relayout::detach(move || {
+                source.text();
+            });
+        }
+        self
     }
 
     /// Attach the M2 formatter results offered by this output's preview selector.
@@ -1976,7 +2051,7 @@ impl OutputBlock {
                 }
                 .truncated(key.block_width)
             }
-            None => match Self::relaid(cell, &key) {
+            None => match Self::relaid(cell, &key, context) {
                 Ok(laid) => laid,
                 Err(stale) => return stale,
             },
@@ -1990,17 +2065,22 @@ impl OutputBlock {
         lines
     }
 
-    /// `cell`'s value laid out under `key`: from a worker when it has finished,
-    /// at once when nothing was laid out before. When only the width moved, the
-    /// previous rows stay on screen while a worker lays the value out again; the
-    /// same holds for a change of theme.
-    fn relaid(cell: &OutputCell, key: &LayoutKey) -> Result<Laid, Rc<Vec<Line<'static>>>> {
+    /// `cell`'s value laid out under `key`, always by a worker unless the context
+    /// asks for it on the spot. Until the worker is done, the previous rows stay
+    /// on screen when only the width or the theme moved, and a placeholder row
+    /// when nothing was laid out before.
+    fn relaid(
+        cell: &OutputCell,
+        key: &LayoutKey,
+        context: &RenderContext,
+    ) -> Result<Laid, Rc<Vec<Line<'static>>>> {
+        let adopted = context.adopted_relayouts();
         let finished = cell
             .relayout
             .borrow()
             .as_ref()
             .filter(|(pending, _)| pending == key)
-            .and_then(|(_, pending)| pending.take());
+            .and_then(|(_, pending)| pending.take(adopted));
         if let Some(laid) = finished {
             cell.relayout.take();
             return Ok(laid);
@@ -2011,9 +2091,13 @@ impl OutputBlock {
             .as_ref()
             .filter(|layout| key.stands_in(&layout.key))
             .map(|layout| layout.lines.clone());
-        let Some(stale) = stale else {
-            cell.relayout.take();
-            return Ok(cell.source.laid(key));
+        let stale = match stale {
+            Some(stale) => stale,
+            None if context.inline_layout() => {
+                cell.relayout.take();
+                return Ok(cell.source.laid(key));
+            }
+            None => Rc::new(vec![Line::raw(LAYING_OUT)]),
         };
         let requested = cell
             .relayout
@@ -2072,7 +2156,7 @@ impl OutputBlock {
     fn unwrapped_text(cell: &OutputCell, context: &RenderContext) -> String {
         let _ = context;
         cell.preview_text(cell.preview_mode())
-            .unwrap_or(&cell.source.text)
+            .unwrap_or(cell.source.text_drawn())
             .to_string()
     }
 
@@ -2095,7 +2179,10 @@ impl OutputBlock {
     fn fold_lines(hidden: usize, width: u16, context: &RenderContext) -> [Line<'static>; 3] {
         let style = context.groups().output_number();
         let rule = Line::from(Span::styled(
-            UI.glyphs.fold_rule.current().repeat(usize::from(width)),
+            Glyphs::FoldRule
+                .glyph()
+                .current()
+                .repeat(usize::from(width)),
             style,
         ));
         let label = format!("⋯ {hidden} rows hidden · double-click to expand");
@@ -2500,7 +2587,7 @@ impl Block for OutputBlock {
                     ItemKind::Output,
                     row..row.saturating_add(shown),
                     cell.number,
-                    cell.source.text.clone(),
+                    cell.source.text_drawn().to_string(),
                 )
                 .with_type(
                     if cell.type_parts.is_empty() || context.math().original_text {

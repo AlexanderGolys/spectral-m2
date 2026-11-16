@@ -4,10 +4,13 @@
 //! remainder to carry, so however irregularly the event loop redraws, a redraw only
 //! decides *when* the spinner is asked, never *what* it answers, and it cannot drift.
 
-use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
+use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
 use crate::ui::block::HLSpan;
+use crate::ui::config::UI;
 
 /// One spinner frame: text whose style comes from the active scheme's group.
 pub type SpinnerFrame = HLSpan<&'static str>;
@@ -64,14 +67,88 @@ impl Spinner {
         self.frame_duration
     }
 
-    pub fn current_frame(self) -> &'static SpinnerFrame {
-        self.frame_at(EPOCH.elapsed())
-    }
-
     /// The frame shown `elapsed` after the first, the frames repeating in order.
     pub fn frame_at(self, elapsed: Duration) -> &'static SpinnerFrame {
-        let turns = elapsed.as_nanos() / self.frame_duration.as_nanos();
-        let frame_count = self.frames.len() as u128;
-        &self.frames[(turns % frame_count) as usize]
+        self.frame_of(Self::turns_at(self, elapsed))
+    }
+
+    fn frame_of(self, turns: u64) -> &'static SpinnerFrame {
+        &self.frames[(turns % self.frames.len() as u64) as usize]
+    }
+
+    /// Frames shown `elapsed` after the first.
+    fn turns_at(self, elapsed: Duration) -> u64 {
+        u64::try_from(elapsed.as_nanos() / self.frame_duration.as_nanos())
+            .expect("a spinner turns fewer than 2^64 times")
+    }
+
+    /// How long the current frame still shows.
+    fn until_next_frame(self) -> Duration {
+        let into = EPOCH.elapsed().as_nanos() % self.frame_duration.as_nanos();
+        self.frame_duration - Duration::from_nanos(u64::try_from(into).expect("within one frame"))
+    }
+}
+
+/// The configured spinner's clock, shared by every cell that spins.
+pub fn clock() -> &'static SpinnerClock {
+    static CLOCK: LazyLock<SpinnerClock> = LazyLock::new(|| SpinnerClock::new(UI.spinner.active()));
+    &CLOCK
+}
+
+/// A spinner's own clock: while running, a thread of its own turns the frame as
+/// each one's time is up. It only moves the spinner's state; drawing reads that
+/// state at the drawing's own rate, so any number of spinners never makes more
+/// frames than the loop does.
+///
+/// ```ignore
+/// clock().run(true); // a cell started evaluating
+/// let frame = clock().current_frame(); // drawn whenever the loop draws
+/// clock().run(false); // the last one finished; the clock's thread parks
+/// ```
+#[derive(Debug)]
+pub struct SpinnerClock {
+    spinner: Spinner,
+    turns: Arc<AtomicU64>,
+    running: Arc<AtomicBool>,
+    thread: Thread,
+}
+
+impl SpinnerClock {
+    pub fn new(spinner: Spinner) -> Self {
+        let turns = Arc::new(AtomicU64::new(spinner.turns_at(EPOCH.elapsed())));
+        let running = Arc::new(AtomicBool::new(false));
+        let (turning, ticking) = (turns.clone(), running.clone());
+        let thread = thread::spawn(move || loop {
+            if !ticking.load(Ordering::Acquire) {
+                thread::park();
+                continue;
+            }
+            thread::sleep(spinner.until_next_frame());
+            turning.store(spinner.turns_at(EPOCH.elapsed()), Ordering::Release);
+        })
+        .thread()
+        .clone();
+        Self {
+            spinner,
+            turns,
+            running,
+            thread,
+        }
+    }
+
+    /// Frames turned so far; the picture changes exactly when this does.
+    pub fn turns(&self) -> u64 {
+        self.turns.load(Ordering::Acquire)
+    }
+
+    pub fn current_frame(&self) -> &'static SpinnerFrame {
+        self.spinner.frame_of(self.turns())
+    }
+
+    pub fn run(&self, running: bool) {
+        self.running.store(running, Ordering::Release);
+        if running {
+            self.thread.unpark();
+        }
     }
 }

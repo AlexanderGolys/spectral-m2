@@ -10,6 +10,10 @@ A session's code is never lost: it is kept every time you quit or restart, so yo
 
 The code is kept on every exit and restart, in `previous-session.m2` under the state directory; see [Files and directories](../reference/files.md). Cells you entered together stay together: submissions are divided by a form-feed line, which Macaulay2 reads as whitespace. A session with no committed code leaves the kept one alone.
 
+`/recent` opens the previous session as highlighted source without running it. Inspect it first, then use `F8` if you want to restart and run it.
+
+The *session* settings tab chooses whether sessions, notes and input history are global or belong to the repository. Local storage uses `.spectral-m2/` at the repository root, with a separate history for each repository. Switching storage leaves the existing files where they are.
+
 ## Save and load
 
 `/save notes.m2`

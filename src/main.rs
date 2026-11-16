@@ -24,13 +24,16 @@ use clap::{CommandFactory, Parser};
 
 use backend::M2Backend;
 use cli::Options;
+use ui::settings::{Persisted, SavedSettings};
 
 fn main() {
     crash::install();
     let options = Options::parse();
+    SavedSettings::load().settings.session.apply();
     let startup = options
         .startup_code()
         .unwrap_or_else(|message| Options::command().error(ErrorKind::Io, message).exit());
+    M2Backend::install_display_package();
     match M2Backend::spawn_with_options(&options.m2) {
         Ok(backend) => {
             // Unwinding restores the terminal, so what stopped the program can be

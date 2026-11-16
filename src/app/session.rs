@@ -15,12 +15,11 @@ use nix::unistd::Pid;
 use m2_syn::{NativeCellParser, NativeCellState, PrettyNode, PrettyTree};
 
 use super::examples::{ExamplePage, ExampleRunner};
-use crate::backend::transcript::captured_error;
 use crate::backend::{M2Backend, M2Response, SpecNet};
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::{Document, SourceId};
 use crate::errors::Error;
-use crate::ui::cell::{response_blocks, CellState, TextBlock};
+use crate::ui::cell::{error_blocks, response_blocks, CellState, TextBlock};
 use crate::ui::controller::EditorUpdate;
 use crate::ui::render::markup;
 
@@ -335,6 +334,7 @@ impl Session {
                 id: evaluation.id,
                 index: 0,
                 number: self.next_input_number,
+                outputs: Vec::new(),
                 printed: None,
                 message: "Computation cancelled before execution".to_string(),
             })
@@ -369,6 +369,7 @@ impl Session {
                     id: evaluation.id,
                     index: 0,
                     number,
+                    outputs: Vec::new(),
                     printed: None,
                     message: "Computation stopped for restart".to_string(),
                 }
@@ -705,15 +706,14 @@ impl Session {
             Ok(response) => {
                 self.next_input_number = number + u32::from(response.has_value);
                 self.in_debugger = response.depth > 1;
-                let error = captured_error(&response.transcript, &cell.code);
-                let printed =
-                    (!error.printed.is_empty()).then(|| TextBlock::printed(error.printed));
+                let (outputs, printed, message) = error_blocks(&response, &cell.code);
                 let failed = EditorUpdate::CellFailed {
                     id,
                     index,
                     number,
+                    outputs,
                     printed,
-                    message: error.diagnostic,
+                    message,
                 };
                 Self::batch(
                     [Some(failed), self.abandon(id)]
@@ -727,6 +727,7 @@ impl Session {
                     id,
                     index,
                     number,
+                    outputs: Vec::new(),
                     printed: None,
                     message: if message == crate::errors::Error::Cancelled.to_string() {
                         message

@@ -139,6 +139,8 @@ Documentation = { fg = "grey1" }
 EnumVariant = { fg = "blue" }
 
 Error = { fg = "red" }
+# Failed source uses the native error surface in every contrast variant.
+ErrorCode = { bg = "bg_red" }
 ErrorMessage = { fg = "red" }
 ErrorTitle = { fg = "red", bold = true }
 Exception = { fg = "red" }

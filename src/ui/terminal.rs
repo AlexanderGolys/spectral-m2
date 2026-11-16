@@ -1,14 +1,16 @@
 //! Crossterm terminal lifecycle and event input.
 
-use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Stdout, Write};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::thread;
 use std::time::{Duration, Instant};
+use std::{fmt, iter};
 
 use crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, Event, KeyboardEnhancementFlags,
+    EnableFocusChange, EnableMouseCapture, Event, KeyboardEnhancementFlags, MouseEventKind,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
@@ -75,6 +77,8 @@ pub struct ReplTerminal {
     active: bool,
     /// Held while the screen is drawn; none when stderr could not be redirected.
     silenced_stderr: Option<SilencedStderr>,
+    /// Terminal input, read on a thread of its own so none waits on a frame.
+    input: Receiver<Event>,
 }
 
 impl ReplTerminal {
@@ -101,12 +105,22 @@ impl ReplTerminal {
             ModifyOtherKeys::REPORT_ALL
         )?;
         graphics::detect();
+        // Detection has had the terminal's answer; from here on one thread reads it.
+        let (sender, input) = mpsc::channel();
+        thread::spawn(move || {
+            while let Ok(event) = event::read() {
+                if sender.send(event).is_err() {
+                    break;
+                }
+            }
+        });
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
         Ok(Self {
             terminal,
             active: true,
             silenced_stderr: SilencedStderr::new().ok(),
+            input,
         })
     }
 
@@ -134,28 +148,31 @@ impl ReplTerminal {
         Ok(())
     }
 
-    /// Read one event, coalescing a burst of wheel reports before the next frame.
-    pub fn next_events(&self, timeout: Duration) -> Result<Vec<Event>> {
-        if !event::poll(timeout)? {
-            return Ok(Vec::new());
-        }
-        let first = event::read()?;
-        let scroll = matches!(
-            first,
-            Event::Mouse(mouse)
-                if matches!(mouse.kind, event::MouseEventKind::ScrollUp | event::MouseEventKind::ScrollDown)
-        );
-        let mut events = vec![first];
+    /// The input arriving within `timeout`, with everything else waiting by then
+    /// and a burst of wheel reports coalesced into the same frame.
+    pub fn next_events(&self, timeout: Duration) -> Vec<Event> {
+        let first = match self.input.recv_timeout(timeout) {
+            Ok(event) => event,
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => return Vec::new(),
+        };
+        let mut events: Vec<Event> = iter::once(first).chain(self.input.try_iter()).collect();
+        let scroll = events.iter().any(|event| {
+            matches!(
+                event,
+                Event::Mouse(mouse)
+                    if matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)
+            )
+        });
         if scroll {
             let deadline = Instant::now() + Self::SCROLL_BUFFER;
-            while let Some(timeout) = deadline.checked_duration_since(Instant::now()) {
-                if !event::poll(timeout)? {
-                    break;
+            while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+                match self.input.recv_timeout(left) {
+                    Ok(event) => events.push(event),
+                    Err(_) => break,
                 }
-                events.push(event::read()?);
             }
         }
-        Ok(events)
+        events
     }
 
     pub fn leave(&mut self) -> Result<()> {

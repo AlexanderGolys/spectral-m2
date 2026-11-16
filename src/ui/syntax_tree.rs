@@ -1,5 +1,7 @@
 //! Syntax-tree preview element.
 
+// Keep mathematical notation and interface symbols legible in their native spelling.
+#![allow(clippy::non_ascii_literal)]
 use m2_syn::{PrettyDetail, PrettyDetailRole, PrettyNode, PrettyNodeRole};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -383,6 +385,7 @@ impl Block for SyntaxTreeBlock {
         let inner_width = area.width - margin;
         let mut rule = |row: u16| {
             Paragraph::new(Line::from(Span::styled(
+                // @##non_ascii
                 "─".repeat(area.width.into()),
                 groups.syntax_tree_border(),
             )))

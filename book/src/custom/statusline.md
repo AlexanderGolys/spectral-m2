@@ -39,7 +39,7 @@ key hints
 : The keys that answer now: idle commands, picker controls, the cancel key during a long computation, or continuation controls.
 
 m2-ls version, sp2 version, M2 version
-: Each process's version, `unknown` when a process did not report it. Put all three in one segment for a version line.
+: Each process's version, `unknown` when a process did not report it, followed by `*` once a newer `sp2` or `m2-ls` is known (see [Installing](../start/install.md)). Put all three in one segment for a version line.
 
 versions
 : The three versions at once.
@@ -48,3 +48,5 @@ debug
 : The `sp2` version with the memory it holds, the M2 process's memory (`n/a` outside Linux), the pictures the terminal holds and their memory, and the frame rate. Measured only while it is shown.
 
 Placements are saved by component name, under `statusline.components` in `settings.json`.
+
+When the terminal becomes narrow, the segment containing key hints reserves its needed width before neighbouring segments are clipped. Hints therefore remain available while resizing a split.

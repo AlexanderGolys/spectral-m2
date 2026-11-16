@@ -1,16 +1,19 @@
 //! The application's session, its panes, and the terminal event loop.
 
+// Keep mathematical notation and interface symbols legible in their native spelling.
+#![allow(clippy::non_ascii_literal)]
 mod documentation;
 mod examples;
 mod panes;
 mod previews;
 pub mod session;
 
+use crate::ui::glyphs::Glyphs;
 use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::iter;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crossterm::clipboard::CopyToClipboard;
@@ -20,7 +23,7 @@ use lsp_types::ServerInfo;
 use ratatui::layout::Alignment;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block as TuiBlock, Borders, Paragraph};
 use ratatui::Frame;
 
 use self::documentation::DocumentationBrowser;
@@ -55,11 +58,11 @@ use crate::ui::render::markdown;
 use crate::ui::render::markup;
 use crate::ui::terminal::ReplTerminal;
 use crate::ui::theme::groups::{scheme, HLGroup};
-use crate::updates::{UpdateChecks, LANGUAGE_SERVER, SHELL};
+use crate::updates::{shell_version, UpdateChecks, LANGUAGE_SERVER, SHELL};
 
-const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(80);
-/// How often to look for pictures or layouts workers have finished while any remain.
-const PICTURE_POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// How often the loop looks for results other threads posted (M2, m2-ls, update
+/// checks) while nothing on screen moves; input wakes it at once regardless.
+const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(80);
 const NO_LANGUAGE_SERVER: &str = "the language server is not running";
 const NOTHING_KNOWN: &str = "nothing is known about this";
 const CODE_NOT_IN_SESSION: &str = "that code is not part of the running session";
@@ -129,6 +132,7 @@ struct App {
     previews: PreviewTabs<PreviewSnapshot>,
     preview_controls: Vec<(Rect, PreviewControl)>,
     archived_code: String,
+    archived_directory: Option<PathBuf>,
     /// Questions put to the language server, by what their answers are for.
     asked: HashMap<QueryId, Asked>,
     /// The cursor when the server was last asked about it.
@@ -136,6 +140,8 @@ struct App {
     /// The cursor as last seen, and since when it holds.
     cursor_seen: Option<(CursorAt, Instant)>,
     updates: UpdateChecks,
+    /// When the session was last seen evaluating.
+    last_busy: Option<Instant>,
 }
 
 /// Where a question about the input's cursor stands: the input's revision and
@@ -163,8 +169,7 @@ enum Asked {
 
 impl App {
     fn new(backend: M2Backend) -> Self {
-        let _ = code_file::archive_previous_session();
-        let app = Self {
+        let mut app = Self {
             workspace: Workspace::new(backend),
             panes: Panes::new(),
             split_ratio: 500,
@@ -177,11 +182,14 @@ impl App {
             previews: PreviewTabs::default(),
             preview_controls: Vec::new(),
             archived_code: String::new(),
+            archived_directory: None,
             asked: HashMap::new(),
             asked_at: None,
             cursor_seen: None,
             updates: UpdateChecks::new(),
+            last_busy: None,
         };
+        let _ = code_file::archive_previous_session();
         app.check_for_updates();
         app
     }
@@ -197,8 +205,10 @@ impl App {
                 self.handle_key(key)
             }
             Event::Paste(text) => {
-                if self.panes.focused().view == ViewKind::Shell {
-                    self.workspace.editor.paste(&text);
+                match self.panes.focused().view {
+                    ViewKind::Shell => self.workspace.editor.paste(&text),
+                    ViewKind::Notes => self.workspace.editor.paste_notes(&text),
+                    _ => {}
                 }
                 true
             }
@@ -214,6 +224,14 @@ impl App {
         editor.set_context(split, previewing, true);
         if let Some(action) = editor.resolve_action(key) {
             return self.handle_action(action);
+        }
+        if self.panes.focused().view == ViewKind::Notes && !editor.picker_open() {
+            if key.code == crossterm::event::KeyCode::Esc {
+                self.panes.focus(0);
+                return true;
+            }
+            let reaction = editor.handle_notes_key(key);
+            return self.handle_reaction(reaction);
         }
         if let Some(reaction) = editor.handle_caret_key(key) {
             return self.handle_reaction(reaction);
@@ -270,8 +288,24 @@ impl App {
     }
 
     fn handle_action(&mut self, action: Action) -> bool {
+        if self.panes.focused().view == ViewKind::Notes {
+            if action == Action::ToggleViewCursor {
+                self.panes.focus(0);
+                return true;
+            }
+            if let Some(reaction) = self.workspace.editor.notes_action(action) {
+                return self.handle_reaction(reaction);
+            }
+        }
         match action {
             Action::CancelExecution => {
+                // A cancel meant for a run that just ended must not clear or quit.
+                let just_ended = self
+                    .last_busy
+                    .is_some_and(|at| at.elapsed() < UI.cancel_grace);
+                if just_ended && !self.workspace.session.busy() {
+                    return true;
+                }
                 if !self.workspace.session.busy() {
                     if self.workspace.editor.cancel_input() {
                         self.workspace.session.reset_incomplete();
@@ -388,6 +422,10 @@ impl App {
                 self.panes.focus(index);
             }
         }
+        if self.panes.focused().view == ViewKind::Notes && !self.workspace.editor.picker_open() {
+            let reaction = self.workspace.editor.notes_mouse(mouse);
+            return self.handle_reaction(reaction);
+        }
         let wheel_rows = self.workspace.editor.wheel_rows().unsigned_abs();
         let pane = self.panes.focused_mut();
         if pane.view == ViewKind::Reference {
@@ -445,6 +483,14 @@ impl App {
                     format!("help {target}")
                 };
                 self.run_code(&code)
+            }
+            Reaction::RecentSession => {
+                match code_file::previous_session().filter(|path| path.is_file()) {
+                    Some(path) => self.open_source_file(SourceLink { path, range: None }),
+                    None => workspace.editor.apply(EditorUpdate::Diagnostic(
+                        "no previous session to view".into(),
+                    )),
+                }
             }
             Reaction::BrowseSessions => match code_file::archived_sessions() {
                 Ok(paths) if paths.is_empty() => workspace
@@ -620,10 +666,11 @@ impl App {
         let code = self.workspace.session.code();
         if let Some(path) = code_file::previous_session().filter(|_| !code.is_empty()) {
             let _ = code_file::write(&path, &code);
-            if code != self.archived_code {
+            if code != self.archived_code || self.archived_directory.as_deref() != path.parent() {
                 if let Some(archive) = code_file::archived_session_path() {
                     if code_file::write(&archive, &code).is_ok() {
                         self.archived_code = code;
+                        self.archived_directory = path.parent().map(Path::to_path_buf);
                     }
                 }
             }
@@ -895,10 +942,9 @@ impl App {
                 .alignment(Alignment::Center),
             Rect::new(area.x, area.y, area.width, 1),
         );
-        let glyphs = UI.glyphs;
         let controls = [
-            (PreviewControl::Back, glyphs.tab_back),
-            (PreviewControl::Bookmark, glyphs.tab_pin),
+            (PreviewControl::Back, Glyphs::TabBack.glyph()),
+            (PreviewControl::Bookmark, Glyphs::TabPin.glyph()),
         ];
         for (index, (control, glyph)) in controls.into_iter().enumerate() {
             let column = area.x + 1 + 2 * index as u16;
@@ -908,10 +954,10 @@ impl App {
         let opened = self.previews.opened_tabs().collect::<Vec<_>>();
         for (index, tab) in opened.into_iter().enumerate() {
             let glyph = match (tab, self.previews.opened(tab).map(|opened| opened.kind)) {
-                (PreviewTab::Bookmark, _) => glyphs.tab_bookmark,
-                (_, Some(OpenedKind::Documentation)) => glyphs.tab_documentation,
-                (_, Some(OpenedKind::Hover)) => glyphs.tab_hover,
-                _ => glyphs.tab_source,
+                (PreviewTab::Bookmark, _) => Glyphs::TabBookmark.glyph(),
+                (_, Some(OpenedKind::Documentation)) => Glyphs::TabDocumentation.glyph(),
+                (_, Some(OpenedKind::Hover)) => Glyphs::TabHover.glyph(),
+                _ => Glyphs::TabSource.glyph(),
             };
             let column = area.x + 1 + 2 * index as u16;
             self.draw_header_cell(
@@ -924,9 +970,10 @@ impl App {
         let fixed = ViewKind::PREVIEWS;
         for (index, view) in fixed.into_iter().enumerate() {
             let glyph = match view {
-                ViewKind::Code => glyphs.tab_code,
-                ViewKind::SyntaxTree => glyphs.tab_syntax_tree,
-                _ => glyphs.tab_output,
+                ViewKind::Code => Glyphs::TabCode.glyph(),
+                ViewKind::SyntaxTree => Glyphs::TabSyntaxTree.glyph(),
+                ViewKind::Notes => Glyphs::TabNotes.glyph(),
+                _ => Glyphs::TabOutput.glyph(),
             };
             let column = area
                 .right()
@@ -1104,6 +1151,18 @@ impl App {
             Rect::new(area.x, area.bottom(), area.width, 1)
         });
         self.layout(area);
+        if let Some(area) = self
+            .pane_areas
+            .get_mut(Panes::SPLIT)
+            .filter(|area| !area.is_empty())
+        {
+            let border = TuiBlock::default()
+                .borders(Borders::ALL)
+                .border_style(scheme().view_divider());
+            let inner = border.inner(*area);
+            frame.render_widget(border, *area);
+            *area = inner;
+        }
         self.draw_preview_header(frame);
         let workspace = &mut self.workspace;
         if let Some(divider) = self.divider {
@@ -1178,6 +1237,16 @@ impl App {
             .filter(|remaining| !remaining.is_zero())
     }
 
+    /// The loop's own cadence: a frame's time while anything moves (an evaluation,
+    /// work on a worker, pictures being encoded), else the idle interval.
+    fn frame_interval(&self) -> Duration {
+        let moving = self.workspace.session.busy() || relayout::busy() || graphics::encoding();
+        match moving {
+            true => UI.frame_interval,
+            false => IDLE_POLL_INTERVAL,
+        }
+    }
+
     /// How long to wait for events before something on screen changes by itself.
     fn event_timeout(&self) -> Duration {
         self.panes
@@ -1187,8 +1256,8 @@ impl App {
             .chain(self.workspace.editor.settles_in())
             .chain(self.cursor_settles_in())
             .min()
-            .map_or(EVENT_POLL_INTERVAL, |remaining| {
-                remaining.min(EVENT_POLL_INTERVAL)
+            .map_or(self.frame_interval(), |remaining| {
+                remaining.min(self.frame_interval())
             })
     }
 
@@ -1198,14 +1267,20 @@ impl App {
         }
     }
 
-    /// Look for newer versions of sp2 and of the language server it runs.
-    fn check_for_updates(&self) {
-        self.updates.check(SHELL, Some(env!("CARGO_PKG_VERSION")));
+    /// Look for newer versions of sp2 and of the language server it runs, wherever
+    /// a look is due.
+    fn check_for_updates(&mut self) {
         let server = self.workspace.editor.language_server_version();
-        self.updates.check(LANGUAGE_SERVER, server);
+        self.updates.poll(&[
+            (SHELL, Some(env!("CARGO_PKG_VERSION"))),
+            (LANGUAGE_SERVER, server),
+        ]);
     }
 
     fn poll(&mut self) -> (bool, bool) {
+        if self.workspace.session.busy() {
+            self.last_busy = Some(Instant::now());
+        }
         let mut dirty = false;
         let mut running = true;
         let timeout = self.workspace.editor.example_timeout();
@@ -1249,8 +1324,9 @@ impl App {
             running &= self.workspace.editor.apply(update);
         }
         if self.workspace.session.take_restarted() {
-            self.check_for_updates();
+            self.updates.forget();
         }
+        self.check_for_updates();
         for update in self.updates.found() {
             dirty = true;
             running &=
@@ -1340,8 +1416,7 @@ impl App {
             dirty = true;
         }
         if let Some(server) = polled.started {
-            self.updates
-                .check(LANGUAGE_SERVER, server.version.as_deref());
+            self.updates.forget();
             workspace
                 .editor
                 .set_language_server_info(Some(server.clone()));
@@ -1380,15 +1455,12 @@ fn read_code(path: &Path) -> std::result::Result<String, EditorUpdate> {
 
 /// The versions of the shell, its Macaulay2, and the language server once it runs.
 fn welcome_message(m2_version: &str, server: Option<&ServerInfo>) -> String {
-    let mut message = format!(
-        "spectral-m2 v{}\nMacaulay2 v{m2_version}",
-        env!("CARGO_PKG_VERSION")
-    );
+    let mut message = format!("spectral-m2 v{}\nMacaulay2 v{m2_version}", shell_version());
     if let Some(server) = server {
         message.push('\n');
         message.push_str(&server.name);
         if let Some(version) = &server.version {
-            message.push_str(&format!(" v{version}"));
+            message.push_str(&format!(" v{}", LANGUAGE_SERVER.version(version)));
         }
     }
     message
@@ -1416,11 +1488,7 @@ pub fn run(backend: M2Backend, startup: Option<String>) -> Result<()> {
             continue;
         }
         terminal.send_pictures()?;
-        let timeout = match graphics::encoding() || relayout::busy() {
-            true => app.event_timeout().min(PICTURE_POLL_INTERVAL),
-            false => app.event_timeout(),
-        };
-        let events = terminal.next_events(timeout)?;
+        let events = terminal.next_events(app.event_timeout());
         if events.is_empty() {
             dirty = app.animate();
             continue;

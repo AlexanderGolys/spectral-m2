@@ -22,13 +22,20 @@ pub struct CapturedValue {
 /// Ordinary output emitted before a failed evaluation and its diagnostic.
 pub struct CapturedError {
     pub printed: String,
+    /// Warnings raised before the error, each with its continuation lines.
+    pub warnings: Vec<String>,
     pub diagnostic: String,
 }
 
-/// Warning lines carried beside otherwise successful output: only ones M2 stamped
-/// with its location, so printed text that merely mentions a warning stays printed.
+/// A warning's opening line, carried beside otherwise successful output: stamped
+/// with M2's location, or bare as Core's `warningMessage` writes it.
 static WARNING: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(&format!("^{LOCATION}warning: ")).expect("valid pattern"));
+    LazyLock::new(|| Regex::new(&format!("^(?:{LOCATION})?warning: ")).expect("valid pattern"));
+
+/// A line continuing the warning above it, indented to the keyword's colon:
+/// `       : debug with expression   debug 365   or with command line option …`.
+static CONTINUATION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s+: ").expect("valid pattern"));
 
 /// Debugger trace markers emitted after the useful error diagnostic.
 static BACKTRACE: LazyLock<Regex> =
@@ -84,10 +91,9 @@ pub fn captured_output(
     value: Option<&str>,
     type_info: Option<&str>,
 ) -> CapturedOutput {
-    let printed = captured_text(raw, code);
-    let mut warnings = Vec::new();
+    let (printed, warnings) = take_warnings(captured_text(raw, code));
     CapturedOutput {
-        printed: take_warnings(printed, &mut warnings),
+        printed,
         value: value.map(|_text| CapturedValue {
             #[cfg(test)]
             text: _text.to_string(),
@@ -97,23 +103,30 @@ pub fn captured_output(
     }
 }
 
-fn take_warnings(text: &str, warnings: &mut Vec<String>) -> String {
-    text.split('\n')
-        .filter(|line| {
-            if BACKTRACE.is_match(line.trim()) {
-                return false;
-            }
-            if !WARNING.is_match(line) {
-                return true;
-            }
-            let warning = diagnostic_message(strip_m2_location(line)).to_string();
-            if !warnings.contains(&warning) {
-                warnings.push(warning);
-            }
-            false
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+/// Split `text` into what stays printed and its warnings, one per `warning:`
+/// line with the lines continuing it, each keeping its own block.
+fn take_warnings(text: &str) -> (String, Vec<String>) {
+    let mut printed = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let mut continuing = false;
+    for line in text.split('\n') {
+        if BACKTRACE.is_match(line.trim()) {
+            continuing = false;
+        } else if WARNING.is_match(line) {
+            warnings.push(diagnostic_message(strip_m2_location(line)).to_string());
+            continuing = true;
+        } else if let Some(more) = CONTINUATION.find(line).filter(|_| continuing) {
+            let warning = warnings
+                .last_mut()
+                .expect("a continuation follows its warning");
+            warning.push('\n');
+            warning.push_str(&line[more.end()..]);
+        } else {
+            continuing = false;
+            printed.push(line);
+        }
+    }
+    (printed.join("\n"), warnings)
 }
 
 /// Remove the echoed input and keep pre-error output out of the diagnostic.
@@ -126,8 +139,10 @@ pub fn captured_error(raw: &str, code: &str) -> CapturedError {
         .iter()
         .position(|line| strip_m2_location(line).starts_with("error: "))
         .unwrap_or_default();
+    let (printed, warnings) = take_warnings(&lines[..diagnostic].join("\n"));
     CapturedError {
-        printed: lines[..diagnostic].join("\n"),
+        printed,
+        warnings,
         diagnostic: lines[diagnostic..].join("\n"),
     }
 }

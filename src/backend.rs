@@ -36,6 +36,13 @@ const STARTUP_SCRIPT: EmbeddedSource = EmbeddedSource {
     file_name: "backend.m2",
     contents: include_str!("backend/m2_startup.m2"),
 };
+/// Installs the shipped package for M2's own documentation when none as recent is.
+const PACKAGE_INSTALLER: EmbeddedSource = EmbeddedSource {
+    file_name: "install-spectral.m2",
+    contents: include_str!("backend/m2_install_spectral.m2"),
+};
+/// The Macaulay2 executable, as found on `PATH`.
+const M2: &str = "M2";
 /// The package that defines `SpecNet` and `specNet`, which every result is drawn from.
 /// Published on its own as `Spectral`; the shell carries the version its backend was
 /// written against, pinned as the `Spectral` submodule, whatever else M2 has installed.
@@ -214,6 +221,31 @@ impl M2Backend {
         Self::spawn_in(&config, init, None, options)
     }
 
+    /// Install the shipped Spectral in the background when M2 has none as recent,
+    /// so `help`, `viewHelp` and the language server document what the shell runs.
+    /// Startup never waits for it; whatever stops it only leaves the docs as they were.
+    pub fn install_display_package() {
+        let Ok(config) = Self::config_dir() else {
+            return;
+        };
+        let (Ok(package), Ok(installer)) = (
+            DISPLAY_PACKAGE.sync_into(&config),
+            PACKAGE_INSTALLER.sync_into(&config),
+        ) else {
+            return;
+        };
+        let install = Command::new(M2)
+            .arg("--script")
+            .args([installer, package])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        if let Ok(mut install) = install {
+            thread::spawn(move || install.wait());
+        }
+    }
+
     /// Start a fresh process with this session's original M2 configuration.
     pub fn restarted(&self) -> Result<Self> {
         Self::spawn_with_options(&self.startup_options)
@@ -258,13 +290,13 @@ impl M2Backend {
         let script_path = STARTUP_SCRIPT.sync_into(config)?;
         let (reader, writer) = std::io::pipe()?;
 
-        let mut command = Command::new("M2");
+        let mut command = Command::new(M2);
         command.arg("--silent").arg("--no-readline");
         command.args(options.arguments());
         // The display package comes first, so the init file and a requested
         // package can already install `specNet` for classes of their own.
         command.arg("-e").arg(format!(
-            "loadPackage({}, FileName => {}, LoadDocumentation => true)",
+            "needsPackage({}, FileName => {}, LoadDocumentation => true)",
             m2_string_literal(DISPLAY_PACKAGE.package_name()),
             m2_string_literal(package_path.display())
         ));
@@ -289,6 +321,9 @@ impl M2Backend {
             .stdout(writer.try_clone()?)
             .stderr(writer)
             .spawn()?;
+        // The command still holds the pipe's writing ends; only once they are gone
+        // does a child dying during startup close the pipe instead of hanging it.
+        drop(command);
 
         let input = process.stdin.take().ok_or_else(|| {
             Error::Process("Macaulay2 was started without a writable stdin".to_string())
@@ -499,7 +534,11 @@ impl M2Backend {
     /// What M2 announced on becoming ready: its version, every name it started
     /// with, and what it printed on the way.
     pub fn take_announcement(&mut self) -> (String, Vec<String>, String) {
-        (self.version.clone(), self.take_names(), self.take_startup_output())
+        (
+            self.version.clone(),
+            self.take_names(),
+            self.take_startup_output(),
+        )
     }
 
     /// Every name M2 started with; later names arrive with each response.

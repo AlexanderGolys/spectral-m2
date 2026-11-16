@@ -1,3 +1,4 @@
+use crate::ui::glyphs::Glyphs;
 use super::*;
 
 use crate::ui::theme::groups::Groups;
@@ -1032,7 +1033,7 @@ fn embedded_formatter_clicks_survive_relayout_and_can_be_hidden() {
         backend.evaluate("symbol example", None).unwrap(),
     );
     let context = RenderContext::new(90, 0).with_renderer_position(RendererPosition::LowerRight);
-    let net = UI.glyphs.renderer_net.current();
+    let net = Glyphs::RendererNet.glyph().current();
     let icon = |lines: &[Line]| {
         lines.iter().enumerate().find_map(|(y, line)| {
             let text = line.to_string();

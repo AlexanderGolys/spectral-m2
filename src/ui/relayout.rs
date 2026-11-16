@@ -35,30 +35,33 @@ fn start_workers() -> Mutex<Sender<Job>> {
     Mutex::new(sender)
 }
 
-/// A result being computed on a worker. Dropping it abandons the work, which is
-/// skipped when no worker has started it yet.
+/// A result being computed on a worker, stamped with its place in the delivery
+/// count. Dropping it abandons the work, which is skipped when no worker has
+/// started it yet.
 ///
 /// ```ignore
 /// let pending = Pending::spawn(|| 6 * 7);
-/// // … later, on the drawing thread:
-/// if let Some(answer) = pending.take() { assert_eq!(answer, 42) }
+/// // … later, on the drawing thread, once the feeds were told of the delivery:
+/// if let Some(answer) = pending.take(delivered()) { assert_eq!(answer, 42) }
 /// ```
 #[derive(Debug)]
 pub struct Pending<T> {
-    slot: Arc<Mutex<Option<T>>>,
+    slot: Arc<Mutex<Option<(u64, T)>>>,
 }
 
 impl<T: Send + 'static> Pending<T> {
     pub fn spawn(job: impl FnOnce() -> T + Send + 'static) -> Self {
         let slot = Arc::new(Mutex::new(None));
-        let target: Weak<Mutex<Option<T>>> = Arc::downgrade(&slot);
+        let target: Weak<Mutex<Option<(u64, T)>>> = Arc::downgrade(&slot);
         IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
         let job: Job = Box::new(move || {
             if target.strong_count() > 0 {
                 let result = job();
                 if let Some(slot) = target.upgrade() {
-                    *slot.lock().expect("a layout result is never set mid-panic") = Some(result);
-                    DELIVERED.fetch_add(1, Ordering::SeqCst);
+                    // Counted under the slot's lock, so a reader who has seen the count
+                    // waits on the lock for the result rather than missing it.
+                    let mut slot = slot.lock().expect("a layout result is never set mid-panic");
+                    *slot = Some((DELIVERED.fetch_add(1, Ordering::SeqCst) + 1, result));
                 }
             }
             IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
@@ -71,16 +74,35 @@ impl<T: Send + 'static> Pending<T> {
         Self { slot }
     }
 
-    /// The result, once; `None` while it is still being computed.
-    pub fn take(&self) -> Option<T> {
-        self.slot
+    /// The result, once, if it is among the first `adopted` deliveries; `None` while it
+    /// is still being computed or arrived after the drawing thread last looked, since
+    /// heights measured before then do not account for it.
+    pub fn take(&self, adopted: u64) -> Option<T> {
+        let mut slot = self
+            .slot
             .lock()
-            .expect("a layout result is never set mid-panic")
-            .take()
+            .expect("a layout result is never set mid-panic");
+        slot.take_if(|(delivery, _)| *delivery <= adopted)
+            .map(|(_, result)| result)
     }
 }
 
-/// Whether any worker still has a layout to deliver.
+/// Run `job` on a worker for its side effects alone, such as filling a cache the
+/// drawing thread reads without waiting.
+pub fn detach(job: impl FnOnce() + Send + 'static) {
+    IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+    let job: Job = Box::new(move || {
+        job();
+        IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+    });
+    WORKERS
+        .lock()
+        .expect("the layout queue is never held across a panic")
+        .send(job)
+        .expect("layout workers live as long as the program");
+}
+
+/// Whether any worker still has work to finish.
 pub fn busy() -> bool {
     IN_FLIGHT.load(Ordering::SeqCst) > 0
 }

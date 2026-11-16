@@ -9,6 +9,7 @@ use crate::ui::config::UI;
 use crate::ui::render::maths::{FractionStyle, MathDisplay, MathInk, MathStyle, ScriptColor};
 use crate::ui::settings::rendering::RendererPosition;
 use crate::ui::theme::groups::{scheme, Groups};
+use crate::ui::wrap::WrapMode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
@@ -45,6 +46,7 @@ pub const RECENT_OUTPUTS: usize = 3;
 #[derive(Clone, Copy)]
 pub struct RenderContext {
     width: u16,
+    code_wrap: WrapMode,
     prefix: u16,
     output_limit: Option<usize>,
     math: MathStyle,
@@ -52,12 +54,18 @@ pub struct RenderContext {
     numbers_printed: bool,
     swapped_code_background: bool,
     renderer_position: RendererPosition,
+    /// Worker layouts the measured heights already account for; see [`Pending::take`](crate::ui::relayout::Pending::take).
+    adopted_relayouts: u64,
+    /// Lay values out on the spot rather than on a worker, for drawings kept as
+    /// they are first painted, which a placeholder would stay in for good.
+    inline_layout: bool,
 }
 
 impl RenderContext {
     pub fn new(width: u16, prefix: u16) -> Self {
         Self {
             width,
+            code_wrap: WrapMode::default(),
             prefix,
             output_limit: Some(UI.max_output_rows),
             math: MathStyle::default(),
@@ -65,7 +73,43 @@ impl RenderContext {
             numbers_printed: false,
             swapped_code_background: false,
             renderer_position: Default::default(),
+            adopted_relayouts: u64::MAX,
+            inline_layout: false,
         }
+    }
+
+    pub fn with_inline_layout(self) -> Self {
+        Self {
+            inline_layout: true,
+            ..self
+        }
+    }
+
+    pub fn inline_layout(&self) -> bool {
+        self.inline_layout
+    }
+
+    /// Take up only the first `adopted` worker layouts, the ones whose arrival the
+    /// retained heights were already invalidated for.
+    pub fn with_adopted_relayouts(self, adopted: u64) -> Self {
+        Self {
+            adopted_relayouts: adopted,
+            ..self
+        }
+    }
+
+    pub fn adopted_relayouts(&self) -> u64 {
+        self.adopted_relayouts
+    }
+
+    /// Choose the line-breaking policy used by source cells.
+    pub fn with_code_wrap(self, code_wrap: WrapMode) -> Self {
+        Self { code_wrap, ..self }
+    }
+
+    /// The configured source line-breaking policy.
+    pub fn code_wrap(&self) -> WrapMode {
+        self.code_wrap
     }
 
     /// Exchange the code background with the transcript background in a reference view.

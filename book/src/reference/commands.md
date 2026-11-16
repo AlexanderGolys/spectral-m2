@@ -20,6 +20,12 @@ Commands are handled by the shell, never sent to Macaulay2. Type `/` into an emp
 `/ast`, `F6`
 : Show the syntax tree of the committed code beside the session.
 
+`/notes`
+: Open the editable notebook beside the session. Changes are saved automatically; `Enter` adds a line and `Esc` returns focus to the shell.
+
+`/recent`
+: Preview the previous session's source without running it. `F8` can run it after inspection.
+
 `/save [file]`
 : Write the code of every committed cell to `file`. Without a file, keep it where quitting would, for `/resume`.
 

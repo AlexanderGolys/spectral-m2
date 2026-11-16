@@ -388,6 +388,8 @@ pub struct AppearanceSettings {
     scheme: SchemeIndex,
     variant: VariantIndex,
     pub transparent_background: bool,
+    /// Position along the current mode's native palette variants, in percent.
+    pub contrast: u8,
 }
 
 impl Default for AppearanceSettings {
@@ -405,6 +407,7 @@ impl Default for AppearanceSettings {
             scheme: SchemeIndex(scheme),
             variant: VariantIndex(variant),
             transparent_background: false,
+            contrast: 50,
         }
     }
 }
@@ -435,16 +438,34 @@ impl AppearanceSettings {
             .collect()
     }
 
-    /// This appearance in each variant of the current scheme and mode.
-    pub fn contrasts(self) -> Vec<Self> {
-        self.scheme()
-            .variants_in(self.mode())
-            .into_iter()
-            .map(|variant| Self {
-                variant: VariantIndex(variant),
-                ..self
-            })
-            .collect()
+    /// The continuous palette position after stepping by percentage points.
+    pub fn with_contrast(self, delta: i8) -> Self {
+        Self {
+            contrast: self
+                .contrast
+                .saturating_add_signed(delta)
+                .min(Self::CONTRAST_MAX),
+            ..self
+        }
+    }
+
+    /// End of the percentage scale used by the contrast slider.
+    pub const CONTRAST_MAX: u8 = 100;
+
+    /// Adjacent native variants and their interpolation fraction. At each native
+    /// stop the original colours are recovered exactly; between stops each RGB
+    /// channel follows the line segment joining those colours.
+    fn contrast_interval(self) -> (&'static ColorVariant, &'static ColorVariant, f32) {
+        let variants = self.scheme().variants_in(self.mode());
+        let position =
+            f32::from(self.contrast) / f32::from(Self::CONTRAST_MAX) * (variants.len() - 1) as f32;
+        let lower = position.floor() as usize;
+        let upper = (lower + 1).min(variants.len() - 1);
+        (
+            &self.scheme().variants()[variants[lower]],
+            &self.scheme().variants()[variants[upper]],
+            position.fract(),
+        )
     }
 
     /// This appearance in each mode the current scheme offers.
@@ -478,7 +499,7 @@ impl AppearanceSettings {
 
     /// Step to a neighbouring variant of the current scheme and mode.
     pub fn cycle_contrast(self, delta: i8) -> Self {
-        cycled(&self.contrasts(), self, delta)
+        self.with_contrast(delta)
     }
 
     /// Step to the scheme's neighbouring mode.
@@ -521,11 +542,44 @@ impl AppearanceSettings {
         }
     }
 
+    /// Native palette colours at the slider's current position, for the inspector.
+    pub fn palette(self) -> Vec<(&'static str, PaletteColor)> {
+        let (lower, upper, amount) = self.contrast_interval();
+        lower
+            .palette()
+            .colors()
+            .into_iter()
+            .map(|(name, color)| {
+                let toward = upper
+                    .palette()
+                    .resolve(Some(name))
+                    .ok()
+                    .flatten()
+                    .unwrap_or(color);
+                (name, palette::blend(color, toward, amount).unwrap_or(color))
+            })
+            .collect()
+    }
+
     /// The scheme to paint with. A transparent background takes the canvas colour
     /// out of the scheme itself, so whatever is set in the canvas group -- the
     /// padding inside a laid-out value included -- shows the terminal through.
     pub fn groups(self) -> Groups {
-        let mut groups = self.variant().groups();
+        let (lower, upper, amount) = self.contrast_interval();
+        let upper = upper.groups();
+        let blend_channel = |from: Option<PaletteColor>, to: Option<PaletteColor>| match (from, to)
+        {
+            (Some(from), Some(to)) => Some(palette::blend(from, to, amount).unwrap_or(from)),
+            _ if amount < 0.5 => from,
+            _ => to,
+        };
+        let mut groups = lower.groups().map_styles(|group, mut style| {
+            let target = upper[group];
+            style.fg = blend_channel(style.fg, target.fg);
+            style.bg = blend_channel(style.bg, target.bg);
+            style.underline_color = blend_channel(style.underline_color, target.underline_color);
+            style
+        });
         if self.transparent_background {
             groups.Canvas.bg = None;
         }
@@ -548,6 +602,8 @@ struct StoredAppearance {
     #[serde(alias = "brightness")]
     mode: Mode,
     transparent_background: bool,
+    #[serde(default)]
+    contrast: Option<u8>,
 }
 
 impl From<AppearanceSettings> for StoredAppearance {
@@ -557,6 +613,7 @@ impl From<AppearanceSettings> for StoredAppearance {
             variant: appearance.variant().label().into(),
             mode: appearance.mode(),
             transparent_background: appearance.transparent_background,
+            contrast: Some(appearance.contrast),
         }
     }
 }
@@ -579,6 +636,18 @@ impl TryFrom<StoredAppearance> for AppearanceSettings {
             scheme: SchemeIndex(scheme),
             variant: VariantIndex(variant),
             transparent_background: stored.transparent_background,
+            contrast: stored
+                .contrast
+                .unwrap_or_else(|| {
+                    let variants = SCHEMES[scheme].variants_in(stored.mode);
+                    let index = variants
+                        .iter()
+                        .position(|&index| index == variant)
+                        .expect("the stored variant belongs to its mode");
+                    (index * usize::from(Self::CONTRAST_MAX)
+                        / variants.len().saturating_sub(1).max(1)) as u8
+                })
+                .min(Self::CONTRAST_MAX),
         })
     }
 }

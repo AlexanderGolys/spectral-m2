@@ -162,12 +162,13 @@ impl PickerItem for CommandItem {
 }
 
 /// Every command, in the order the picker lists them.
-const COMMANDS: [Command; 12] = [
+const COMMANDS: [Command; 14] = [
     Command::new("settings", Action::OpenSettings),
     Command::new("keymaps", Action::OpenKeymaps),
     Command::new("clear", Action::ClearFeed),
     Command::new("code", Action::OpenCode),
     Command::new("output", Action::OpenOutput),
+    Command::new("notes", Action::OpenNotes),
     Command::new("ast", Action::OpenSyntaxTree),
     Command::taking(
         "save",
@@ -176,6 +177,7 @@ const COMMANDS: [Command; 12] = [
     ),
     Command::taking("load", Action::LoadCode, Argument::Required(Operand::File)),
     Command::new("resume", Action::ResumeSession),
+    Command::new("recent", Action::RecentSession),
     Command::new("sessions", Action::BrowseSessions),
     Command::taking("view", Action::ViewFile, Argument::Required(Operand::File)),
     Command::taking(

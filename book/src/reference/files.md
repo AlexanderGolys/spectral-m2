@@ -12,11 +12,14 @@ Spectral keeps configuration in one directory and session state in another, foll
 `backend.m2`
 : The Macaulay2 side of the shell, written out from the program so M2's `code` can show you Spectral's hooks. Replaced whenever a new version brings a different one; don't edit it.
 
+`Spectral.m2`, `install-spectral.m2`
+: The `Spectral` package the shell draws with, and the script that installs it. Each start, when Macaulay2 has no `Spectral` installed or only an older version, the shell installs this copy in the background, so `help`, `viewHelp` and `m2-ls` document the version it runs; a copy as new or newer, such as one you installed yourself, is left alone. Both are replaced like `backend.m2`; don't edit them.
+
 `settings.json`
-: Editable settings and rebound keys, created on first launch. Each tab of the settings keeps its own section, named after it: `rendering`, `lsp`, `editor` (with the selection under `editor.selection`) and `statusline`; files saved by older versions are read into this shape. Restart the shell after editing.
+: Editable settings and rebound keys, created on first launch. Each tab of the settings keeps its own section, named after it: `rendering`, `lsp`, `editor` (with the selection under `editor.selection`) `statusline` and `session`; files saved by older versions are read into this shape. Restart the shell after editing.
 
 `appearance.json`
-: The chosen scheme, variant, mode and background.
+: The chosen scheme, variant, continuous contrast position, mode and background.
 
 `completion-usage.json`
 : How often you used each symbol M2 knows at startup, for [completion order](../shell/write.md#how-often-used-is-counted).
@@ -28,8 +31,13 @@ Spectral keeps configuration in one directory and session state in another, foll
 
 `$XDG_STATE_HOME/spectral-m2/`, or `~/.local/state/spectral-m2/` when the variable is unset.
 
+With *local session files* enabled, history, the previous session, archives and notes instead live in `.spectral-m2/` at the repository root (or the current directory outside a repository). Configuration and crash logs remain in their global directories.
+
+`notes.md`
+: The automatically saved [notebook](../shell/views.md#notes).
+
 `history.jsonl`
-: Input history, shared by every running shell.
+: Input history, shared by shells using the same storage directory.
 
 `previous-session.m2`
 : The code of the last session, kept on every exit and restart, for `/resume` and `--resume`.

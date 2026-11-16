@@ -15,6 +15,7 @@ use self::usage::Usage;
 use super::commands::{self, Command, Operand};
 use crate::code::file::{self, Entries};
 use crate::input::Completion;
+use crate::ui::settings::editor::CompletionSort;
 
 /// What opens a raw string literal, which a path typed inside one follows.
 const RAW_STRING_OPENER: &str = "///";
@@ -95,7 +96,7 @@ impl Names {
     }
 
     /// Prefix matches ranked by usage, then by length and name for stable ties.
-    fn starting_with(&self, prefix: &str) -> Vec<String> {
+    fn starting_with(&self, prefix: &str, sort: CompletionSort) -> Vec<String> {
         let matching = |names: &BTreeSet<String>| {
             names
                 .range(prefix.to_string()..)
@@ -114,13 +115,19 @@ impl Names {
                 .into_iter()
                 .filter(|name| !self.bound.contains(name)),
         );
-        found.sort_by(|left, right| {
-            (Reverse(self.frequency(left)), left.len(), left).cmp(&(
-                Reverse(self.frequency(right)),
-                right.len(),
-                right,
-            ))
-        });
+        match sort {
+            CompletionSort::Usage => found.sort_by(|left, right| {
+                (Reverse(self.frequency(left)), left.len(), left).cmp(&(
+                    Reverse(self.frequency(right)),
+                    right.len(),
+                    right,
+                ))
+            }),
+            CompletionSort::Alphabetical => found.sort(),
+            CompletionSort::Length => {
+                found.sort_by(|left, right| (left.len(), left).cmp(&(right.len(), right)))
+            }
+        }
         found
     }
 }
@@ -204,6 +211,7 @@ pub struct Request<'a> {
     pub names: &'a Names,
     /// Characters of a name or a string typed before it is completed.
     pub complete_after: usize,
+    pub sort: CompletionSort,
 }
 
 /// The completion for the text before the cursor, if anything completes it.
@@ -215,6 +223,7 @@ pub fn complete(request: Request<'_>) -> Option<Completion> {
         picked,
         names,
         complete_after,
+        sort,
     } = request;
     if let Some(command) = picked.filter(|_| cursor == text.len()) {
         let mut candidates = vec![commands::completed(command)];
@@ -238,7 +247,7 @@ pub fn complete(request: Request<'_>) -> Option<Completion> {
             let range = in_text(range);
             let typed = &text[range.clone()];
             (typed.chars().count() >= complete_after && !names.knows(typed))
-                .then(|| Completion::new(text, range, names.starting_with(typed)))?
+                .then(|| Completion::new(text, range, names.starting_with(typed, sort)))?
         }
         Typing::Text(range) => {
             let range = in_text(range);

@@ -12,7 +12,7 @@ theme
 : The scheme family: Catppuccin, Everforest, Gruvbox, Gruvbox Material, Kanagawa, Rosé Pine or Tokyo Night.
 
 contrast
-: The family's variants for the current mode, such as hard, medium and soft, or Catppuccin's mocha, macchiato and frappé.
+: A continuous 0–100% slider through the family's variants for the current mode, in declaration order: for example Everforest hard, medium and soft. Native stops keep their original colours; intermediate positions interpolate RGB channels. A mode with one variant keeps its palette throughout the range.
 
 mode
 : Dark or light, where the family has both.

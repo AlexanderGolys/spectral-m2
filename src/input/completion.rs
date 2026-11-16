@@ -50,8 +50,8 @@ impl Completion {
 
     /// Open the list before insertion when no inline hint was offered.
     /// Returns whether this key only opened the list.
-    pub fn reveal(&mut self, below: u16) -> bool {
-        if self.listed {
+    pub fn reveal(&mut self, below: u16, list: bool) -> bool {
+        if self.listed || !list {
             return false;
         }
         let reveal_only = !self.taken && !self.hinted(below);
@@ -60,10 +60,11 @@ impl Completion {
     }
 
     /// Rows needed by the open list, including its border.
-    pub fn list_height(&self) -> u16 {
+    pub fn list_height(&self, rows: u8) -> u16 {
         if self.listed {
             u16::try_from(self.candidates.len())
                 .unwrap_or(u16::MAX)
+                .min(u16::from(rows.max(1)))
                 .saturating_add(2)
         } else {
             0

@@ -73,3 +73,5 @@ A few more move the way code is built:
 `Ctrl+Z` undoes and `Ctrl+Shift+Z` redoes. Typing undoes a word at a time and a run of deletions all at once; clearing, pasting, recalling history and taking a completion are one step each. Submitting starts a fresh input with nothing to undo.
 
 Every key here can be rebound; see [Keymaps](../custom/keymaps.md) and the [full key list](../reference/keys.md).
+
+The *editor* settings also choose completion ordering (`usage`, `alphabetical` or `length`), whether a candidate list appears, and how many candidates it shows. Turn *completion* off to type without suggestions, or set *hint below* to zero to keep the list while hiding inline hints. *Input wrapping* and *code wrapping* independently select word/token boundaries or terminal columns.

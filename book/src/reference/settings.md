@@ -2,7 +2,7 @@
 
 Open the settings with `Ctrl+O` or `/settings`. They are kept between sessions: the appearance in `appearance.json`, everything else, keys included, in `settings.json`, both in the [configuration directory](files.md).
 
-The picker has six tabs along its top; `Tab` and `Shift+Tab` switch them, or move onto the row of tabs and use `Left` and `Right`. `Up` and `Down` pick a row, `Left` and `Right` change it (`Space` also steps right), and the selected row describes itself under the list. *Restore defaults*, beneath the rows, resets everything: settings, keys and appearance.
+The picker has seven tabs along its top; `Tab` and `Shift+Tab` switch them, or move onto the row of tabs and use `Left` and `Right`. `Up` and `Down` pick a row, `Left` and `Right` change it (`Space` also steps right), and the selected row describes itself under the list. *Restore defaults*, beneath the rows, resets everything: settings, keys and appearance.
 
 ## Appearance
 
@@ -10,7 +10,7 @@ theme
 : The colour-scheme family. Default: Everforest. See [Colour schemes](../custom/colours.md).
 
 contrast
-: The family's variant for the current mode. Default: medium.
+: A continuous slider from 0% to 100% between the current mode's native palette variants. Each arrow changes one percentage point. Default: 50% (Everforest medium). A mode with one variant keeps that palette throughout the range.
 
 mode
 : Dark or light. Default: dark.
@@ -87,6 +87,21 @@ scrolloff
 scroll speed
 : Rows one notch of the mouse wheel scrolls the feed or a view. Default: 3, at least 1.
 
+input wrapping, code wrapping
+: `word` breaks live input at words and submitted or previewed code at token boundaries; `character` breaks at terminal columns. Default: `word` for both. A word or token wider than the pane still breaks to fit.
+
+completion
+: Offer name and path completions. Default: on. Commands remain available through the command picker when it is off.
+
+completion sorting
+: `usage` ranks symbols by recorded frequency, then length and name; `alphabetical` ignores frequency; `length` offers shortest names first. Default: `usage`. Paths keep directories first and then alphabetical order.
+
+completion list
+: Show candidates when completing with `Tab`. Off inserts and cycles candidates inline. Default: on.
+
+completion rows
+: Maximum candidates shown at once; the list scrolls to keep the current candidate visible. Default: 8, at least 1.
+
 complete after
 : Characters of a name, or of a file name in a string, typed before it completes. Default: 1.
 
@@ -111,6 +126,11 @@ position
 
 One row per component
 : Its segment: `off`, `L`, `LC`, `C`, `RC` or `R`. `Left` and `Right` move it; `0` hides it and `1` to `5` choose a segment. See [Status line](../custom/statusline.md) for every component and the defaults.
+
+## Session
+
+local session files
+: Keep session archives, the previous session, notes and input history in `.spectral-m2/` at the nearest ancestor containing `.git`, or the current directory outside a repository. Off uses the global state directory. Default: off. Switching takes effect immediately and keeps the two histories separate; existing files stay in their original location.
 
 ## Keymap
 

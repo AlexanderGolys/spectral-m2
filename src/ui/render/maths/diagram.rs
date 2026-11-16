@@ -3,6 +3,8 @@
 //! components running down between them, as many columns across as the map's
 //! degree.
 
+// Keep mathematical notation and interface symbols legible in their native spelling.
+#![allow(clippy::non_ascii_literal)]
 use unicode_width::UnicodeWidthChar;
 
 use super::{Math, MathBlock, MathStyle};

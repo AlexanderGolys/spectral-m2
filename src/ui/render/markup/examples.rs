@@ -16,12 +16,14 @@ use ratatui::text::{Line, Span};
 use regex::Regex;
 use unicode_width::UnicodeWidthStr;
 
-use crate::backend::transcript::{captured_error, strip_m2_location};
+use crate::backend::transcript::strip_m2_location;
 use crate::backend::{M2Response, PreviewMode};
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::{merge, PageColors};
 use crate::ui::block::{Block, HLSpan, Link};
-use crate::ui::cell::{response_blocks, CellState, EvaluationBlock, OutputBlock, TextBlock};
+use crate::ui::cell::{
+    error_blocks, response_blocks, CellState, EvaluationBlock, OutputBlock, TextBlock,
+};
 use crate::ui::config::UI;
 use crate::ui::render::selection::Inclusions;
 use crate::ui::render::{RenderContext, RECENT_OUTPUTS};
@@ -289,9 +291,8 @@ impl Example {
     fn computed(&self, page: u64, response: &M2Response) -> EvaluationBlock {
         let mut block = self.input(page);
         if response.is_error {
-            let error = captured_error(&response.transcript, &self.source);
-            let printed = (!error.printed.is_empty()).then(|| TextBlock::printed(error.printed));
-            block.fail(0, self.number, printed, error.diagnostic);
+            let (outputs, printed, message) = error_blocks(response, &self.source);
+            block.fail(0, self.number, outputs, printed, message);
         } else {
             let (outputs, printed, value) = response_blocks(response, &self.source);
             let value = value.map(|value| value.numbered(self.number));
@@ -312,7 +313,7 @@ impl Example {
         let mut block = self.input(page);
         let printed = (!self.printed.is_empty()).then(|| TextBlock::printed(self.printed));
         if let Some(error) = self.error {
-            block.fail(0, self.number, printed, error);
+            block.fail(0, self.number, Vec::new(), printed, error);
         } else {
             let state = if self.value.is_some() {
                 CellState::Value
@@ -539,6 +540,7 @@ pub fn render_code(source: &str, page: u64, context: &RenderContext) -> Option<P
 fn painted(block: &EvaluationBlock, context: &RenderContext) -> Painted {
     let context = context
         .full_output()
+        .with_inline_layout()
         .with_recent_outputs([None; RECENT_OUTPUTS]);
     let area = Rect::new(0, 0, context.width(), block.height(&context));
     let mut buffer = Buffer::empty(area);

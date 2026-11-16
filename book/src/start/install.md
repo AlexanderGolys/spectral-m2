@@ -47,7 +47,7 @@ sp2 -q --no-randomize --resume
 
 ## Stay up to date
 
-When it starts, and after every restart, `sp2` looks for a newer version of itself and of `m2-ls`. It checks the copy installed on your `PATH`, which may be newer than the one running if you reinstalled since starting it, and the latest release on crates.io. If either is newer, a note in the feed names the newest version and how to get it. Without a network connection or `cargo` the check is skipped silently.
+While it runs, `sp2` keeps looking for a newer version of itself and of `m2-ls`: every minute it asks the copy installed on your `PATH`, which is newer than the one running once you reinstall, and every half hour the latest release on crates.io (both at once at startup and after every restart). The first time a newer version turns up, a note in the feed names it and how to get it, and from then on every place that shows the running version marks it with a `*`, as in `sp2 1.3.2*`. Without a network connection or `cargo` the check is skipped silently.
 
 ## Leave
 

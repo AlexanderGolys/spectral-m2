@@ -4,6 +4,32 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- At startup sp2 installs its `Spectral` package in the background when Macaulay2 has none or an older one, keeping `help`, `viewHelp` and m2-ls documentation current.
+- The running sp2 and m2-ls versions show a `*` wherever they appear once a newer one is found; the installed binaries are checked every minute and crates.io every half hour, not only at startup.
+- Completion enable, ordering, candidate-list visibility and height settings, plus independent input and source wrapping policies.
+- Repository-local session/history storage, `/recent` for inspecting the previous session, and an automatically saved editable `/notes` pane.
+- Remappable `Alt+S`, `Alt+.`, and `Alt+T` shortcuts for shuffle, dot and tensor operators.
+
+### Changed
+
+- Contrast is a continuous slider through native theme variants; saved native-variant choices migrate to their matching stops.
+- Picker tabs have separators, the side pane has a frame, palette names use their own colours, and key hints take priority when statusline space is tight.
+- `Descent` values retain their hierarchy and render one branch per row.
+
+### Fixed
+
+- Every `warning:` M2 writes gets its own warning block, with the indented `: …` lines that continue it, including Core's unlocated warnings and warnings raised before an error.
+- Smoother while anything moves: the screen redraws at up to 60 frames a second during a run or background work (80 ms when idle), keys are read on a thread of their own so none waits on a frame, and the spinner turns on its own clock.
+- A huge result no longer freezes sp2: values are laid out and turned into text on worker threads, showing `… laying out …` until ready, so the spinner keeps moving and Ctrl+C cancels the run.
+- A Ctrl+C arriving within half a second after a run ends is ignored instead of clearing the input or quitting, and input left unread at exit no longer spills into the shell.
+- sp2 no longer hangs on a blank screen when Macaulay2 dies while starting; it reports why.
+- A value laid out again in the background (after a resize or theme change) no longer crashes sp2 by growing taller in the middle of a frame.
+- Dragging the border between the feed and a side pane keeps the feed's layout until the width settles, as intended, instead of re-wrapping every block on every frame.
+- Failed source in Everforest uses its native error background across dark/light modes and all contrast positions.
+
+
 ## [1.3.1] - 2026-11-14
 
 ### Added

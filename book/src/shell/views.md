@@ -36,3 +36,9 @@ Each pane keeps at least 40 columns, so a split needs 81. In a narrower terminal
 
 > [!NOTE]
 > Views show the one session they sit beside. For a second, independent session, open another terminal pane, a tmux split or a new window, and start `sp2` there. History is shared between them.
+
+## Notes { #notes }
+
+Keep a list of ideas or computations beside your work with `/notes`. Click inside the notebook to edit it; `Enter` inserts a line, the input's editing shortcuts provide selection and undo, and paste inserts text. `Ctrl+Y` copies and `Ctrl+X` cuts the selection. `Esc` returns focus to the shell; `Ctrl+Q` closes the pane.
+
+Changes are saved automatically to `notes.md` in the active session storage directory. The *local session files* setting gives each repository its own notebook. Notes are text and are never evaluated by Macaulay2.

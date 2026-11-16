@@ -34,50 +34,49 @@ impl Glyph {
 }
 
 /// UI symbols that have a simpler spelling on limited terminals.
-#[forall(pub, Glyph)]
-#[derive(Clone, Copy)]
-pub struct Glyphs(
-    prompt, //  󱪂    
-    prompt_typing,
-    split_divider,
-    cell_separator,
-    pending_separator,
-    fold_rule,
-    // Beside the first line of a stretch of code that folds, open or folded.
-    fold_open,
-    fold_closed,
-    // After a folded stretch's first line, before the count of lines it hides.
-    folded_lines,
-    unevaluated_cell,
-    rejected_cell,
-    // Marks which renderer laid out an output cell's value.
-    renderer_markup,
-    renderer_external,
-    renderer_tex,
-    renderer_net,
-    renderer_spec_net,
-    renderer_string,
-    renderer_peek,
-    renderer_speek,
-    // Stands in for the leading part of text trimmed to fit.
-    trimmed,
-    // Either side of a picker value that steps with the horizontal arrows.
-    step_back,
-    step_forward,
-    // Divides a picker's rows from what it shows beneath them.
-    picker_rule,
-    // One cell for each tab of the pane beside the session.
-    tab_documentation,
-    tab_hover,
-    tab_source,
-    tab_bookmark,
-    tab_code,
-    tab_output,
-    tab_syntax_tree,
-    // Before the tab's title: back to the previous tab, and bookmark this one.
-    tab_back,
-    tab_pin,
-);
+#[enum_fn(pub const glyph -> Glyph)]
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Glyphs {
+    Prompt = Glyph::new("", ">"),
+    PromptTyping = Glyph::new(" ", ">>"),
+    SplitDivider = Glyph::new("│", "|"),
+    CellSeparator = Glyph::new("│", "|"),
+    PendingSeparator = Glyph::new("󰇘", "-"),
+    TreeBranch = Glyph::new("├─ ", "+- "),
+    TreeLast = Glyph::new("╰─ ", "`- "),
+    TreeContinue = Glyph::new("│  ", "|  "),
+    TreeIndent = Glyph::new("   ", "   "),
+    FoldRule = Glyph::new("─", "-"),
+    FoldOpen = Glyph::new("▾", "v"),
+    FoldClosed = Glyph::new("▸", ">"),
+    FoldedLines = Glyph::new("⋯", "..."),
+    UnevaluatedCell = Glyph::new("", "."),
+    RejectedCell = Glyph::new("", "x"),
+    RendererMarkup = Glyph::new("󱚊", "m"),
+    RendererExternal = Glyph::new("", "e"),
+    RendererTex = Glyph::new("", "t"),
+    RendererNet = Glyph::new("󰊉", "n"),
+    RendererSpecNet = Glyph::new("󰎃", "*"),
+    RendererString = Glyph::new("", "s"),
+    RendererPeek = Glyph::new("󰈈", "p"),
+    RendererSpeek = Glyph::new("󰛐", "P"),
+    Trimmed = Glyph::new(" ..󰴏", "[..]"),
+    StepBack = Glyph::new("", "<"),
+    StepForward = Glyph::new("", ">"),
+    PickerRule = Glyph::new("─", "-"),
+
+    TabDocumentation = Glyph::new("󰗚", "d"),
+    TabHover = Glyph::new("󰋽", "i"),
+    TabSource = Glyph::new("󰈮", "f"),
+    TabBookmark = Glyph::new(" ", "*"),
+    TabCode = Glyph::new("󰅩 ", "c"),
+    TabOutput = Glyph::new("󰞷 ", "o"),
+    TabSyntaxTree = Glyph::new("󱁉 ", "t"),
+    TabNotes = Glyph::new("󰎞", "n"),
+    TabBack = Glyph::new("‹", "<"),
+    TabPin = Glyph::new(" ", "+"),
+}
 
 /// Whether the *basic glyphs* setting is on, published for every drawing.
 static CHOSEN_BASIC: AtomicBool = AtomicBool::new(false);
@@ -98,40 +97,3 @@ impl Glyphs {
         CHOSEN_BASIC.store(basic, Relaxed);
     }
 }
-
-/// The symbols of the shell's chrome.
-pub const GLYPHS: Glyphs = Glyphs {
-    prompt: Glyph::new("", ">"),
-    prompt_typing: Glyph::new(" ", ">>"),
-    split_divider: Glyph::new("│", "|"),
-    cell_separator: Glyph::new("│", "|"),
-    pending_separator: Glyph::new("󰇘", "-"),
-    fold_rule: Glyph::new("─", "-"),
-    fold_open: Glyph::new("▾", "v"),
-    fold_closed: Glyph::new("▸", ">"),
-    folded_lines: Glyph::new("⋯", "..."),
-    unevaluated_cell: Glyph::new("", "."),
-    rejected_cell: Glyph::new("", "x"),
-    renderer_markup: Glyph::new("󱚊", "m"),
-    renderer_external: Glyph::new("", "e"),
-    renderer_tex: Glyph::new("", "t"),
-    renderer_net: Glyph::new("󰊉", "n"),
-    renderer_spec_net: Glyph::new("󱨇", "*"),
-    renderer_string: Glyph::new("", "s"),
-    renderer_peek: Glyph::new("󰈈", "p"),
-    renderer_speek: Glyph::new("󰛐", "P"),
-    trimmed: Glyph::new(" ..󰴏", "[..]"),
-    step_back: Glyph::new("", "<"),
-    step_forward: Glyph::new("", ">"),
-    picker_rule: Glyph::new("─", "-"),
-
-    tab_documentation: Glyph::new("󰗚", "d"),
-    tab_hover: Glyph::new("󰋽", "i"),
-    tab_source: Glyph::new("󰈮", "f"),
-    tab_bookmark: Glyph::new(" ", "*"),
-    tab_code: Glyph::new("󰅩 ", "c"),
-    tab_output: Glyph::new("󰞷 ", "o"),
-    tab_syntax_tree: Glyph::new("󱁉 ", "t"),
-    tab_back: Glyph::new("‹", "<"),
-    tab_pin: Glyph::new(" ", "+"),
-};

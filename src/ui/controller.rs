@@ -1,9 +1,12 @@
 //! Interactive editor: submitted feed, live input and history, navigation,
 //! scrolling, and rendering.
 
+// Keep mathematical notation and interface symbols legible in their native spelling.
+#![allow(clippy::non_ascii_literal)]
 pub mod commands;
 mod completion;
 mod highlight_debug;
+mod notes;
 pub(crate) mod picker;
 mod screen;
 mod view;
@@ -35,6 +38,7 @@ use super::feed::Feed;
 use super::key::{KeyEvent, KeyMod};
 use super::render::maths::MathDisplay;
 use super::render::selection::Inclusions;
+use super::render::spin;
 use super::render::RenderContext;
 use super::statusline::{
     LanguageServerState, StatusDiagnostics, StatusLine, StatusLineContext, StatusLocation,
@@ -61,6 +65,7 @@ use crate::ui::text_object::{TextDirection, TextMotion};
 use crate::ui::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
 use crate::ui::theme::palette::blend;
 use crate::ui::theme::AppearanceSettings;
+use crate::updates::shell_version;
 
 /// How far the background under a hovered link moves toward the text colour.
 const LINK_HOVER_TINT: f32 = 0.15;
@@ -92,6 +97,8 @@ pub enum Reaction {
     DocumentationInFeed(String),
     /// Browse the archived sessions.
     BrowseSessions,
+    /// Show the most recently kept session without evaluating it.
+    RecentSession,
     /// Preview a source file without evaluating it.
     ViewFile(String),
     /// Save selected source to a file.
@@ -235,6 +242,8 @@ pub enum EditorUpdate {
         id: u64,
         index: usize,
         number: u32,
+        /// Warnings raised before the error.
+        outputs: Vec<Box<dyn Block>>,
         printed: Option<TextBlock>,
         message: String,
     },
@@ -293,6 +302,7 @@ pub struct Editor {
     reference: Feed,
     reference_file: Option<String>,
     input: InputCode,
+    notes: notes::Notes,
     settings: Settings,
     keymaps: Keymaps,
     status_line: StatusLine,
@@ -301,6 +311,9 @@ pub struct Editor {
     processing: bool,
     processing_started: Option<Instant>,
     cancel_hint_shown: bool,
+    /// The spinner frame last drawn, so a frame the spinner has not turned since
+    /// draws nothing new.
+    spinner_turns: u64,
     /// The names M2 knows, which the input completes.
     names: Names,
     pickers: Vec<PickerController>,
@@ -346,6 +359,7 @@ impl Editor {
             appearance,
             ..saved.settings
         };
+        settings.session.apply();
         let mut input = InputCode::new();
         input.set_settings(settings);
         Glyphs::choose_basic(settings.rendering.basic_glyphs);
@@ -354,6 +368,7 @@ impl Editor {
             reference: Feed::new(Box::new(TextBlock::system(String::new()))),
             reference_file: None,
             input,
+            notes: notes::Notes::default(),
             settings,
             keymaps: Keymaps::replaying(&saved.rebinds),
             status_line: StatusLine::default(),
@@ -362,6 +377,7 @@ impl Editor {
             processing: false,
             processing_started: None,
             cancel_hint_shown: false,
+            spinner_turns: 0,
             names: Names::default(),
             pickers: Vec::new(),
             picker_area: Rect::ZERO,
@@ -422,6 +438,7 @@ impl Editor {
     pub fn set_processing(&mut self, processing: bool) {
         if self.processing != processing {
             self.processing = processing;
+            spin::clock().run(processing);
             self.processing_started = processing.then(Instant::now);
             self.cancel_hint_shown = false;
             self.refresh_status_line();
@@ -431,17 +448,20 @@ impl Editor {
     /// Redraw whatever moves with the clock while the backend works; false when
     /// nothing does, so an idle shell never repaints on its own.
     pub fn animate(&mut self) -> bool {
-        if self.processing {
-            self.feed.on_event(&Ticked);
-            let show_hint = self
-                .processing_started
-                .is_some_and(|started| started.elapsed() >= Duration::from_secs(3));
-            if self.cancel_hint_shown != show_hint {
-                self.cancel_hint_shown = show_hint;
-                self.refresh_status_line();
-            }
+        let turns = spin::clock().turns();
+        if !self.processing || turns == self.spinner_turns {
+            return false;
         }
-        self.processing
+        self.spinner_turns = turns;
+        self.feed.on_event(&Ticked);
+        let show_hint = self
+            .processing_started
+            .is_some_and(|started| started.elapsed() >= UI.cancel_hint_delay);
+        if self.cancel_hint_shown != show_hint {
+            self.cancel_hint_shown = show_hint;
+            self.refresh_status_line();
+        }
+        true
     }
 
     const COPY_NOTICE: Duration = Duration::from_millis(UI.copy_notice_ms);
@@ -703,12 +723,13 @@ impl Editor {
                 id,
                 index,
                 number,
+                outputs,
                 printed,
                 message,
             } => {
                 self.input.clear_diagnostic();
                 self.feed.update_evaluation(id, |evaluation| {
-                    evaluation.fail(index, number, printed, message)
+                    evaluation.fail(index, number, outputs, printed, message)
                 });
             }
         }
@@ -1216,12 +1237,14 @@ impl Editor {
             | Action::ClearFeed
             | Action::OpenCode
             | Action::OpenOutput
+            | Action::OpenNotes
             | Action::OpenSyntaxTree
             | Action::ClosePane
             | Action::ReferenceBack
             | Action::Restart
             | Action::Quit
             | Action::RunViewedFile
+            | Action::RecentSession
             | Action::BrowseSessions
             | Action::ViewFile
             | Action::SaveSelection
@@ -1254,11 +1277,13 @@ impl Editor {
             }
             Action::OpenCode => self.leave_pickers(Reaction::Open(ViewKind::Code)),
             Action::OpenOutput => self.leave_pickers(Reaction::Open(ViewKind::Output)),
+            Action::OpenNotes => self.leave_pickers(Reaction::Open(ViewKind::Notes)),
             Action::OpenSyntaxTree => self.leave_pickers(Reaction::Open(ViewKind::SyntaxTree)),
             Action::ClosePane => self.leave_pickers(Reaction::ClosePane),
             Action::ReferenceBack => self.leave_pickers(Reaction::ReferenceBack),
             Action::Restart => self.leave_pickers(Reaction::Restart),
             Action::Quit => self.leave_pickers(Reaction::Quit),
+            Action::RecentSession => self.leave_pickers(Reaction::RecentSession),
             Action::BrowseSessions => self.leave_pickers(Reaction::BrowseSessions),
             Action::ViewFile if !argument.is_empty() => {
                 self.leave_pickers(Reaction::ViewFile(argument.to_string()))
@@ -1430,14 +1455,22 @@ impl Editor {
         }
         self.input
             .set_command_range(commands::name_range(self.input.text()));
-        let completion = completion::complete(Request {
-            text: self.input.text(),
-            cursor: self.input.field().cursor(),
-            pending: self.feed.incomplete_source(),
-            picked: self.picked_command(),
-            names: &self.names,
-            complete_after: usize::from(self.settings.editor.complete_after),
-        });
+        let completion = self
+            .settings
+            .editor
+            .completion
+            .then(|| {
+                completion::complete(Request {
+                    text: self.input.text(),
+                    cursor: self.input.field().cursor(),
+                    pending: self.feed.incomplete_source(),
+                    picked: self.picked_command(),
+                    names: &self.names,
+                    complete_after: usize::from(self.settings.editor.complete_after),
+                    sort: self.settings.editor.completion_sort,
+                })
+            })
+            .flatten();
         self.input.offer(completion);
     }
 
@@ -1652,6 +1685,7 @@ impl Editor {
         }
         self.apply_appearance(settings.appearance);
         self.settings = settings;
+        settings.session.apply();
         self.input.set_settings(settings);
         Glyphs::choose_basic(settings.rendering.basic_glyphs);
         self.save_settings();
@@ -1745,9 +1779,7 @@ impl Editor {
         let palette = self
             .settings
             .appearance
-            .variant()
             .palette()
-            .colors()
             .into_iter()
             .map(|(name, color)| DebugEntry::swatch(name, color))
             .collect();
@@ -1755,7 +1787,7 @@ impl Editor {
             DebugSection::new("LSP highlights", lsp),
             DebugSection::new("tree-sitter highlights", tree_sitter),
             DebugSection::new("UI", interface),
-            DebugSection::new("original palette", palette),
+            DebugSection::new("palette", palette),
         ]
     }
 
@@ -1817,7 +1849,7 @@ impl Editor {
             Line::from(Span::styled(
                 format!(
                     "sp2 {}  {}  {}",
-                    env!("CARGO_PKG_VERSION"),
+                    shell_version(),
                     self.frame_stats.label(),
                     crate::ui::graphics::usage()
                 ),
@@ -2001,6 +2033,7 @@ impl Editor {
     /// Shared rendering preferences for transcript and reference content.
     fn render_context(&self, width: u16) -> RenderContext {
         RenderContext::new(width, 0)
+            .with_code_wrap(self.settings.editor.code_wrap)
             .with_fractions(self.settings.rendering.fractions)
             .with_blackboard(self.settings.rendering.math_fonts)
             .with_matrix_row_spacing(self.settings.rendering.matrix_row_spacing_percent)
@@ -2013,6 +2046,7 @@ impl Editor {
             )
             .with_renderer_position(self.settings.rendering.renderer_position)
             .with_recent_outputs(self.feed.recent_outputs())
+            .with_adopted_relayouts(self.relayouts_adopted)
             .with_output_limit(self.settings.editor.output_rows)
     }
 
@@ -2058,9 +2092,9 @@ impl Editor {
         let picker_height = if self.pane_focused {
             self.pickers.last().map_or_else(
                 || {
-                    self.input
-                        .offered()
-                        .map_or(0, |completion| completion.list_height())
+                    self.input.offered().map_or(0, |completion| {
+                        completion.list_height(self.settings.editor.completion_rows)
+                    })
                 },
                 |controller| controller.picker.height(editor_area.width),
             )
@@ -2113,11 +2147,9 @@ impl Editor {
             controller
                 .picker
                 .render(&(), sections[1], frame.buffer_mut());
-        } else if let Some(completion) = self
-            .input
-            .offered()
-            .filter(|completion| self.pane_focused && completion.list_height() > 0)
-        {
+        } else if let Some(completion) = self.input.offered().filter(|completion| {
+            self.pane_focused && completion.list_height(self.settings.editor.completion_rows) > 0
+        }) {
             completion.render_list(sections[1], frame.buffer_mut(), &theme);
         }
         self.refresh_completion();
