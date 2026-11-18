@@ -8,7 +8,6 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use ratatui::style::Style;
 use serde::{Deserialize, Serialize};
 
 pub mod groups;
@@ -584,14 +583,6 @@ impl AppearanceSettings {
             groups.Canvas.bg = None;
         }
         groups
-    }
-
-    pub fn canvas(self, opaque: Style) -> Style {
-        if self.transparent_background {
-            Style::default()
-        } else {
-            opaque
-        }
     }
 }
 /// Stable appearance names stored independently of in-memory picker indices.

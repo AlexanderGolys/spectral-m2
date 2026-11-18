@@ -1156,6 +1156,7 @@ impl App {
             .filter(|area| !area.is_empty())
         {
             let border = TuiBlock::default()
+                .style(self.workspace.editor.view_canvas())
                 .borders(Borders::ALL)
                 .border_style(scheme().view_divider());
             let inner = border.inner(*area);

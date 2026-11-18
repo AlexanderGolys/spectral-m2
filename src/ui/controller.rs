@@ -2251,9 +2251,7 @@ impl Editor {
             context,
             area,
             frame.buffer_mut(),
-            self.settings
-                .appearance
-                .canvas(context.groups().transcript()),
+            context.groups().transcript(),
         );
         self.feed_top = -(self.feed.offset() as i64);
         self.selection_inclusions.merge(inclusions);

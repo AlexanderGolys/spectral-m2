@@ -371,8 +371,8 @@ impl Editor {
 
     /// The one background of every view: the code block's, under code and output
     /// alike, so nothing reads as a seam between blocks.
-    fn view_canvas(&self) -> Style {
-        self.settings.appearance.canvas(scheme().code())
+    pub fn view_canvas(&self) -> Style {
+        scheme().code()
     }
 
     pub fn draw_preview(
