@@ -4,9 +4,11 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-18
+
 ### Added
 
-- sp2 no longer carries its `Spectral` package inside the binary: the first start installs it from [its repository](https://github.com/AlexanderGolys/Spectral) when Macaulay2 has none, with its documentation and source files, and later starts only load it.
+- [`Spectral`](https://github.com/AlexanderGolys/Spectral), the package results are drawn with, is an ordinary package of your Macaulay2: sp2 loads the one installed there, which your own code can load and extend too. sp2 carries the version it was built with and installs it, documentation and source files included, only when Macaulay2 has none or one too old for it to read; when it carries a newer one, it says how to install it, as it does for its own updates. The welcome message names the Spectral version.
 - The running sp2 and m2-ls versions show a `*` wherever they appear once a newer one is found; the installed binaries are checked every minute and crates.io every half hour, not only at startup.
 - Completion enable, ordering, candidate-list visibility and height settings, plus independent input and source wrapping policies.
 - Repository-local session/history storage, `/recent` for inspecting the previous session, and an automatically saved editable `/notes` pane.
@@ -14,14 +16,21 @@ All notable changes to Spectral M2 are documented here.
 
 ### Changed
 
+- `SpecNet` and `specNet` are now `Rod` and `rod`, and the `specNet` output mode is `rod`; a saved `specNet` choice carries over.
+- Updated the native parser to `m2-syn` 0.8, including its corrected syntax handling and reshaped syntax trees.
 - The input's diagnostic line stands above its code instead of below it.
-- Spectral now sends each result already laid out, as a tree of rows, scripts, fractions, fences, grids and diagrams with each piece of text tagged by its class, so how every class of value and expression is formatted lives in the package, where a session can change it with `formatted`, `specNet` and the shape constructors; a `Highlight` recolours any part, as deep as its `Reach`. sp2 only fits the layout to the pane and colours it. `speek` spells the drawing one level deep, as `peek` spells an object.
+- A function applied by juxtaposition is spaced from its argument as M2 spells it: `frac R` and `cokernel M`, while `R[t]` and `OO_X(1)` stay together.
+- The *basic glyphs* setting is now *ascii*, and only the setting decides it: `TERM=dumb` no longer forces plain symbols on. A saved *basic glyphs* choice carries over.
+- Spectral now sends each result already laid out, as a tree of rows, scripts, fractions, fences, grids and diagrams with each piece of text tagged by its class, so how every class of value and expression is formatted lives in the package, where a session can change it with `formatted`, `rod` and the shape constructors; a `Highlight` recolours any part, as deep as its `Reach`. sp2 only fits the layout to the pane and colours it. `speek` spells the drawing one level deep, as `peek` spells an object.
 - Contrast is a continuous slider through native theme variants; saved native-variant choices migrate to their matching stops.
 - Picker tabs have separators, the side pane has a frame, palette names use their own colours, and key hints take priority when statusline space is tight.
 - `Descent` values retain their hierarchy and render one branch per row.
 
 ### Fixed
 
+- Up and down move between the rows a long input line wraps into, recalling history only from its first or last row, and a click past the end of a wrapped row puts the cursor on that row.
+- Changing any rendering setting keeps each value's current drawing on screen until its new layout is ready, instead of flashing `… laying out …` in its place.
+- A numeric literal after `symbol`, `local`, `global` or `threadLocal` is reported as a syntax error instead of leaving the shell waiting for Macaulay2.
 - A power of an indexed variable, such as `x_2^2`, stacks its exponent over the index in typeset maths, as TeX sets it, instead of after it.
 - Every `warning:` M2 writes gets its own warning block, with the indented `: …` lines that continue it, including Core's unlocated warnings, the documentation tools' `-- *** warning:` lines and warnings raised before an error.
 - Smoother while anything moves: the screen redraws at up to 60 frames a second during a run or background work (80 ms when idle), keys are read on a thread of their own so none waits on a frame, and the spinner turns on its own clock.

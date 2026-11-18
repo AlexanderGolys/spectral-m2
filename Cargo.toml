@@ -1,6 +1,6 @@
 [package]
 name = "spectral-m2"
-version = "1.3.2-dev.1.29"
+version = "1.4.0"
 edition = "2021"
 description = "A syntax-aware terminal shell for Macaulay2"
 license = "MIT OR Apache-2.0"
@@ -13,6 +13,8 @@ include = [
     "src/**/*.rs",
     "src/backend/m2_startup.m2",
     "src/backend/m2_spectral_package.m2",
+    "Spectral/Spectral.m2",
+    "Spectral/Spectral/*.m2",
     "src/**/*.toml",
     "Cargo.lock",
     "CHANGELOG.md",
@@ -32,7 +34,7 @@ crossterm = { version = "0.29.0", features = ["osc52", "serde"] }
 html2text = "0.17.1"
 lsp-server = "0.10.0"
 lsp-types = "0.97.0"
-m2-syn = { version = "0.7.1", default-features = false }
+m2-syn = { version = "0.8", default-features = false }
 nix = { version = "0.29.0", features = ["fs", "signal"] }
 regex = "1.11"
 ratatui = { version = "0.30.0", features = ["serde"] }
@@ -48,6 +50,7 @@ resvg = { version = "0.48.1", default-features = false }
 semver = "1.0.28"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+strum = { version = "0.28.0", features = ["derive"] }
 thiserror = "2.0.18"
 ttf-parser = "0.25.1"
 rustybuzz = "0.20.1"
