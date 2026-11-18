@@ -30,7 +30,7 @@ spectralShell := (() -> (
 	-- The mode M2 dispatches on: a symbol no session can name, whose hooks are
     -- installed on Thing alone. The protocol they keep is the shell's own, not
     -- something to override; a session changes how values are drawn through the
-    -- Spectral package's `specNet` and `specType`, which these hooks only call.
+    -- Spectral package's `rod` and `specType`, which these hooks only call.
 	shell := local SpectralShell;
 	standardStage := (stage, value) -> (lookup({Standard, stage}, class value)
 			?? identity) value;
@@ -103,11 +103,11 @@ spectralShell := (() -> (
     -- Its text joins the pieces' nets along their baselines, as M2 prints it.
 	annotationPieces := value -> select(deepSplice sequence value, item -> item =!= null);
 
-	-- What a value is drawn as is the Spectral package's business: `specNet`,
+	-- What a value is drawn as is the Spectral package's business: `rod`,
 	-- which a session may install for a class of its own. The formatting hooks are
 	-- taken once, before any user code runs, so rebinding a name later cannot
-	-- change what is called here. `drawnAs` is `specNet` held to giving a
-	-- SpecNet; `forgetDrawing` clears what a drawing that threw part-way may have
+	-- change what is called here. `drawnAs` is `rod` held to giving a
+	-- Rod; `forgetDrawing` clears what a drawing that threw part-way may have
 	-- left behind.
 	spectral := Spectral#"private dictionary";
 	drawnAs := value spectral#"drawnAs";
@@ -241,7 +241,7 @@ spectralShell := (() -> (
     -- forgetting what an earlier statement of the same cell recorded, since only
     -- the last one is sent; Print records the result; every stage prints nothing.
     --
-    -- Every call into session code -- `specNet`, `specType`, an `AfterPrint`
+    -- Every call into session code -- `rod`, `specType`, an `AfterPrint`
     -- method -- already falls back to plain text when it throws. A recording that
     -- throws all the same is reported as M2 reports any error and marks the
     -- statement failed. Left to M2, the error would open the debugger in this
@@ -341,6 +341,7 @@ spectralShell := (() -> (
     -- the session starts with.
 	emitFrame hashTable {
 		"ready" => version#"VERSION",
+		"spectral" => (options Spectral).Version,
 		"names" => newNames dictionaryPath
 	};
 	shell

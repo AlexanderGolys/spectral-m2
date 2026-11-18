@@ -14,8 +14,6 @@ pub struct CapturedOutput {
 
 /// The rendered value and optional M2 type annotation of an output cell.
 pub struct CapturedValue {
-    #[cfg(test)]
-    pub text: String,
     pub type_info: Option<String>,
 }
 
@@ -85,9 +83,7 @@ pub fn captured_output(
     let (printed, warnings) = take_warnings(captured_text(raw, code));
     CapturedOutput {
         printed,
-        value: value.map(|_text| CapturedValue {
-            #[cfg(test)]
-            text: _text.to_string(),
+        value: value.map(|_| CapturedValue {
             type_info: type_info.map(str::to_string),
         }),
         warnings,

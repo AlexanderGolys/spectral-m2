@@ -6,34 +6,34 @@ Spectral is a front end to one real, long-running Macaulay2 process. Knowing a l
 
 When `sp2` starts, it launches `M2` with your startup options, loads its backend, and lets M2 enter its normal top level, reading the whole session from standard input, exactly as an interactive M2 does. So `x := 1` in one cell is visible in the next, `exit` closes the shell, and your packages and `init.m2` behave as usual.
 
-What the backend changes is only how results come back: instead of printing `oN =` and `oN :` lines, M2 hands each value over already laid out, as a tree of rows, scripts, fractions, fences, grids and diagrams, each piece of text tagged with its class. Separate `specNet` and `specType` methods lay out the value and its type; they come from the [Spectral](https://github.com/AlexanderGolys/Spectral) package, which works in a plain M2 too. The shell fits that layout to the pane, as text or as a typeset picture, and colours each piece by its class. Printed text and errors arrive as M2 produced them, in order.
+What the backend changes is only how results come back: instead of printing `oN =` and `oN :` lines, M2 hands each value over already laid out, as a tree of rows, scripts, fractions, fences, grids and diagrams, each piece of text tagged with its class. Separate `rod` and `specType` methods lay out the value and its type; they come from the [Spectral](https://github.com/AlexanderGolys/Spectral) package, which works in a plain M2 too. The shell fits that layout to the pane, as text or as a typeset picture, and colours each piece by its class. Printed text and errors arrive as M2 produced them, in order.
 
 You can read all of it: the backend is written out as `backend.m2` in the [configuration directory](../reference/files.md), so `code` shows Spectral's hooks like any other M2 code.
 
 ## Drawing your own types
 
-How a result is drawn is decided by the [Spectral](https://github.com/AlexanderGolys/Spectral) package alone. The backend only calls it; it doesn't hand you its output hooks. A type that already has an `expression` is drawn from it, each class of expression laid out by Spectral's `formatted`: a sum between plus signs, a power as a script, a matrix as a grid. Install `specNet` (or `specType`, for the annotation) to draw a type some other way, or `formatted` to lay out an expression class differently. Do it in a cell, or in Spectral's own [`init.m2`](../reference/files.md) to have it in every session:
+How a result is drawn is decided by the [Spectral](https://github.com/AlexanderGolys/Spectral) package alone. The backend only calls it; it doesn't hand you its output hooks. A type that already has an `expression` is drawn from it, each class of expression laid out by Spectral's `formatted`: a sum between plus signs, a power as a script, a matrix as a grid. Install `rod` (or `specType`, for the annotation) to draw a type some other way, or `formatted` to lay out an expression class differently. Do it in a cell, or in Spectral's own [`init.m2`](../reference/files.md) to have it in every session:
 
 ```m2
 Point = new Type of List
 expression Point := p -> new FunctionApplication from (symbol point, toSequence p)
 speek new Point from {1, 1/2}   -- Row{Atom{"point", Symbol}, Fence{...}}
-formatted Sum := s -> joined(apply(toList s, specNet), " ⊞ ", "Operator")
+formatted Sum := s -> joined(apply(toList s, rod), " ⊞ ", "Operator")
 ```
 
 A drawing is built from Spectral's shape constructors: `atom(text, class)`, `row`, `joined`, `listed`, `script`, `fraction`, `fence`, `parenthesized`, `grid` and `labelled`. Any part may carry a `Highlight`, a class it is coloured as in place of its own, reaching `Reach` levels below it, or all of them when unset:
 
 ```m2
-specNet Ideal := I -> (lookup(specNet, Thing)) I ++ {Highlight => Keyword, Reach => 1}
+rod Ideal := I -> (lookup(rod, Thing)) I ++ {Highlight => Keyword, Reach => 1}
 ```
 
-A drawing that throws falls back to the value's plain text, so a broken `specNet` can't break the session.
+A drawing that throws falls back to the value's plain text, so a broken `rod` can't break the session.
 
 ## Your code runs once
 
 Each cell is sent to Macaulay2 exactly once and is never replayed behind your back. Deciding whether input is complete, splitting it into cells, highlighting and diagnostics are all done locally, by parsing the text, before anything is sent. An hour-long computation is never started twice.
 
-Each result arrives once, complete: drawn by `specNet` with its type from `specType`, and also formatted by M2's own `net`, `toString`, `tex`, `toExternalString` and `peek`, and by Spectral's `speek`. By default `specNet` traverses the class's `expression` representation; a value held without further structure keeps its class and textual spelling. Switching renderers uses the data already received. A result that is `null`, or silenced by a trailing `;`, is not formatted at all; a silenced one is still bound to its `oN`.
+Each result arrives once, complete: drawn by `rod` with its type from `specType`, and also formatted by M2's own `net`, `toString`, `tex`, `toExternalString` and `peek`, and by Spectral's `speek`. By default `rod` traverses the class's `expression` representation; a value held without further structure keeps its class and textual spelling. Switching renderers uses the data already received. A result that is `null`, or silenced by a trailing `;`, is not formatted at all; a silenced one is still bound to its `oN`.
 
 ## Other processes
 
@@ -65,10 +65,10 @@ new Report from {"status" => "converged", "steps" => toList(1..40)}
 
 `MapExpression{target, source, label}` places a label above a leftward arrow. Nest maps in the target position to compose a chain without repeating its modules. `UnderExpression{base, label}` centers a label beneath its base while keeping the base on the surrounding baseline; complexes use it for homological degrees.
 
-Use `speek` to inspect how a value is laid out. Like `peek`, it spells one level of the drawing, each part by its shape and each piece of text by its class; `speek'(depth, value)` spells `depth` levels, and parts past them as `{...}`. `specNet` and `specType` are separate methods, both receiving the original value. You can change a type annotation independently:
+Use `speek` to inspect how a value is laid out. Like `peek`, it spells one level of the drawing, each part by its shape and each piece of text by its class; `speek'(depth, value)` spells `depth` levels, and parts past them as `{...}`. `rod` and `specType` are separate methods, both receiving the original value. You can change a type annotation independently:
 
 ```m2
-specType' (ZZ, Pair) := (depth, p) -> specNet symbol Pair;
+specType' (ZZ, Pair) := (depth, p) -> rod symbol Pair;
 ```
 
 Type annotations take their depth from the nearest `typeDepth` parameter in the value's type ancestry. `Thing.typeDepth = 1` keeps ordinary values and containers compact; `Module.typeDepth = 2` shows the base ring as `Module[R]`. A subclass inherits its parent's setting unless it has its own.
@@ -104,7 +104,7 @@ A complex unfolds one name at a time. At depth one it is only its chain, `0 ⟵ 
 
 ```m2
 Complex.valueDepth = 3;    -- also spell out the ring of every module
-specNet'(3, OO_(Proj(QQ[a,b]))^2)
+rod'(3, OO_(Proj(QQ[a,b]))^2)
 ```
 
-An explicit `specNet'(depth, value)` overrides the configured depth.
+An explicit `rod'(depth, value)` overrides the configured depth.

@@ -24,7 +24,7 @@ maths
 : `unicode`, `ascii` or `typeset`. Default: `unicode`. See [Read results](../shell/results.md#renderers).
 
 output mode position
-: Place the output mode controls in the border: `upper left`, `upper center`, `upper right`, `lower left`, `lower center` or `lower right`; `off` hides them. Default: `upper right`. The icons select the output representation (`specNet`, `net`, `string`, `tex`, `markup` or `external`). The maths setting controls display within that preview.
+: Place the output mode controls in the border: `upper left`, `upper center`, `upper right`, `lower left`, `lower center` or `lower right`; `off` hides them. Default: `upper right`. The icons select the output representation (`rod`, `net`, `string`, `tex`, `markup` or `external`). The maths setting controls display within that preview.
 
 maths size
 : Preferred typeset size relative to terminal text, from 50% to 200% in 10% steps. Default: 100%. Long formulas wrap at available break points before shrinking to fit the pane.
@@ -38,8 +38,8 @@ index colours, exponent colours
 italics
 : Draw emphasised and commented text in italics. Typeset pictures keep TeX's math italic either way. Default: on.
 
-basic glyphs
-: Draw the prompt, dividers, separators and spinner with plain symbols such as `>` and `|`, for a font without Nerd Font icons. Always on, and greyed out, when `TERM=dumb`. Default: off.
+ascii
+: Draw the prompt, dividers, separators and spinner with plain symbols such as `>` and `|`, for a font without Nerd Font icons. Colours stay as they are. When the screen is too garbled to reach the picker, set `"ascii": true` under `rendering` in [`settings.json`](files.md) by hand. Default: off.
 
 fractions
 : `stacked`, `underlined` or `inline`. Default: `stacked`. Greyed out while maths is typeset.

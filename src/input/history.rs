@@ -4,7 +4,6 @@
 //! Every session appends to one history file and takes in what the others appended,
 //! so input submitted in any session can be recalled in all of them.
 
-#[cfg(not(test))]
 use crate::ui::settings::session::SessionSettings;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -74,11 +73,6 @@ impl History {
 
     pub fn new() -> Self {
         Self::from_path(history_file_path())
-    }
-
-    #[cfg(test)]
-    pub fn in_memory() -> Self {
-        Self::from_path(None)
     }
 
     fn from_path(path: Option<PathBuf>) -> Self {
@@ -271,13 +265,6 @@ fn append(path: &Path, entry: &str) -> io::Result<()> {
     writeln!(file, "{}", serde_json::to_string(entry)?)
 }
 
-/// Tests keep no history file, so what they submit never reaches a developer's.
-#[cfg(test)]
-fn history_file_path() -> Option<PathBuf> {
-    None
-}
-
-#[cfg(not(test))]
 fn history_file_path() -> Option<PathBuf> {
     Some(SessionSettings::directory()?.join("history.jsonl"))
 }

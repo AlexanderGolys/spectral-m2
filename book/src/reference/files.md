@@ -12,8 +12,8 @@ Spectral keeps configuration in one directory and session state in another, foll
 `backend.m2`
 : The Macaulay2 side of the shell, written out from the program so M2's `code` can show you Spectral's hooks. Replaced whenever a new version brings a different one; don't edit it.
 
-`spectral-package.m2`
-: Loads the [`Spectral`](https://github.com/AlexanderGolys/Spectral) package the shell draws with. When Macaulay2 has no `Spectral` installed, the first start fetches it with `git` and installs it, documentation and source files included, so `help`, `viewHelp`, `code` and `m2-ls` see it like any package; later starts only load it. Replaced like `backend.m2`; don't edit it.
+`package/`
+: The [`Spectral`](https://github.com/AlexanderGolys/Spectral) package the shell draws with, as this sp2 carries it, and `load.m2`, which loads it. Spectral is an ordinary package of your Macaulay2: each start loads the one installed there, so `help`, `viewHelp`, `code`, `m2-ls` and your own code (`needsPackage "Spectral"`) see it like any package. Only when none is installed, or one too old for this sp2 to read, is the carried one installed first. When the carried one is newer than yours, the welcome message marks your version with `*` and a message says how to install it. Replaced like `backend.m2`; don't edit it.
 
 `settings.json`
 : Editable settings and rebound keys, created on first launch. Each tab of the settings keeps its own section, named after it: `rendering`, `lsp`, `editor` (with the selection under `editor.selection`) `statusline` and `session`; files saved by older versions are read into this shape. Restart the shell after editing.

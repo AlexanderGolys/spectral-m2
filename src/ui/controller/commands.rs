@@ -82,11 +82,6 @@ impl Command {
                 .any(|word| word.starts_with(query))
     }
 
-    #[cfg(test)]
-    pub const fn label(self) -> &'static str {
-        self.label
-    }
-
     /// The part of the picker's line for this command that `query` has typed, the
     /// prefix included when it starts the label and only the word otherwise.
     fn typed_range(self, query: &str) -> Range<usize> {

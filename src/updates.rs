@@ -1,6 +1,7 @@
-//! Whether a newer sp2 or m2-ls than the one running exists: installed since it
-//! started, or published on crates.io. Purely a courtesy: whatever cannot be
-//! asked (no network, no cargo) is skipped without a word.
+//! Whether a newer sp2, m2-ls or Spectral package than the one running exists:
+//! installed since it started, published on crates.io, or for the package,
+//! carried by this sp2. Purely a courtesy: whatever cannot be asked (no network,
+//! no cargo) is skipped without a word, and nothing is ever updated for the user.
 
 use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
@@ -12,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use semver::Version;
 
+use crate::backend::{m2_string_literal, M2Backend};
 use crate::code::semantic::SERVER_EXECUTABLE;
 use crate::ui::config::UI;
 
@@ -28,20 +30,36 @@ static NEWEST: Mutex<BTreeMap<&str, Version>> = Mutex::new(BTreeMap::new());
 /// A program whose updates are announced.
 #[derive(Clone, Copy, Debug)]
 pub struct Program {
-    /// What it is run as, and so found on `PATH` as.
-    executable: &'static str,
+    /// What it is called; for an executable, what it is run as, and so found on
+    /// `PATH` as.
+    name: &'static str,
     /// What it is published on crates.io as.
     published_as: &'static str,
+    /// Where newer versions of it are looked for.
+    sources: &'static [Source],
 }
 
+/// Where newer versions of a program published on crates.io are found.
+const PUBLISHED_EXECUTABLE: &[Source] = &[Source::Published, Source::Installed];
+
 pub const SHELL: Program = Program {
-    executable: env!("CARGO_BIN_NAME"),
+    name: env!("CARGO_BIN_NAME"),
     published_as: env!("CARGO_PKG_NAME"),
+    sources: PUBLISHED_EXECUTABLE,
 };
 
 pub const LANGUAGE_SERVER: Program = Program {
-    executable: SERVER_EXECUTABLE,
+    name: SERVER_EXECUTABLE,
     published_as: SERVER_EXECUTABLE,
+    sources: PUBLISHED_EXECUTABLE,
+};
+
+/// The package results are drawn with: the user's own, which a newer sp2 only
+/// tells them it carries a newer version of.
+pub const SPECTRAL: Program = Program {
+    name: "Spectral",
+    published_as: "Spectral",
+    sources: &[Source::Carried],
 };
 
 /// Where a newer version was found, which decides how to get it.
@@ -49,25 +67,30 @@ pub const LANGUAGE_SERVER: Program = Program {
 enum Source {
     Published,
     Installed,
+    /// The `Spectral` this sp2 was built with.
+    Carried,
 }
 
 impl Source {
     /// Every source, ordered so installed wins a tie, being one relaunch away.
-    const EACH: [Self; 2] = [Self::Published, Self::Installed];
+    const EACH: [Self; 3] = [Self::Published, Self::Installed, Self::Carried];
 
     fn find(self, program: Program) -> Option<Version> {
         match self {
             Self::Published => program.published(),
             Self::Installed => program.installed(),
+            Self::Carried => Version::parse(env!("SPECTRAL_VERSION")).ok(),
         }
     }
 
     /// How long one look holds: asking the installed binary is a local
-    /// `--version`, asking crates.io a network search.
+    /// `--version`, asking crates.io a network search, and what sp2 carries
+    /// cannot change while it runs.
     fn interval(self) -> Duration {
         match self {
             Self::Published => UI.published_check_interval,
             Self::Installed => UI.installed_check_interval,
+            Self::Carried => Duration::MAX,
         }
     }
 }
@@ -94,17 +117,17 @@ impl Program {
     }
 
     fn newest(self) -> Option<Version> {
-        Self::known().get(self.executable).cloned()
+        Self::known().get(self.name).cloned()
     }
 
     /// Record `found` as the newest version; whether it is news.
     fn learn(self, found: &Version) -> bool {
         let mut known = Self::known();
         let news = known
-            .get(self.executable)
+            .get(self.name)
             .is_none_or(|newest| found > newest);
         if news {
-            known.insert(self.executable, found.clone());
+            known.insert(self.name, found.clone());
         }
         news
     }
@@ -117,7 +140,7 @@ impl Program {
 
     /// The version `PATH`'s binary reports as the last word of `--version`.
     fn installed(self) -> Option<Version> {
-        let output = Command::new(self.executable)
+        let output = Command::new(self.name)
             .arg("--version")
             .output()
             .ok()?;
@@ -148,10 +171,12 @@ impl Program {
         Version::parse(&quoted[..quoted.find('"')?]).ok()
     }
 
-    /// The newest version `sources` offer instead of `running`, if any is newer.
+    /// The newest version those of `sources` it is looked for in offer instead
+    /// of `running`, if any is newer.
     fn update(self, running: Version, sources: &[Source]) -> Option<Update> {
         let (newer, source) = sources
             .iter()
+            .filter(|source| self.sources.contains(source))
             .filter_map(|&source| Some((source.find(self)?, source)))
             .max()?;
         (newer > running).then_some(Update {
@@ -171,21 +196,18 @@ impl Display for Update {
             newer,
             source,
         } = self;
-        write!(
-            f,
-            "{} {newer} is out (running {running}): ",
-            program.executable
-        )?;
+        write!(f, "{} {newer} is out (running {running}): ", program.name)?;
         match source {
             Source::Installed => write!(f, "quit and start sp2 again to use it"),
             Source::Published => write!(f, "cargo install {}", program.published_as),
+            Source::Carried => write!(
+                f,
+                "installPackage({}, FileName => {}), then restart",
+                m2_string_literal(program.name),
+                m2_string_literal(M2Backend::carried_package().unwrap_or_default().display())
+            ),
         }
     }
-}
-
-/// The version of sp2 itself, as every view shows it.
-pub fn shell_version() -> String {
-    SHELL.version(env!("CARGO_PKG_VERSION"))
 }
 
 /// Updates found by checks running in the background, collected as they finish;
@@ -241,11 +263,12 @@ impl UpdateChecks {
             return;
         };
         let report = self.report.clone();
+        // A report nobody is left to receive is moot: the shell is closing.
         thread::spawn(move || {
-            program
+            let news = program
                 .update(running, &sources)
-                .filter(|update| program.learn(&update.newer))
-                .map(|update| report.send(update))
+                .filter(|update| program.learn(&update.newer));
+            news.map(|update| report.send(update).ok());
         });
     }
 

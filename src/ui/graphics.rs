@@ -35,7 +35,6 @@ use kitty::{ImageId, KittyImage, Passthrough, Piece};
 use ratex::{Break, Rgb, EM, PADDING};
 
 // @##magic
-const TMUX: &str = "tmux";
 /// Lets this pane's escape sequences through tmux to the terminal.
 const TMUX_ALLOW_PASSTHROUGH: [&str; 4] = ["set", "-p", "allow-passthrough", "on"];
 /// tmux's names for the terminal its client runs in, one a line: as the terminal
@@ -100,7 +99,7 @@ fn tmux_canvas() -> Option<Canvas> {
     if window.columns == 0 || window.rows == 0 || window.width == 0 || window.height == 0 {
         return None;
     }
-    let _ = Command::new(TMUX)
+    let _ = Command::new("tmux")
         .args(TMUX_ALLOW_PASSTHROUGH)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -126,7 +125,7 @@ pub fn terminal() -> Option<&'static str> {
 }
 
 fn tmux_client_names() -> Vec<String> {
-    Command::new(TMUX)
+    Command::new("tmux")
         .args(["display-message", "-p", TMUX_CLIENT_TERMINAL])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -682,20 +681,6 @@ struct Raster {
 }
 
 impl Raster {
-    /// The picture at the terminal's text size, broken into rows of at most
-    /// `width` columns where it may break, and shrunk to `width` when a row it
-    /// cannot break is wider; none when shrinking would make it too small to read.
-    #[cfg(test)]
-    fn fitted(formula: &Formula, canvas: Canvas, width: u16, placement: Placement) -> Option<Self> {
-        Self::fitted_at_scale(
-            formula,
-            canvas,
-            width,
-            placement,
-            UI.math_size_percent,
-            Slicing::AtBreaks,
-        )
-    }
 
     fn fitted_at_scale(
         formula: &Formula,

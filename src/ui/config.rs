@@ -8,18 +8,17 @@ use crate::spinner_frames;
 use crate::ui::glyphs::Glyphs;
 use crate::ui::render::spin::Spinner;
 
-/// The pending-cell spinner, with its fallback for terminals without rich glyphs.
+/// The pending-cell spinner, with its *ascii*-mode frames.
 #[derive(Clone, Copy, Debug)]
 pub struct SpinnerConfig {
     pub rich: Spinner,
-    pub basic: Spinner,
+    pub ascii: Spinner,
 }
 
 impl SpinnerConfig {
-    /// The spinner chosen for the terminal.
     pub fn active(self) -> Spinner {
-        if Glyphs::basic() {
-            self.basic
+        if Glyphs::ascii() {
+            self.ascii
         } else {
             self.rich
         }
@@ -148,7 +147,7 @@ pub const UI: UiConfig = UiConfig {
             // spinner_frames![PendingCellMarker: "", "", "", "", "", ""],
             Duration::from_millis(80),
         ),
-        basic: Spinner::new(
+        ascii: Spinner::new(
             spinner_frames![PendingCellMarker: "<", "^", ">", "v"],
             Duration::from_millis(80),
         ),

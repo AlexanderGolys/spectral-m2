@@ -46,7 +46,7 @@ The *maths* setting picks how values are drawn:
 
 Each output block has one formatter selector on its outer border. It applies to every value in the block, without separators between values, and offers the representations available throughout the block:
 
-`specNet`
+`rod`
 : Spectral's drawing of the value: a layout of rows, scripts, fractions, fences, grids and diagrams, as TeX lays out a formula, each piece of text coloured by its class.
 
 `net`
@@ -72,7 +72,7 @@ Each output block has one formatter selector on its outer border. It applies to 
 
 The active icon is highlighted and its mode name appears beside the controls. Click another icon to select that preview, or click the active icon or mode name to cycle. This changes every value inside that border. The original input is evaluated once; switching previews uses its retained formatter results. A formatter that fails is omitted without hiding the other previews.
 
-The *maths* setting controls how mathematical content is displayed within a preview. Changing between typeset, Unicode and ASCII leaves the selected preview and its icons unchanged, including when pictures are unavailable. Results start in `specNet`; documentation pages start in `markup`. A result drawn as plain text of no particular class starts in `net`, with no `specNet` option. Archived examples use `net` until a computed structured result is available. Choose `net` to compare a preview with M2's own terminal spelling.
+The *maths* setting controls how mathematical content is displayed within a preview. Changing between typeset, Unicode and ASCII leaves the selected preview and its icons unchanged, including when pictures are unavailable. Results start in `rod`; documentation pages start in `markup`. A result drawn as plain text of no particular class starts in `net`, with no `rod` option. Archived examples use `net` until a computed structured result is available. Choose `net` to compare a preview with M2's own terminal spelling.
 
 Place the controls with *output mode position* in the rendering settings: upper or lower, aligned left, center or right; `off` hides them. Icon positions stay fixed when the mode label changes. The same controls work inside documentation examples.
 

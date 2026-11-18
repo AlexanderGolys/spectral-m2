@@ -127,9 +127,11 @@ impl Node {
                 denominator,
             } => vec![numerator, denominator],
             Shape::Fence { body, .. } => vec![body],
-            Shape::Grid { rows, degrees, .. } => {
-                rows.iter().flatten().chain(degrees.iter().flatten()).collect()
-            }
+            Shape::Grid { rows, degrees, .. } => rows
+                .iter()
+                .flatten()
+                .chain(degrees.iter().flatten())
+                .collect(),
             Shape::Over { base, label } | Shape::Under { base, label } => vec![base, label],
             Shape::Diagram {
                 pieces,
@@ -158,7 +160,7 @@ impl Node {
 /// into, each as its ancestry nearest first, and what is sent for the value whole.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "PascalCase")]
-pub struct SpecNet {
+pub struct Rod {
     #[serde(flatten)]
     pub drawing: Node,
     #[serde(default)]
@@ -177,7 +179,7 @@ pub struct SpecNet {
     pub type_names: Vec<String>,
 }
 
-impl SpecNet {
+impl Rod {
     /// Plain text, a single atom of M2's `Net`.
     pub fn plain(text: String) -> Self {
         Self {
@@ -218,9 +220,7 @@ impl SpecNet {
                     "Boolean" => HLGroup::Boolean,
                     "String" => HLGroup::String,
                     "Number" => HLGroup::Number,
-                    "Symbol" | "RingElement" | "RawRingElement" | "Variety" => {
-                        HLGroup::Variable
-                    }
+                    "Symbol" | "RingElement" | "RawRingElement" | "Variety" => HLGroup::Variable,
                     "Function" | "ScriptedFunctor" => HLGroup::Function,
                     "Type" | "Ring" | "RingFamily" => HLGroup::Type,
                     "Package" => HLGroup::Package,

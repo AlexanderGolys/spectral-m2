@@ -5,7 +5,7 @@
 #![allow(clippy::non_ascii_literal)]
 use super::diagram::Arrow;
 use super::{Diagram, GridKind, Math, MathDisplay, MathStyle};
-use crate::backend::spec_net::{Node, Shape, SpecNet};
+use crate::backend::rod::{Node, Shape, Rod};
 use crate::ui::theme::groups::HLGroup;
 
 /// The sign between the factors of a product.
@@ -45,7 +45,7 @@ impl Reaching {
 
 /// How a drawing is read into maths.
 pub struct Reading<'a> {
-    value: &'a SpecNet,
+    value: &'a Rod,
     style: MathStyle,
     /// Whether an atom M2 did not mark typeset is spelled in a typewriter face, as
     /// a picture sets what only sits beside its maths.
@@ -53,7 +53,7 @@ pub struct Reading<'a> {
 }
 
 impl<'a> Reading<'a> {
-    pub fn new(value: &'a SpecNet, style: MathStyle) -> Self {
+    pub fn new(value: &'a Rod, style: MathStyle) -> Self {
         Self {
             value,
             style,
@@ -270,9 +270,7 @@ fn ascii(math: Math) -> Math {
         ),
         Math::Over { base, label } => infix(ascii(*base), "^", parenthesized(ascii(*label))),
         Math::Under { base, label } => infix(ascii(*base), "_", parenthesized(ascii(*label))),
-        Math::Power { base, exponent } => {
-            infix(ascii(*base), "^", parenthesized(ascii(*exponent)))
-        }
+        Math::Power { base, exponent } => infix(ascii(*base), "^", parenthesized(ascii(*exponent))),
         Math::Index { base, subscript } => {
             infix(ascii(*base), "_", parenthesized(ascii(*subscript)))
         }

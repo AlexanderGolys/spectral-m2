@@ -9,7 +9,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-use m2_syn::{lex_str_recovering, LexError, LexErrorKind, Spanned, TokenTree, TriviaKind};
+use m2_syn::{lex_str_recovering, CommentKind, LexError, LexErrorKind, Spanned, TokenTree};
 
 use self::usage::Usage;
 use super::commands::{self, Command, Operand};
@@ -169,9 +169,9 @@ fn typing(source: &str) -> Typing {
         }
     }
     let commented = chain.iter().any(|tree| {
-        tree.trailing_trivia().as_slice().iter().any(|trivia| {
-            trivia.kind() == TriviaKind::LineComment
-                && trivia.span().range().is_some_and(|range| range.end == end)
+        tree.span().comments_after().iter().any(|comment| {
+            comment.kind() == CommentKind::Line
+                && comment.span().range().is_some_and(|range| range.end == end)
         })
     });
     match chain.last() {

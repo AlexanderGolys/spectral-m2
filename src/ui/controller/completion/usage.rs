@@ -6,8 +6,7 @@ use std::io::{self, Seek, Write};
 use std::path::Path;
 
 use m2_syn::nodes::{
-    ExprAssignParallelGlobal, ExprAssignParallelLocal, ExprAssignSimpleGlobal,
-    ExprAssignSimpleLocal, ExprFor, ExprLambdaList, ExprLambdaVariadic, ExprOpBinMember, ExprQuote,
+    AssignOperator, Expr, ExprAssign, ExprField, ExprFor, ExprFunction, ExprQuote, QuoteKeyword,
     Symbol, TryFallback,
 };
 use m2_syn::visit::{self, Visit};
@@ -145,91 +144,59 @@ impl<'ast> Visit<'ast> for References {
         }
     }
 
-    fn visit_expr_assign_simple_local(&mut self, assignment: &'ast ExprAssignSimpleLocal) {
-        self.bind(&assignment.variable);
-        self.visit_expr(&assignment.value);
-    }
-
-    fn visit_expr_assign_simple_global(&mut self, assignment: &'ast ExprAssignSimpleGlobal) {
-        self.visit_expr(&assignment.value);
-    }
-
-    fn visit_expr_assign_parallel_local(&mut self, assignment: &'ast ExprAssignParallelLocal) {
-        let mut bindings = Bindings::default();
-        bindings.visit_assignment_list(&assignment.argument_list);
-        self.scopes
-            .last_mut()
-            .expect("a top-level scope")
-            .extend(bindings.0);
-        self.visit_expr(&assignment.value);
-    }
-
-    fn visit_expr_assign_parallel_global(&mut self, assignment: &'ast ExprAssignParallelGlobal) {
-        self.visit_expr(&assignment.value);
-    }
-
-    fn visit_expr_lambda_variadic(&mut self, lambda: &'ast ExprLambdaVariadic) {
-        self.scoped(vec![lambda.argument.text().to_string()], |this| {
-            this.visit_expr(&lambda.body)
-        });
-    }
-
-    fn visit_expr_lambda_list(&mut self, lambda: &'ast ExprLambdaList) {
-        let mut bindings = Bindings::default();
-        if let Some(arguments) = &lambda.arguments.contents {
-            bindings.visit_argument_list_content(arguments);
+    fn visit_expr_assign(&mut self, assignment: &'ast ExprAssign) {
+        match (&assignment.op, assignment.left.as_ref()) {
+            (AssignOperator::Local(_), Expr::Symbol(symbol)) => self.bind(symbol),
+            (AssignOperator::Local(_), Expr::Sequence(sequence)) => {
+                let mut bindings = Bindings::default();
+                bindings.visit_expr_sequence(sequence);
+                self.scopes
+                    .last_mut()
+                    .expect("a top-level scope")
+                    .extend(bindings.0);
+            }
+            (AssignOperator::Global(_), Expr::Symbol(_) | Expr::Sequence(_)) => {}
+            _ => self.visit_expr(&assignment.left),
         }
+        self.visit_expr(&assignment.right);
+    }
+
+    fn visit_expr_function(&mut self, lambda: &'ast ExprFunction) {
+        let mut bindings = Bindings::default();
+        bindings.visit_function_params(&lambda.params);
         self.scoped(bindings.0, |this| this.visit_expr(&lambda.body));
     }
 
     fn visit_expr_for(&mut self, expression: &'ast ExprFor) {
-        let (variable, condition, body) = match expression {
-            ExprFor::Bare(value) => (&value.variable, &value.condition, &value.body),
-            ExprFor::Range(value) => {
-                if let Some(bound) = &value.lower_bound {
-                    self.visit_range_bound_from(bound);
-                }
-                if let Some(bound) = &value.upper_bound {
-                    self.visit_range_bound_to(bound);
-                }
-                (&value.variable, &value.condition, &value.body)
+        if let Some(iter) = &expression.iter {
+            self.visit_for_iter(iter);
+        }
+        self.scoped(vec![expression.var.text().to_string()], |this| {
+            if let Some(condition) = &expression.when_clause {
+                this.visit_when_clause(condition);
             }
-            ExprFor::In(value) => {
-                self.visit_expr(&value.collection);
-                (&value.variable, &value.condition, &value.body)
-            }
-        };
-        self.scoped(vec![variable.text().to_string()], |this| {
-            if let Some(condition) = condition {
-                this.visit_when_condition(condition);
-            }
-            this.visit_loop_body(body);
+            this.visit_loop_body(&expression.body);
         });
     }
 
     fn visit_try_fallback(&mut self, fallback: &'ast TryFallback) {
         match fallback {
-            TryFallback::Except(value) => self
-                .scoped(vec![value.exception.text().to_string()], |this| {
-                    this.visit_expr(&value.value)
-                }),
+            TryFallback::Except(value) => self.scoped(vec![value.var.text().to_string()], |this| {
+                this.visit_expr(&value.expr)
+            }),
             _ => visit::visit_try_fallback(self, fallback),
         }
     }
 
     fn visit_expr_quote(&mut self, quote: &'ast ExprQuote) {
-        match quote {
-            ExprQuote::Local(value) => self.bind(&value.symbol),
-            ExprQuote::ThreadLocal(value) => self.bind(&value.symbol),
-            ExprQuote::Global(value) => self.names.push(value.symbol.text().to_string()),
+        match &quote.keyword {
+            QuoteKeyword::Local(_) | QuoteKeyword::ThreadLocal(_) => self.bind(&quote.symbol),
+            QuoteKeyword::Global(_) => self.names.push(quote.symbol.text().to_string()),
             _ => visit::visit_expr_quote(self, quote),
         }
     }
 
-    fn visit_expr_op_bin_member(&mut self, member: &'ast ExprOpBinMember) {
-        match member {
-            ExprOpBinMember::Dot(value) => self.visit_expr(&value.receiver),
-            ExprOpBinMember::Optional(value) => self.visit_expr(&value.receiver),
-        }
+    fn visit_expr_field(&mut self, member: &'ast ExprField) {
+        self.visit_expr(&member.base);
     }
 }

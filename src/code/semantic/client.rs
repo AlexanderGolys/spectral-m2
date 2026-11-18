@@ -128,19 +128,6 @@ impl Client {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn test_channel() -> (Self, Sender<Event>) {
-        let (sender, events) = mpsc::channel();
-        (
-            Self {
-                mailbox: Arc::new(Mutex::new(Mailbox::default())),
-                events,
-                worker: None,
-            },
-            sender,
-        )
-    }
-
     pub(super) fn update(&self, document: Arc<Document>) {
         self.mailbox.lock().unwrap().latest = Some((document, Instant::now()));
     }

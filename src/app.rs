@@ -30,14 +30,15 @@ use self::documentation::DocumentationBrowser;
 use self::panes::{pane_layout, ratio_for_width, Pane, Panes, MIN_PANE_WIDTH};
 use self::previews::{Opened, OpenedKind, PreviewTab, PreviewTabs};
 use self::session::Session;
-use crate::backend::M2Backend;
-use crate::backend::SpecNet;
+use crate::backend::{Announcement, M2Backend, Versions};
+use crate::backend::Rod;
 use crate::code::file as code_file;
 use crate::code::location::SourceLink;
 use crate::code::location::{SourcePoint, SourceRange};
 use crate::code::semantic::query::{Answer, Place, QueryId, Question};
 use crate::code::semantic::SemanticHighlighter;
 use crate::code::semantic::SourceId;
+use crate::env::ENV;
 use crate::errors::Result;
 use crate::ui::action::Action;
 use crate::ui::block::Block;
@@ -58,7 +59,7 @@ use crate::ui::render::markdown;
 use crate::ui::render::markup;
 use crate::ui::terminal::ReplTerminal;
 use crate::ui::theme::groups::{scheme, HLGroup};
-use crate::updates::{shell_version, UpdateChecks, LANGUAGE_SERVER, SHELL};
+use crate::updates::{UpdateChecks, LANGUAGE_SERVER, SHELL, SPECTRAL};
 
 /// How often the loop looks for results other threads posted (M2, m2-ls, update
 /// checks) while nothing on screen moves; input wakes it at once regardless.
@@ -89,19 +90,18 @@ struct Workspace {
     highlighter: SemanticHighlighter,
     // @##wtf is this type?
     analysis_state: Option<(u64, u64, Option<String>)>,
-    /// The Macaulay2 version the welcome message names.
-    // @##redundant
-    m2_version: String,
 }
 
 impl Workspace {
     fn new(mut backend: M2Backend) -> Self {
-        let names = backend.take_names();
-        let startup_output = backend.take_startup_output();
+        let Announcement {
+            versions,
+            names,
+            startup_output,
+        } = backend.take_announcement();
         let session = Session::new(backend);
-        let version = session.version().to_string();
-        let mut editor = Editor::new(welcome_message(&version, None));
-        editor.set_m2_version(version.clone());
+        let mut editor = Editor::new(welcome_message(&versions, None));
+        editor.set_m2_version(versions.m2);
         editor.apply(EditorUpdate::KnownNames(names));
         if !startup_output.is_empty() {
             editor.apply(EditorUpdate::Message(Box::new(TextBlock::printed(
@@ -113,7 +113,6 @@ impl Workspace {
             editor,
             highlighter: SemanticHighlighter::new(),
             analysis_state: None,
-            m2_version: version,
         }
     }
 }
@@ -817,7 +816,7 @@ impl App {
                 );
                 self.workspace.editor.open_reference(
                     vec![Box::new(
-                        OutputBlock::rendered(SpecNet::document(html, text, width), None)
+                        OutputBlock::rendered(Rod::document(html, text, width), None)
                             .without_frame(),
                     )],
                     None,
@@ -1267,13 +1266,14 @@ impl App {
         }
     }
 
-    /// Look for newer versions of sp2 and of the language server it runs, wherever
-    /// a look is due.
+    /// Look for newer versions of sp2, of the language server it runs and of the
+    /// Spectral package its session loaded, wherever a look is due.
     fn check_for_updates(&mut self) {
         let server = self.workspace.editor.language_server_version();
         self.updates.poll(&[
             (SHELL, Some(env!("CARGO_PKG_VERSION"))),
             (LANGUAGE_SERVER, server),
+            (SPECTRAL, Some(&self.workspace.session.versions().spectral)),
         ]);
     }
 
@@ -1423,7 +1423,7 @@ impl App {
             running &= workspace
                 .editor
                 .apply(EditorUpdate::Welcome(welcome_message(
-                    &workspace.m2_version,
+                    workspace.session.versions(),
                     Some(&server),
                 )));
             dirty = true;
@@ -1453,9 +1453,15 @@ fn read_code(path: &Path) -> std::result::Result<String, EditorUpdate> {
     })
 }
 
-/// The versions of the shell, its Macaulay2, and the language server once it runs.
-fn welcome_message(m2_version: &str, server: Option<&ServerInfo>) -> String {
-    let mut message = format!("spectral-m2 v{}\nMacaulay2 v{m2_version}", shell_version());
+/// The versions of the shell, its Macaulay2 and Spectral package, and the
+/// language server once it runs.
+fn welcome_message(versions: &Versions, server: Option<&ServerInfo>) -> String {
+    let mut message = format!(
+        "spectral-m2 v{}\nMacaulay2 v{}\nSpectral v{}",
+        ENV.shell_version(),
+        versions.m2,
+        SPECTRAL.version(&versions.spectral)
+    );
     if let Some(server) = server {
         message.push('\n');
         message.push_str(&server.name);

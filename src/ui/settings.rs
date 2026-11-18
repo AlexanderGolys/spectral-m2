@@ -119,7 +119,8 @@ impl StoredSettings {
     /// `layout`, and before that every value lay in flat `editor` and `input`
     /// records with no `rendering` section; the selection was a section of its
     /// own; the language server's values were among the rendering and editor
-    /// ones. A section reads only its own fields, so a larger record is harmless.
+    /// ones; *ascii* was `basic_glyphs`, kept only while `ascii` is unwritten.
+    /// A section reads only its own fields, so a larger record is harmless.
     fn upgraded(mut self) -> Self {
         if !self.0.contains_key("rendering") {
             let flat: Map<String, Value> = ["editor", "input"]
@@ -151,6 +152,10 @@ impl StoredSettings {
                 .chain(self.section("editor").clone())
                 .collect();
             self.0.insert("lsp".to_string(), Value::Object(lsp));
+        }
+        let rendering = self.section("rendering");
+        if let Some(ascii) = rendering.remove("basic_glyphs") {
+            rendering.entry("ascii").or_insert(ascii);
         }
         self
     }

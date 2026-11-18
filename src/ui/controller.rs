@@ -65,7 +65,6 @@ use crate::ui::text_object::{TextDirection, TextMotion};
 use crate::ui::theme::groups::{publish, scheme, HLGroup, GROUP_DECLARATIONS};
 use crate::ui::theme::palette::blend;
 use crate::ui::theme::AppearanceSettings;
-use crate::updates::shell_version;
 
 /// How far the background under a hovered link moves toward the text colour.
 const LINK_HOVER_TINT: f32 = 0.15;
@@ -362,7 +361,7 @@ impl Editor {
         settings.session.apply();
         let mut input = InputCode::new();
         input.set_settings(settings);
-        Glyphs::choose_basic(settings.rendering.basic_glyphs);
+        Glyphs::choose_ascii(settings.rendering.ascii);
         let mut editor = Self {
             feed: Feed::new(Box::new(TextBlock::system(welcome))),
             reference: Feed::new(Box::new(TextBlock::system(String::new()))),
@@ -897,11 +896,10 @@ impl Editor {
                     -1
                 };
                 if self.input.contains(event) {
-                    let field = self.input.field_mut();
-                    match delta > 0 {
-                        true => field.move_vertically(TextDirection::Backward),
-                        false => field.move_vertically(TextDirection::Forward),
-                    }
+                    self.input.move_vertically(match delta > 0 {
+                        true => TextDirection::Backward,
+                        false => TextDirection::Forward,
+                    });
                 } else {
                     self.feed.scroll(delta * self.wheel_rows());
                 }
@@ -1687,7 +1685,7 @@ impl Editor {
         self.settings = settings;
         settings.session.apply();
         self.input.set_settings(settings);
-        Glyphs::choose_basic(settings.rendering.basic_glyphs);
+        Glyphs::choose_ascii(settings.rendering.ascii);
         self.save_settings();
         self.refresh_settings_picker();
     }
@@ -1849,7 +1847,7 @@ impl Editor {
             Line::from(Span::styled(
                 format!(
                     "sp2 {}  {}  {}",
-                    shell_version(),
+                    ENV.shell_version(),
                     self.frame_stats.label(),
                     crate::ui::graphics::usage()
                 ),

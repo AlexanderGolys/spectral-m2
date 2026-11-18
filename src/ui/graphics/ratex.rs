@@ -84,12 +84,6 @@ impl From<Rgb> for Color {
     }
 }
 
-/// `tex`, in display style and painted `colour`, as an SVG of [`EM`] units per em.
-#[cfg(test)]
-pub fn svg(tex: &str, Rgb([r, g, b]): Rgb) -> Result<String, Unset> {
-    svg_colored(tex, tex, Rgb([r, g, b]), PERCENT_PER_ARRAYSTRETCH).map(|typeset| typeset.svg)
-}
-
 /// A formula set as a picture, with the places its rows may break. A diagram's
 /// description, as [`diagram::Description`] writes it, is set as that diagram.
 pub fn svg_colored(

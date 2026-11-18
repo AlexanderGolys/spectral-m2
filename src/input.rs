@@ -11,7 +11,6 @@ mod history;
 mod undo;
 
 use crate::ui::glyphs::Glyphs;
-use std::iter;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -35,11 +34,9 @@ use crate::ui::config::UI;
 use crate::ui::graphics::kitty::PLACEHOLDER;
 use crate::ui::key::KeyEvent;
 use crate::ui::render::{Highlights, Prompt, RenderContext};
-#[cfg(test)]
-use crate::ui::settings::keymap::Keymaps;
 use crate::ui::settings::Settings;
 use crate::ui::text_object::{bracket_pair_at, Bracket, CharClass, TextDirection, TextMotion};
-use crate::ui::wrap::{offset_at_column, CaretWrap, TextLayout};
+use crate::ui::wrap::{offset_at_column, CaretWrap, TextLayout, VisualLine};
 
 /// A text-editing operation owned and interpreted by the input field.
 #[discriminated_str(description)]
@@ -497,45 +494,6 @@ impl InputTextField {
         });
     }
 
-    /// Where the cursor lands a line up or down, at the column it stands in;
-    /// none at the first or last line.
-    fn line_step(&self, direction: TextDirection) -> Option<usize> {
-        let starts = self.line_starts();
-        let current = self.current_line(&starts);
-        let target = match direction {
-            TextDirection::Backward => current.checked_sub(1)?,
-            TextDirection::Forward => Some(current + 1).filter(|&line| line < starts.len())?,
-        };
-        let column = self.text[starts[current]..self.cursor].width();
-        Some(self.cursor_at_column(&starts, target, column))
-    }
-
-    pub fn move_vertically(&mut self, direction: TextDirection) {
-        self.clear_selection();
-        if let Some(target) = self.line_step(direction) {
-            self.cursor = target;
-        }
-    }
-
-    pub fn select_vertically(&mut self, direction: TextDirection) {
-        self.extend_selection(|field| {
-            if let Some(target) = field.line_step(direction) {
-                field.cursor = target;
-            }
-        });
-    }
-
-    #[cfg(test)]
-    fn cursor_line_col(&self) -> (usize, usize) {
-        // `str::lines()` drops a trailing newline, so a cursor sitting just past one
-        // would report the previous row. Count newlines directly, and take the column
-        // from the text after the last one (the whole prefix when there is none).
-        let before = &self.text[..self.cursor];
-        let line = before.matches('\n').count();
-        let col = before.rsplit('\n').next().map_or(0, |l| l.chars().count());
-        (line, col)
-    }
-
     /// The current line with its line break, or the one before it on the last line.
     fn whole_line(&self) -> Range<usize> {
         let start = self.text[..self.cursor].rfind('\n').map_or(0, |i| i + 1);
@@ -620,44 +578,6 @@ impl InputTextField {
         self.growth.clear();
     }
 
-    fn line_starts(&self) -> Vec<usize> {
-        iter::once(0)
-            .chain(
-                self.text
-                    .char_indices()
-                    .filter(|&(_, ch)| ch == '\n')
-                    .map(|(i, _)| i + 1),
-            )
-            .collect()
-    }
-
-    fn current_line(&self, starts: &[usize]) -> usize {
-        starts
-            .iter()
-            .rposition(|&start| start <= self.cursor)
-            .unwrap_or(0)
-    }
-
-    fn cursor_at_column(&self, starts: &[usize], line: usize, column: usize) -> usize {
-        let start = starts[line];
-        let end = starts
-            .get(line + 1)
-            .map_or(self.text.len(), |next| next - 1);
-        start + offset_at_column(&self.text[start..end], column)
-    }
-
-    #[cfg(test)]
-    fn new_in_memory() -> Self {
-        Self {
-            text: String::new(),
-            cursor: 0,
-            revision: 0,
-            anchor: None,
-            history: History::in_memory(),
-            edits: Undo::default(),
-            growth: Vec::new(),
-        }
-    }
 }
 
 /// The live source field and its transient presentation state.
@@ -767,12 +687,6 @@ impl InputCode {
             .filter(|_| !self.needs_completion() && self.field.selection().is_none())
     }
 
-    /// Return the component's adjustable layout policy.
-    #[cfg(test)]
-    pub const fn settings(&self) -> Settings {
-        self.settings
-    }
-
     /// Replace the component's adjustable layout policy.
     pub fn set_settings(&mut self, settings: Settings) {
         self.forget_completion();
@@ -877,8 +791,6 @@ impl InputCode {
             return field.traverse(traversal);
         }
         let browse = field.history.browsing(&field.text) || !field.text.contains('\n');
-        let on_first_line = !field.text[..field.cursor].contains('\n');
-        let on_last_line = !field.text[field.cursor..].contains('\n');
         match action {
             InsertNewline => field.insert_char('\n'),
             InsertTab => field.insert_char('\t'),
@@ -890,12 +802,10 @@ impl InputCode {
             Redo => field.redo(),
             HistoryPrevious => field.recall_previous(Recall::Any),
             HistoryNext => field.recall_next(Recall::Any),
-            MoveUp if browse && on_first_line => field.recall_previous(Recall::Prefixed),
-            MoveUp => field.move_vertically(TextDirection::Backward),
-            MoveDown if browse && on_last_line => field.recall_next(Recall::Prefixed),
-            MoveDown => field.move_vertically(TextDirection::Forward),
-            SelectUp => field.select_vertically(TextDirection::Backward),
-            SelectDown => field.select_vertically(TextDirection::Forward),
+            MoveUp => self.move_vertically_or_recall(TextDirection::Backward, browse),
+            MoveDown => self.move_vertically_or_recall(TextDirection::Forward, browse),
+            SelectUp => self.select_vertically(TextDirection::Backward),
+            SelectDown => self.select_vertically(TextDirection::Forward),
             MoveMatchingBracket => field.move_to_matching_bracket(),
             SelectAll => field.select_all(),
             GrowSelection => field.grow_selection(),
@@ -962,13 +872,6 @@ impl InputCode {
         let typed = self.interpret_key(key, edit);
         self.note_keystroke_since(revision);
         typed
-    }
-
-    /// Interpret a key through the default keymaps.
-    #[cfg(test)]
-    pub fn handle_key(&mut self, key: KeyEvent) -> Option<char> {
-        let edit = Keymaps::default().edit(key);
-        self.handle_edit_key(key, edit)
     }
 
     fn interpret_key(&mut self, key: KeyEvent, edit: Option<InputAction>) -> Option<char> {
@@ -1074,32 +977,6 @@ impl InputCode {
         self.cursor_at_visual(area.width, source_row, column)
     }
 
-    #[cfg(test)]
-    pub fn new_in_memory() -> Self {
-        Self {
-            field: InputTextField::new_in_memory(),
-            hint: Hint::default(),
-            completion: None,
-            completed_for: None,
-            settings: Settings::default(),
-            diagnostic: None,
-            diagnostic_range: None,
-            findings: Vec::new(),
-            occurrences: (0, Vec::new()),
-            command_range: None,
-            selecting: false,
-            highlighted_revision: u64::MAX,
-            semantic_revision: u64::MAX,
-            highlighted_pending: None,
-            highlights: Vec::new(),
-            area: Rect::ZERO,
-            text_area: Rect::ZERO,
-            scroll: 0,
-            pinned_first_row: false,
-            typed_at: None,
-        }
-    }
-
     /// Return the source currently being edited.
     pub fn text(&self) -> &str {
         self.field.text()
@@ -1139,7 +1016,7 @@ impl InputCode {
             .offered()
             .filter(|completion| completion.hinted(self.settings.editor.hint_completion_below))
             .map(|completion| {
-                let (row, _) = self.visual_cursor(width);
+                let (row, _) = self.cursor_among(&visual_lines);
                 let offset = self.field.cursor() - visual_lines[row].range.start;
                 (row, offset, completion.ghost().to_string())
             });
@@ -1448,7 +1325,7 @@ impl TextLayout for InputCode {
         self.field.text()
     }
 
-    fn lines(&self, width: u16) -> Vec<crate::ui::wrap::VisualLine> {
+    fn lines(&self, width: u16) -> Vec<VisualLine> {
         self.settings
             .editor
             .input_wrap
@@ -1464,15 +1341,17 @@ impl InputCode {
     /// newline stays at the end of its own row, since the next row begins past
     /// the newline rather than at the cursor.
     pub fn visual_cursor(&self, width: u16) -> (usize, usize) {
-        let text = self.text();
+        self.cursor_among(&self.lines(width))
+    }
+
+    /// The cursor's row among `rows` and its column there, as [`Self::visual_cursor`].
+    fn cursor_among(&self, rows: &[VisualLine]) -> (usize, usize) {
         let cursor = self.field.cursor();
-        let rows = self.lines(width);
         let row = rows
             .iter()
             .rposition(|row| row.range.start <= cursor)
             .unwrap_or(0);
-        let column = text[rows[row].range.start..cursor].width();
-        (row, column)
+        (row, self.text()[rows[row].range.start..cursor].width())
     }
 
     /// How many visual rows the live source occupies at `width`.
@@ -1482,825 +1361,57 @@ impl InputCode {
 
     pub fn cursor_at_visual(&self, width: u16, row: usize, column: usize) -> usize {
         let rows = self.lines(width);
-        let line = &rows[row.min(rows.len().saturating_sub(1))];
-        line.range.start + offset_at_column(&self.text()[line.range.clone()], column)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::code::highlight::SyntaxHighlighter;
-    use crate::ui::config::UI;
-    use crate::ui::key::KeyMod::{self, Alt, Ctrl, Shift};
-    use crate::ui::theme::groups::Groups;
-    use ratatui::style::Modifier;
-
-    #[test]
-    fn disabling_automatic_diagnostics_preserves_input_height() {
-        let mut input = InputCode::new();
-        input.settings.lsp.diagnostics = false;
-        input.insert("fixture");
-        let height = input.height(80, 3, 30);
-        input.set_findings(vec![finding(0..7, Severity::Error, "unresolved fixture")]);
-        assert!(input.shown_diagnostic().is_none());
-        assert_eq!(input.height(80, 3, 30), height);
-        input.settings.lsp.diagnostics = true;
-        assert!(input.shown_diagnostic().is_some());
+        Self::offset_among(self.text(), &rows, row.min(rows.len() - 1), column)
     }
 
-    #[test]
-    fn editor_owns_modified_newlines_and_tabs() {
-        let mut input = InputCode::new_in_memory();
-        for key in [
-            KeyCode::Char(' ') + Shift,
-            KeyCode::Enter + Shift,
-            KeyCode::Enter + Alt,
-            KeyCode::Tab + Alt,
-        ] {
-            input.handle_key(key);
-        }
-
-        assert_eq!(input.text(), "\n\n\n\t");
-    }
-
-    #[test]
-    fn a_double_click_selects_the_word_or_bracketed_block_around_it() {
-        let source = "f(x_1, {a, b}) + total";
-        let selected = |cursor: usize| {
-            let mut input = InputCode::new_in_memory();
-            input.insert(source);
-            input.field.select_around(cursor);
-            input.field.selected_text().map(str::to_string)
-        };
-
-        assert_eq!(selected(3).as_deref(), Some("x_1"));
-        assert_eq!(selected(source.len() - 2).as_deref(), Some("total"));
-        assert_eq!(selected(1).as_deref(), Some("(x_1, {a, b})"));
-        assert_eq!(selected(12).as_deref(), Some("{a, b}"));
-        assert_eq!(selected(5), None);
-    }
-
-    #[test]
-    fn a_triple_click_selects_the_lines_around_it_up_to_the_blank_ones() {
-        let source = "a = 1\nb = 2\n\nc = 3\n  \nd = 4";
-        let selected = |cursor: usize| {
-            let mut input = InputCode::new_in_memory();
-            input.insert(source);
-            input.field.select_paragraph(cursor);
-            input.field.selected_text().map(str::to_string)
-        };
-
-        assert_eq!(selected(0).as_deref(), Some("a = 1\nb = 2"));
-        assert_eq!(selected(11).as_deref(), Some("a = 1\nb = 2"));
-        assert_eq!(selected(14).as_deref(), Some("c = 3"));
-        assert_eq!(selected(source.len()).as_deref(), Some("d = 4"));
-        assert_eq!(selected(12), None, "a blank line holds nothing");
-    }
-
-    #[test]
-    fn ctrl_a_selects_the_whole_input() {
-        let mut input = InputCode::new_in_memory();
-        input.insert("R = QQ[x]\nI = ideal x");
-
-        input.handle_key(KeyCode::Char('a') + Ctrl);
-
-        assert_eq!(input.field.selected_text(), Some("R = QQ[x]\nI = ideal x"));
-    }
-
-    #[test]
-    fn pasted_lines_grow_the_input_whatever_line_endings_the_terminal_sends() {
-        let rows = |input: &InputCode| input.height(80, UI.prompt_width(), 100);
-        let single = rows(&InputCode::new_in_memory());
-        for pasted in ["a\nb\nc", "a\rb\rc", "a\r\nb\r\nc"] {
-            let mut input = InputCode::new_in_memory();
-            input.insert(pasted);
-
-            assert_eq!(input.text(), "a\nb\nc", "{pasted:?}");
-            assert!(rows(&input) > single, "{pasted:?}");
-        }
-    }
-
-    #[test]
-    fn a_paste_keeps_text_but_not_terminal_commands_or_picture_placeholders() {
-        let placeholder = format!("{PLACEHOLDER}\u{305}\u{30D}");
-        let pasted = format!("a\tb{placeholder}{placeholder}\x1b[2Jc\u{301}\r\nd");
-        let mut input = InputCode::new_in_memory();
-        input.insert(&pasted);
-
-        assert_eq!(input.text(), "a\tb[2Jc\u{301}\nd");
-    }
-
-    #[test]
-    fn a_long_paste_grows_the_input_to_its_max_height() {
-        let mut input = InputCode::new_in_memory();
-        let editor_height = 100;
-        let cap = editor_height * u16::from(input.settings().editor.max_input_height_percent) / 100;
-        input.insert(&vec!["f(x)"; usize::from(editor_height)].join("\n"));
-
-        assert_eq!(input.height(80, UI.prompt_width(), editor_height), cap);
-    }
-
-    #[test]
-    fn ctrl_arrows_jump_a_word_and_ctrl_home_end_the_whole_input() {
-        let mut input = InputCode::new_in_memory();
-        input.insert("R = ZZ[x, y]\nf(a)");
-        let key = |code: KeyCode, modifiers: &[KeyMod]| {
-            modifiers
-                .iter()
-                .fold(KeyEvent::from(code), |key, modifier| key + *modifier)
-        };
-        let word = |input: &mut InputCode, code, modifiers: &[KeyMod]| {
-            input.handle_key(key(code, modifiers));
-            input.text()[..input.field().cursor()].to_string()
-        };
-
-        assert_eq!(
-            word(&mut input, KeyCode::Left, &[Ctrl]),
-            "R = ZZ[x, y]\nf(a"
-        );
-        assert_eq!(word(&mut input, KeyCode::Left, &[Ctrl]), "R = ZZ[x, y]\nf(");
-        assert_eq!(word(&mut input, KeyCode::Left, &[Ctrl]), "R = ZZ[x, y]\nf");
-        assert_eq!(word(&mut input, KeyCode::Left, &[Ctrl]), "R = ZZ[x, y]\n");
-        assert_eq!(word(&mut input, KeyCode::Left, &[Ctrl]), "R = ZZ[x, y");
-        assert_eq!(word(&mut input, KeyCode::Left, &[Ctrl]), "R = ZZ[x, ");
-        assert_eq!(word(&mut input, KeyCode::Home, &[Ctrl]), "");
-        assert_eq!(word(&mut input, KeyCode::Right, &[Ctrl]), "R");
-        assert_eq!(word(&mut input, KeyCode::Right, &[Ctrl]), "R =");
-        assert_eq!(word(&mut input, KeyCode::Right, &[Ctrl]), "R = ZZ");
-        assert_eq!(word(&mut input, KeyCode::Right, &[Ctrl]), "R = ZZ[");
-        input.handle_key(key(KeyCode::Right, &[Ctrl, Shift]));
-        assert_eq!(
-            input.field().selection().map(|range| &input.text()[range]),
-            Some("x")
-        );
-        assert_eq!(
-            word(&mut input, KeyCode::End, &[Ctrl]),
-            "R = ZZ[x, y]\nf(a)"
-        );
-    }
-
-    #[test]
-    fn ctrl_deletion_removes_what_the_ctrl_arrow_crosses() {
-        let source = "R = ZZ[x, y]\nf(a)  ";
-        let (mut moved, mut deleted) = (InputCode::new_in_memory(), InputCode::new_in_memory());
-        moved.insert(source);
-        deleted.insert(source);
-        while !deleted.text().is_empty() {
-            moved.handle_key(KeyCode::Left + Ctrl);
-            deleted.handle_key(KeyCode::Backspace + Ctrl);
-            assert_eq!(deleted.text(), &moved.text()[..moved.field().cursor()]);
-        }
-
-        deleted.insert(source);
-        deleted
-            .field_mut()
-            .move_by(TextMotion::Full, TextDirection::Backward);
-        moved
-            .field_mut()
-            .move_by(TextMotion::Full, TextDirection::Backward);
-        while !deleted.text().is_empty() {
-            moved.handle_key(KeyCode::Right + Ctrl);
-            deleted.handle_key(KeyCode::Delete + Ctrl);
-            assert_eq!(deleted.text(), &moved.text()[moved.field().cursor()..]);
-        }
-    }
-
-    #[test]
-    fn undo_restores_deletions_and_typing_a_word_at_a_time() {
-        let mut input = InputCode::new_in_memory();
-        for character in "f = x + y".chars() {
-            input.handle_key(KeyCode::Char(character).into());
-        }
-        input.handle_key(KeyCode::Backspace + Ctrl);
-        input.handle_key(KeyCode::Backspace + Ctrl);
-        input.handle_key(KeyCode::Char('l') + Ctrl);
-        assert_eq!(input.text(), "");
-
-        input.handle_key(KeyCode::Char('z') + Ctrl);
-        assert_eq!(input.text(), "f = x ");
-        input.handle_key(KeyCode::Char('z') + Ctrl);
-        assert_eq!(input.text(), "f = x + y", "a run of deletions is one step");
-        assert_eq!(input.field().cursor(), input.text().len());
-        input.handle_key(KeyCode::Char('z') + Ctrl);
-        assert_eq!(input.text(), "f = x + ");
-        input.handle_key(KeyCode::Char('z') + Ctrl);
-        assert_eq!(input.text(), "f = x ");
-
-        input.handle_key(KeyCode::Char('z') + Ctrl + Shift);
-        input.handle_key(KeyCode::Char('z') + Ctrl + Shift);
-        assert_eq!(input.text(), "f = x + y");
-        input.handle_key(KeyCode::Char('!').into());
-        input.handle_key(KeyCode::Char('z') + Ctrl + Shift);
-        assert_eq!(
-            input.text(),
-            "f = x + y!",
-            "a new edit drops what was undone"
-        );
-    }
-
-    #[test]
-    fn a_submission_leaves_nothing_to_undo() {
-        let mut input = InputCode::new_in_memory();
-        input.insert("1 + 1");
-        input.accept_submission();
-
-        input.handle_key(KeyCode::Char('z') + Ctrl);
-
-        assert_eq!(input.text(), "");
-    }
-
-    #[test]
-    fn the_newline_character_a_terminal_sends_for_shift_enter_is_a_newline() {
-        let mut input = InputCode::new_in_memory();
-        input.insert("1");
-        input.handle_key(KeyCode::Char('j') + Ctrl);
-
-        assert_eq!(input.text(), "1\n");
-    }
-
-    #[test]
-    fn shifted_movement_selects_and_typing_replaces_it() {
-        let mut field = InputTextField::new_in_memory();
-        field.insert_str("abcdef");
-        field.move_by(TextMotion::Line, TextDirection::Backward);
-
-        field.select_by(TextMotion::Character, TextDirection::Forward);
-        field.select_by(TextMotion::Character, TextDirection::Forward);
-        assert_eq!(field.selected_text(), Some("ab"));
-
-        field.insert_char('X');
-        assert_eq!(field.text(), "Xcdef");
-        assert!(field.selection().is_none(), "typing consumes the selection");
-    }
-
-    // The anchor indexes the buffer it was set in, so replacing the buffer has to
-    // drop it -- otherwise it points past the new end and the next edit or copy
-    // slices out of bounds.
-    #[test]
-    fn a_replaced_buffer_carries_no_selection() {
-        let mut input = InputCode::new_in_memory();
-        input.field_mut().insert_str("abc");
-        input
-            .field_mut()
-            .select_by(TextMotion::Line, TextDirection::Backward);
-
-        input.accept_submission();
-        input.field_mut().insert_char('x');
-
-        assert_eq!(input.text(), "x");
-    }
-
-    #[test]
-    fn recalled_history_carries_no_selection() {
-        let mut field = InputTextField::new_in_memory();
-        field.history.record("q");
-        field.insert_str("abcdef");
-        field.select_by(TextMotion::Line, TextDirection::Backward);
-
-        field.recall_previous(Recall::Prefixed);
-
-        assert_eq!(field.text(), "q");
-        assert_eq!(field.selected_text(), None);
-    }
-
-    #[test]
-    fn history_browsing_crosses_multiline_entries_until_cursor_movement() {
-        let mut input = InputCode::new_in_memory();
-        input.field.history.record("older\nentry");
-        input.field.history.record("newer\nentry");
-        input.edit(InputAction::MoveUp);
-        assert_eq!(input.text(), "newer\nentry");
-        input.edit(InputAction::MoveUp);
-        assert_eq!(input.field.cursor_line_col().0, 0);
-        assert_eq!(input.text(), "newer\nentry");
-        input.edit(InputAction::MoveUp);
-        assert_eq!(input.text(), "older\nentry");
-        input.edit(InputAction::MoveDown);
-        assert_eq!(input.text(), "newer\nentry");
-
-        input.edit(InputAction::MoveTextStart);
-        input.edit(InputAction::MoveUp);
-        assert_eq!(input.text(), "newer\nentry");
-        assert_eq!(input.field.cursor, 0);
-        input.edit(InputAction::MoveDown);
-        assert_eq!(input.field.cursor_line_col(), (1, 0));
-    }
-
-    #[test]
-    fn editing_recalled_multiline_input_stops_browsing() {
-        let mut input = InputCode::new_in_memory();
-        input.field.history.record("older\nentry");
-        input.field.history.record("newer\nentry");
-        input.edit(InputAction::MoveUp);
-        input.field.insert_char('!');
-        input.edit(InputAction::MoveUp);
-        assert_eq!(input.text(), "newer\nentry!");
-        assert_eq!(input.field.cursor_line_col().0, 0);
-        input.edit(InputAction::MoveUp);
-        assert_eq!(input.text(), "newer\nentry!");
-    }
-
-    #[test]
-    fn clipped_input_pins_its_first_row_above_a_separator() {
-        let mut input = InputCode::new_in_memory();
-        input
-            .field
-            .insert_str("first\nsecond\nthird\nfourth\nfifth\nlast");
-        let context = RenderContext::new(40, UI.prompt_width());
-        let mut highlighter = SyntaxHighlighter::new();
-        let area = Rect::new(0, 0, 40, 7);
-        let mut buffer = Buffer::empty(area);
-        let cursor = input
-            .render(
-                InputContext {
-                    render: &context,
-                    highlighter: &mut highlighter,
-                    command: false,
-                    debugging: false,
-                    focused: true,
-                    pending: None,
-                },
-                area,
-                &mut buffer,
-            )
-            .unwrap();
-        let row = |y| (0..40).map(|x| buffer[(x, y)].symbol()).collect::<String>();
-        assert!(row(1).contains("first"));
-        assert!(row(2)
+    /// The offset drawn at `column` of `rows[row]`. The end of a row wrapped
+    /// softly is drawn at the start of the next one, so the offset stops a
+    /// character before it to stay on `row`.
+    fn offset_among(text: &str, rows: &[VisualLine], row: usize, column: usize) -> usize {
+        let range = rows[row].range.clone();
+        let drawn = &text[range.clone()];
+        let offset = offset_at_column(drawn, column);
+        let wrapped = rows
+            .get(row + 1)
+            .is_some_and(|next| next.range.start == range.end);
+        let last = drawn
             .chars()
-            .all(|symbol| symbol.to_string() == Glyphs::PendingSeparator.glyph().current()));
-        assert!(row(cursor.y).contains("last"));
-        assert!(cursor.y < area.bottom() - 1);
-        assert!(input.pinned_first_row);
-        assert!(input.scroll > 1);
+            .next_back()
+            .filter(|_| wrapped && offset == drawn.len());
+        range.start + offset - last.map_or(0, char::len_utf8)
     }
 
-    #[test]
-    fn returning_from_history_restores_the_draft_cursor() {
-        let mut field = InputTextField::new_in_memory();
-        field.history.record("top\nbottom + 1");
-        field.history.record("unrelated input");
-        field.insert_str("top\nbottom");
-        field.cursor = 0;
-
-        field.recall_previous(Recall::Prefixed);
-        assert_eq!(field.text(), "top\nbottom + 1");
-        field.recall_next(Recall::Prefixed);
-
-        assert_eq!(field.text(), "top\nbottom");
-        assert_eq!(field.cursor_line_col(), (0, 0));
-    }
-
-    #[test]
-    fn multiline_history_without_a_match_preserves_the_draft() {
-        let mut field = InputTextField::new_in_memory();
-        field.history.record("top\nother");
-        field.history.record("unrelated input");
-        field.insert_str("top\nbottom");
-        field.cursor = 0;
-
-        field.recall_previous(Recall::Prefixed);
-
-        assert_eq!(field.text(), "top\nbottom");
-        assert_eq!(field.cursor_line_col(), (0, 0));
-    }
-
-    // Selecting is a shifted gesture: any plain movement abandons it.
-    #[test]
-    fn plain_movement_clears_the_selection() {
-        let mut field = InputTextField::new_in_memory();
-        field.insert_str("abc");
-        field.select_by(TextMotion::Line, TextDirection::Backward);
-        assert!(field.selection().is_some());
-
-        field.move_by(TextMotion::Character, TextDirection::Forward);
-        assert!(field.selection().is_none());
-    }
-
-    #[test]
-    fn deleting_a_selection_removes_all_of_it() {
-        let mut field = InputTextField::new_in_memory();
-        field.insert_str("keep this");
-        field.select_by(TextMotion::Line, TextDirection::Backward);
-
-        field.delete_by(TextMotion::Character, TextDirection::Backward);
-        assert_eq!(field.text(), "");
-    }
-
-    #[test]
-    fn cursor_after_trailing_newline_is_on_next_line() {
-        let mut field = InputTextField::new_in_memory();
-        field.insert_str("abc");
-        field.insert_char('\n');
-        assert_eq!(field.cursor_line_col(), (1, 0));
-    }
-
-    #[test]
-    fn cursor_within_second_line() {
-        let mut field = InputTextField::new_in_memory();
-        field.insert_str("ab\ncd");
-        assert_eq!(field.cursor_line_col(), (1, 2));
-    }
-
-    #[test]
-    fn up_moves_to_previous_line_at_same_column() {
-        let mut field = InputTextField::new_in_memory();
-        field.insert_str("ab\ncd");
-
-        field.move_vertically(TextDirection::Backward);
-
-        assert_eq!(field.cursor_line_col(), (0, 2));
-    }
-
-    #[test]
-    fn vertical_movement_clamps_to_line_length_and_keeps_utf8_boundaries() {
-        let mut field = InputTextField::new_in_memory();
-        field.insert_str("αβ\nγδεζ");
-
-        field.move_vertically(TextDirection::Backward);
-        assert_eq!(field.cursor_line_col(), (0, 2));
-        field.move_vertically(TextDirection::Forward);
-        assert_eq!(field.cursor_line_col(), (1, 2));
-    }
-
-    #[test]
-    fn cursor_on_single_line() {
-        let mut field = InputTextField::new_in_memory();
-        field.insert_str("abc");
-        assert_eq!(field.cursor_line_col(), (0, 3));
-    }
-
-    #[test]
-    fn multiline_prompt_glyph_is_on_last_line() {
-        let mut input = InputCode::new_in_memory();
-        input.field_mut().insert_str("first\nsecond\nthird");
-        let context = RenderContext::new(40, UI.prompt_width());
-        let mut highlighter = SyntaxHighlighter::new();
-
-        let lines = input.highlighted_lines(&context, &mut highlighter, false, None);
-        assert_eq!(lines.len(), 3);
-        assert!(!lines[0].spans[0]
-            .content
-            .contains(Glyphs::Prompt.glyph().current()));
-        assert!(!lines[1].spans[0]
-            .content
-            .contains(Glyphs::Prompt.glyph().current()));
-        assert!(lines[2].spans[0]
-            .content
-            .contains(Glyphs::Prompt.glyph().current()));
-    }
-
-    #[test]
-    fn the_prompt_shows_typing_until_keystrokes_pause() {
-        let mut input = InputCode::new_in_memory();
-        let context = RenderContext::new(40, UI.prompt_width());
-        let mut highlighter = SyntaxHighlighter::new();
-        let mut prompt = |input: &mut InputCode| {
-            let lines = input.highlighted_lines(&context, &mut highlighter, false, None);
-            lines[0].spans[0].content.to_string()
+    /// Where the cursor lands a drawn row up or down in the text area, at the
+    /// column it is drawn in; none at the first or last row.
+    fn row_step(&self, direction: TextDirection) -> Option<usize> {
+        let rows = self.lines(self.text_area.width);
+        let (row, column) = self.cursor_among(&rows);
+        let target = match direction {
+            TextDirection::Backward => row.checked_sub(1)?,
+            TextDirection::Forward => Some(row + 1).filter(|&target| target < rows.len())?,
         };
-        let typing = Glyphs::PromptTyping.glyph().current();
-        let resting = Glyphs::Prompt.glyph().current();
-
-        input.handle_key(KeyCode::Left.into());
-        assert!(prompt(&mut input).contains(resting), "moving is not typing");
-
-        input.handle_key(KeyCode::Char('x').into());
-        assert!(prompt(&mut input).contains(typing));
-        assert!(!input.settle_typing());
-
-        input.typed_at = input
-            .typed_at
-            .map(|at| at - Duration::from_millis(UI.typing_prompt_ms));
-        assert!(input.settle_typing());
-        assert!(prompt(&mut input).contains(resting));
+        Some(Self::offset_among(self.text(), &rows, target, column))
     }
 
-    #[test]
-    fn a_typing_prompt_keeps_the_text_in_place() {
-        let resting = Prompt::new(Glyphs::Prompt.glyph().current(), Style::default()).spans(&());
-        let typing =
-            Prompt::new(Glyphs::PromptTyping.glyph().current(), Style::default()).spans(&());
-        assert_eq!(typing[0].width(), resting[0].width());
+    pub fn move_vertically(&mut self, direction: TextDirection) {
+        let target = self.row_step(direction);
+        self.field.clear_selection();
+        self.field.cursor = target.unwrap_or(self.field.cursor);
     }
 
-    #[test]
-    fn the_hint_of_an_empty_input_starts_at_the_cursor() {
-        let mut input = InputCode::new_in_memory();
-        let context = RenderContext::new(40, UI.prompt_width());
-        let mut highlighter = SyntaxHighlighter::new();
-
-        let rendered: String = input.highlighted_lines(&context, &mut highlighter, false, None)[0]
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-
-        let hint = rendered.find(&input.hint.to_string()).unwrap();
-        assert_eq!(
-            rendered[..hint].chars().count(),
-            usize::from(UI.prompt_width())
-        );
+    pub fn select_vertically(&mut self, direction: TextDirection) {
+        let target = self.row_step(direction);
+        self.field
+            .extend_selection(|field| field.cursor = target.unwrap_or(field.cursor));
     }
 
-    #[test]
-    fn unchanged_input_reuses_its_semantic_highlights() {
-        /// A highlighter recording how often parsing is requested.
-        struct CountingHighlighter(usize);
-
-        impl Highlighter for CountingHighlighter {
-            fn highlight(&mut self, _source: &str) -> Vec<HLSpan> {
-                self.0 += 1;
-                Vec::new()
-            }
+    /// Past the first or last drawn row, recall older or newer input when
+    /// `browse` allows it, instead of staying put.
+    fn move_vertically_or_recall(&mut self, direction: TextDirection, browse: bool) {
+        match direction {
+            _ if !browse || self.row_step(direction).is_some() => self.move_vertically(direction),
+            TextDirection::Backward => self.field.recall_previous(Recall::Prefixed),
+            TextDirection::Forward => self.field.recall_next(Recall::Prefixed),
         }
-
-        let mut input = InputCode::new_in_memory();
-        let context = RenderContext::new(40, UI.prompt_width());
-        let mut highlighter = CountingHighlighter(0);
-
-        input.highlighted_lines(&context, &mut highlighter, false, None);
-        input.highlighted_lines(&context, &mut highlighter, false, None);
-        assert_eq!(highlighter.0, 1);
-
-        input.field_mut().insert_char('x');
-        input.highlighted_lines(&context, &mut highlighter, false, None);
-        assert_eq!(highlighter.0, 2);
-
-        input.highlighted_lines(&context, &mut highlighter, false, Some("f("));
-        assert_eq!(highlighter.0, 3);
-    }
-
-    #[test]
-    fn diagnostic_special_colour_underlines_only_its_source_range() {
-        struct EmptyHighlighter;
-
-        impl Highlighter for EmptyHighlighter {
-            fn highlight(&mut self, _source: &str) -> Vec<crate::ui::block::HLSpan> {
-                Vec::new()
-            }
-        }
-
-        let mut input = InputCode::new_in_memory();
-        input.field_mut().insert_str("abc");
-        input.set_diagnostic("bad b".to_string(), Some(1..2));
-        let context = RenderContext::new(40, UI.prompt_width());
-        let lines = input.highlighted_lines(&context, &mut EmptyHighlighter, false, None);
-        let text = &lines[0].spans[1..];
-
-        assert_eq!(text[0].content, "a");
-        assert_eq!(text[1].content, "b");
-        assert_eq!(text[2].content, "c");
-        assert!(!text[0].style.add_modifier.contains(Modifier::UNDERLINED));
-        assert!(text[1].style.add_modifier.contains(Modifier::UNDERLINED));
-        assert_eq!(text[1].style.fg, text[0].style.fg);
-        assert_eq!(text[1].style.bg, text[0].style.bg);
-    }
-
-    /// Source left in the plain code colour, so only what is laid over it shows.
-    struct Uncoloured;
-
-    impl Highlighter for Uncoloured {
-        fn highlight(&mut self, _source: &str) -> Vec<crate::ui::block::HLSpan> {
-            Vec::new()
-        }
-    }
-
-    fn finding(range: Range<usize>, severity: Severity, message: &str) -> Finding {
-        Finding {
-            range,
-            severity,
-            message: message.to_string(),
-            code: None,
-        }
-    }
-
-    #[test]
-    fn server_findings_underline_their_range_and_tell_the_one_under_the_cursor() {
-        let mut input = InputCode::new_in_memory();
-        input.settings.lsp.diagnostics = true;
-        input.field_mut().insert_str("abcd");
-        input.set_findings(vec![
-            finding(0..1, Severity::Hint, "a hint"),
-            finding(3..4, Severity::Error, "an error"),
-        ]);
-        let context = RenderContext::new(40, UI.prompt_width());
-        let lines = input.highlighted_lines(&context, &mut Uncoloured, false, None);
-        let underlined = |content: &str| {
-            lines[0].spans[1..]
-                .iter()
-                .find(|span| span.content == content)
-                .is_some_and(|span| span.style.add_modifier.contains(Modifier::UNDERLINED))
-        };
-        assert!(underlined("a") && underlined("d"));
-        assert!(!underlined("bc"));
-        // Away from every finding, the first error is told.
-        input
-            .field_mut()
-            .move_by(TextMotion::Full, TextDirection::Backward);
-        input
-            .field_mut()
-            .move_by(TextMotion::Character, TextDirection::Forward);
-        input
-            .field_mut()
-            .move_by(TextMotion::Character, TextDirection::Forward);
-        assert_eq!(
-            input.shown_diagnostic(),
-            Some(("an error".to_string(), Severity::Error))
-        );
-        input
-            .field_mut()
-            .move_by(TextMotion::Full, TextDirection::Backward);
-        assert_eq!(
-            input.shown_diagnostic(),
-            Some(("a hint".to_string(), Severity::Hint))
-        );
-        input.set_diagnostic("the shell's own".to_string(), None);
-        assert_eq!(
-            input.shown_diagnostic().map(|(message, _)| message),
-            Some("the shell's own".to_string())
-        );
-    }
-
-    #[test]
-    fn a_finding_left_behind_by_an_edit_is_not_drawn() {
-        let mut input = InputCode::new_in_memory();
-        input.field_mut().insert_str("ℤ");
-        input.set_findings(vec![finding(1..2, Severity::Error, "stale")]);
-        let context = RenderContext::new(40, UI.prompt_width());
-        input.highlighted_lines(&context, &mut Uncoloured, false, None);
-        assert_eq!(input.shown_diagnostic(), None);
-    }
-
-    #[test]
-    fn the_rest_of_a_completion_is_drawn_after_the_cursor_as_a_hint() {
-        let mut input = InputCode::new_in_memory();
-        input.field_mut().insert_str("f(ide)");
-        input
-            .field_mut()
-            .move_by(TextMotion::Character, TextDirection::Backward);
-        let candidates = vec!["ideal".to_string()];
-        input.offer(Completion::new(input.text(), 2..5, candidates));
-        let context = RenderContext::new(40, UI.prompt_width());
-
-        let lines = input.highlighted_lines(&context, &mut SyntaxHighlighter::new(), false, None);
-        let rendered: String = lines[0].spans[1..]
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert_eq!(rendered, "f(ideal)");
-        let ghost = lines[0]
-            .spans
-            .iter()
-            .find(|span| span.content == "al")
-            .unwrap();
-        assert_eq!(ghost.style, Groups::default().completion_hint());
-
-        input.handle_key(KeyCode::Tab.into());
-        assert_eq!(input.text(), "f(ideal)");
-        assert!(
-            !input.needs_completion(),
-            "taking cycles the candidates, it does not complete further"
-        );
-    }
-
-    #[test]
-    fn a_command_is_drawn_in_its_colour_and_its_completion_as_a_hint() {
-        let mut input = InputCode::new_in_memory();
-        input.field_mut().insert_str("$se");
-        input.set_command_range(Some(0..3));
-        let candidates = vec!["$settings".to_string()];
-        input.offer(Completion::new(input.text(), 0..3, candidates));
-        let context = RenderContext::new(40, UI.prompt_width());
-        let groups = Groups::default();
-
-        let lines = input.highlighted_lines(&context, &mut SyntaxHighlighter::new(), false, None);
-        let style_of = |text: &str| {
-            lines[0]
-                .spans
-                .iter()
-                .find(|span| span.content == text)
-                .unwrap_or_else(|| panic!("{text} is drawn on its own"))
-                .style
-        };
-        assert_eq!(style_of("$se").fg, groups.command().fg);
-        assert_eq!(style_of("ttings"), groups.completion_hint());
-    }
-
-    #[test]
-    fn long_line_wraps_to_the_available_width() {
-        let mut input = InputCode::new_in_memory();
-        input.field_mut().insert_str("abcdefghij");
-
-        // Three full rows of four, then the remainder.
-        assert_eq!(input.visual_rows(4), 3);
-        assert_eq!(input.visual_cursor(4), (2, 2));
-    }
-
-    #[test]
-    fn cursor_on_a_wrap_boundary_sits_on_the_row_it_continues_onto() {
-        let mut input = InputCode::new_in_memory();
-        input.field_mut().insert_str("abcd");
-
-        // Exactly one full row: the cursor moves on rather than hanging off the end.
-        assert_eq!(input.visual_cursor(4), (1, 0));
-    }
-
-    #[test]
-    fn cursor_before_a_newline_stays_on_its_own_row() {
-        let mut input = InputCode::new_in_memory();
-        input.field_mut().insert_str("ab\ncd");
-        input.field_mut().move_vertically(TextDirection::Backward);
-        input
-            .field_mut()
-            .move_by(TextMotion::Line, TextDirection::Forward);
-
-        assert_eq!(input.visual_cursor(4), (0, 2));
-    }
-
-    #[test]
-    fn wide_characters_take_the_columns_they_are_drawn_in() {
-        let mut input = InputCode::new_in_memory();
-        input.field_mut().insert_str("😀😀");
-        assert_eq!(input.visual_cursor(80), (0, 4));
-
-        // A wide character that would cross the edge starts the next row, and a
-        // row it fills exactly leaves the caret the row after.
-        input.field_mut().insert_str("a");
-        assert_eq!(input.visual_rows(3), 3);
-        assert_eq!(input.visual_cursor(3), (2, 0));
-    }
-
-    #[test]
-    fn vertical_moves_keep_the_drawn_column_across_wide_characters() {
-        let mut input = InputCode::new_in_memory();
-        input.field_mut().insert_str("abcd\n😀x");
-        input.field_mut().move_vertically(TextDirection::Backward);
-        input
-            .field_mut()
-            .move_by(TextMotion::Line, TextDirection::Forward);
-        input.field_mut().move_vertically(TextDirection::Forward);
-        assert_eq!(input.visual_cursor(80), (1, 3));
-        input
-            .field_mut()
-            .move_by(TextMotion::Character, TextDirection::Backward);
-        input.field_mut().move_vertically(TextDirection::Backward);
-        assert_eq!(input.visual_cursor(80), (0, 2));
-    }
-
-    #[test]
-    fn semantic_revision_recolors_unchanged_input_without_moving_selection() {
-        use crate::ui::theme::groups::HLGroup;
-        struct ChangingHighlighter {
-            revision: u64,
-            group: HLGroup,
-        }
-        impl Highlighter for ChangingHighlighter {
-            fn revision(&self) -> u64 {
-                self.revision
-            }
-            fn highlight(&mut self, source: &str) -> Vec<HLSpan> {
-                vec![HLSpan::new(0..source.len(), self.group)]
-            }
-        }
-        let mut input = InputCode::new_in_memory();
-        input.field_mut().insert_str("alpha");
-        let context = RenderContext::new(40, UI.prompt_width());
-        let mut highlighter = ChangingHighlighter {
-            revision: 0,
-            group: HLGroup::Function,
-        };
-        input.field_mut().start_selection(1);
-        input.field_mut().continue_selection(3);
-        input.set_diagnostic("example diagnostic".to_string(), Some(3..5));
-        let before = input.highlighted_lines(&context, &mut highlighter, false, None);
-        let state = (
-            input.revision(),
-            input.field().cursor(),
-            input.field().selection(),
-        );
-        highlighter.revision = 1;
-        highlighter.group = HLGroup::Type;
-        let after = input.highlighted_lines(&context, &mut highlighter, false, None);
-        let color = |lines: &[Line<'_>]| {
-            lines[0]
-                .spans
-                .iter()
-                .find(|span| span.content == "a")
-                .unwrap()
-                .style
-                .fg
-        };
-        assert_ne!(color(&before), color(&after));
-        assert_eq!(
-            state,
-            (
-                input.revision(),
-                input.field().cursor(),
-                input.field().selection()
-            )
-        );
-        assert_eq!(input.text(), "alpha");
     }
 }

@@ -7,6 +7,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
+use strum::EnumString;
 
 use super::block::Block;
 use super::cell::{CodeBlock, M2CodeCell};
@@ -38,7 +39,10 @@ enum TreeItem<'a> {
     },
 }
 
-/// Which side of a bracket pair a row is.
+/// Which side of a bracket pair a row is, read from the edge label m2-syn gives
+/// it: a label ending in `.opening` marks the opening.
+#[derive(Clone, Copy, Debug, EnumString)]
+#[strum(serialize_all = "lowercase")]
 enum Bracket {
     Opening,
     Closing,
@@ -49,17 +53,9 @@ impl TreeEntry<'_> {
         if self.node.role() != PrettyNodeRole::Delimiter {
             return None;
         }
-        match self.label.rsplit('.').next() {
-            Some(OPENING) => Some(Bracket::Opening),
-            Some(CLOSING) => Some(Bracket::Closing),
-            _ => None,
-        }
+        self.label.rsplit('.').next()?.parse().ok()
     }
 }
-
-/// The edge labels m2-syn gives the two boundaries of a bracket pair.
-const OPENING: &str = "opening";
-const CLOSING: &str = "closing";
 
 fn tree_label(parent: &str, child: &str) -> String {
     match (parent, child) {

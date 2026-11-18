@@ -401,12 +401,6 @@ impl Feed {
         self.surface = None;
     }
 
-    /// Return the number of stored blocks.
-    #[cfg(test)]
-    pub fn len(&self) -> usize {
-        self.blocks.len()
-    }
-
     /// Collect only the text submissions printed, each numbered by its cell.
     pub fn printed(&self) -> Vec<&dyn Block> {
         self.blocks

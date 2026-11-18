@@ -11,8 +11,8 @@ cyclic! {
     #[non_exhaustive]
     pub enum PreviewMode {
         /// Structured expression data from the Spectral formatter.
-        #[serde(rename = "specNet")]
-        SpecNet = "specNet",
+        #[serde(rename = "rod", alias = "specNet")]
+        Rod = "rod",
         /// M2's two-dimensional terminal spelling.
         #[serde(rename = "net")]
         Net = "net",

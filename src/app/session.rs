@@ -15,7 +15,7 @@ use nix::unistd::Pid;
 use m2_syn::{NativeCellParser, NativeCellState, PrettyNode, PrettyTree};
 
 use super::examples::{ExamplePage, ExampleRunner};
-use crate::backend::{M2Backend, M2Response, SpecNet};
+use crate::backend::{Announcement, M2Backend, M2Response, Rod, Versions};
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::{Document, SourceId};
 use crate::errors::Error;
@@ -77,8 +77,8 @@ enum WorkerEvent {
         number: u32,
         result: Box<Result<M2Response, String>>,
     },
-    /// The fresh process's version and every name it started with.
-    Restarted(Result<(String, Vec<String>, String), String>),
+    /// What the fresh process announced.
+    Restarted(Result<Announcement, String>),
 }
 
 /// A live M2 worker and the source state committed through it.
@@ -88,7 +88,7 @@ pub struct Session {
     /// The id of the M2 process the worker runs, replaced when it restarts.
     m2_process: Arc<AtomicU32>,
     restart_requested: Arc<AtomicBool>,
-    version: String,
+    versions: Versions,
     in_debugger: bool,
     next_input_number: u32,
     next_submission_id: u64,
@@ -117,7 +117,7 @@ pub struct Session {
 
 impl Session {
     pub fn new(backend: M2Backend) -> Self {
-        let version = backend.version().to_string();
+        let versions = backend.versions().clone();
         let (request_tx, request_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
         let m2_process = Arc::new(AtomicU32::new(backend.process_id()));
@@ -138,7 +138,7 @@ impl Session {
             events: event_rx,
             m2_process,
             restart_requested,
-            version,
+            versions,
             in_debugger: false,
             next_input_number: 1,
             next_submission_id: 0,
@@ -166,13 +166,13 @@ impl Session {
     }
 
     /// Prepare a page for the same example rendering and semantic analysis as session output.
-    pub fn prepare_documentation(&mut self, value: Option<&SpecNet>) {
+    pub fn prepare_documentation(&mut self, value: Option<&Rod>) {
         self.compute_examples(value);
         self.analyse_page(value);
     }
 
-    fn analyse_page(&mut self, value: Option<&SpecNet>) {
-        let Some((html, example_width)) = value.and_then(SpecNet::markup) else {
+    fn analyse_page(&mut self, value: Option<&Rod>) {
+        let Some((html, example_width)) = value.and_then(Rod::markup) else {
             return;
         };
         let page = markup::page(html);
@@ -192,8 +192,8 @@ impl Session {
 
     /// Compute the examples of the documentation `value` shows, once per page.
     // @##issue should take either a code block or a sequence of blocks
-    fn compute_examples(&mut self, value: Option<&SpecNet>) {
-        let Some((html, example_width)) = value.and_then(SpecNet::markup) else {
+    fn compute_examples(&mut self, value: Option<&Rod>) {
+        let Some((html, example_width)) = value.and_then(Rod::markup) else {
             return;
         };
         let page = markup::page(html);
@@ -212,13 +212,8 @@ impl Session {
         }
     }
 
-    pub fn version(&self) -> &str {
-        &self.version
-    }
-
-    #[cfg(test)]
-    pub fn next_input_number(&self) -> u32 {
-        self.next_input_number
+    pub fn versions(&self) -> &Versions {
+        &self.versions
     }
 
     pub fn in_debugger(&self) -> bool {
@@ -776,15 +771,19 @@ impl Session {
 
     fn resolve_restart(
         &mut self,
-        result: Result<(String, Vec<String>, String), String>,
+        result: Result<Announcement, String>,
     ) -> EditorUpdate {
         self.restarting = false;
         match result {
-            Ok((version, names, startup_output)) => {
+            Ok(Announcement {
+                versions,
+                names,
+                startup_output,
+            }) => {
                 // Empty unless M2 restarted itself, from a cell still pending.
                 let mut updates = self.stop_for_restart();
                 self.restarted = true;
-                self.version = version;
+                self.versions = versions;
                 self.in_debugger = false;
                 self.next_input_number = 1;
                 self.generation = self.generation.wrapping_add(1);

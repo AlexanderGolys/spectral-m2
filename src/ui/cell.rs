@@ -37,9 +37,9 @@ use super::render::{markup, maths, spin, typeset};
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::settings::rendering::RendererPosition;
 use super::wrap::{offset_at_column, SpanWrap, WrapPolicy, WrappedText};
+use crate::backend::rod::Shape;
 use crate::backend::transcript::{captured_error, captured_output, strip_m2_location};
-use crate::backend::spec_net::Shape;
-use crate::backend::{M2Response, PreviewMode, SpecNet, ValuePreview};
+use crate::backend::{M2Response, PreviewMode, Rod, ValuePreview};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::SourceId;
 use crate::ui::config::UI;
@@ -285,21 +285,9 @@ impl M2CodeCell {
         cell
     }
 
-    /// Create a numbered input cell from source and spans produced for that source.
-    #[cfg(test)]
-    fn input(text: String, spans: Vec<HLSpan>) -> Self {
-        Self::new(text, None, spans)
-    }
-
     /// Create an unnumbered cell that was not submitted to Macaulay2.
     fn rejected(text: String, spans: Vec<HLSpan>) -> Self {
         Self::new(text, None, spans)
-    }
-
-    /// Put this cell and another cell into one code block.
-    #[cfg(test)]
-    fn join(self, other: M2CodeCell) -> CodeBlock {
-        CodeBlock::new([self, other])
     }
 
     fn rehighlight(&mut self, id: SourceId, highlighter: &mut dyn Highlighter) -> bool {
@@ -650,17 +638,6 @@ impl IncompleteBlock {
     /// Refresh this unfinished source without replacing the block.
     pub fn rehighlight(&mut self, id: SourceId, highlighter: &mut dyn Highlighter) -> bool {
         self.code.cells[0].rehighlight(id, highlighter)
-    }
-
-    /// Return the source when this block is moved back into the editor.
-    #[cfg(test)]
-    pub fn into_source(self) -> String {
-        self.code
-            .cells
-            .into_iter()
-            .next()
-            .expect("unfinished cell")
-            .text
     }
 
     /// Borrow the retained source as highlighting context for the live input.
@@ -1547,7 +1524,7 @@ struct OutputCell {
     number: Option<u32>,
     ty: Option<String>,
     /// The annotation's pieces, set from their structure when M2 sent them.
-    type_drawing: Option<SpecNet>,
+    type_drawing: Option<Rod>,
     /// The formatter choice shared by every value in the enclosing block.
     chosen: Rc<Cell<Option<PreviewMode>>>,
 }
@@ -1555,7 +1532,7 @@ struct OutputCell {
 impl PreviewMode {
     fn glyph(self) -> Glyph {
         match self {
-            Self::SpecNet => Glyphs::RendererSpecNet.glyph(),
+            Self::Rod => Glyphs::RendererRod.glyph(),
             Self::Net => Glyphs::RendererNet.glyph(),
             Self::String => Glyphs::RendererString.glyph(),
             Self::Tex => Glyphs::RendererTex.glyph(),
@@ -1571,7 +1548,7 @@ impl OutputCell {
     fn default_preview(&self) -> PreviewMode {
         match self.source.value.as_ref() {
             Some(value) if value.html.is_some() => PreviewMode::Markup,
-            Some(value) if value.is_structured() => PreviewMode::SpecNet,
+            Some(value) if value.is_structured() => PreviewMode::Rod,
             Some(_) => PreviewMode::Net,
             None => PreviewMode::Net,
         }
@@ -1579,7 +1556,7 @@ impl OutputCell {
 
     /// The formatter chosen, unless this cell has nothing from it: a recorded
     /// example's answer is M2's string even when its computed twin shares a
-    /// choice of `specNet`.
+    /// choice of `rod`.
     fn preview_mode(&self) -> PreviewMode {
         self.chosen
             .get()
@@ -1589,11 +1566,11 @@ impl OutputCell {
 
     fn offers(&self, mode: PreviewMode) -> bool {
         match mode {
-            PreviewMode::SpecNet => self
+            PreviewMode::Rod => self
                 .source
                 .value
                 .as_ref()
-                .is_some_and(SpecNet::is_structured),
+                .is_some_and(Rod::is_structured),
             PreviewMode::Markup => self
                 .source
                 .value
@@ -1615,7 +1592,7 @@ impl OutputCell {
                 .as_ref()?
                 .markup()
                 .map(|(html, width)| (html, *width)),
-            PreviewMode::SpecNet => self
+            PreviewMode::Rod => self
                 .source
                 .value
                 .as_ref()?
@@ -1674,20 +1651,6 @@ impl fmt::Debug for LayoutKey {
     }
 }
 
-impl LayoutKey {
-    /// Whether rows laid out under `other` may stand in until this key's are
-    /// ready: they differ only in widths or colours, so they still show the value.
-    fn stands_in(&self, other: &Self) -> bool {
-        *self
-            == Self {
-                width: self.width,
-                block_width: self.block_width,
-                groups: self.groups,
-                ..*other
-            }
-    }
-}
-
 /// What a value is laid out from, shared with the worker laying it out again.
 #[derive(Clone, Debug)]
 struct ValueSource {
@@ -1695,7 +1658,7 @@ struct ValueSource {
     /// The value as plain text, which without M2's own may take a whole drawing;
     /// filled on a worker, so the drawing thread only reads it once there.
     text: OnceLock<String>,
-    value: Option<SpecNet>,
+    value: Option<Rod>,
 }
 
 /// A value's rows and the links among them.
@@ -1710,9 +1673,7 @@ impl ValueSource {
     fn text(&self) -> &str {
         self.text.get_or_init(|| {
             self.value.as_ref().map_or_else(String::new, |value| {
-                value
-                    .text()
-                    .map_or_else(|| value.render(), output_preview)
+                value.text().map_or_else(|| value.render(), output_preview)
             })
         })
     }
@@ -1735,7 +1696,7 @@ impl ValueSource {
             PreviewMode::Net => self
                 .preview_text(PreviewMode::Net)
                 .map(str::to_owned)
-                .or_else(|| self.value.as_ref().map(SpecNet::ascii)),
+                .or_else(|| self.value.as_ref().map(Rod::ascii)),
             mode @ (PreviewMode::String | PreviewMode::Peek | PreviewMode::Speek) => {
                 self.preview_text(mode).map(str::to_owned)
             }
@@ -1770,7 +1731,7 @@ impl ValueSource {
             );
             links = drawn.links;
             drawn.lines
-        } else if renderer == PreviewMode::SpecNet {
+        } else if renderer == PreviewMode::Rod {
             let mut preview = self.value.clone();
             // A value drawn as one atom shows the text cut as every text formatter cuts it.
             if let Some(Shape::Atom { text, .. }) =
@@ -1875,7 +1836,7 @@ impl OutputBlock {
     }
 
     /// Retain a structured M2 value for width-aware terminal rendering.
-    pub fn rendered(value: SpecNet, ty: Option<String>) -> Self {
+    pub fn rendered(value: Rod, ty: Option<String>) -> Self {
         if let Some(html) = &value.html {
             markup::remember_types(html, &value.type_names);
         }
@@ -1945,7 +1906,7 @@ impl OutputBlock {
     }
 
     /// Set the type annotation from its drawing rather than its text.
-    pub fn annotated(mut self, drawing: Option<SpecNet>) -> Self {
+    pub fn annotated(mut self, drawing: Option<Rod>) -> Self {
         self.cells[0].type_drawing = drawing;
         self
     }
@@ -2052,9 +2013,9 @@ impl OutputBlock {
     }
 
     /// `cell`'s value laid out under `key`, always by a worker unless the context
-    /// asks for it on the spot. Until the worker is done, the previous rows stay
-    /// on screen when only the width or the theme moved, and a placeholder row
-    /// when nothing was laid out before.
+    /// asks for it on the spot. Until the worker is done, the rows laid out last
+    /// stay on screen whatever moved, and a placeholder row only when nothing was
+    /// laid out before.
     fn relaid(
         cell: &OutputCell,
         key: &LayoutKey,
@@ -2075,7 +2036,6 @@ impl OutputBlock {
             .layout
             .borrow()
             .as_ref()
-            .filter(|layout| key.stands_in(&layout.key))
             .map(|layout| layout.lines.clone());
         let stale = match stale {
             Some(stale) => stale,
@@ -2288,7 +2248,6 @@ impl OutputBlock {
                         &context.with_width(self.value_width(cell, context)),
                         Position::new(position.x - inner.x, y),
                     ) {
-                        cell.layout.take();
                         return true;
                     }
                 }
@@ -2575,12 +2534,10 @@ impl Block for OutputBlock {
                     cell.number,
                     cell.source.text_drawn().to_string(),
                 )
-                .with_type(
-                    match &cell.type_drawing {
-                        Some(drawing) if !context.math().original_text => Some(drawing.render()),
-                        _ => cell.ty.clone(),
-                    },
-                ),
+                .with_type(match &cell.type_drawing {
+                    Some(drawing) if !context.math().original_text => Some(drawing.render()),
+                    _ => cell.ty.clone(),
+                }),
             );
             row = row.saturating_add(shown);
         }

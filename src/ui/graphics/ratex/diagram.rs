@@ -4,6 +4,8 @@
 
 use std::fmt::Write;
 
+use strum::{Display, EnumString};
+
 use ratex_types::color::Color;
 use ratex_types::display_item::{DisplayItem, DisplayList};
 use ratex_types::path_command::PathCommand;
@@ -12,9 +14,6 @@ use super::{set, Rgb, Unset};
 
 /// The first line of a diagram's description, which no formula starts with.
 const MARK: &str = "%diagram";
-const INK: &str = "ink";
-const PIECE: &str = "piece";
-const ARROW: &str = "arrow";
 
 /// Ems between neighbouring columns no arrow joins.
 const COLUMN_GAP: f64 = 1.2;
@@ -60,17 +59,25 @@ impl Description {
     pub fn new(ink: Option<Rgb>) -> Self {
         let mut text = format!("{MARK}\n");
         if let Some(Rgb([r, g, b])) = ink {
-            let _ = writeln!(text, "{INK} {r} {g} {b}");
+            let _ = writeln!(text, "{} {r} {g} {b}", Line::Ink);
         }
         Self(text)
     }
 
     pub fn piece(&mut self, (row, column): Cell, tex: &str) {
-        let _ = writeln!(self.0, "{PIECE} {row} {column} {}", one_line(tex));
+        let _ = writeln!(self.0, "{} {row} {column} {}", Line::Piece, one_line(tex));
     }
 
     pub fn arrow(&mut self, from: Cell, to: Cell, label: Option<&str>) {
-        let _ = write!(self.0, "{ARROW} {} {} {} {}", from.0, from.1, to.0, to.1);
+        let _ = write!(
+            self.0,
+            "{} {} {} {} {}",
+            Line::Arrow,
+            from.0,
+            from.1,
+            to.0,
+            to.1
+        );
         if let Some(label) = label {
             let _ = write!(self.0, " {}", one_line(label));
         }
@@ -86,6 +93,19 @@ impl From<Description> for String {
 
 fn one_line(tex: &str) -> String {
     tex.replace('\n', " ")
+}
+
+/// What a line of a description after its mark gives, named by the word it starts
+/// with: `piece 0 1 A` places `A` at row 0, column 1.
+#[derive(Clone, Copy, Debug, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
+enum Line {
+    /// The arrows' colour, as red, green and blue channels.
+    Ink,
+    /// A cell and the TeX set in it.
+    Piece,
+    /// The cells an arrow joins, and the TeX of its label if it has one.
+    Arrow,
 }
 
 /// A grid position, `(row, column)`.
@@ -112,8 +132,8 @@ impl<'a> Read<'a> {
         let mut read = Self::default();
         for line in lines {
             let (word, rest) = line.split_once(' ')?;
-            match word {
-                INK => {
+            match word.parse().ok()? {
+                Line::Ink => {
                     let channels = rest
                         .split(' ')
                         .map(str::parse)
@@ -121,19 +141,18 @@ impl<'a> Read<'a> {
                         .ok()?;
                     read.ink = Some(Rgb(channels.try_into().ok()?));
                 }
-                PIECE => {
+                Line::Piece => {
                     let mut fields = rest.splitn(3, ' ');
                     let place = (fields.next()?.parse().ok()?, fields.next()?.parse().ok()?);
                     read.pieces.push((place, fields.next().unwrap_or("")));
                 }
-                ARROW => {
+                Line::Arrow => {
                     let mut fields = rest.splitn(5, ' ');
                     let mut number = || fields.next()?.parse().ok();
                     let from = (number()?, number()?);
                     let to = (number()?, number()?);
                     read.arrows.push((from, to, fields.next()));
                 }
-                _ => return None,
             }
         }
         Some(read)

@@ -3,7 +3,7 @@
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
-use crate::backend::SpecNet;
+use crate::backend::Rod;
 use crate::ui::block::{Link, Text};
 use crate::ui::graphics::{self, ratex::Rgb, Pictured, Slicing, Typesetting};
 use crate::ui::present;
@@ -269,7 +269,7 @@ fn tex(math: &Math, groups: Option<&Groups>) -> String {
 }
 
 fn draw(
-    value: &SpecNet,
+    value: &Rod,
     width: usize,
     groups: &Groups,
     style: MathStyle,
@@ -378,18 +378,18 @@ pub fn tex_preview(source: &str, width: usize, groups: &Groups, style: MathStyle
 
 /// Draw the supplied expression directly, without classifying formatted text: as a
 /// picture when M2 asks for some part of it to be typeset, else as terminal text.
-pub fn drawn(value: &SpecNet, width: usize, groups: &Groups, style: MathStyle) -> Drawn {
+pub fn drawn(value: &Rod, width: usize, groups: &Groups, style: MathStyle) -> Drawn {
     draw(value, width, groups, style, graphics::typeset_alone)
 }
 
 /// Render the type method's output with each component's supplied highlight class.
 pub fn annotation(
-    value: &SpecNet,
+    value: &Rod,
     width: usize,
     groups: &Groups,
     style: MathStyle,
 ) -> Vec<Line<'static>> {
-    let value = SpecNet {
+    let value = Rod {
         code: Some(value.render()),
         ..value.clone()
     };

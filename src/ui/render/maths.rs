@@ -8,8 +8,8 @@ pub use diagram::{Course, Diagram, Place};
 pub use drawing::{Reading, DIRECT_SUM_SIGN, PRODUCT_SIGN, TENSOR_SIGN};
 
 use super::markup;
-use crate::backend::spec_net::{Node, Shape};
-use crate::backend::{SpecNet, OPTION_ARROW};
+use crate::backend::rod::{Node, Shape};
+use crate::backend::{Rod, OPTION_ARROW};
 use crate::ui::block::TextSpan;
 use crate::ui::config::UI;
 use crate::ui::cycle::cyclic;
@@ -253,7 +253,7 @@ impl From<FractionStyle> for MathStyle {
 /// token by its role. A value M2 drew as plain text carries nothing to colour, and
 /// the caller's flat path renders it unchanged.
 pub fn spans(
-    value: &SpecNet,
+    value: &Rod,
     width: usize,
     style: impl Into<MathStyle>,
 ) -> Result<Vec<SpanLine>, UnsupportedTeX> {
@@ -272,7 +272,7 @@ pub fn spans(
 
 /// [`spans`], each span in the colour of its role.
 fn role_spans(
-    value: &SpecNet,
+    value: &Rod,
     width: usize,
     style: MathStyle,
 ) -> Result<Vec<SpanLine>, UnsupportedTeX> {
@@ -374,7 +374,7 @@ fn prose(text: &str, group: HLGroup, width: usize) -> Vec<SpanLine> {
 
 /// A value's type annotation as rows no wider than `width`, its pieces set side by
 /// side in the type colour.
-pub fn annotation(value: &SpecNet, width: usize, style: impl Into<MathStyle>) -> Vec<SpanLine> {
+pub fn annotation(value: &Rod, width: usize, style: impl Into<MathStyle>) -> Vec<SpanLine> {
     let style = style.into();
     let line = MathBlock::value(&Reading::new(value, style), &value.drawing, style);
     let mut rows = MathBlock::fitted(vec![line], width);
@@ -1077,11 +1077,6 @@ const TEXT_SYMBOLS: [(&str, &str); 3] = [
 const TEXT_ESCAPED: &str = "#$%&_{}";
 
 impl Math {
-    /// Parse one M2 TeX expression.
-    #[cfg(test)]
-    pub fn parse(source: &str) -> Result<Self, UnsupportedTeX> {
-        Self::parse_with(source, MathStyle::default())
-    }
 
     /// Parse one M2 TeX expression, drawing rings as blackboard glyphs when asked.
     fn parse_with(source: &str, style: MathStyle) -> Result<Self, UnsupportedTeX> {
@@ -1643,19 +1638,8 @@ impl MathBlock {
         Self::atom(" ", HLGroup::Canvas)
     }
 
-    #[cfg(test)]
-    pub fn rows(&self) -> &[SpanLine] {
-        &self.rows
-    }
-
     pub(super) fn into_rows(self) -> Vec<SpanLine> {
         self.rows
-    }
-
-    /// The row that aligns with neighbouring blocks.
-    #[cfg(test)]
-    pub const fn baseline(&self) -> usize {
-        self.baseline
     }
 
     pub fn width(&self) -> usize {

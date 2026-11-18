@@ -1,11 +1,11 @@
 //! Macaulay2 process management, protocol types, and transcript decoding.
 
 pub mod preview;
-pub mod spec_net;
+pub mod rod;
 pub mod transcript;
 
 pub use preview::{PreviewMode, ValuePreview};
-pub use spec_net::SpecNet;
+pub use rod::Rod;
 use std::fmt::Display;
 use std::io::{BufRead, BufReader, PipeReader, Write};
 use std::os::unix::process::CommandExt;
@@ -36,15 +36,20 @@ const STARTUP_SCRIPT: EmbeddedSource = EmbeddedSource {
     file_name: "backend.m2",
     contents: include_str!("backend/m2_startup.m2"),
 };
-/// Loads the `Spectral` package, which defines `SpecNet` and `specNet` that every
-/// result is drawn from, installing it first when M2 has none. Published on its
-/// own; the shell carries none of it, only this step.
-const DISPLAY_PACKAGE: EmbeddedSource = EmbeddedSource {
-    file_name: "spectral-package.m2",
+/// Where the shell writes the `Spectral` package it carries, under its config,
+/// and the package's main file there.
+const PACKAGE_DIRECTORY: &str = "package";
+const PACKAGE_MAIN: &str = "Spectral.m2";
+/// Loads the `Spectral` package, which defines `Rod` and `rod` that every result
+/// is drawn from: the user's installed copy when it is as recent as the carried
+/// one, else the carried one, installing it for the user's M2 meanwhile.
+const PACKAGE_LOADER: EmbeddedSource = EmbeddedSource {
+    file_name: "load.m2",
     contents: include_str!("backend/m2_spectral_package.m2"),
 };
-/// The Macaulay2 executable, as found on `PATH`.
-const M2: &str = "M2";
+/// The pinned `Spectral` submodule's source files, as `build.rs` lists them.
+const SPECTRAL_SOURCES: &[EmbeddedSource] =
+    &include!(concat!(env!("OUT_DIR"), "/spectral_package.rs"));
 /// Introduces a result frame on the child's output stream. ASCII group
 /// separator: no diagnostic, prompt or ordinary value begins with it, and the
 /// M2 side writes it immediately before the frame's JSON.
@@ -72,7 +77,8 @@ enum Chunk {
     Frame(String),
 }
 
-/// An M2 source file the shell carries inside itself and hands M2 by path.
+/// An M2 source file the shell carries inside itself and hands M2 by path,
+/// named by its path relative to the directory it is written into.
 #[derive(Clone, Copy, Debug)]
 struct EmbeddedSource {
     file_name: &'static str,
@@ -83,9 +89,10 @@ impl EmbeddedSource {
     /// Materialize the file under `config` at a stable path, so source positions
     /// in it stay readable. Replacement through a same-directory staging file
     /// keeps parallel launches atomic.
-    fn sync_into(self, config: &Path) -> Result<PathBuf> {
-        fs::create_dir_all(config)?;
-        let path = config.join(self.file_name);
+    fn sync_into(self, directory: &Path) -> Result<PathBuf> {
+        let path = directory.join(self.file_name);
+        let parent = path.parent().unwrap_or(directory);
+        fs::create_dir_all(parent)?;
         match fs::read(&path) {
             Ok(contents) if contents == self.contents.as_bytes() => return Ok(path),
             _ => {}
@@ -94,9 +101,9 @@ impl EmbeddedSource {
         // starting at once (the test suite does exactly that), and a shared
         // staging name means one launch renames the file out from under another.
         static STAGE: AtomicU32 = AtomicU32::new(0);
-        let staged = config.join(format!(
+        let staged = parent.join(format!(
             ".{}-{}-{}",
-            self.file_name,
+            path.file_name().unwrap_or_default().display(),
             std::process::id(),
             STAGE.fetch_add(1, Ordering::Relaxed)
         ));
@@ -117,6 +124,9 @@ impl EmbeddedSource {
 struct Frame {
     /// The M2 version, present only on the startup frame.
     ready: Option<String>,
+    /// The version of the Spectral package loaded, on the startup frame.
+    #[serde(default)]
+    spectral: String,
     /// The input number M2 gave this statement, absent on the startup frame.
     #[serde(default)]
     number: u32,
@@ -127,11 +137,11 @@ struct Frame {
     #[serde(default)]
     error: bool,
 
-    value: Option<SpecNet>,
+    value: Option<Rod>,
     #[serde(default)]
     previews: Vec<ValuePreview>,
     type_info: Option<String>,
-    type_drawing: Option<SpecNet>,
+    type_drawing: Option<Rod>,
     #[serde(default)]
     has_value: bool,
     #[serde(default)]
@@ -157,12 +167,12 @@ pub struct M2Response {
     pub transcript: String,
     /// The rendered result, present only when M2 displayed it. A `;`-suppressed
     /// result is `None` here -- deliberately never rendered -- yet still bound.
-    pub value: Option<SpecNet>,
+    pub value: Option<Rod>,
     /// Independent M2 formatter results available to the preview selector.
     pub previews: Vec<ValuePreview>,
     pub type_info: Option<String>,
     /// The type annotation as Spectral draws it.
-    pub type_drawing: Option<SpecNet>,
+    pub type_drawing: Option<Rod>,
     /// Whether M2 bound an `oN` for this input. Not implied by `value`: a
     /// suppressed result binds one without producing rendered text.
     pub has_value: bool,
@@ -174,11 +184,23 @@ pub struct M2Response {
 }
 
 impl M2Response {
-    /// Render the displayed value, preserving its Net fallback.
-    #[cfg(test)]
-    pub fn rendered_value(&self) -> Option<String> {
-        self.value.as_ref().map(SpecNet::render)
-    }
+}
+
+/// The versions of what a session runs, as its startup frame reports them.
+#[derive(Clone, Debug, Default)]
+pub struct Versions {
+    pub m2: String,
+    /// The `Spectral` package loaded, the user's own installed copy.
+    pub spectral: String,
+}
+
+/// What M2 announces on becoming ready: its versions, every name it started
+/// with, and what it printed on the way.
+#[derive(Clone, Debug, Default)]
+pub struct Announcement {
+    pub versions: Versions,
+    pub names: Vec<String>,
+    pub startup_output: String,
 }
 
 /// The live Macaulay2 child, the stdin it reads its session from, and the
@@ -187,20 +209,14 @@ pub struct M2Backend {
     process: Child,
     input: ChildStdin,
     chunks: Receiver<Chunk>,
-    version: String,
-    /// Every name M2 started with, until it is taken.
-    names: Vec<String>,
-    startup_output: String,
+    /// What the startup frame announced; its names and printed text until taken.
+    announcement: Announcement,
     startup_options: M2Options,
     /// Number of the latest submission; its frame is the only one that closes it.
     submission: u64,
 }
 
 impl M2Backend {
-    #[cfg(test)]
-    pub fn spawn() -> Result<Self> {
-        Self::spawn_with_options(&M2Options::default())
-    }
 
     /// Start an interactive session with the requested M2 configuration.
     pub fn spawn_with_options(options: &M2Options) -> Result<Self> {
@@ -222,15 +238,6 @@ impl M2Backend {
         Self::spawn_in(&Self::config_dir()?, None, package, &M2Options::default())
     }
 
-    #[cfg(test)]
-    pub(crate) fn spawn_with_init_file(init_file: Option<PathBuf>) -> Result<Self> {
-        let config = match init_file.as_deref().and_then(Path::parent) {
-            Some(config) => config.to_path_buf(),
-            None => Self::config_dir()?,
-        };
-        Self::spawn_in(&config, init_file, None, &M2Options::default())
-    }
-
     /// Start M2 and let its own top level read the session from stdin.
     ///
     /// The startup script is loaded with `-e` *before* the top level begins, so
@@ -249,15 +256,19 @@ impl M2Backend {
         package: Option<&str>,
         options: &M2Options,
     ) -> Result<Self> {
-        let package_path = DISPLAY_PACKAGE.sync_into(config)?;
+        let carried = config.join(PACKAGE_DIRECTORY);
+        for source in SPECTRAL_SOURCES {
+            source.sync_into(&carried)?;
+        }
+        let package_path = PACKAGE_LOADER.sync_into(&carried)?;
         let script_path = STARTUP_SCRIPT.sync_into(config)?;
         let (reader, writer) = std::io::pipe()?;
 
-        let mut command = Command::new(M2);
+        let mut command = Command::new("M2");
         command.arg("--silent").arg("--no-readline");
         command.args(options.arguments());
         // The display package comes first, so the init file and a requested
-        // package can already install `specNet` for classes of their own.
+        // package can already install `rod` for classes of their own.
         command.arg("-e").arg(format!(
             "load {}",
             m2_string_literal(package_path.display())
@@ -294,9 +305,7 @@ impl M2Backend {
             process,
             input,
             chunks: split_stream(reader),
-            version: String::new(),
-            names: Vec::new(),
-            startup_output: String::new(),
+            announcement: Announcement::default(),
             startup_options: options.clone(),
             submission: 0,
         };
@@ -304,14 +313,14 @@ impl M2Backend {
         Ok(backend)
     }
 
+    /// The main file of the `Spectral` package the shell carries, written out.
+    pub fn carried_package() -> Option<PathBuf> {
+        let directory = Self::config_dir().ok()?.join(PACKAGE_DIRECTORY);
+        Some(directory.join(PACKAGE_MAIN))
+    }
+
     /// Spectral's persistent configuration directory.
     fn config_dir() -> Result<PathBuf> {
-        #[cfg(test)]
-        return Ok(ENV
-            .temp_dir()
-            .join(format!("spectral-m2-test-{}", std::process::id())));
-
-        #[cfg(not(test))]
         ENV.config_home()
             .map(|config| config.join("spectral-m2"))
             .ok_or_else(|| {
@@ -352,12 +361,17 @@ impl M2Backend {
     /// Take over what a startup frame announces, with the text printed before it;
     /// false when `frame` is not a startup frame.
     fn adopt_ready(&mut self, frame: Frame, said: &str) -> bool {
-        let Some(version) = frame.ready else {
+        let Some(m2) = frame.ready else {
             return false;
         };
-        self.version = version;
-        self.names = frame.names;
-        self.startup_output = said.trim().to_string();
+        self.announcement = Announcement {
+            versions: Versions {
+                m2,
+                spectral: frame.spectral,
+            },
+            names: frame.names,
+            startup_output: said.trim().to_string(),
+        };
         true
     }
 
@@ -371,22 +385,6 @@ impl M2Backend {
             true => status,
             false => format!("{status} ({said})"),
         }
-    }
-
-    /// Evaluate `code` (executes it), returning once M2 has closed the input.
-    ///
-    /// `number` is the input number the shell believes this cell has. M2 keeps
-    /// its own count now -- one reader means `lineNumber` is the session's real
-    /// input number -- so it is no longer sent; it stays in the signature because
-    /// the caller still names its cells by it.
-    ///
-    /// Synchronous and blocking. The terminator statement is appended so that a
-    /// statement which errors, and therefore runs none of the hooks, is still
-    /// closed by a frame rather than leaving this loop waiting forever.
-    #[cfg(test)]
-    pub fn evaluate(&mut self, code: &str, number: Option<u32>) -> Result<M2Response> {
-        let _ = number;
-        self.evaluate_within(code, EVALUATION_TIMEOUT)
     }
 
     /// Evaluate `code`, giving up once `timeout` passes without an answer. M2 is
@@ -488,29 +486,21 @@ impl M2Backend {
         }
     }
 
-    /// The M2 version, as reported by the startup frame.
-    pub fn version(&self) -> &str {
-        &self.version
+    pub fn versions(&self) -> &Versions {
+        &self.announcement.versions
     }
 
-    /// What M2 announced on becoming ready: its version, every name it started
-    /// with, and what it printed on the way.
-    pub fn take_announcement(&mut self) -> (String, Vec<String>, String) {
-        (
-            self.version.clone(),
-            self.take_names(),
-            self.take_startup_output(),
+    /// What M2 announced on becoming ready, its names and printed text taken:
+    /// later names arrive with each response.
+    pub fn take_announcement(&mut self) -> Announcement {
+        let versions = self.announcement.versions.clone();
+        mem::replace(
+            &mut self.announcement,
+            Announcement {
+                versions,
+                ..Announcement::default()
+            },
         )
-    }
-
-    /// Every name M2 started with; later names arrive with each response.
-    pub fn take_names(&mut self) -> Vec<String> {
-        mem::take(&mut self.names)
-    }
-
-    /// Text printed during initialization before the backend became ready.
-    pub fn take_startup_output(&mut self) -> String {
-        mem::take(&mut self.startup_output)
     }
 
     /// The operating-system id of the M2 process.
@@ -530,7 +520,7 @@ impl M2Backend {
 }
 
 /// Spell `text` as an M2 string literal, for the `-e` arguments M2 starts with.
-fn m2_string_literal(text: impl Display) -> String {
+pub fn m2_string_literal(text: impl Display) -> String {
     format!(
         "\"{}\"",
         text.to_string().replace('\\', r"\\").replace('"', "\\\"")

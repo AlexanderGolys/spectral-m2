@@ -11,7 +11,6 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Index;
 use std::sync::LazyLock;
-#[cfg(not(test))]
 use std::sync::RwLock;
 
 use ratatui::style::{Color, Modifier, Style};
@@ -449,12 +448,10 @@ fn desaturated(style: Style, saturation: f32) -> Style {
 /// calls. Carrying it made every context a copy of every style and made a repaint look
 /// like a rebuild. Each published table is leaked so a reader can hold `&'static
 /// Groups` without a guard; republishing happens only when a person changes the theme.
-#[cfg(not(test))]
 static SCHEME: LazyLock<RwLock<&'static Groups>> =
     LazyLock::new(|| RwLock::new(Box::leak(Box::new(Groups::default()))));
 
 /// Read the scheme currently in effect.
-#[cfg(not(test))]
 pub fn scheme() -> &'static Groups {
     *SCHEME
         .read()
@@ -462,7 +459,6 @@ pub fn scheme() -> &'static Groups {
 }
 
 /// Publish a newly resolved scheme for every later read.
-#[cfg(not(test))]
 pub fn publish(groups: Groups) {
     *SCHEME
         .write()
@@ -471,21 +467,6 @@ pub fn publish(groups: Groups) {
 
 // Each test runs on its own thread, so a per-thread scheme keeps one test's theme
 // changes from repainting another running in parallel.
-#[cfg(test)]
-thread_local! {
-    static SCHEME: std::cell::Cell<&'static Groups> =
-        std::cell::Cell::new(Box::leak(Box::new(Groups::default())));
-}
-
-#[cfg(test)]
-pub fn scheme() -> &'static Groups {
-    SCHEME.get()
-}
-
-#[cfg(test)]
-pub fn publish(groups: Groups) {
-    SCHEME.set(Box::leak(Box::new(groups)));
-}
 
 impl Groups {
     /// The style of one group, selected by its [`HLGroup`] tag.

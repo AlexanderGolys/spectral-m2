@@ -8,10 +8,10 @@
 use unicode_width::UnicodeWidthChar;
 
 use super::{Math, MathBlock};
-use serde::Deserialize;
 use crate::ui::block::TextSpan;
 use crate::ui::present::SpanLine;
 use crate::ui::theme::groups::HLGroup;
+use serde::Deserialize;
 
 /// Columns kept between neighbouring columns that no arrow joins.
 const COLUMN_GAP: usize = 2;

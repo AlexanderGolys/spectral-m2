@@ -90,16 +90,8 @@ impl Editor {
         self.notes.refresh();
         let edit = self.keymaps.edit(key);
         match edit {
-            Some(InputAction::MoveUp) => self
-                .notes
-                .input
-                .field_mut()
-                .move_vertically(TextDirection::Backward),
-            Some(InputAction::MoveDown) => self
-                .notes
-                .input
-                .field_mut()
-                .move_vertically(TextDirection::Forward),
+            Some(InputAction::MoveUp) => self.notes.input.move_vertically(TextDirection::Backward),
+            Some(InputAction::MoveDown) => self.notes.input.move_vertically(TextDirection::Forward),
             Some(InputAction::HistoryPrevious | InputAction::HistoryNext) => {}
             _ => {
                 self.notes.input.handle_edit_key(key, edit);

@@ -1,7 +1,8 @@
 //! Configurable content at fixed, evenly spaced statusline anchors.
 
 use crate::code::semantic::SERVER_EXECUTABLE;
-use crate::updates::{shell_version, LANGUAGE_SERVER};
+use crate::env::ENV;
+use crate::updates::LANGUAGE_SERVER;
 use lsp_types::ServerInfo;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -137,7 +138,7 @@ impl StatusComponent {
                 HLGroup::StatuslineState,
             ),
             Self::M2Version => version("M2", context.runtime.m2_version.clone()),
-            Self::Sp2Version => version("sp2", Some(shell_version())),
+            Self::Sp2Version => version("sp2", Some(ENV.shell_version())),
             Self::LanguageServerVersion => match &context.runtime.language_server {
                 LanguageServerState::Running(server) => version(
                     &server.name,
@@ -153,7 +154,11 @@ impl StatusComponent {
                 let memory = |bytes: Option<u64>| bytes.map_or_else(|| "n/a".into(), mebibytes);
                 let separator = TextSpan::new(" / ", HLGroup::StatuslineSeparator);
                 [
-                    format!("sp2 {} {}", shell_version(), memory(diagnostics.sp2_memory)),
+                    format!(
+                        "sp2 {} {}",
+                        ENV.shell_version(),
+                        memory(diagnostics.sp2_memory)
+                    ),
                     format!("M2 {}", memory(diagnostics.m2_memory)),
                     format!(
                         "pictures {} ({})",

@@ -8,9 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::env::ENV;
-#[cfg(not(test))]
 use crate::ui::settings::session::SessionSettings;
-use m2_syn::{lex_str_recovering, CommentTrivia, LexErrorKind, Spanned};
+use m2_syn::{lex_str_recovering, Comments, LexErrorKind, Source, Span, Spanned};
 
 /// The extension a file of Macaulay2 code carries.
 const EXTENSION: &str = "m2";
@@ -29,7 +28,7 @@ pub fn without_comments(source: &str) -> String {
     {
         return source.to_string();
     }
-    let comments = CommentTrivia::of(&tokens.value);
+    let comments = Comments::within(&Span::ranged(Source::new(source), 0..source.len()));
     let mut ranges = comments
         .outer()
         .iter()
@@ -129,19 +128,12 @@ pub fn write(path: &Path, code: &str) -> io::Result<()> {
 }
 
 /// Where the code of the previous session is kept.
-#[cfg(not(test))]
 pub fn previous_session() -> Option<PathBuf> {
     Some(
         SessionSettings::directory()?
             .join("previous-session")
             .with_extension(EXTENSION),
     )
-}
-
-/// Tests keep no previous session, so they never overwrite a developer's.
-#[cfg(test)]
-pub fn previous_session() -> Option<PathBuf> {
-    None
 }
 
 /// A fresh archive filename, ordered by creation time.
