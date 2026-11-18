@@ -418,7 +418,7 @@ impl Editor {
         self.picker_area = sections[1];
 
         match view {
-            ViewKind::Notes => self.draw_notes(frame, sections[0], &context),
+            ViewKind::Notes => self.draw_notes(frame, sections[0]),
             ViewKind::Reference => {
                 let (_, inclusions) = self.reference.render(
                     &context.full_output(),

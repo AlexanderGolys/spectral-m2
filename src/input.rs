@@ -577,7 +577,6 @@ impl InputTextField {
         self.revision = self.revision.wrapping_add(1);
         self.growth.clear();
     }
-
 }
 
 /// The live source field and its transient presentation state.

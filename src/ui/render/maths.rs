@@ -1077,7 +1077,6 @@ const TEXT_SYMBOLS: [(&str, &str); 3] = [
 const TEXT_ESCAPED: &str = "#$%&_{}";
 
 impl Math {
-
     /// Parse one M2 TeX expression, drawing rings as blackboard glyphs when asked.
     fn parse_with(source: &str, style: MathStyle) -> Result<Self, UnsupportedTeX> {
         let mut input = Input::new(source, style);

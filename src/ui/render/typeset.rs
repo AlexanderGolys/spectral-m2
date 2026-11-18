@@ -268,13 +268,7 @@ fn tex(math: &Math, groups: Option<&Groups>) -> String {
     }
 }
 
-fn draw(
-    value: &Rod,
-    width: usize,
-    groups: &Groups,
-    style: MathStyle,
-    picture: Picture,
-) -> Drawn {
+fn draw(value: &Rod, width: usize, groups: &Groups, style: MathStyle, picture: Picture) -> Drawn {
     let width = width.max(1);
     if value.wants_typesetting() && value.html.is_none() && !value.has_links() {
         let math = Reading::new(value, style).typewritten().math();

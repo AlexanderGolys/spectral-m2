@@ -681,7 +681,6 @@ struct Raster {
 }
 
 impl Raster {
-
     fn fitted_at_scale(
         formula: &Formula,
         canvas: Canvas,

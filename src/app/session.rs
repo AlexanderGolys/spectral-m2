@@ -769,10 +769,7 @@ impl Session {
         }
     }
 
-    fn resolve_restart(
-        &mut self,
-        result: Result<Announcement, String>,
-    ) -> EditorUpdate {
+    fn resolve_restart(&mut self, result: Result<Announcement, String>) -> EditorUpdate {
         self.restarting = false;
         match result {
             Ok(Announcement {

@@ -1566,11 +1566,7 @@ impl OutputCell {
 
     fn offers(&self, mode: PreviewMode) -> bool {
         match mode {
-            PreviewMode::Rod => self
-                .source
-                .value
-                .as_ref()
-                .is_some_and(Rod::is_structured),
+            PreviewMode::Rod => self.source.value.as_ref().is_some_and(Rod::is_structured),
             PreviewMode::Markup => self
                 .source
                 .value

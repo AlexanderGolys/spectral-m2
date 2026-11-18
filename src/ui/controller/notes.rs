@@ -10,10 +10,10 @@ use ratatui::Frame;
 use super::Editor;
 use super::Reaction;
 use crate::code::file;
-use crate::code::highlight::Highlighter;
+use crate::code::highlight::SyntaxHighlighter;
 use crate::input::{InputAction, InputCode, InputContext};
 use crate::ui::action::Action;
-use crate::ui::block::HLSpan;
+use crate::ui::config::UI;
 use crate::ui::key::KeyEvent;
 use crate::ui::render::RenderContext;
 use crate::ui::settings::session::SessionSettings;
@@ -23,6 +23,7 @@ use crate::ui::text_object::TextDirection;
 /// It uses the input's editing and undo operations without ever submitting code.
 pub struct Notes {
     input: InputCode,
+    highlighter: SyntaxHighlighter,
     path: Option<PathBuf>,
     saved: String,
 }
@@ -31,17 +32,10 @@ impl Default for Notes {
     fn default() -> Self {
         Self {
             input: InputCode::new(),
+            highlighter: SyntaxHighlighter::markdown(),
             path: None,
             saved: String::new(),
         }
-    }
-}
-
-struct PlainText;
-
-impl Highlighter for PlainText {
-    fn highlight(&mut self, _: &str) -> Vec<HLSpan> {
-        Vec::new()
     }
 }
 
@@ -147,15 +141,15 @@ impl Editor {
     }
 
     /// Draw the notebook and keep its caret visible while it has focus.
-    pub fn draw_notes(&mut self, frame: &mut Frame, area: Rect, context: &RenderContext) {
+    pub fn draw_notes(&mut self, frame: &mut Frame, area: Rect) {
         self.notes.refresh();
+        let context = RenderContext::new(area.width, UI.prompt_width());
         self.notes.input.set_settings(self.settings);
-        let mut highlighter = PlainText;
         let focused = self.pane_focused && !self.picker_open();
         if let Some(cursor) = self.notes.input.render(
             InputContext {
-                render: context,
-                highlighter: &mut highlighter,
+                render: &context,
+                highlighter: &mut self.notes.highlighter,
                 command: false,
                 debugging: false,
                 focused,

@@ -123,9 +123,7 @@ impl Program {
     /// Record `found` as the newest version; whether it is news.
     fn learn(self, found: &Version) -> bool {
         let mut known = Self::known();
-        let news = known
-            .get(self.name)
-            .is_none_or(|newest| found > newest);
+        let news = known.get(self.name).is_none_or(|newest| found > newest);
         if news {
             known.insert(self.name, found.clone());
         }
@@ -140,10 +138,7 @@ impl Program {
 
     /// The version `PATH`'s binary reports as the last word of `--version`.
     fn installed(self) -> Option<Version> {
-        let output = Command::new(self.name)
-            .arg("--version")
-            .output()
-            .ok()?;
+        let output = Command::new(self.name).arg("--version").output().ok()?;
         Version::parse(
             String::from_utf8(output.stdout)
                 .ok()?

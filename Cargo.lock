@@ -2580,7 +2580,7 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "spectral-m2"
-version = "1.4.0"
+version = "1.4.1-shitshow.1.1"
 dependencies = [
  "base64",
  "clap",
@@ -2611,8 +2611,10 @@ dependencies = [
  "these-macros-should-be-illegal",
  "thiserror 2.0.18",
  "toml",
+ "tree-sitter",
  "tree-sitter-highlight",
  "tree-sitter-macaulay2",
+ "tree-sitter-md",
  "ttf-parser",
  "unicode-width",
  "url",
@@ -3054,6 +3056,16 @@ checksum = "ab54399a4af15d2644bb9d68d2832365c9eebf2e1c03aa308c379a0e243367d1"
 dependencies = [
  "cc",
  "tree-sitter",
+]
+
+[[package]]
+name = "tree-sitter-md"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ed661bfe3c264961425f77cd89ad2998bf5d629e71ce8bab1e5d7e940d6246e"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
 ]
 
 [[package]]

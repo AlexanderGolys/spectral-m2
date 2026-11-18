@@ -9,7 +9,7 @@ Bg1 = { required = true }
 Bg2 = { required = true }
 Bg3 = { required = true }
 Bg4 = { required = true }
-Text = { required = true }
+Text = { required = true, captures = ["none"] }
 Muted = { required = true }
 Faint = { required = true }
 Keyword = { required = true, captures = ["keyword", "keyword.modifier"] }
@@ -63,16 +63,20 @@ Quote = { link = "Symbol", captures = ["character.special"] }
 Namespace = { link = "Type", italic = true, captures = ["namespace"] }
 Package = { link = "Type", italic = true, captures = ["module"] }
 Documentation = { link = "Info", captures = ["string.special.url"] }
-MarkupHeading1 = { link = "Keyword", bold = true }
+MarkupHeading1 = { link = "Keyword", bold = true, captures = ["text.title"] }
 MarkupBrief = { link = "Keyword", italic = true }
 MarkupHeading2 = { link = "Function", bold = true }
 MarkupHeading3 = { link = "Type", bold = true }
-MarkupStrong = { bold = true }
-MarkupEmphasis = { italic = true }
+MarkupStrong = { bold = true, captures = ["text.strong"] }
+MarkupEmphasis = { italic = true, captures = ["text.emphasis"] }
 MarkupStrongEmphasis = { bold = true, italic = true }
 MarkupStrike = { crossed_out = true }
 # A link is drawn in the color of printed output, set apart by its slant.
-MarkupLink = { fg_from = "Printed.fg", italic = true }
+MarkupLink = { fg_from = "Printed.fg", italic = true, captures = ["text.uri", "text.reference"] }
+# Written Markdown: code as Neovim draws `@markup.raw`, and the marks that
+# structure a page (heading hashes, list bullets, quote bars) as its `Special`.
+MarkupRaw = { link = "Comment", captures = ["text.literal"] }
+MarkupMarker = { link = "Accent", captures = ["punctuation.special"] }
 # A link to a documentation node keeps the colours of what it is made of and adds
 # only a soft underline; under the pointer the background behind it lights up.
 MarkupDocLink = { underline = true, sp_from = "Muted.fg" }

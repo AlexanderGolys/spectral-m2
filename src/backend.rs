@@ -183,8 +183,7 @@ pub struct M2Response {
     pub names: Vec<String>,
 }
 
-impl M2Response {
-}
+impl M2Response {}
 
 /// The versions of what a session runs, as its startup frame reports them.
 #[derive(Clone, Debug, Default)]
@@ -217,7 +216,6 @@ pub struct M2Backend {
 }
 
 impl M2Backend {
-
     /// Start an interactive session with the requested M2 configuration.
     pub fn spawn_with_options(options: &M2Options) -> Result<Self> {
         let config = Self::config_dir()?;

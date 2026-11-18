@@ -43,7 +43,10 @@ fn highlight_groups(out: &Path) {
 fn spectral_sources(out: &Path) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(SPECTRAL);
     let auxiliary = root.join(SPECTRAL);
-    println!("cargo:rerun-if-changed={}", root.join(SPECTRAL_MAIN).display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        root.join(SPECTRAL_MAIN).display()
+    );
     println!("cargo:rerun-if-changed={}", auxiliary.display());
     let main = fs::read_to_string(root.join(SPECTRAL_MAIN)).unwrap();
     let version = main

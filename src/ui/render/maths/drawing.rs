@@ -5,7 +5,7 @@
 #![allow(clippy::non_ascii_literal)]
 use super::diagram::Arrow;
 use super::{Diagram, GridKind, Math, MathDisplay, MathStyle};
-use crate::backend::rod::{Node, Shape, Rod};
+use crate::backend::rod::{Node, Rod, Shape};
 use crate::ui::theme::groups::HLGroup;
 
 /// The sign between the factors of a product.
