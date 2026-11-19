@@ -99,6 +99,15 @@ const STACKED_CELL_RULE: &str = "┄";
 static SOURCE_LOCATION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\S+\.m2(:[0-9]+)*$").expect("valid source location pattern"));
 
+/// A [`SOURCE_LOCATION`] down to its line and column, as a page's closing "source
+/// of this document" states it, capturing the package: `Graphs` of
+/// `Graphs.m2:1868:0`, `Macaulay2Doc` of `Macaulay2Doc/functions/det-doc.m2:25:0`.
+/// A file prose names, such as `PackageName.m2`, has no position.
+static DOCUMENT_SOURCE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^([^/\s]+?)(?:/\S+)?\.m2:[0-9]+:[0-9]+$")
+        .expect("valid document source pattern")
+});
+
 /// The typewriter spans M2 sets locations and code in, as its HTML spells them.
 static TYPEWRITER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<span class="tt">([^<]*)</span>"#).expect("valid typewriter span pattern")
@@ -477,16 +486,12 @@ fn preformatted_sources(html: &str) -> Vec<String> {
     found
 }
 
-/// The package a page documents, which its source location names first:
-/// `Graphs.m2:1868:0`, or `Macaulay2Doc/functions/det-doc.m2:25:0`.
+/// The package a page documents, as its closing source location names it.
 pub fn source_package(html: &str) -> Option<String> {
-    let location = TYPEWRITER
+    TYPEWRITER
         .captures_iter(html)
-        .map(|captures| captures[1].to_string())
-        .find(|text| SOURCE_LOCATION.is_match(text))?;
-    let file = location.split(':').next()?;
-    let first = file.split('/').next()?;
-    Some(first.strip_suffix(".m2").unwrap_or(first).to_string())
+        .filter_map(|text| DOCUMENT_SOURCE.captures(&text[1]).map(|source| source[1].to_string()))
+        .last()
 }
 
 /// A preformatted block among laid-out lines: the list or quote prefix it sits
