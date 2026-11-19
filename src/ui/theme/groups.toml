@@ -49,6 +49,7 @@ Repeat = { link = "Keyword", captures = ["keyword.repeat"] }
 Exception = { link = "Keyword", captures = ["keyword.exception"] }
 StorageClass = { link = "Keyword" }
 Debug = { link = "Keyword", captures = ["keyword.debug"] }
+PreProc = { link = "Keyword", captures = ["keyword.directive"] }
 Delimiter = { link = "Muted", captures = ["punctuation.delimiter"] }
 Punctuation = { link = "Muted", captures = ["punctuation.bracket"] }
 Variable = { link = "Text", captures = ["variable"] }
@@ -57,7 +58,7 @@ TypeParameter = { link = "Type" }
 RingGenerator = { link = "Text" }
 Option = { link = "Property" }
 LspVariable = {}
-Installation = { link = "Function", captures = ["label"] }
+Installation = { link = "Function", captures = ["function.method"] }
 CompiledFunction = { link = "Function", captures = ["function.builtin"] }
 Quote = { link = "Symbol", captures = ["character.special"] }
 Namespace = { link = "Type", italic = true, captures = ["namespace"] }
