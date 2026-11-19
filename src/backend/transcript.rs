@@ -26,10 +26,11 @@ pub struct CapturedError {
 }
 
 /// A warning's opening line, up to its message: stamped with M2's location, bare
-/// as Core's `warningMessage` writes it, or commented out as packages print
-/// theirs: `--warning: `, `-- warning: `, or the documentation tools' `-- *** warning: `.
+/// as Core's `warningMessage` writes it, or commented out: by Core's `printerr`
+/// as ` -- warning: `, by packages as `--warning: ` or `-- warning: `, by the
+/// documentation tools as `-- *** warning: `.
 static WARNING: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(r"^(?:{LOCATION}|-- ?(?:\*\*\* )?)?warning: ")).expect("valid pattern")
+    Regex::new(&format!(r"^(?:{LOCATION}| ?-- ?(?:\*\*\* )?)?warning: ")).expect("valid pattern")
 });
 
 /// A line continuing the warning above it, indented to the keyword's colon:
