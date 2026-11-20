@@ -17,7 +17,7 @@ How a result is drawn is decided by the [Spectral](https://github.com/AlexanderG
 ```m2
 Point = new Type of List
 expression Point := p -> new FunctionApplication from (symbol point, toSequence p)
-speek new Point from {1, 1/2}   -- Row{Atom{"point", Symbol}, Fence{...}}
+rod new Point from {1, 1/2}     -- a Rod, printed as point(1, 1/2)
 formatted Sum := s -> joined(apply(toList s, rod), " ⊞ ", "Operator")
 ```
 
@@ -33,7 +33,7 @@ A drawing that throws falls back to the value's plain text, so a broken `rod` ca
 
 Each cell is sent to Macaulay2 exactly once and is never replayed behind your back. Deciding whether input is complete, splitting it into cells, highlighting and diagnostics are all done locally, by parsing the text, before anything is sent. An hour-long computation is never started twice.
 
-Each result arrives once, complete: drawn by `rod` with its type from `specType`, and also formatted by M2's own `net`, `toString`, `tex`, `toExternalString` and `peek`, and by Spectral's `speek`. By default `rod` traverses the class's `expression` representation; a value held without further structure keeps its class and textual spelling. Switching renderers uses the data already received. A result that is `null`, or silenced by a trailing `;`, is not formatted at all; a silenced one is still bound to its `oN`.
+Each result arrives once, complete: drawn by `rod` with its type from `specType`, and also formatted by M2's own `net`, `toString`, `tex`, `toExternalString` and `peek`, and inspected by Spectral's `speek`. By default `rod` traverses the class's `expression` representation; a value held without further structure keeps its class and textual spelling. Switching renderers uses the data already received. A result that is `null`, or silenced by a trailing `;`, is not formatted at all; a silenced one is still bound to its `oN`.
 
 ## Other processes
 
@@ -55,13 +55,13 @@ new Pair from {0 => "a", 1 => symbol a}
 
 The first component is a string and the second a symbol. Their colours follow those classes. No shell extension is needed. An expression class with no layout of its own is spelled by its name over its parts, as `Equation{a, b}`.
 
-The colour of a class is its `highlightGroup`, the name of one of the shell's highlight groups, inherited from the nearest ancestor that sets one: numbers are `Number`, ring elements and symbols `Variable`, rings and types `Type`, anything else `Text`. A value drawn whole, as one piece of text, takes the colour of its own class:
+What a class says about how its values are drawn is a method of the class returning a constant, found up its ancestry as any method is. The colour of a class is its `highlightGroup`, the name of one of the shell's highlight groups, from the nearest ancestor that installs one: numbers are `Number`, ring elements and symbols `Variable`, rings and types `Type`, anything else `Text`. A value drawn whole, as one piece of text, takes the colour of its own class:
 
 ```m2
 Gene = new Type of HashTable;
 expression Gene := g -> hold g;
 toString Gene := g -> g.name;
-Gene.highlightGroup = "Keyword";
+highlightGroup Gene := class' -> "Keyword";
 new Gene from {symbol name => "BRCA1"}
 ```
 
@@ -77,45 +77,45 @@ new Report from {"status" => "converged", "steps" => toList(1..40)}
 
 `MapExpression{target, source, label}` places a label above a leftward arrow. Nest maps in the target position to compose a chain without repeating its modules. `UnderExpression{base, label}` centers a label beneath its base while keeping the base on the surrounding baseline; complexes use it for homological degrees.
 
-Use `speek` to inspect how a value is laid out. Like `peek`, it spells one level of the drawing, each part by its shape and each piece of text by its class; `speek'(depth, value)` spells `depth` levels, and parts past them as `{...}`. `rod` and `specType` are separate methods, both receiving the original value. You can change a type annotation independently:
+A drawing is a `Rod`, the format string a value is shown by: the expression it lays out, each part keeping its colour and whether it is typeset. Plain M2 prints a `Rod` as the text it lays out. `speek` inspects a value as `peek` does, its class and what it holds, but drawn: `speek {1, 1/2}` is `List{1, ½}`, and `speek'(depth, value)` opens `depth` levels. A `Rod` is a hash table too, so `speek rod x` shows the fields the drawing of `x` is made of. `rod` and `specType` are separate methods, both receiving the original value. You can change a type annotation independently:
 
 ```m2
 specType' (ZZ, Pair) := (depth, p) -> rod symbol Pair;
 ```
 
-Type annotations take their depth from the nearest `typeDepth` parameter in the value's type ancestry. `Thing.typeDepth = 1` keeps ordinary values and containers compact; `Module.typeDepth = 2` shows the base ring as `Module[R]`. A subclass inherits its parent's setting unless it has its own.
+Type annotations take their depth from the nearest `typeDepth` method in the value's type ancestry. Most values have depth 1, which keeps them and containers compact; a module has 2, which shows the base ring as `Module[R]`. A subclass inherits its parent's setting unless it installs its own.
 
-Set these parameters in the shell, or keep them in your Spectral `init.m2`:
+Install these in the shell, or keep them in your Spectral `init.m2`:
 
 ```m2
-Array.typeDepth = 1;
-List.typeDepth = 1;
-Module.typeDepth = 2;
-SheafOfRings.typeDepth = 2;
-CoherentSheaf.typeDepth = 2;
+typeDepth Array := class' -> 1;
+typeDepth List := class' -> 1;
+typeDepth Module := class' -> 2;
+typeDepth SheafOfRings := class' -> 2;
+typeDepth CoherentSheaf := class' -> 2;
 ```
 
 Depth zero or one shows only the outer type. At depth two or greater, modules and matrices show their base ring, coherent sheaves and sheaf maps show the sheaf of rings they are modules over, and a sheaf of rings shows its variety. These are mathematical parameters: a module over `R` displays as `Module[R]`, a sheaf on `X` as `CoherentSheaf[OO_X]`, and `OO_X` as `SheafOfRings[X]`, independently of their presentation matrices or twists. Depth three looks into the variety under `OO_X` when it has no name. A named parameter keeps its name. An unnamed one shows a placeholder at depth two, and each further level spells it out one more step: `specType'(3, (ZZ/7[t])^2)` shows the ring as `ZZ/7[t]`.
 
-Other types use a bounded fold of their expression components. Set `Array.typeDepth = 2` to display `[1, 1.]` as `Array[ZZ, RR]`. The depth must be a non-negative integer. A bad setting leaves the ordinary class annotation available, while a direct `specType` call reports the error.
+Other types use a bounded fold of their expression components. Install `typeDepth Array := class' -> 2` to display `[1, 1.]` as `Array[ZZ, RR]`. The depth must be a non-negative integer. A bad setting leaves the ordinary class annotation available, while a direct `specType` call reports the error.
 
 An explicit `specType'(depth, value)` overrides the configured depth: `specType'(2, [1, 1.])` expands one layer to `Array[ZZ, RR]`; `specType'(3, [[1, 1.], ["a"]])` gives `Array[Array[ZZ, RR], Array[String]]`. Repeated components remain present at explicitly requested depths. Install `specType'` for `(ZZ, YourType)` to customize which parameters a type exposes.
 
-A type's `typeset` setting chooses whether its values are set as typeset maths. The nearest setting in the type's ancestry applies, and everything inside a typeset part is typeset with it. `Thing.typeset` is `false`; `RingElement`, `Ring`, `Module`, `Matrix` and the expressions `Divide`, `Power`, `Subscript` and `MatrixExpression` are `true`. Turn it on for a type of your own, or off for one you prefer as text:
+A type's `typeset` method chooses whether its values are set as typeset maths. The nearest one in the type's ancestry applies, and everything inside a typeset part is typeset with it. Values are not typeset unless their class says so; `RingElement`, `Ring`, `Module`, `Matrix` and the expressions `Divide`, `Power`, `Subscript` and `MatrixExpression` are `true`. Turn it on for a type of your own, or off for one you prefer as text:
 
 ```m2
-Pair.typeset = true;     -- draw pairs as typeset maths
-Ring.typeset = false;    -- spell rings such as QQ as text
+typeset Pair := class' -> true;     -- draw pairs as typeset maths
+typeset Ring := class' -> false;    -- spell rings such as QQ as text
 ```
 
 ### How deep values unfold
 
-A value is drawn from its `expression`, and unfolding stops at names: a ring, module or variety bound to a symbol is shown by that symbol. Unnamed structures inside a value, such as the quotient ring of a resolution computed from `coker vars (S/I)`, are unfolded only up to the nearest `valueDepth` setting in the value's type ancestry. Past that depth they keep a conventional placeholder: `R` for a ring, `I` for an ideal, `M` for a module, `X` for a variety, `F` for a sheaf and `C` for a complex. `Thing.valueDepth = 1` spells out the outer value and shows the structures it is built over by placeholder. Ring elements, numbers and the items of lists are always drawn in full.
+A value is drawn from its `expression`, and unfolding stops at names: a ring, module or variety bound to a symbol is shown by that symbol. Unnamed structures inside a value, such as the quotient ring of a resolution computed from `coker vars (S/I)`, are unfolded only up to the nearest `valueDepth` in the value's type ancestry. Past that depth they keep a conventional placeholder: `R` for a ring, `I` for an ideal, `M` for a module, `X` for a variety, `F` for a sheaf and `C` for a complex. A depth of 1, the default, spells out the outer value and shows the structures it is built over by placeholder. Ring elements, numbers and the items of lists are always drawn in full.
 
-A complex unfolds one name at a time. At depth one it is only its chain, `0 ⟵ C₀ ⟵ C₁ ⟵ ⋯ ⟵ C₄ ⟵ 0`, with each arrow labelled by its differential `dᵢ`. At depth two the names give way to the modules and the matrices of the differentials, with their rings as placeholders. Every further level substitutes one more name, the quotient ring first and then the ring it is a quotient of. `Complex.valueDepth = 2` is the default, so a resolution shows its modules and matrices.
+A complex unfolds one name at a time. At depth one it is only its chain, `0 ⟵ C₀ ⟵ C₁ ⟵ ⋯ ⟵ C₄ ⟵ 0`, with each arrow labelled by its differential `dᵢ`. At depth two the names give way to the modules and the matrices of the differentials, with their rings as placeholders. Every further level substitutes one more name, the quotient ring first and then the ring it is a quotient of. A complex has depth 2 by default, so a resolution shows its modules and matrices.
 
 ```m2
-Complex.valueDepth = 3;    -- also spell out the ring of every module
+valueDepth Complex := class' -> 3;    -- also spell out the ring of every module
 rod'(3, OO_(Proj(QQ[a,b]))^2)
 ```
 

@@ -8,6 +8,8 @@ All notable changes to Spectral M2 are documented here.
 
 - The *ascii* switch in the rendering settings is now *symbols*, with three choices: `nerd font`, `unicode` (no Nerd Font icons) and `ascii`. A saved `ascii` choice carries over. The choice now also reaches the spinner, tree branches, key hints, ellipses and documentation rules, and changing it redraws results at once.
 - Picker key hints spell arrow keys as arrows (`↑↓ select`, `←→ change`) instead of `updown`.
+- The `speek` preview inspects the value as `peek` does, drawn like any result: `List{1, ½}`, a ring as its class with its pairs aligned. It used to spell the drawing's own tree as text; `speek rod x` shows that now.
+- Spectral 0.4.0: a class says how its values are drawn through methods returning a constant, `highlightGroup Gene := class' -> "Keyword"` or `typeDepth Array := class' -> 2`, in place of `Gene.highlightGroup = "Keyword"`; they are found up the class's ancestry as any method is. A `Rod` prints in plain M2 as the text it lays out.
 
 ## [1.4.0] - 2026-11-18
 

@@ -138,6 +138,7 @@ struct Frame {
     error: bool,
 
     value: Option<Rod>,
+    inspection: Option<Rod>,
     #[serde(default)]
     previews: Vec<ValuePreview>,
     type_info: Option<String>,
@@ -168,6 +169,8 @@ pub struct M2Response {
     /// The rendered result, present only when M2 displayed it. A `;`-suppressed
     /// result is `None` here -- deliberately never rendered -- yet still bound.
     pub value: Option<Rod>,
+    /// The value inspected as `peek` inspects it, as Spectral's `speek` draws it.
+    pub inspection: Option<Rod>,
     /// Independent M2 formatter results available to the preview selector.
     pub previews: Vec<ValuePreview>,
     pub type_info: Option<String>,
@@ -468,6 +471,7 @@ impl M2Backend {
                         is_error: frame.error,
                         transcript,
                         value: frame.value,
+                        inspection: frame.inspection,
                         previews: frame.previews,
                         type_info: frame.type_info,
                         type_drawing: frame.type_drawing,

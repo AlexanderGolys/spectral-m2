@@ -139,6 +139,7 @@ pub fn response_blocks(
         (Some(value), Some(rendered), true) => Some(
             OutputBlock::rendered(value, rendered.type_info)
                 .with_previews(response.previews.clone())
+                .inspected(response.inspection.clone())
                 .annotated(response.type_drawing.clone())
                 .drawing_text(),
         ),
@@ -1621,6 +1622,7 @@ impl OutputCell {
     fn offers(&self, mode: PreviewMode) -> bool {
         match mode {
             PreviewMode::Rod => self.source.value.as_ref().is_some_and(Rod::is_structured),
+            PreviewMode::Speek => self.source.inspection.is_some(),
             PreviewMode::Markup => self
                 .source
                 .value
@@ -1709,6 +1711,8 @@ struct ValueSource {
     /// filled on a worker, so the drawing thread only reads it once there.
     text: OnceLock<String>,
     value: Option<Rod>,
+    /// The value inspected as `peek` inspects it, drawn as the value is.
+    inspection: Option<Rod>,
 }
 
 impl ValueSource {
@@ -1743,7 +1747,7 @@ impl ValueSource {
                 .preview_text(PreviewMode::Net)
                 .map(str::to_owned)
                 .or_else(|| self.value.as_ref().map(Rod::ascii)),
-            mode @ (PreviewMode::String | PreviewMode::Peek | PreviewMode::Speek) => {
+            mode @ (PreviewMode::String | PreviewMode::Peek) => {
                 self.preview_text(mode).map(str::to_owned)
             }
             _ => None,
@@ -1777,15 +1781,18 @@ impl ValueSource {
             );
             links = drawn.links;
             drawn.lines
-        } else if renderer == PreviewMode::Rod {
-            let mut preview = self.value.clone();
-            // A value drawn as one atom shows the text cut as every text formatter cuts it.
-            if let Some(Shape::Atom { text, .. }) =
-                preview.as_mut().map(|value| &mut value.drawing.shape)
-            {
-                *text = self.text().to_string();
-            }
-            match preview.as_ref() {
+        } else if matches!(renderer, PreviewMode::Rod | PreviewMode::Speek) {
+            let drawing = match renderer {
+                PreviewMode::Speek => self.inspection.clone(),
+                _ => self.value.clone().map(|mut value| {
+                    // A value drawn as one atom shows the text cut as every text formatter cuts it.
+                    if let Shape::Atom { text, .. } = &mut value.drawing.shape {
+                        *text = self.text().to_string();
+                    }
+                    value
+                }),
+            };
+            match drawing.as_ref() {
                 Some(value) if style.display == MathDisplay::Typeset => {
                     let drawn = typeset::drawn(value, width, theme, style);
                     links = drawn.links;
@@ -1874,6 +1881,7 @@ impl OutputBlock {
                     )],
                     text: OnceLock::from(text.trim_end().to_string()),
                     value: None,
+                    inspection: None,
                 }),
                 pictures: RefCell::default(),
                 number: None,
@@ -1906,6 +1914,7 @@ impl OutputBlock {
                         .collect(),
                     text: OnceLock::new(),
                     value: Some(value),
+                    inspection: None,
                 }),
                 pictures: RefCell::default(),
                 number: None,
@@ -1942,7 +1951,6 @@ impl OutputBlock {
                         | PreviewMode::String
                         | PreviewMode::External
                         | PreviewMode::Peek
-                        | PreviewMode::Speek
                 ) {
                     preview.text = output_preview(&preview.text);
                 }
@@ -1955,6 +1963,12 @@ impl OutputBlock {
     /// Present this value without its enclosing output border.
     pub fn without_frame(mut self) -> Self {
         self.framed = false;
+        self
+    }
+
+    /// Offer the value's inspection, as `speek` draws it, beside its drawing.
+    pub fn inspected(mut self, inspection: Option<Rod>) -> Self {
+        Arc::make_mut(&mut self.cells[0].source).inspection = inspection;
         self
     }
 

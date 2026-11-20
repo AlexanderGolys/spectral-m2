@@ -65,11 +65,13 @@ spectralShell := (() -> (
 		Function.GlobalReleaseHook = releaseHook;
 	);
 
-	-- What the statement in flight showed: its drawn value and type annotation.
+	-- What the statement in flight showed: its drawn value, its inspection and
+    -- its type annotation.
     -- The hooks only record them; the terminator sends them, because a
     -- statement that throws or ends in `;` is never recorded, and the frame
     -- must leave exactly once per cell all the same.
 	renderedValue := null;
+	inspection := null;
 	previews := {};
 	typeInfo := null;
 	typeDrawing := null;
@@ -106,14 +108,14 @@ spectralShell := (() -> (
 	-- What a value is drawn as is the Spectral package's business: `rod`,
 	-- which a session may install for a class of its own. The formatting hooks are
 	-- taken once, before any user code runs, so rebinding a name later cannot
-	-- change what is called here. `drawnAs` is `rod` held to giving a
-	-- Rod; `forgetDrawing` clears what a drawing that threw part-way may have
-	-- left behind.
+	-- change what is called here. `drawnAs`, `inspectedAs` and `typedAs` are
+	-- `rod`, `speek` and `specType` held to giving a Rod; `forgetDrawing` clears
+	-- what a drawing that threw part-way may have left behind.
 	spectral := Spectral#"private dictionary";
 	drawnAs := value spectral#"drawnAs";
 	typedAs := value spectral#"typedAs";
 	forgetDrawing := value spectral#"forgetDrawing";
-	structureOf := value spectral#"speek";
+	inspectedAs := value spectral#"inspectedAs";
 	-- A class in a frame -- the role of a word, the kind of a list -- is sent as
 	-- its ancestors, nearest first, for the shell to read by the first it knows.
 	typeName := lookup(toString, Type);
@@ -184,6 +186,7 @@ spectralShell := (() -> (
 		failed or evaluatedLine =!= lineNumber), hashTable {
 			"names" => newNames join(dictionaryPath, locals),
 			"value" => renderedValue,
+			"inspection" => inspection,
 			"previews" => previews,
 			"typeInfo" => typeInfo,
 			"typeDrawing" => typeDrawing
@@ -196,6 +199,7 @@ spectralShell := (() -> (
 	);
 	forgetResult := () -> (
 		renderedValue = null;
+		inspection = null;
 		previews = {};
 		typeInfo = null;
 		typeDrawing = null;
@@ -205,13 +209,12 @@ spectralShell := (() -> (
 	);
 
 	-- A result, recorded once and whole: the value under every formatter the
-    -- shell offers -- Spectral's own drawing and `speek`, then M2's `net`,
+    -- shell offers -- Spectral's own drawing and inspection, then M2's `net`,
     -- `toString`, `tex`, `toExternalString` and `peek` as M2 gives them -- and
     -- its type, both as Spectral draws it and as M2 annotates it. Which of them
     -- the shell shows is its own business. Recording rather than printing keeps
     -- the channel free of everything but genuinely printed text.
 	formatters := {
-		("speek", structureOf),
 		("net", toString@@net),
 		("string", toString),
 		("tex", tex),
@@ -220,6 +223,7 @@ spectralShell := (() -> (
 	};
 	recordResult := value -> (
 		renderedValue = drawnAs value;
+		inspection = inspectedAs value;
 		previews = select(apply(formatters, (name, formatter) -> (
 			text := try formatter value;
 			if instance(text, String) then

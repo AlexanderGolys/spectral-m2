@@ -28,8 +28,8 @@ cyclic! {
         /// M2's re-readable spelling, `toExternalString`.
         #[serde(rename = "external")]
         External = "external",
-        /// The value's drawing one level deep, as `speek` spells it, the way
-        /// `peek` shows an object.
+        /// The value inspected as `peek` inspects it, drawn as Spectral's
+        /// `speek` draws it.
         #[serde(rename = "speek")]
         Speek = "speek",
         /// One level of the value's inner structure, as M2's `peek` shows it.
