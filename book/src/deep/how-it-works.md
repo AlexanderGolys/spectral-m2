@@ -55,11 +55,14 @@ new Pair from {0 => "a", 1 => symbol a}
 
 The first component is a string and the second a symbol. Their colours follow those classes. No shell extension is needed. An expression class with no layout of its own is spelled by its name over its parts, as `Equation{a, b}`.
 
-The colour of a class is its `highlightGroup`, the name of one of the shell's highlight groups, inherited from the nearest ancestor that sets one: numbers are `Number`, ring elements and symbols `Variable`, rings and types `Type`, anything else `Text`. Give a class of your own a colour of its own:
+The colour of a class is its `highlightGroup`, the name of one of the shell's highlight groups, inherited from the nearest ancestor that sets one: numbers are `Number`, ring elements and symbols `Variable`, rings and types `Type`, anything else `Text`. A value drawn whole, as one piece of text, takes the colour of its own class:
 
 ```m2
-Prime = new Type of ZZ;
-Prime.highlightGroup = "Keyword";
+Gene = new Type of HashTable;
+expression Gene := g -> hold g;
+toString Gene := g -> g.name;
+Gene.highlightGroup = "Keyword";
+new Gene from {symbol name => "BRCA1"}
 ```
 
 A name that is not a highlight group is reported as an error for the cell, with the names there are.
