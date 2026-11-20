@@ -6,7 +6,7 @@
 carried := currentFileDirectory | "Spectral.m2"
 -- The first version sending drawings as the shell reads them; raised only when
 -- what Spectral sends changes in a way the shell cannot read.
-minimumVersion := "0.5.2"
+minimumVersion := "0.6.0"
 
 -- A session started with -q leaves out the user's own packages, where Spectral
 -- is installed, so they are put back: their prefix, and the files' directory.

@@ -18,10 +18,10 @@ How a result is drawn is decided by the [Spectral](https://github.com/AlexanderG
 Point = new Type of List
 expression Point := p -> new FunctionApplication from (symbol point, toSequence p)
 rod new Point from {1, 1/2}     -- a Rod, printed as point(1, 1/2)
-formatted Sum := s -> Rod {RowExpression between(Rod {Holder {" ⊞ "}, {Highlight => HLG "Operator"}}, apply(toList s, rod))}
+formatted Sum := s -> Rod {RowExpression between(Rod {Holder {" ⊞ "}, Highlight => HLG "Operator"}, apply(toList s, rod))}
 ```
 
-A drawing, a `Rod`, is an expression with how it is drawn: `Rod{shape, meta}`, the shape an expression whose parts are drawings in turn, of one of the classes the shell draws. They are `Holder{text}` for an atom, `RowExpression`, `Parenthesize`, `Divide`, `Subscript`, `Superscript`, the lists, `MatrixExpression`, `Table`, and Spectral's own `AlignedExpression`, `UnderExpression`, `OverExpression`, `DiagramExpression` and `TreeExpression`. The meta may give a `Highlight`, one of the shell's colours, an `HLG` such as `HLG "Operator"`, or a class naming one, the part is coloured as in place of its own, reaching `Reach` levels below it, or all of them when unset:
+A drawing, a `Rod`, is a table of how something is drawn, `Rod{shape, Highlight => …}`, read as `x.Shape`, `x.Class`, `x.Highlight` and so on. Its `Shape` is an expression whose parts are drawings in turn, of one of the classes the shell draws. They are `Holder{text}` for an atom, `RowExpression`, `Parenthesize`, `Divide`, `Subscript`, `Superscript`, the lists, `MatrixExpression`, `Table`, and Spectral's own `AlignedExpression`, `UnderExpression`, `OverExpression`, `DiagramExpression` and `TreeExpression`. A drawing may give a `Highlight`, one of the shell's colours, an `HLG` such as `HLG "Operator"`, or a class naming one, the part is coloured as in place of its own, reaching `Reach` levels below it, or all of them when unset. A field the shell does not know is an error where it is written:
 
 ```m2
 rod Ideal := I -> (lookup(rod, Thing)) I ++ {Highlight => Keyword, Reach => 1}
