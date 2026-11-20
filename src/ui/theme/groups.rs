@@ -183,7 +183,7 @@ macro_rules! highlight_groups {
     ($($group:ident),+ $(,)?) => {
         /// Every syntax and interface highlight group.
         #[enum_fn(pub const description -> &'static str)]
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash)]
         pub enum HLGroup {$(
             $group = stringify!($group),
         )+}

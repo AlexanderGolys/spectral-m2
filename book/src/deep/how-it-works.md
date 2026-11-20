@@ -55,6 +55,15 @@ new Pair from {0 => "a", 1 => symbol a}
 
 The first component is a string and the second a symbol. Their colours follow those classes. No shell extension is needed. An expression class with no layout of its own is spelled by its name over its parts, as `Equation{a, b}`.
 
+The colour of a class is its `highlightGroup`, the name of one of the shell's highlight groups, inherited from the nearest ancestor that sets one: numbers are `Number`, ring elements and symbols `Variable`, rings and types `Type`, anything else `Text`. Give a class of your own a colour of its own:
+
+```m2
+Prime = new Type of ZZ;
+Prime.highlightGroup = "Keyword";
+```
+
+A name that is not a highlight group is reported as an error for the cell, with the names there are.
+
 `AlignedExpression` sets rows of cells in aligned columns, with each row's last cell running on. When that cell is too long for the pane it wraps beneath where it began, and when the columns before it leave it too little room it moves beneath them, indented. Hash tables draw their pairs this way, so every `=>` stands in one column. Use it for any type that reads as labelled lines:
 
 ```m2
