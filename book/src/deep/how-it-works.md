@@ -18,10 +18,10 @@ How a result is drawn is decided by the [Spectral](https://github.com/AlexanderG
 Point = new Type of List
 expression Point := p -> new FunctionApplication from (symbol point, toSequence p)
 rod new Point from {1, 1/2}     -- a Rod, printed as point(1, 1/2)
-formatted Sum := s -> Rod {RowExpression between(Rod {Holder {" ⊞ "}, {Highlight => hl$Operator}}, apply(toList s, rod))}
+formatted Sum := s -> Rod {RowExpression between(Rod {Holder {" ⊞ "}, {Highlight => HLG "Operator"}}, apply(toList s, rod))}
 ```
 
-A drawing, a `Rod`, is an expression with how it is drawn: `Rod{shape, meta}`, the shape an expression whose parts are drawings in turn, of one of the classes the shell draws. Spectral lists them as `shapes`: `Holder{text}` for an atom, `RowExpression`, `Parenthesize`, `Divide`, `Subscript`, `Superscript`, the lists, `MatrixExpression`, `Table`, and Spectral's own `AlignedExpression`, `UnderExpression`, `OverExpression`, `DiagramExpression` and `TreeExpression`. The meta may give a `Highlight`, one of the shell's colours, an `HLGroup` such as `hl$Operator`, or a class naming one, the part is coloured as in place of its own, reaching `Reach` levels below it, or all of them when unset:
+A drawing, a `Rod`, is an expression with how it is drawn: `Rod{shape, meta}`, the shape an expression whose parts are drawings in turn, of one of the classes the shell draws. They are `Holder{text}` for an atom, `RowExpression`, `Parenthesize`, `Divide`, `Subscript`, `Superscript`, the lists, `MatrixExpression`, `Table`, and Spectral's own `AlignedExpression`, `UnderExpression`, `OverExpression`, `DiagramExpression` and `TreeExpression`. The meta may give a `Highlight`, one of the shell's colours, an `HLG` such as `HLG "Operator"`, or a class naming one, the part is coloured as in place of its own, reaching `Reach` levels below it, or all of them when unset:
 
 ```m2
 rod Ideal := I -> (lookup(rod, Thing)) I ++ {Highlight => Keyword, Reach => 1}
@@ -55,17 +55,17 @@ new Pair from {0 => "a", 1 => symbol a}
 
 The first component is a string and the second a symbol. Their colours follow those classes. No shell extension is needed. An expression class with no layout of its own is spelled by its name over its parts, as `Equation{a, b}`.
 
-What a class says about how its values are drawn is a method of the class returning a constant, found up its ancestry as any method is. The colour of a class is its `highlightGroup`, one of the `HLGroup` constants, from the nearest ancestor that installs one: numbers are `hl$Number`, ring elements and symbols `hl$Variable`, rings and types `hl$Type`, anything else `hl$Text`. A value drawn whole, as one piece of text, takes the colour of its own class:
+What a class says about how its values are drawn is a method of the class returning a constant, found up its ancestry as any method is. The colour of a class is its `highlightGroup`, an `HLG`, from the nearest ancestor that installs one: numbers are `HLG "Number"`, ring elements and symbols `HLG "Variable"`, rings and types `HLG "Type"`, anything else `HLG "Text"`. A value drawn whole, as one piece of text, takes the colour of its own class:
 
 ```m2
 Gene = new Type of HashTable;
 expression Gene := g -> hold g;
 toString Gene := g -> g.name;
-highlightGroup Gene := class' -> hl$Keyword;
+highlightGroup Gene := class' -> HLG "Keyword";
 new Gene from {symbol name => "BRCA1"}
 ```
 
-The `HLGroup` constants are the colours code can have: `hl$Text`, `hl$Muted`, `hl$Keyword`, `hl$Operator`, `hl$Delimiter`, `hl$Punctuation`, `hl$Comment`, `hl$String`, `hl$Number`, `hl$Boolean`, `hl$Builtin`, `hl$Variable`, `hl$Type`, `hl$Function`, `hl$Macro`, `hl$Option`, `hl$Package`, `hl$MapArrow`, `hl$MarkupLink` and `hl$Canvas`.
+`HLG` makes the colours code can have, by name: `Text`, `Muted`, `Keyword`, `Operator`, `Delimiter`, `Punctuation`, `Comment`, `String`, `Number`, `Boolean`, `Builtin`, `Variable`, `Type`, `Function`, `Macro`, `Option`, `Package`, `MapArrow`, `MarkupLink` and `Canvas`. Any other name is an error where it is written, as is a meta field Spectral doesn't know. The field names are Spectral's own and never exported: `Highlight` in your code names Spectral's `Highlight` by its spelling.
 
 `AlignedExpression` sets rows of cells in aligned columns, with each row's last cell running on. When that cell is too long for the pane it wraps beneath where it began, and when the columns before it leave it too little room it moves beneath them, indented. Hash tables draw their pairs this way, so every `=>` stands in one column. Use it for any type that reads as labelled lines:
 

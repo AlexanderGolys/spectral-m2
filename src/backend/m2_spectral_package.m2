@@ -6,7 +6,7 @@
 carried := currentFileDirectory | "Spectral.m2"
 -- The first version sending drawings as the shell reads them; raised only when
 -- what Spectral sends changes in a way the shell cannot read.
-minimumVersion := "0.5.0"
+minimumVersion := "0.5.2"
 
 -- A session started with -q leaves out the user's own packages, where Spectral
 -- is installed, so they are put back: their prefix, and the files' directory.
@@ -24,8 +24,11 @@ readable := member("Spectral", installedPackages()) and (
 )
 
 -- Installing writes its progress to the session's own output, so it runs apart,
--- quietly.
-if not readable and run concatenate(commandLine#0,
+-- quietly, from the carried package's directory: its documentation reads the
+-- package's header by file name, which a session started with -q finds only
+-- in the directory it runs in.
+if not readable and run concatenate("cd ", format currentFileDirectory, " && ",
+	commandLine#0,
 	" --silent -q --stop -e 'installPackage(", format "Spectral", ", FileName => ",
 	format carried, "); exit 0' >/dev/null 2>&1") != 0 then
 	error("cannot install Spectral from " | carried)
