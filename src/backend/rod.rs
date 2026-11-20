@@ -4,20 +4,22 @@
 
 use crate::ui::render::maths::{self, GridKind, MathStyle, Place};
 use crate::ui::theme::groups::HLGroup;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
-/// One shaped node of a drawing, with what any node may carry.
+/// One shaped node of a drawing, with what any node may carry, its atoms coloured
+/// by a class of type `C`: the colour itself once read, an index into the class
+/// table M2 sends beside the drawing until then.
 ///
 /// `x_1^2` arrives as
 /// `{"Shape": "Script", "Base": {"Shape": "Script", "Base": x, "Sub": 1}, "Sup": 2}`,
 /// each of `x`, `1` and `2` an atom.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "PascalCase")]
-pub struct Node {
+pub struct Node<C = HLGroup> {
     #[serde(flatten)]
-    pub shape: Shape,
+    pub shape: Shape<C>,
     /// The class this node and its parts are coloured as, in place of their own.
-    pub highlight: Option<usize>,
+    pub highlight: Option<C>,
     /// How many levels below this node its highlight reaches; all when absent.
     pub reach: Option<usize>,
     /// Where the node links to.
@@ -28,68 +30,208 @@ pub struct Node {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
 #[serde(tag = "Shape", rename_all_fields = "PascalCase")]
 #[non_exhaustive]
-pub enum Shape {
-    /// Text of the class at `class` in the drawing's table, with its own TeX when
-    /// it has one; `typeset` when M2 sets it as maths.
+pub enum Shape<C = HLGroup> {
+    /// Text coloured as `class`, with its own TeX when it has one; `typeset` when
+    /// M2 sets it as maths.
     Atom {
         text: String,
-        class: usize,
+        class: C,
         tex: Option<String>,
         #[serde(default)]
         typeset: bool,
     },
     Row {
-        items: Vec<Node>,
+        items: Vec<Node<C>>,
     },
     /// Items with the separator between each two, as a list's entries are.
     Join {
-        items: Vec<Node>,
-        separator: Box<Node>,
+        items: Vec<Node<C>>,
+        separator: Box<Node<C>>,
     },
     Script {
-        base: Box<Node>,
-        sub: Option<Box<Node>>,
-        sup: Option<Box<Node>>,
+        base: Box<Node<C>>,
+        sub: Option<Box<Node<C>>>,
+        sup: Option<Box<Node<C>>>,
     },
     Fraction {
-        numerator: Box<Node>,
-        denominator: Box<Node>,
+        numerator: Box<Node<C>>,
+        denominator: Box<Node<C>>,
     },
     Fence {
         left: char,
         right: char,
-        body: Box<Node>,
+        body: Box<Node<C>>,
     },
     /// Rows of cells; a matrix may carry its rows' degrees.
     Grid {
-        rows: Vec<Vec<Node>>,
+        rows: Vec<Vec<Node<C>>>,
         align: GridKind,
-        degrees: Option<Vec<Node>>,
+        degrees: Option<Vec<Node<C>>>,
     },
     Over {
-        base: Box<Node>,
-        label: Box<Node>,
+        base: Box<Node<C>>,
+        label: Box<Node<C>>,
     },
     Under {
-        base: Box<Node>,
-        label: Box<Node>,
+        base: Box<Node<C>>,
+        label: Box<Node<C>>,
     },
     /// Pieces on a grid joined by arrows, each `(from, to, label)`; `straight` is
     /// the same diagram for a layout in characters when this one runs arrows across.
     Diagram {
-        pieces: Vec<(Place, Node)>,
-        arrows: Vec<(Place, Place, Option<Node>)>,
-        straight: Option<Box<Node>>,
+        pieces: Vec<(Place, Node<C>)>,
+        arrows: Vec<(Place, Place, Option<Node<C>>)>,
+        straight: Option<Box<Node<C>>>,
     },
     /// A hierarchy, each branch a label over its subtree.
     Tree {
-        branches: Vec<(Node, Node)>,
+        branches: Vec<(Node<C>, Node<C>)>,
     },
 }
 
+impl<C> Node<C> {
+    /// The same drawing with every class, of an atom or a highlight, recoloured.
+    pub fn recoloured<D>(self, recolour: &impl Fn(C) -> D) -> Node<D> {
+        let node = |node: Self| node.recoloured(recolour);
+        let boxed = |node: Box<Self>| Box::new(node.recoloured(recolour));
+        let nodes = |nodes: Vec<Self>| nodes.into_iter().map(node).collect::<Vec<_>>();
+        let shape = match self.shape {
+            Shape::Atom {
+                text,
+                class,
+                tex,
+                typeset,
+            } => Shape::Atom {
+                text,
+                class: recolour(class),
+                tex,
+                typeset,
+            },
+            Shape::Row { items } => Shape::Row {
+                items: nodes(items),
+            },
+            Shape::Join { items, separator } => Shape::Join {
+                items: nodes(items),
+                separator: boxed(separator),
+            },
+            Shape::Script { base, sub, sup } => Shape::Script {
+                base: boxed(base),
+                sub: sub.map(boxed),
+                sup: sup.map(boxed),
+            },
+            Shape::Fraction {
+                numerator,
+                denominator,
+            } => Shape::Fraction {
+                numerator: boxed(numerator),
+                denominator: boxed(denominator),
+            },
+            Shape::Fence { left, right, body } => Shape::Fence {
+                left,
+                right,
+                body: boxed(body),
+            },
+            Shape::Grid {
+                rows,
+                align,
+                degrees,
+            } => Shape::Grid {
+                rows: rows.into_iter().map(nodes).collect(),
+                align,
+                degrees: degrees.map(nodes),
+            },
+            Shape::Over { base, label } => Shape::Over {
+                base: boxed(base),
+                label: boxed(label),
+            },
+            Shape::Under { base, label } => Shape::Under {
+                base: boxed(base),
+                label: boxed(label),
+            },
+            Shape::Diagram {
+                pieces,
+                arrows,
+                straight,
+            } => Shape::Diagram {
+                pieces: pieces
+                    .into_iter()
+                    .map(|(place, piece)| (place, node(piece)))
+                    .collect(),
+                arrows: arrows
+                    .into_iter()
+                    .map(|(from, to, label)| (from, to, label.map(node)))
+                    .collect(),
+                straight: straight.map(boxed),
+            },
+            Shape::Tree { branches } => Shape::Tree {
+                branches: branches
+                    .into_iter()
+                    .map(|(label, subtree)| (node(label), node(subtree)))
+                    .collect(),
+            },
+        };
+        Node {
+            shape,
+            highlight: self.highlight.map(recolour),
+            reach: self.reach,
+            target: self.target,
+        }
+    }
+}
+
+/// A drawing as M2 sends it: every atom and highlight points into the table of
+/// the classes the drawing is coloured as, each sent once as its ancestry,
+/// nearest first: `["ZZ", "Ring", "Type", "MutableHashTable", "HashTable", "Thing"]`.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct Transmitted {
+    #[serde(flatten)]
+    drawing: Node<usize>,
+    #[serde(default)]
+    classes: Vec<Vec<String>>,
+}
+
+impl Transmitted {
+    /// The colour of a class: the role of its nearest ancestor that has one.
+    fn group(ancestry: &[String]) -> HLGroup {
+        ancestry
+            .iter()
+            .find_map(|name| {
+                Some(match name.as_str() {
+                    "Delimiter" => HLGroup::Delimiter,
+                    "Punctuation" => HLGroup::Punctuation,
+                    "Operator" => HLGroup::Operator,
+                    "MapArrow" => HLGroup::MapArrow,
+                    "Canvas" => HLGroup::Canvas,
+                    "Nothing" => HLGroup::Builtin,
+                    "Boolean" => HLGroup::Boolean,
+                    "String" => HLGroup::String,
+                    "Number" => HLGroup::Number,
+                    "Symbol" | "RingElement" | "RawRingElement" | "Variety" => HLGroup::Variable,
+                    "Function" | "ScriptedFunctor" => HLGroup::Function,
+                    "Type" | "Ring" | "RingFamily" => HLGroup::Type,
+                    "Package" => HLGroup::Package,
+                    "Option" => HLGroup::Option,
+                    "Keyword" => HLGroup::Keyword,
+                    "Command" => HLGroup::Macro,
+                    "FilePosition" => HLGroup::MarkupLink,
+                    _ => return None,
+                })
+            })
+            .unwrap_or(HLGroup::Text)
+    }
+
+    /// The drawing with each class index replaced by the colour of its class.
+    fn coloured<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Node, D::Error> {
+        let Self { drawing, classes } = Self::deserialize(deserializer)?;
+        let groups: Vec<_> = classes.iter().map(|ancestry| Self::group(ancestry)).collect();
+        Ok(drawing.recoloured(&|class| groups.get(class).copied().unwrap_or(HLGroup::Text)))
+    }
+}
+
 impl Node {
-    /// An atom of the class at `class`.
-    pub fn atom(text: impl Into<String>, class: usize) -> Self {
+    /// An atom coloured as `class`.
+    pub fn atom(text: impl Into<String>, class: HLGroup) -> Self {
         Self {
             shape: Shape::Atom {
                 text: text.into(),
@@ -108,6 +250,14 @@ impl Node {
         match &self.shape {
             Shape::Atom { text, .. } => Some(text),
             _ => None,
+        }
+    }
+
+    /// The colour of an atom standing alone, its highlight's over its class's.
+    pub fn group(&self) -> HLGroup {
+        match &self.shape {
+            Shape::Atom { class, .. } => self.highlight.unwrap_or(*class),
+            _ => HLGroup::Text,
         }
     }
 
@@ -156,15 +306,12 @@ impl Node {
     }
 }
 
-/// A drawing as M2 sends it: the tree, the classes its atoms and highlights point
-/// into, each as its ancestry nearest first, and what is sent for the value whole.
+/// A drawing as M2 sends it: the tree, and what is sent for the value whole.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "PascalCase")]
 pub struct Rod {
-    #[serde(flatten)]
+    #[serde(flatten, deserialize_with = "Transmitted::coloured")]
     pub drawing: Node,
-    #[serde(default)]
-    pub classes: Vec<Vec<String>>,
     /// M2's own two-dimensional spelling.
     pub fallback: Option<String>,
     /// M2's copyable input spelling.
@@ -183,8 +330,7 @@ impl Rod {
     /// Plain text, a single atom of M2's `Net`.
     pub fn plain(text: String) -> Self {
         Self {
-            drawing: Node::atom(text, 0),
-            classes: vec![vec!["Net".into()]],
+            drawing: Node::atom(text, HLGroup::Text),
             fallback: None,
             code: None,
             html: None,
@@ -200,38 +346,6 @@ impl Rod {
             example_width,
             ..Self::plain(fallback)
         }
-    }
-
-    /// The colour of the class at `class` in the table: the role of the nearest
-    /// ancestor that has one.
-    pub fn group(&self, class: usize) -> HLGroup {
-        self.classes
-            .get(class)
-            .into_iter()
-            .flatten()
-            .find_map(|name| {
-                Some(match name.as_str() {
-                    "Delimiter" => HLGroup::Delimiter,
-                    "Punctuation" => HLGroup::Punctuation,
-                    "Operator" => HLGroup::Operator,
-                    "MapArrow" => HLGroup::MapArrow,
-                    "Canvas" => HLGroup::Canvas,
-                    "Nothing" => HLGroup::Builtin,
-                    "Boolean" => HLGroup::Boolean,
-                    "String" => HLGroup::String,
-                    "Number" => HLGroup::Number,
-                    "Symbol" | "RingElement" | "RawRingElement" | "Variety" => HLGroup::Variable,
-                    "Function" | "ScriptedFunctor" => HLGroup::Function,
-                    "Type" | "Ring" | "RingFamily" => HLGroup::Type,
-                    "Package" => HLGroup::Package,
-                    "Option" => HLGroup::Option,
-                    "Keyword" => HLGroup::Keyword,
-                    "Command" => HLGroup::Macro,
-                    "FilePosition" => HLGroup::MarkupLink,
-                    _ => return None,
-                })
-            })
-            .unwrap_or(HLGroup::Text)
     }
 
     /// The text of a value drawn as a single atom.
@@ -254,7 +368,7 @@ impl Rod {
     /// one atom of no particular class.
     pub fn is_structured(&self) -> bool {
         self.html.is_none()
-            && !matches!(&self.drawing.shape, Shape::Atom { class, .. } if self.group(*class) == HLGroup::Text)
+            && !matches!(self.drawing.shape, Shape::Atom { class: HLGroup::Text, .. })
     }
 
     /// Documentation content and the width of its recorded examples.

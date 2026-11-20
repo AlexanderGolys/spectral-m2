@@ -82,19 +82,11 @@ impl<'a> Reading<'a> {
         }
     }
 
-    /// The colour of an atom standing alone.
-    pub fn group(&self, node: &Node) -> HLGroup {
-        match &node.shape {
-            Shape::Atom { class, .. } => self.value.group(node.highlight.unwrap_or(*class)),
-            _ => HLGroup::Text,
-        }
-    }
-
     fn node(&self, node: &Node, reaching: Option<Reaching>) -> Math {
         let reaching = node
             .highlight
-            .map(|class| Reaching {
-                group: self.value.group(class),
+            .map(|group| Reaching {
+                group,
                 levels: node.reach,
             })
             .or(reaching);
@@ -107,7 +99,7 @@ impl<'a> Reading<'a> {
                 tex,
                 typeset,
             } => {
-                let kind = reaching.map_or_else(|| self.value.group(*class), |over| over.group);
+                let kind = reaching.map_or(*class, |over| over.group);
                 let typewriter = (self.typewritten && !typeset).then(|| super::typewriter(text));
                 match tex.clone().or(typewriter) {
                     Some(tex) => Math::Native {

@@ -284,7 +284,7 @@ fn role_spans(
     let drawing = &value.drawing;
     let mut rows = match &drawing.shape {
         Shape::Tree { branches } => return Ok(hierarchy_rows(branches, width)),
-        Shape::Atom { text, .. } => prose(text, reading.group(drawing), width),
+        Shape::Atom { text, .. } => prose(text, drawing.group(), width),
         Shape::Fence { left, right, body } => match &body.shape {
             Shape::Join { items, .. } => MathBlock::fitted(
                 MathBlock::listed(&reading, (*left, *right), items, width, style),
@@ -1735,7 +1735,7 @@ impl MathBlock {
     /// a string.
     fn value(reading: &Reading, node: &Node, style: MathStyle) -> Self {
         let block = match node.text() {
-            Some(text) => Self::text(text, reading.group(node)),
+            Some(text) => Self::text(text, node.group()),
             None => reading.part(node).layout(style.fractions),
         };
         match &node.target {
