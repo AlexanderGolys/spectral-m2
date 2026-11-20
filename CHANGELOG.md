@@ -12,6 +12,11 @@ All notable changes to Spectral M2 are documented here.
 - Spectral 0.6.0: a drawing is a table of how it is drawn, `Rod{shape, Highlight => …}`, its `Shape` one of the expression classes the shell draws, every field read as `x.Shape`, `x.Class`, `x.Highlight`. Its colours are `HLG` groups such as `HLG "Operator"`, a name outside the shell's groups being an error. A `rod` method builds the expression it draws as, `Rod {RowExpression {…}}`, in place of the removed constructors `atom`, `row`, `joined`, `listed`, `script`, `fence`, `parenthesized`, `grid` and `labelled`.
 - A ring, ideal, module, matrix, ring map, variety, sheaf, complex or map of complexes that a global name holds is drawn by that name inside other values: after `I = ideal(x^3, y^3)`, `S/I` reads S/I, while one assigned with `:=` is drawn whole. A result itself is always spelled out, a named ring `R = QQ[x]` as QQ[x]. Structures without a name are drawn in full rather than under a made-up `R`, `I` or `M`, a complex as its modules and differentials rather than `Cᵢ` and `dᵢ`.
 - Spectral 0.7.0: what a class says about how its values are drawn is in the drawing its `rod` returns, an atom's `Group`, `Typeset`, a `Highlight`, in place of the setting methods `highlightGroup`, `typeset`, `typesetOperands`, `typewriter`, `typeDepth`, `valueDepth` and `keepNames` and the `formatted` hook. A class without a `rod` is spelled as M2 spells it. `rod'_n x` draws `x` with its names resolved `n` times; `specType x` is its class over its `typeParameters` by name, `Module[R]`, and `specType'_n x` resolves them. A `Rod` prints in plain M2 as the text it lays out.
+- Spectral 0.8.0: a drawing names the `Font` its text is set in, `"MathNormal"`, a maths alphabet such as `"MathBB"` or a text face such as `"TextTT"`, in place of `Typeset` and an atom's `Tex`; `QQ` is the letter `Q` in the blackboard alphabet. A result arrives drawn with every piece of text in its colour and font, the drawing alone deciding how it looks.
+
+### Removed
+
+- The `tex` and `peek` previews: a result is spelled only by M2's cheap `net`, `toString` and `toExternalString` beside Spectral's `rod` and `speek`, so no result waits on formatting it is never shown in.
 
 ## [1.4.0] - 2026-11-18
 

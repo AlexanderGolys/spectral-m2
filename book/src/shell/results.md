@@ -55,17 +55,11 @@ Each output block has one formatter selector on its outer border. It applies to 
 `string`
 : The result of M2's `toString` method.
 
-`tex`
-: The result of M2's `tex` method, displayed using the maths setting. It uses a single foreground colour because TeX alone does not carry M2's component classes.
-
 `markup`
 : A documentation page with its semantic layout, links and examples.
 
 `external`
 : The result of M2's `toExternalString`: source that reads the value back in, such as `new HashTable from {1 => 2}`, coloured as code.
-
-`peek`
-: The result of M2's `peek`: one level of the value's inner structure, such as the entries of a hash table, without its usual presentation.
 
 `speek`
 : The value inspected as `peek` inspects it, but drawn like any result, as Spectral's `speek` draws it: a list as its class over its entries, `List{1, ½}`, and a ring or a hash table as its class with its pairs, keys and values aligned and each value in its own colour.
@@ -78,7 +72,7 @@ Place the controls with *output mode position* in the rendering settings: upper 
 
 ## Typeset maths { #typeset }
 
-With *maths* set to `typeset`, mathematical values become pictures in your theme's colours, with matrices and fractions at their full height. M2 decides what is mathematical through each type's `typeset` setting: numbers, ring elements, rings, modules, matrices and fractions are typeset, while a list of names, strings or packages stays terminal text. Operators make their operands maths too, so in `X ** Y + Z` each symbol is typeset, while the index of a subscript keeps its own type, as `"a"` does in `x_"a"`. Strings, nets, booleans, `null` and function names never become maths. Containers such as a matrix or a table only hold their entries, which keep their own setting. Change any of this by installing a type's `typeset`, `typesetOperands` and `typewriter` methods, as `typeset Ring := class' -> false`. When a value mixes the two, such as a matrix in a list beside a string, the whole value is one picture so its brackets fit what they hold, and the parts that are not maths keep the typewriter face. M2's tensor operators read as such: `M ** N` as M ⊗ N and `M ^** n` as a tensor power. The `net` and `string` formatters retain their terminal text.
+With *maths* set to `typeset`, mathematical values become pictures in your theme's colours, with matrices and fractions at their full height. Each piece of text in a drawing is set in a font its `rod` names: TeX's own maths, a maths alphabet such as the blackboard `ℚ` or the calligraphic `𝒪`, or the typewriter face code is spelled in. Numbers, ring elements, rings, modules, matrices and fractions are maths, while a list of names, strings or packages stays typewritten. Operators make their operands maths too, so in `X ** Y + Z` each symbol is typeset. Strings, nets, booleans, `null` and function names never become maths. Containers such as a matrix or a table only hold their entries, which keep their own font. Change any of this with the `Font` of the drawing a type's `rod` returns, as `rod Gene := g -> Rod {Holder {g.name}, Font => "MathNormal"}`. When a value mixes the two, such as a matrix in a list beside a string, the whole value is one picture so its brackets fit what they hold, and the parts that are not maths keep the typewriter face. M2's tensor operators read as such: `M ** N` as M ⊗ N and `M ^** n` as a tensor power. The `net` and `string` formatters retain their terminal text.
 
 Set *maths size* to choose the preferred formula size independently of the terminal font. Matrix degrees sit beside their rows, and tuple subscripts follow M2's TeX spelling without extra parentheses.
 

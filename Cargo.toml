@@ -1,6 +1,6 @@
 [package]
 name = "spectral-m2"
-version = "1.4.1-shitshow.1.13"
+version = "1.4.1-shitshow.1.14"
 edition = "2021"
 description = "A syntax-aware terminal shell for Macaulay2"
 license = "MIT OR Apache-2.0"
@@ -57,7 +57,7 @@ rustybuzz = "0.20.1"
 unicode-width = "0.2"
 url = "2.5"
 toml = "1.1.4"
-these-macros-should-be-illegal = "0.14.2"
+these-macros-should-be-illegal = "0.14"
 tree-sitter-highlight = "0.26.13"
 tree-sitter-macaulay2 = "=6.4.0"
 pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }

@@ -23,13 +23,15 @@ pub const EM: f32 = 10.0;
 pub const PADDING: f32 = EM * 0.1;
 /// Where an SVG document ends, before which further shapes are drawn on top.
 const SVG_END: &str = "</svg>";
-/// Separators after which a formula's rows may break, as a list breaks after its commas.
+/// TeX marking a place a formula's rows may break, as its writer chose it: a
+/// rule with neither width nor height, which RaTeX keeps as a line of no extent
+/// and no other ink is.
+pub const BREAK_MARK: &str = r"\rule{0pt}{0pt}";
+/// Separators after which rows of TeX written without marks may break, as a
+/// list breaks after its commas.
 const BREAK_AFTER: [char; 4] = [',', '+', '=', ';'];
-/// How far, in ems, an item may start before a separator ends and still follow it.
+/// How far, in ems, an item may start before a break and still follow it.
 const BREAK_TOLERANCE: f64 = 1e-6;
-/// The least blank width, in ems, a formula may break across with no separator,
-/// as between a matrix's columns: wider than the space around any operator.
-const BREAK_GAP: f64 = 0.8;
 /// How RaTeX begins its message about a command it does not know.
 const UNDEFINED_COMMAND: &str = "Undefined control sequence: ";
 /// How many commands run into the letters after them one formula is parted for.
@@ -41,8 +43,11 @@ const PERCENT_PER_ARRAYSTRETCH: u16 = 100;
 /// A formula set as a picture, with the places its rows may break.
 pub struct Typeset {
     pub svg: String,
-    /// Places the picture may be cut into rows, left to right.
+    /// Places its writer marked the picture may be cut into rows, left to right.
     pub breaks: Vec<Break>,
+    /// Places after its separators the picture may be cut into rows, for TeX
+    /// written without marks, left to right.
+    pub separators: Vec<Break>,
     /// How far down the picture the text baseline runs, as a share of its height.
     pub baseline: f32,
 }
@@ -151,7 +156,7 @@ fn pictured(mut list: DisplayList) -> Typeset {
         embed_glyphs: true,
         font_dir: String::new(),
     };
-    let breaks = breaks(&list);
+    let (breaks, separators) = (marked(&list), separated(&list));
     let baseline = (list.height as f32 * EM + PADDING)
         / ((list.height + list.depth) as f32 * EM + 2.0 * PADDING);
     let typewriter = TerminalFont::get().map(|font| typewriter_paths(&mut list, font));
@@ -163,26 +168,31 @@ fn pictured(mut list: DisplayList) -> Typeset {
     Typeset {
         svg,
         breaks,
+        separators,
         baseline,
     }
 }
 
-/// Where the formula may be cut into rows: after each separator set in the
-/// maths font, and across each blank as wide as [`BREAK_GAP`] from top to bottom,
-/// as between a matrix's columns, when nothing drawn reaches across from it to
+/// Whether `item` is a [`BREAK_MARK`].
+fn is_mark(item: &DisplayItem) -> bool {
+    matches!(item, DisplayItem::Line { width, thickness, .. } if *width == 0.0 && *thickness == 0.0)
+}
+
+/// Where the formula may be cut into rows: at each [`BREAK_MARK`].
+fn marked(list: &DisplayList) -> Vec<Break> {
+    let cuts = list.items.iter().filter_map(|item| match item {
+        DisplayItem::Line { x, .. } if is_mark(item) => Some(*x),
+        _ => None,
+    });
+    breaks(list, rows_after(list, cuts))
+}
+
+/// Where TeX written without marks may be cut into rows: after each separator
+/// set in the maths font, unless something drawn reaches across from it to
 /// what follows, as a fraction bar or a radical would.
-fn breaks(list: &DisplayList) -> Vec<Break> {
+fn separated(list: &DisplayList) -> Vec<Break> {
     let separator_font = FontId::MainRegular.as_str();
-    let extents = list.items.iter().map(extent).collect::<Vec<_>>();
-    let em = f64::from(EM);
-    let padding = f64::from(PADDING);
-    let width = list.width * em + 2.0 * padding;
-    let reached_across = |end: f64, start: f64| {
-        extents
-            .iter()
-            .any(|(left, right)| *left < end - BREAK_TOLERANCE && *right > start)
-    };
-    let separators = list.items.iter().filter_map(|item| {
+    let cuts = list.items.iter().filter_map(|item| {
         let DisplayItem::GlyphPath {
             x,
             scale,
@@ -194,31 +204,48 @@ fn breaks(list: &DisplayList) -> Vec<Break> {
             return None;
         };
         let separator = char::from_u32(*char_code).is_some_and(|c| BREAK_AFTER.contains(&c));
-        if !separator || font != separator_font {
-            return None;
-        }
-        let end = x + get_char_metrics(FontId::MainRegular, *char_code)?.width * scale;
-        let start = extents
+        (separator && font == separator_font)
+            .then(|| Some(x + get_char_metrics(FontId::MainRegular, *char_code)?.width * scale))
+            .flatten()
+    });
+    let extents = list.items.iter().map(extent).collect::<Vec<_>>();
+    let unbridged = rows_after(list, cuts).filter(|(end, start)| {
+        !extents
             .iter()
-            .map(|(left, _)| *left)
+            .any(|(left, right)| *left < end - BREAK_TOLERANCE && right > start)
+    });
+    breaks(list, unbridged)
+}
+
+/// Each of `cuts` across the formula, in ems, as where a row ends and where
+/// the next starts: at the first item drawn past it. A cut nothing follows
+/// ends no row.
+fn rows_after(
+    list: &DisplayList,
+    cuts: impl Iterator<Item = f64>,
+) -> impl Iterator<Item = (f64, f64)> {
+    let lefts = list
+        .items
+        .iter()
+        .filter(|item| !is_mark(item))
+        .map(|item| extent(item).0)
+        .collect::<Vec<_>>();
+    cuts.filter_map(move |end| {
+        let start = lefts
+            .iter()
+            .copied()
             .filter(|left| *left >= end - BREAK_TOLERANCE)
             .fold(f64::INFINITY, f64::min);
-        (start.is_finite() && !reached_across(end, start)).then_some((end, start))
-    });
-    let mut covered = extents
-        .iter()
-        .copied()
-        .filter(|(left, right)| left.is_finite() && right.is_finite())
-        .collect::<Vec<_>>();
-    covered.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut reach = f64::NEG_INFINITY;
-    let gaps = covered.into_iter().filter_map(move |(left, right)| {
-        let gap = (reach.is_finite() && left - reach >= BREAK_GAP).then_some((reach, left));
-        reach = reach.max(right);
-        gap
-    });
-    let mut breaks = separators
-        .chain(gaps)
+        start.is_finite().then_some((end, start))
+    })
+}
+
+/// Rows' ends and starts across the formula, in ems, as its breaks.
+fn breaks(list: &DisplayList, rows: impl Iterator<Item = (f64, f64)>) -> Vec<Break> {
+    let em = f64::from(EM);
+    let padding = f64::from(PADDING);
+    let width = list.width * em + 2.0 * padding;
+    let mut breaks = rows
         .map(|(end, start)| Break {
             end: ((end * em + 2.0 * padding) / width) as f32,
             start: (start * em / width) as f32,

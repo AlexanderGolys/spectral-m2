@@ -7,9 +7,7 @@ mod drawing;
 pub use diagram::{Course, Diagram, Place};
 pub use drawing::{Reading, DIRECT_SUM_SIGN, PRODUCT_SIGN, TENSOR_SIGN};
 
-use super::markup;
-use crate::backend::rod::{Node, Shape};
-use crate::backend::{Rod, OPTION_ARROW};
+use crate::backend::rod::Shape;
 use crate::ui::block::TextSpan;
 use crate::ui::config::UI;
 use crate::ui::cycle::cyclic;
@@ -276,7 +274,7 @@ impl From<&RenderingSettings> for MathStyle {
 /// token by its role. A value M2 drew as plain text carries nothing to colour, and
 /// the caller's flat path renders it unchanged.
 pub fn spans(
-    value: &Rod,
+    value: &Shape,
     width: usize,
     style: impl Into<MathStyle>,
 ) -> Result<Vec<SpanLine>, UnsupportedTeX> {
@@ -295,43 +293,28 @@ pub fn spans(
 
 /// [`spans`], each span in the colour of its role.
 fn role_spans(
-    value: &Rod,
+    value: &Shape,
     width: usize,
     style: MathStyle,
 ) -> Result<Vec<SpanLine>, UnsupportedTeX> {
-    if let Some(html) = &value.html {
-        return markup::spans(html, width, style.blackboard)
-            .ok_or_else(|| UnsupportedTeX("markup that does not read as HTML".into()));
-    }
     let reading = Reading::new(value, style);
-    let drawing = &value.drawing;
-    let mut rows = match (&drawing.shape, drawing.shape.listing()) {
+    Ok(match (value, value.listing()) {
         (Shape::TreeExpression(branches), _) => return Ok(hierarchy_rows(branches, width)),
-        (Shape::Holder((text,)), _) => prose(text, drawing.group(), width),
+        (Shape::Atom { text, style }, _) if !style.font.is_maths() => {
+            prose(text, style.highlight, width)
+        }
         (_, Some((delimiters, items))) => MathBlock::fitted(
             MathBlock::listed(&reading, delimiters, items, width, style),
             width,
         ),
         _ => reading.math().wrapped(width, style.fractions),
-    };
-    if let Some(target) = &drawing.target {
-        link(rows.iter_mut().flatten(), target);
-    }
-    Ok(rows)
-}
-
-/// Make every one of `spans` link to `target`.
-fn link<'a>(spans: impl IntoIterator<Item = &'a mut TextSpan>, target: &str) {
-    let target: Arc<str> = target.into();
-    for span in spans {
-        span.target = Some(target.clone());
-    }
+    })
 }
 
 /// Lay out a class hierarchy a branch at a time, so no subtree forces its
 /// siblings into a shared wide column. Wrapped labels keep their branch indent.
-fn hierarchy_rows(branches: &[(Node, Node)], width: usize) -> Vec<SpanLine> {
-    fn append(branches: &[(Node, Node)], prefix: &str, width: usize, rows: &mut Vec<SpanLine>) {
+fn hierarchy_rows(branches: &[(Shape, Shape)], width: usize) -> Vec<SpanLine> {
+    fn append(branches: &[(Shape, Shape)], prefix: &str, width: usize, rows: &mut Vec<SpanLine>) {
         for (index, (label, subtree)) in branches.iter().enumerate() {
             let last = index + 1 == branches.len();
             let (branch, continuation) = Glyphs::tree_limb(last).current();
@@ -361,7 +344,7 @@ fn hierarchy_rows(branches: &[(Node, Node)], width: usize) -> Vec<SpanLine> {
                 }
                 rows.push(row);
             }
-            if let Shape::TreeExpression(branches) = &subtree.shape {
+            if let Shape::TreeExpression(branches) = subtree {
                 append(branches, &format!("{prefix}{continuation}"), width, rows);
             }
         }
@@ -381,9 +364,9 @@ fn prose(text: &str, group: HLGroup, width: usize) -> Vec<SpanLine> {
 
 /// A value's type annotation as rows no wider than `width`, its pieces set side by
 /// side in the type colour.
-pub fn annotation(value: &Rod, width: usize, style: impl Into<MathStyle>) -> Vec<SpanLine> {
+pub fn annotation(value: &Shape, width: usize, style: impl Into<MathStyle>) -> Vec<SpanLine> {
     let style = style.into();
-    let line = MathBlock::value(&Reading::new(value, style), &value.drawing, style);
+    let line = MathBlock::value(&Reading::new(value, style), value, style);
     let mut rows = MathBlock::fitted(vec![line], width);
     for span in rows.iter_mut().flatten() {
         if !matches!(
@@ -415,7 +398,13 @@ pub fn inline(tex: &str, blackboard: bool) -> Option<SpanLine> {
 
 /// `text` as TeX set in a typewriter font, escaped so it reads back as written.
 pub fn typewriter(text: &str) -> String {
-    let mut tex = String::from(r"\texttt{");
+    in_face("texttt", text)
+}
+
+/// `text` as TeX set in the face `command` sets, `mathbb` or `texttt`, escaped
+/// so it reads back as written.
+pub fn in_face(command: &str, text: &str) -> String {
+    let mut tex = format!(r"\{command}{{");
     for character in text.chars() {
         match TEXT_SYMBOLS
             .iter()
@@ -974,7 +963,7 @@ const OPERATOR_COMMANDS: [(&str, &str); 19] = [
     ("times", "\u{00D7}"),
     ("ast", "\u{2217}"),
     ("mid", "|"),
-    ("Rightarrow", OPTION_ARROW),
+    ("Rightarrow", "=>"),
     ("Leftarrow", "\u{21D0}"),
     ("Leftrightarrow", "\u{21D4}"),
     ("Longrightarrow", "\u{27F9}"),
@@ -1064,7 +1053,7 @@ const SCRIPT: Alphabet = Alphabet {
         ('M', 'ℳ'),
         ('R', 'ℛ'),
     ],
-    doubled_in_code: false,
+    doubled_in_code: true,
 };
 /// Font commands M2 wraps names in. All are transparent to layout: they change how a
 /// name is *set*, never what it is. `mathit` marks multi-character names, which is how
@@ -1091,6 +1080,22 @@ impl Math {
         match input.rest().is_empty() {
             true => Ok(parsed),
             false => Err(UnsupportedTeX(format!("trailing input: {}", input.rest()))),
+        }
+    }
+
+    /// `text` in the face TeX's `command` sets it in: its TeX for a picture, and
+    /// for a terminal the spelling that TeX reads as, `\mathbb{Q}` as `ℚ` or `QQ`.
+    pub fn faced(command: &str, text: &str, kind: HLGroup, style: MathStyle) -> Self {
+        let tex = in_face(command, text);
+        let spelled = match Self::parse_with(&tex, style) {
+            Ok(Self::Atom { text, .. }) => text,
+            _ => text.to_owned(),
+        };
+        Self::Native {
+            text: spelled,
+            tex,
+            kind,
+            color: None,
         }
     }
 
@@ -1424,24 +1429,12 @@ impl Math {
     }
 
     /// Whether a line may end after this, as after a list's comma.
-    fn is_separator(&self) -> bool {
+    pub fn is_separator(&self) -> bool {
         matches!(
             self,
             Self::Atom { text, kind: HLGroup::Delimiter, .. }
                 if matches!(text.trim_end(), "," | ";")
         )
-    }
-
-    /// Parse what M2's `tex` produced, when it is maths: the source between `$` signs.
-    ///
-    /// For a String, a Net or null M2 answers `tex` with the raw text instead, which
-    /// is not maths -- read as TeX, `hello world` would set as the name `helloworld`.
-    pub fn from_tex(source: &str, style: MathStyle) -> Result<Self, UnsupportedTeX> {
-        let maths = source
-            .strip_prefix('$')
-            .and_then(|tex| tex.strip_suffix('$'))
-            .ok_or_else(|| UnsupportedTeX("not maths: no $ delimiters".into()))?;
-        Self::parse_with(maths, style)
     }
 
     /// A row's pieces laid out in order, split wherever a long row may break.
@@ -1522,7 +1515,7 @@ impl Math {
     }
 
     /// Whether this separates its neighbours rather than binding to one.
-    fn is_binary(&self) -> bool {
+    pub fn is_binary(&self) -> bool {
         if let Self::Over { base, .. } = self {
             return base.is_binary();
         }
@@ -1621,7 +1614,10 @@ pub struct MathBlock {
 impl MathBlock {
     /// The same block, every span of it linking to `target`.
     fn linked(mut self, target: &str) -> Self {
-        link(self.rows.iter_mut().flatten(), target);
+        let target: Arc<str> = target.into();
+        for span in self.rows.iter_mut().flatten() {
+            span.target = Some(target.clone());
+        }
         self
     }
 
@@ -1740,14 +1736,10 @@ impl MathBlock {
     /// A value M2 sent, laid out whole: TeX from its structure, a container from its
     /// entries, a token in its role's colour, and whatever M2 drew as plain text as
     /// a string.
-    fn value(reading: &Reading, node: &Node, style: MathStyle) -> Self {
-        let block = match node.text() {
-            Some(text) => Self::text(text, node.group()),
-            None => reading.part(node).layout(style.fractions),
-        };
-        match &node.target {
-            Some(target) => block.linked(target),
-            None => block,
+    fn value(reading: &Reading, shape: &Shape, style: MathStyle) -> Self {
+        match shape.text() {
+            Some(text) => Self::text(text, shape.group()),
+            None => reading.part(shape).layout(style.fractions),
         }
     }
 
@@ -1760,7 +1752,7 @@ impl MathBlock {
     fn listed(
         reading: &Reading,
         (open, close): (char, char),
-        items: &[Node],
+        items: &[Shape],
         width: usize,
         style: MathStyle,
     ) -> Vec<Self> {

@@ -207,8 +207,12 @@ pub struct Typesetting<'a> {
 /// What a formula too wide for its room may do about it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Slicing {
-    /// Be cut into strips at its breaks, set one under another, as a long sum is.
+    /// Be cut into strips at the breaks its writer marked, set one under
+    /// another, as a long sum is.
     AtBreaks,
+    /// Be cut into strips after its separators, as TeX written without marks
+    /// can only be.
+    AtSeparators,
     /// Only shrink: its rows read as lines, and a cut through all of them at once
     /// would scatter their tails beneath the picture.
     Whole,
@@ -391,6 +395,7 @@ type ImageKey = (FormulaKey, u16, Size, String, Placement, u16, Slicing);
 struct Formula {
     tree: Tree,
     breaks: Vec<Break>,
+    separators: Vec<Break>,
     /// Where the text baseline runs down the picture, as a share of its height.
     baseline: f32,
 }
@@ -531,6 +536,7 @@ impl Gallery {
                 Some(Arc::new(Formula {
                     tree,
                     breaks: typeset.breaks,
+                    separators: typeset.separators,
                     baseline: typeset.baseline,
                 }))
             })
@@ -703,6 +709,7 @@ impl Raster {
         let across = tree.size().width();
         let breaks = match slicing {
             Slicing::AtBreaks => formula.breaks.as_slice(),
+            Slicing::AtSeparators => formula.separators.as_slice(),
             Slicing::Whole => &[],
         };
         let breaks = breaks

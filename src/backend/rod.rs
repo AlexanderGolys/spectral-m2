@@ -1,88 +1,146 @@
 //! The drawing M2's Spectral package sends for a value: an expression whose
-//! parts are drawings in turn, each node of one of the expression classes the
-//! shell draws, every atom coloured by the highlight group its M2 class names.
+//! parts are drawings in turn, each of one of the expression classes the shell
+//! draws, its atoms in their own colour and font. Nothing else rides along:
+//! M2's other spellings of the value come beside it, each from its own
+//! formatter.
 
 use crate::ui::render::maths::{self, MathStyle, Place};
 use crate::ui::theme::groups::HLGroup;
 use serde::Deserialize;
 
-/// One node of a drawing, an expression of one of the [`Shape`]s, with what any
-/// node may carry.
-///
-/// `x_1^2` arrives as
-/// `{"Shape": "Superscript", "Parts": [{"Shape": "Subscript", "Parts": [x, 1]}, 2]}`,
-/// each of `x`, `1` and `2` a `Holder` atom.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "PascalCase")]
-pub struct Node {
-    #[serde(flatten)]
-    pub shape: Shape,
-    /// The colour of an atom's class.
-    pub group: Option<HLGroup>,
-    /// The group this node and its parts are coloured as, in place of their own.
-    pub highlight: Option<HLGroup>,
-    /// How many levels below this node its highlight reaches; all when absent.
-    pub reach: Option<usize>,
-    /// Where the node links to.
-    pub target: Option<String>,
-    /// An atom's own TeX.
-    pub tex: Option<String>,
-    /// Whether M2 sets an atom as maths.
-    #[serde(default)]
-    pub typeset: bool,
-    /// A matrix's degrees, its rows' standing beside them.
-    pub degrees: Option<Degrees>,
-    /// A diagram for a layout in characters, when this one runs arrows across
-    /// columns.
-    pub straight: Option<Box<Node>>,
+/// The face an atom is set in: one of TeX's maths alphabets, set as maths, or
+/// a text face, set as text beside it.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SRodFont {
+    /// `\mathbb`: `Q` is ℚ.
+    MathBB,
+    MathFrak,
+    /// `\mathcal`: `O` is 𝒪.
+    MathCal,
+    /// TeX's own maths: italic letters, upright digits.
+    MathNormal,
+    MathBf,
+    MathIt,
+    MathRm,
+    /// Typewriter text, as code and strings are spelled.
+    TextTT,
+    TextNormal,
+    TextBf,
+    TextIt,
 }
 
-/// A matrix's degrees as M2 gives them, `[rows, columns]`, each a degree, a
-/// list of integers, for every row or column: `[[[1], [1]], [[2]]]` for a map
+impl SRodFont {
+    /// Whether text in this face is set as maths.
+    pub fn is_maths(self) -> bool {
+        !matches!(self, Self::TextTT | Self::TextNormal | Self::TextBf | Self::TextIt)
+    }
+
+    /// The TeX command setting text in this face, none for TeX's own maths.
+    pub fn command(self) -> Option<&'static str> {
+        Some(match self {
+            Self::MathBB => "mathbb",
+            Self::MathFrak => "mathfrak",
+            Self::MathCal => "mathcal",
+            Self::MathNormal => return None,
+            Self::MathBf => "mathbf",
+            Self::MathIt => "mathit",
+            Self::MathRm => "mathrm",
+            Self::TextTT => "texttt",
+            Self::TextNormal => "text",
+            Self::TextBf => "textbf",
+            Self::TextIt => "textit",
+        })
+    }
+
+}
+
+/// How an atom is drawn: the highlight group it is coloured as and its face.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "PascalCase")]
+pub struct SRodAtomicStyle {
+    pub highlight: HLGroup,
+    pub font: SRodFont,
+}
+
+/// A matrix's degrees as M2 gives them, `[rows, columns]`, a degree, a list of
+/// integers, for every row and every column: `[[[1], [1]], [[2]]]` for a map
 /// from `R^{-2}` to `R^{-1, -1}`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
 pub struct Degrees {
-    pub rows: Vec<Node>,
-    pub columns: Vec<Node>,
+    pub rows: Vec<Shape>,
+    pub columns: Vec<Shape>,
 }
 
-/// The expression classes a drawing is built from, each named as the M2 class
-/// it is; Spectral's `shapes` lists the same.
+/// A drawing: an atom, or an expression of one of the classes the shell draws,
+/// each named as the M2 class it is, as Spectral's `shapes` lists them.
+///
+/// `x_1^2` arrives as
+/// `{"Shape": "Superscript", "Parts": [{"Shape": "Subscript", "Parts": [x, 1]}, 2]}`,
+/// each of `x`, `1` and `2` an atom such as
+/// `{"Shape": "Atom", "Parts": {"Text": "x", "Highlight": "Variable", "Font": "MathNormal"}}`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
-#[serde(tag = "Shape", content = "Parts")]
+#[serde(tag = "Shape", content = "Parts", rename_all_fields = "PascalCase")]
 #[non_exhaustive]
 pub enum Shape {
-    /// An atom: text in the colour of its class.
-    Holder((String,)),
-    RowExpression(Vec<Node>),
-    Parenthesize((Box<Node>,)),
-    Divide(Box<Node>, Box<Node>),
-    Subscript(Box<Node>, Box<Node>),
-    Superscript(Box<Node>, Box<Node>),
-    List(Vec<Node>),
-    Array(Vec<Node>),
-    Sequence(Vec<Node>),
-    AngleBarList(Vec<Node>),
+    /// An atom: text in its colour and face. Not M2's `Holder`, which is
+    /// any expression standing for one value, `(x)` too.
+    Atom {
+        text: String,
+        #[serde(flatten)]
+        style: SRodAtomicStyle,
+    },
+    RowExpression(Vec<Shape>),
+    Parenthesize((Box<Shape>,)),
+    Divide(Box<Shape>, Box<Shape>),
+    Subscript(Box<Shape>, Box<Shape>),
+    Superscript(Box<Shape>, Box<Shape>),
+    List(Vec<Shape>),
+    Array(Vec<Shape>),
+    Sequence(Vec<Shape>),
+    AngleBarList(Vec<Shape>),
     /// Items one under another, between braces.
-    VerticalList(Vec<Node>),
-    MatrixExpression(Vec<Vec<Node>>),
+    VerticalList(Vec<Shape>),
+    /// A matrix's entries, row by row, its rows' degrees beside them.
+    MatrixExpression {
+        rows: Vec<Vec<Shape>>,
+        degrees: Option<Degrees>,
+    },
     /// A bare grid of cells.
-    Table(Vec<Vec<Node>>),
+    Table(Vec<Vec<Shape>>),
     /// Rows whose every cell but the last sits in an aligned column, the last
     /// running on.
-    AlignedExpression(Vec<Vec<Node>>),
-    UnderExpression(Box<Node>, Box<Node>),
-    OverExpression(Box<Node>, Box<Node>),
-    /// Pieces on a grid joined by arrows, each `(from, to, label)`.
-    DiagramExpression(Vec<(Place, Node)>, Vec<(Place, Place, Option<Node>)>),
+    AlignedExpression(Vec<Vec<Shape>>),
+    UnderExpression(Box<Shape>, Box<Shape>),
+    OverExpression(Box<Shape>, Box<Shape>),
+    /// Pieces on a grid joined by arrows, each `(from, to, label)`, and the same
+    /// diagram for a layout in characters when this one runs arrows across
+    /// columns.
+    DiagramExpression {
+        pieces: Vec<(Place, Shape)>,
+        arrows: Vec<(Place, Place, Option<Shape>)>,
+        straight: Option<Box<Shape>>,
+    },
     /// A hierarchy, each branch a label over its subtree.
-    TreeExpression(Vec<(Node, Node)>),
+    TreeExpression(Vec<(Shape, Shape)>),
+}
+
+/// A documentation page, laid out apart from any drawing: its HTML, the width
+/// its examples were archived at, and the names it resolves as types.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct DocPage {
+    pub html: String,
+    pub example_width: usize,
+    #[serde(default)]
+    pub type_names: Vec<String>,
 }
 
 impl Shape {
+
     /// A list's items with the delimiters it is fenced by, its entries between
     /// commas.
-    pub fn listing(&self) -> Option<((char, char), &[Node])> {
+    pub fn listing(&self) -> Option<((char, char), &[Shape])> {
         match self {
             Self::List(items) => Some((('{', '}'), items)),
             Self::Array(items) => Some((('[', ']'), items)),
@@ -90,161 +148,85 @@ impl Shape {
             _ => None,
         }
     }
-}
 
-impl Node {
-    /// An atom coloured as `group`.
-    pub fn atom(text: impl Into<String>, group: HLGroup) -> Self {
-        Self {
-            shape: Shape::Holder((text.into(),)),
-            group: Some(group),
-            highlight: None,
-            reach: None,
-            target: None,
-            tex: None,
-            typeset: false,
-            degrees: None,
-            straight: None,
-        }
-    }
-
-    /// The text of an atom.
+    /// The text of an atom set as text, laid out as prose rather than maths.
     pub fn text(&self) -> Option<&str> {
-        match &self.shape {
-            Shape::Holder((text,)) => Some(text),
+        match self {
+            Self::Atom { text, style } if !style.font.is_maths() => Some(text),
             _ => None,
         }
     }
 
-    /// The colour of an atom standing alone, its highlight's over its class's.
+    /// The colour of an atom standing alone.
     pub fn group(&self) -> HLGroup {
-        match &self.shape {
-            Shape::Holder(_) => self.highlight.or(self.group).unwrap_or(HLGroup::Text),
+        match self {
+            Self::Atom { style, .. } => style.highlight,
             _ => HLGroup::Text,
         }
     }
 
-    /// The nodes this one is built from, in reading order.
+    /// The drawings this one is built from, in reading order.
     pub fn parts(&self) -> Vec<&Self> {
-        let own = match &self.shape {
-            Shape::Holder(_) => Vec::new(),
-            Shape::RowExpression(items)
-            | Shape::List(items)
-            | Shape::Array(items)
-            | Shape::Sequence(items)
-            | Shape::AngleBarList(items)
-            | Shape::VerticalList(items) => items.iter().collect(),
-            Shape::Parenthesize((body,)) => vec![&**body],
-            Shape::Divide(first, second)
-            | Shape::Subscript(first, second)
-            | Shape::Superscript(first, second)
-            | Shape::UnderExpression(first, second)
-            | Shape::OverExpression(first, second) => vec![&**first, &**second],
-            Shape::MatrixExpression(rows) | Shape::Table(rows) | Shape::AlignedExpression(rows) => {
-                rows.iter().flatten().collect()
-            }
-            Shape::DiagramExpression(pieces, arrows) => pieces
+        match self {
+            Self::Atom { .. } => Vec::new(),
+            Self::RowExpression(items)
+            | Self::List(items)
+            | Self::Array(items)
+            | Self::Sequence(items)
+            | Self::AngleBarList(items)
+            | Self::VerticalList(items) => items.iter().collect(),
+            Self::Parenthesize((body,)) => vec![&**body],
+            Self::Divide(first, second)
+            | Self::Subscript(first, second)
+            | Self::Superscript(first, second)
+            | Self::UnderExpression(first, second)
+            | Self::OverExpression(first, second) => vec![&**first, &**second],
+            Self::MatrixExpression { rows, degrees } => rows
+                .iter()
+                .flatten()
+                .chain(degrees.iter().flat_map(|degrees| degrees.rows.iter().chain(&degrees.columns)))
+                .collect(),
+            Self::Table(rows) | Self::AlignedExpression(rows) => rows.iter().flatten().collect(),
+            Self::DiagramExpression {
+                pieces,
+                arrows,
+                straight,
+            } => pieces
                 .iter()
                 .map(|(_, piece)| piece)
                 .chain(arrows.iter().filter_map(|(.., label)| label.as_ref()))
+                .chain(straight.as_deref())
                 .collect(),
-            Shape::TreeExpression(branches) => branches
+            Self::TreeExpression(branches) => branches
                 .iter()
                 .flat_map(|(label, subtree)| [label, subtree])
                 .collect(),
-        };
-        own.into_iter()
-            .chain(
-                self.degrees
-                    .iter()
-                    .flat_map(|degrees| degrees.rows.iter().chain(&degrees.columns)),
-            )
-            .chain(self.straight.as_deref())
-            .collect()
+        }
     }
 
-    /// Whether this node or any below it satisfies `test`.
+    /// Whether this drawing or any below it satisfies `test`.
     pub fn any(&self, test: &impl Fn(&Self) -> bool) -> bool {
         test(self) || self.parts().into_iter().any(|part| part.any(test))
     }
-}
 
-/// A drawing as M2 sends it: the tree, and what is sent for the value whole.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "PascalCase")]
-pub struct Rod {
-    #[serde(flatten)]
-    pub drawing: Node,
-    /// M2's own two-dimensional spelling.
-    pub fallback: Option<String>,
-    /// M2's copyable input spelling.
-    pub code: Option<String>,
-    /// A documentation page, laid out apart from any drawing.
-    pub html: Option<String>,
-    /// The width the page's archived examples were produced at.
-    #[serde(default)]
-    pub example_width: usize,
-    /// Names M2 resolves as types where the page was written.
-    #[serde(default)]
-    pub type_names: Vec<String>,
-}
-
-impl Rod {
-    /// Plain text, a single atom of M2's `Net`.
-    pub fn plain(text: String) -> Self {
-        Self {
-            drawing: Node::atom(text, HLGroup::Text),
-            fallback: None,
-            code: None,
-            html: None,
-            example_width: 0,
-            type_names: Vec::new(),
-        }
-    }
-
-    /// A documentation page with its original text and archived example width.
-    pub fn document(html: String, fallback: String, example_width: usize) -> Self {
-        Self {
-            html: Some(html),
-            example_width,
-            ..Self::plain(fallback)
-        }
-    }
-
-    /// The text of a value drawn as a single atom.
-    pub fn text(&self) -> Option<&str> {
-        self.drawing.text()
-    }
-
-    /// Whether M2 asks for any part of this to be set as typeset maths.
+    /// Whether any atom of this is set as maths.
     pub fn wants_typesetting(&self) -> bool {
-        self.drawing
-            .any(&|node| matches!(node.shape, Shape::Holder(_)) && node.typeset)
+        self.any(&|shape| matches!(shape, Self::Atom { style, .. } if style.font.is_maths()))
     }
 
-    /// Whether any part of this links somewhere.
-    pub fn has_links(&self) -> bool {
-        self.drawing.any(&|node| node.target.is_some())
-    }
-
-    /// Whether the drawing tells more than M2's own text: anything but a page or
-    /// one atom of no particular class.
+    /// Whether the drawing tells more than M2's own text: anything but one atom
+    /// of plain text.
     pub fn is_structured(&self) -> bool {
-        self.html.is_none()
-            && !(matches!(self.drawing.shape, Shape::Holder(_))
-                && self
-                    .drawing
-                    .group
-                    .is_none_or(|group| group == HLGroup::Text))
-    }
-
-    /// Documentation content and the width of its recorded examples.
-    pub fn markup(&self) -> Option<(&str, &usize)> {
-        self.html.as_deref().map(|html| (html, &self.example_width))
+        !matches!(self, Self::Atom { style, .. } if style.highlight == HLGroup::Text)
     }
 
     /// The drawing as Unicode terminal text.
     pub fn render(&self) -> String {
+        self.rendered(MathStyle::default())
+    }
+
+    /// The drawing as terminal text set in `style`.
+    pub fn rendered(&self, style: MathStyle) -> String {
         if let Some(text) = self.text() {
             return text
                 .lines()
@@ -252,10 +234,6 @@ impl Rod {
                 .collect::<Vec<_>>()
                 .join("\n");
         }
-        self.render_with(MathStyle::default())
-    }
-
-    fn render_with(&self, style: MathStyle) -> String {
         maths::spans(self, usize::MAX / 4, style)
             .unwrap_or_default()
             .iter()
@@ -266,18 +244,5 @@ impl Rod {
             })
             .collect::<Vec<_>>()
             .join("\n")
-    }
-
-    /// M2's own spelling, for when ASCII output is asked for.
-    pub fn ascii(&self) -> String {
-        self.fallback
-            .clone()
-            .or_else(|| self.text().map(str::to_owned))
-            .unwrap_or_else(|| {
-                self.render_with(MathStyle {
-                    display: maths::MathDisplay::Ascii,
-                    ..MathStyle::default()
-                })
-            })
     }
 }

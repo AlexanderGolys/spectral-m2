@@ -37,9 +37,8 @@ use super::render::{markup, maths, spin, typeset};
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::settings::rendering::RendererPosition;
 use super::wrap::{offset_at_column, SpanWrap, WrapPolicy, WrappedText};
-use crate::backend::rod::Shape;
 use crate::backend::transcript::{captured_error, captured_output, strip_m2_location};
-use crate::backend::{M2Response, PreviewMode, Rod, ValuePreview};
+use crate::backend::{DocPage, M2Response, PreviewMode, Shape, ValuePreview};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::SourceId;
 use crate::ui::config::UI;
@@ -140,6 +139,8 @@ pub fn response_blocks(
             OutputBlock::rendered(value, rendered.type_info)
                 .with_previews(response.previews.clone())
                 .inspected(response.inspection.clone())
+                .documented(response.document.clone())
+                .located(response.location.clone())
                 .annotated(response.type_drawing.clone())
                 .drawing_text(),
         ),
@@ -1576,7 +1577,7 @@ struct OutputCell {
     recall: Option<Recall>,
     ty: Option<String>,
     /// The annotation's pieces, set from their structure when M2 sent them.
-    type_drawing: Option<Rod>,
+    type_drawing: Option<Shape>,
     /// The formatter choice shared by every value in the enclosing block.
     chosen: Rc<Cell<Option<PreviewMode>>>,
 }
@@ -1589,10 +1590,8 @@ impl Spelled for PreviewMode {
             Self::Rod => Glyphs::RendererRod,
             Self::Net => Glyphs::RendererNet,
             Self::String => Glyphs::RendererString,
-            Self::Tex => Glyphs::RendererTex,
             Self::Markup => Glyphs::RendererMarkup,
             Self::External => Glyphs::RendererExternal,
-            Self::Peek => Glyphs::RendererPeek,
             Self::Speek => Glyphs::RendererSpeek,
         }
         .spelled(charset)
@@ -1602,10 +1601,9 @@ impl Spelled for PreviewMode {
 impl OutputCell {
     fn default_preview(&self) -> PreviewMode {
         match self.source.value.as_ref() {
-            Some(value) if value.html.is_some() => PreviewMode::Markup,
+            _ if self.source.document.is_some() => PreviewMode::Markup,
             Some(value) if value.is_structured() => PreviewMode::Rod,
-            Some(_) => PreviewMode::Net,
-            None => PreviewMode::Net,
+            _ => PreviewMode::Net,
         }
     }
 
@@ -1621,13 +1619,9 @@ impl OutputCell {
 
     fn offers(&self, mode: PreviewMode) -> bool {
         match mode {
-            PreviewMode::Rod => self.source.value.as_ref().is_some_and(Rod::is_structured),
+            PreviewMode::Rod => self.source.value.as_ref().is_some_and(Shape::is_structured),
             PreviewMode::Speek => self.source.inspection.is_some(),
-            PreviewMode::Markup => self
-                .source
-                .value
-                .as_ref()
-                .is_some_and(|value| value.html.is_some()),
+            PreviewMode::Markup => self.source.document.is_some(),
             _ => self.preview_text(mode).is_some(),
         }
     }
@@ -1638,18 +1632,11 @@ impl OutputCell {
 
     fn markup(&self) -> Option<(&str, usize)> {
         match self.preview_mode() {
-            PreviewMode::Markup => self
+            PreviewMode::Markup | PreviewMode::Rod => self
                 .source
-                .value
-                .as_ref()?
-                .markup()
-                .map(|(html, width)| (html, *width)),
-            PreviewMode::Rod => self
-                .source
-                .value
-                .as_ref()?
-                .markup()
-                .map(|(html, width)| (html, *width)),
+                .document
+                .as_ref()
+                .map(|document| (document.html.as_str(), document.example_width)),
             _ => None,
         }
     }
@@ -1704,15 +1691,19 @@ impl fmt::Debug for LayoutKey {
 }
 
 /// What a value is laid out from, shared with the worker laying it out again.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct ValueSource {
     previews: Vec<ValuePreview>,
     /// The value as plain text, which without M2's own may take a whole drawing;
     /// filled on a worker, so the drawing thread only reads it once there.
     text: OnceLock<String>,
-    value: Option<Rod>,
+    value: Option<Shape>,
     /// The value inspected as `peek` inspects it, drawn as the value is.
-    inspection: Option<Rod>,
+    inspection: Option<Shape>,
+    /// The value as a documentation page, when it is one.
+    document: Option<DocPage>,
+    /// Where the value links to, the source of a function or a position.
+    location: Option<String>,
 }
 
 impl ValueSource {
@@ -1740,16 +1731,26 @@ impl ValueSource {
             .map(|preview| preview.text.as_str())
     }
 
+    /// M2's own two-dimensional spelling, else the drawing set in ASCII.
+    fn ascii(&self) -> String {
+        self.preview_text(PreviewMode::Net).map_or_else(
+            || {
+                self.value.as_ref().map_or_else(String::new, |value| {
+                    value.rendered(MathStyle {
+                        display: MathDisplay::Ascii,
+                        ..MathStyle::default()
+                    })
+                })
+            },
+            str::to_owned,
+        )
+    }
+
     /// The rows M2's own text wraps into for the text formatters.
     fn text_lines(&self, renderer: PreviewMode, width: u16) -> Vec<String> {
         let text = match renderer {
-            PreviewMode::Net => self
-                .preview_text(PreviewMode::Net)
-                .map(str::to_owned)
-                .or_else(|| self.value.as_ref().map(Rod::ascii)),
-            mode @ (PreviewMode::String | PreviewMode::Peek) => {
-                self.preview_text(mode).map(str::to_owned)
-            }
+            PreviewMode::Net => Some(self.ascii()),
+            PreviewMode::String => self.preview_text(PreviewMode::String).map(str::to_owned),
             _ => None,
         }
         .unwrap_or_else(|| self.text().to_string());
@@ -1772,34 +1773,28 @@ impl ValueSource {
                 .preview_text(PreviewMode::External)
                 .unwrap_or(self.text());
             code_lines(source, width as u16, theme)
-        } else if renderer == PreviewMode::Tex {
-            let drawn = typeset::tex_preview(
-                self.preview_text(PreviewMode::Tex).unwrap_or(""),
-                width,
-                theme,
-                style,
-            );
-            links = drawn.links;
-            drawn.lines
         } else if matches!(renderer, PreviewMode::Rod | PreviewMode::Speek) {
             let drawing = match renderer {
                 PreviewMode::Speek => self.inspection.clone(),
                 _ => self.value.clone().map(|mut value| {
                     // A value drawn as one atom shows the text cut as every text formatter cuts it.
-                    if let Shape::Holder((text,)) = &mut value.drawing.shape {
-                        *text = self.text().to_string();
+                    if let Shape::Atom { text, style } = &mut value {
+                        if !style.font.is_maths() {
+                            *text = self.text().to_string();
+                        }
                     }
                     value
                 }),
             };
             match drawing.as_ref() {
                 Some(value) if style.display == MathDisplay::Typeset => {
-                    let drawn = typeset::drawn(value, width, theme, style);
+                    let code = self.preview_text(PreviewMode::String).unwrap_or(self.text());
+                    let drawn = typeset::drawn(value, code, width, theme, style);
                     links = drawn.links;
                     drawn.lines
                 }
-                Some(value) if style.display == MathDisplay::Ascii => {
-                    word_lines(&value.ascii(), width as u16)
+                Some(_) if style.display == MathDisplay::Ascii => {
+                    word_lines(&self.ascii(), width as u16)
                         .into_iter()
                         .map(|line| Line::from(Span::styled(line, theme.value())))
                         .collect()
@@ -1870,52 +1865,34 @@ pub struct OutputBlock {
 impl OutputBlock {
     /// Create a rendered value and its optional type.
     pub fn value(text: String, ty: Option<String>) -> Self {
-        Self {
-            cells: vec![OutputCell {
-                layout: RefCell::default(),
-                relayout: RefCell::default(),
-                source: Arc::new(ValueSource {
-                    previews: vec![ValuePreview::new(
-                        PreviewMode::Net,
-                        text.trim_end().to_string(),
-                    )],
-                    text: OnceLock::from(text.trim_end().to_string()),
-                    value: None,
-                    inspection: None,
-                }),
-                pictures: RefCell::default(),
-                number: None,
-                recall: None,
-                ty: ty.map(|ty| ty.trim_end().to_string()),
-                type_drawing: None,
-                chosen: Rc::default(),
-            }],
-            expanded: false,
-            framed: true,
-        }
+        let text = text.trim_end().to_string();
+        Self::holding(
+            ValueSource {
+                previews: vec![ValuePreview::new(PreviewMode::Net, text.clone())],
+                text: OnceLock::from(text),
+                ..ValueSource::default()
+            },
+            ty.map(|ty| ty.trim_end().to_string()),
+        )
     }
 
     /// Retain a structured M2 value for width-aware terminal rendering.
-    pub fn rendered(value: Rod, ty: Option<String>) -> Self {
-        if let Some(html) = &value.html {
-            markup::remember_types(html, &value.type_names);
-        }
+    pub fn rendered(value: Shape, ty: Option<String>) -> Self {
+        Self::holding(
+            ValueSource {
+                value: Some(value),
+                ..ValueSource::default()
+            },
+            ty,
+        )
+    }
+
+    fn holding(source: ValueSource, ty: Option<String>) -> Self {
         Self {
             cells: vec![OutputCell {
                 layout: RefCell::default(),
                 relayout: RefCell::default(),
-                source: Arc::new(ValueSource {
-                    previews: value
-                        .fallback
-                        .as_deref()
-                        .or(value.text())
-                        .map(|text| ValuePreview::new(PreviewMode::Net, output_preview(text)))
-                        .into_iter()
-                        .collect(),
-                    text: OnceLock::new(),
-                    value: Some(value),
-                    inspection: None,
-                }),
+                source: Arc::new(source),
                 pictures: RefCell::default(),
                 number: None,
                 recall: None,
@@ -1926,6 +1903,21 @@ impl OutputBlock {
             expanded: false,
             framed: true,
         }
+    }
+
+    /// Offer the value as the documentation page it is.
+    pub fn documented(mut self, document: Option<DocPage>) -> Self {
+        if let Some(document) = &document {
+            markup::remember_types(&document.html, &document.type_names);
+        }
+        Arc::make_mut(&mut self.cells[0].source).document = document;
+        self
+    }
+
+    /// Link the value to where it comes from.
+    pub fn located(mut self, location: Option<String>) -> Self {
+        Arc::make_mut(&mut self.cells[0].source).location = location;
+        self
     }
 
     /// Draw each value's plain text on a worker, once the block is whole and its
@@ -1947,10 +1939,7 @@ impl OutputBlock {
             .map(|mut preview| {
                 if matches!(
                     preview.mode,
-                    PreviewMode::Net
-                        | PreviewMode::String
-                        | PreviewMode::External
-                        | PreviewMode::Peek
+                    PreviewMode::Net | PreviewMode::String | PreviewMode::External
                 ) {
                     preview.text = output_preview(&preview.text);
                 }
@@ -1967,13 +1956,13 @@ impl OutputBlock {
     }
 
     /// Offer the value's inspection, as `speek` draws it, beside its drawing.
-    pub fn inspected(mut self, inspection: Option<Rod>) -> Self {
+    pub fn inspected(mut self, inspection: Option<Shape>) -> Self {
         Arc::make_mut(&mut self.cells[0].source).inspection = inspection;
         self
     }
 
     /// Set the type annotation from its drawing rather than its text.
-    pub fn annotated(mut self, drawing: Option<Rod>) -> Self {
+    pub fn annotated(mut self, drawing: Option<Shape>) -> Self {
         self.cells[0].type_drawing = drawing;
         self
     }
@@ -2475,7 +2464,7 @@ impl OutputBlock {
             .filter(|_| {
                 context.math().display == MathDisplay::Ascii || context.math().original_text
             })
-            .and_then(|value| value.drawing.target.as_ref())?;
+            .and(cell.source.location.as_ref())?;
         let cells = self
             .unfolded_lines(cell, context)
             .iter()

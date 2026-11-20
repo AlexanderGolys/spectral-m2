@@ -1,11 +1,11 @@
 //! Reading a drawing M2 sent into maths: each shape into its construct, each atom
-//! in the colour of its class, or of the highlight over it.
+//! in its own colour and face.
 
 // Keep mathematical notation and interface symbols legible in their native spelling.
 #![allow(clippy::non_ascii_literal)]
 use super::diagram::Arrow;
 use super::{Diagram, GridKind, Math, MathDisplay, MathStyle};
-use crate::backend::rod::{Node, Rod, Shape};
+use crate::backend::rod::Shape;
 use crate::ui::theme::groups::HLGroup;
 
 /// The sign between the factors of a product.
@@ -27,107 +27,56 @@ const ASCII_SPELLINGS: [(&str, &str); 4] = [
     (DIRECT_SUM_SIGN, "++"),
 ];
 
-/// A highlight reaching down from the node that set it: its colour, and how many
-/// levels further it reaches, without end when `None`.
-#[derive(Clone, Copy)]
-struct Reaching {
-    group: HLGroup,
-    levels: Option<usize>,
-}
-
-impl Reaching {
-    fn below(self) -> Option<Self> {
-        match self.levels {
-            Some(0) => None,
-            levels => Some(Self {
-                levels: levels.map(|levels| levels - 1),
-                ..self
-            }),
-        }
-    }
-}
-
 /// How a drawing is read into maths.
 pub struct Reading<'a> {
-    value: &'a Rod,
+    value: &'a Shape,
     style: MathStyle,
-    /// Whether an atom M2 did not mark typeset is spelled in a typewriter face, as
-    /// a picture sets what only sits beside its maths.
-    typewritten: bool,
 }
 
 impl<'a> Reading<'a> {
-    pub fn new(value: &'a Rod, style: MathStyle) -> Self {
-        Self {
-            value,
-            style,
-            typewritten: false,
-        }
-    }
-
-    pub fn typewritten(self) -> Self {
-        Self {
-            typewritten: true,
-            ..self
-        }
+    pub fn new(value: &'a Shape, style: MathStyle) -> Self {
+        Self { value, style }
     }
 
     /// The whole drawing.
     pub fn math(&self) -> Math {
-        self.part(&self.value.drawing)
+        self.part(self.value)
     }
 
     /// One part of the drawing, as if it stood alone.
-    pub fn part(&self, node: &Node) -> Math {
-        let math = self.node(node, None);
+    pub fn part(&self, shape: &Shape) -> Math {
+        let math = self.shape(shape);
         match self.style.display {
             MathDisplay::Ascii => ascii(math),
             _ => math,
         }
     }
 
-    fn node(&self, node: &Node, reaching: Option<Reaching>) -> Math {
-        let reaching = node
-            .highlight
-            .map(|group| Reaching {
-                group,
-                levels: node.reach,
-            })
-            .or(reaching);
-        let part = |part: &Node| self.node(part, reaching.and_then(Reaching::below));
-        let boxed = |node: &Node| Box::new(part(node));
-        let rows = |rows: &[Vec<Node>]| -> Vec<Vec<Math>> {
+    fn shape(&self, shape: &Shape) -> Math {
+        let part = |part: &Shape| self.shape(part);
+        let boxed = |shape: &Shape| Box::new(part(shape));
+        let rows = |rows: &[Vec<Shape>]| -> Vec<Vec<Math>> {
             rows.iter()
                 .map(|row| row.iter().map(part).collect())
                 .collect()
         };
-        let tinted = |script: &Node, color: super::ScriptColor, base: &Math| {
+        let tinted = |script: &Shape, color: super::ScriptColor, base: &Math| {
             let script = part(script);
             match color.role(base) {
                 Some(role) => script.tinted(role),
                 None => script,
             }
         };
-        let body = match (&node.shape, node.shape.listing()) {
+        match (shape, shape.listing()) {
             (_, Some(((left, right), items))) => Math::Delimited {
                 left,
                 right,
                 body: Box::new(Math::Row(listed(items.iter().map(part)))),
             },
-            (Shape::Holder((text,)), _) => {
-                let kind = reaching.map_or(node.group(), |over| over.group);
-                let typewriter =
-                    (self.typewritten && !node.typeset).then(|| super::typewriter(text));
-                match node.tex.clone().or(typewriter) {
-                    Some(tex) => Math::Native {
-                        text: text.clone(),
-                        tex,
-                        kind,
-                        color: None,
-                    },
-                    None => Math::atom(text, kind),
-                }
-            }
+            (Shape::Atom { text, style }, _) => match style.font.command() {
+                Some(command) => Math::faced(command, text, style.highlight, self.style),
+                None => Math::atom(text, style.highlight),
+            },
             (Shape::RowExpression(items), _) => Math::Row(items.iter().map(part).collect()),
             (Shape::Parenthesize((body,)), _) => parenthesized(part(body)),
             (Shape::Subscript(base, sub), _) => {
@@ -177,7 +126,7 @@ impl<'a> Reading<'a> {
                     ])),
                 }
             }
-            (Shape::MatrixExpression(cells), _) => match &node.degrees {
+            (Shape::MatrixExpression { rows: cells, degrees }, _) => match degrees {
                 Some(degrees) => Math::AnnotatedMatrix {
                     rows: rows(cells),
                     degrees: degrees.rows.iter().map(part).collect(),
@@ -203,9 +152,7 @@ impl<'a> Reading<'a> {
                 base: boxed(base),
                 label: boxed(label),
             },
-            (Shape::DiagramExpression(..), _) => {
-                Math::Diagram(Box::new(self.diagram(node, reaching)))
-            }
+            (Shape::DiagramExpression { .. }, _) => Math::Diagram(Box::new(self.diagram(shape))),
             (Shape::TreeExpression(branches), _) => Math::Grid {
                 rows: branches
                     .iter()
@@ -216,38 +163,34 @@ impl<'a> Reading<'a> {
             (Shape::List(_) | Shape::Array(_) | Shape::Sequence(_), None) => {
                 unreachable!("every list has a listing")
             }
-        };
-        match &node.target {
-            Some(target) => Math::Linked {
-                body: Box::new(body),
-                target: target.clone(),
-            },
-            None => body,
         }
     }
 
-    fn diagram(&self, node: &Node, reaching: Option<Reaching>) -> Diagram {
-        let part = |part: &Node| self.node(part, reaching.and_then(Reaching::below));
-        let Shape::DiagramExpression(pieces, arrows) = &node.shape else {
-            unreachable!("only a diagram node is read as a diagram")
+    fn diagram(&self, shape: &Shape) -> Diagram {
+        let Shape::DiagramExpression {
+            pieces,
+            arrows,
+            straight,
+        } = shape
+        else {
+            unreachable!("only a diagram is read as a diagram")
         };
         Diagram {
             pieces: pieces
                 .iter()
-                .map(|(place, piece)| (*place, part(piece)))
+                .map(|(place, piece)| (*place, self.shape(piece)))
                 .collect(),
             arrows: arrows
                 .iter()
                 .map(|(from, to, label)| Arrow {
                     from: *from,
                     to: *to,
-                    label: label.as_ref().map(part),
+                    label: label.as_ref().map(|label| self.shape(label)),
                 })
                 .collect(),
-            straight: node
-                .straight
+            straight: straight
                 .as_deref()
-                .map(|straight| Box::new(self.diagram(straight, reaching))),
+                .map(|straight| Box::new(self.diagram(straight))),
         }
     }
 }

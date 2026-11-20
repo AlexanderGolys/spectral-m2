@@ -19,9 +19,6 @@ cyclic! {
         /// M2's string conversion.
         #[serde(rename = "string")]
         String = "string",
-        /// M2's TeX formatter.
-        #[serde(rename = "tex")]
-        Tex = "tex",
         /// A semantic documentation page.
         #[serde(rename = "markup")]
         Markup = "markup",
@@ -32,9 +29,6 @@ cyclic! {
         /// `speek` draws it.
         #[serde(rename = "speek")]
         Speek = "speek",
-        /// One level of the value's inner structure, as M2's `peek` shows it.
-        #[serde(rename = "peek")]
-        Peek = "peek",
     }
 }
 

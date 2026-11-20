@@ -22,7 +22,7 @@ new Point from {1, 1/2}     -- drawn as point(1, ½)
 
 `rod'` draws a part of a drawing, here the expression the point is spelled by, laid out as any of M2's expressions is: a function applied to its arguments.
 
-A drawing is a table of how something is drawn, `Rod{shape, Highlight => …}`, read as `x.Shape`, `x.Class`, `x.Highlight` and so on. Its `Shape` is an expression whose parts are drawings in turn, of one of the classes the shell draws. They are `Holder{text}` for an atom, `RowExpression`, `Parenthesize`, `Divide`, `Subscript`, `Superscript`, the lists, `MatrixExpression`, `Table`, and Spectral's own `AlignedExpression`, `UnderExpression`, `OverExpression`, `DiagramExpression` and `TreeExpression`. An atom takes its colour from its `Group`, one of the shell's colours, an `HLG` such as `HLG "Keyword"`. A `Highlight` colours a part and everything in it in place of their own colours, reaching `Reach` levels below it, or all of them when unset. `Typeset => true` sets a part as maths, with the atoms in it unless they say otherwise. A field given as `null` is not set:
+A drawing is a table of how something is drawn, `Rod{shape, Highlight => …}`, read as `x.Shape`, `x.Class`, `x.Highlight` and so on. Its `Shape` is an expression whose parts are drawings in turn, of one of the classes the shell draws. They are `Holder{text}` for an atom, `RowExpression`, `Parenthesize`, `Divide`, `Subscript`, `Superscript`, the lists, `MatrixExpression`, `Table`, and Spectral's own `AlignedExpression`, `UnderExpression`, `OverExpression`, `DiagramExpression` and `TreeExpression`. An atom takes its colour from its `Group`, one of the shell's colours, an `HLG` such as `HLG "Keyword"`. A `Highlight` colours a part and everything in it in place of their own colours, reaching `Reach` levels below it, or all of them when unset. A `Font` sets the text of a part in a font by its name: `"MathNormal"` for TeX's own maths, a maths alphabet such as `"MathBB"`, where `Q` is ℚ, or a text face such as `"TextTT"`, the typewriter face; the atoms in it take it unless they name their own. A field given as `null` is not set:
 
 ```m2
 Gene = new Type of HashTable
@@ -36,7 +36,7 @@ A drawing that throws falls back to the value's plain text, so a broken `rod` ca
 
 Each cell is sent to Macaulay2 exactly once and is never replayed behind your back. Deciding whether input is complete, splitting it into cells, highlighting and diagnostics are all done locally, by parsing the text, before anything is sent. An hour-long computation is never started twice.
 
-Each result arrives once, complete: drawn by `rod` with its type from `specType`, and also formatted by M2's own `net`, `toString`, `tex`, `toExternalString` and `peek`, and its drawing shown by Spectral's `speek`. Switching renderers uses the data already received. A result that is `null`, or silenced by a trailing `;`, is not formatted at all; a silenced one is still bound to its `oN`.
+Each result arrives once, complete: drawn by `rod` with its type from `specType`, its drawing shown by Spectral's `speek`, and also spelled by M2's own `net`, `toString` and `toExternalString`, every one of them cheap. Each piece of text in the drawing comes with the colour and the font it is drawn in, so the shell only lays it out. Switching renderers uses the data already received. A result that is `null`, or silenced by a trailing `;`, is not formatted at all; a silenced one is still bound to its `oN`.
 
 ## Other processes
 

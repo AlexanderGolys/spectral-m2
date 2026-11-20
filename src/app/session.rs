@@ -15,7 +15,7 @@ use nix::unistd::Pid;
 use m2_syn::{NativeCellParser, NativeCellState, PrettyNode, PrettyTree};
 
 use super::examples::{ExamplePage, ExampleRunner};
-use crate::backend::{Announcement, M2Backend, M2Response, Rod, Versions};
+use crate::backend::{Announcement, DocPage, M2Backend, M2Response, Versions};
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::{Document, SourceId};
 use crate::errors::Error;
@@ -166,13 +166,18 @@ impl Session {
     }
 
     /// Prepare a page for the same example rendering and semantic analysis as session output.
-    pub fn prepare_documentation(&mut self, value: Option<&Rod>) {
-        self.compute_examples(value);
-        self.analyse_page(value);
+    pub fn prepare_documentation(&mut self, document: Option<&DocPage>) {
+        self.compute_examples(document);
+        self.analyse_page(document);
     }
 
-    fn analyse_page(&mut self, value: Option<&Rod>) {
-        let Some((html, example_width)) = value.and_then(Rod::markup) else {
+    fn analyse_page(&mut self, document: Option<&DocPage>) {
+        let Some(DocPage {
+            html,
+            example_width,
+            ..
+        }) = document
+        else {
             return;
         };
         let page = markup::page(html);
@@ -192,8 +197,13 @@ impl Session {
 
     /// Compute the examples of the documentation `value` shows, once per page.
     // @##issue should take either a code block or a sequence of blocks
-    fn compute_examples(&mut self, value: Option<&Rod>) {
-        let Some((html, example_width)) = value.and_then(Rod::markup) else {
+    fn compute_examples(&mut self, document: Option<&DocPage>) {
+        let Some(DocPage {
+            html,
+            example_width,
+            ..
+        }) = document
+        else {
             return;
         };
         let page = markup::page(html);
@@ -605,7 +615,7 @@ impl Session {
         let computed = self.examples.answered();
         if !computed.is_empty() {
             for example in computed {
-                self.analyse_page(example.response.value.as_ref());
+                self.analyse_page(example.response.document.as_ref());
                 markup::remember_example(example.page, example.number, example.response);
             }
             updates.push(EditorUpdate::ExamplesComputed);
@@ -656,7 +666,7 @@ impl Session {
                 self.in_debugger = response.depth > 1;
                 self.next_input_number = number + 1;
                 let state = CellState::of(&response);
-                self.prepare_documentation(response.value.as_ref());
+                self.prepare_documentation(response.document.as_ref());
                 self.committed.push(CommittedCell {
                     source_id: SourceId::Cell {
                         generation: self.generation,

@@ -5,7 +5,7 @@ pub mod rod;
 pub mod transcript;
 
 pub use preview::{PreviewMode, ValuePreview};
-pub use rod::Rod;
+pub use rod::{DocPage, Shape};
 use std::fmt::Display;
 use std::io::{BufRead, BufReader, PipeReader, Write};
 use std::os::unix::process::CommandExt;
@@ -50,13 +50,11 @@ const PACKAGE_LOADER: EmbeddedSource = EmbeddedSource {
 /// The pinned `Spectral` submodule's source files, as `build.rs` lists them.
 const SPECTRAL_SOURCES: &[EmbeddedSource] =
     &include!(concat!(env!("OUT_DIR"), "/spectral_package.rs"));
+
 /// Introduces a result frame on the child's output stream. ASCII group
 /// separator: no diagnostic, prompt or ordinary value begins with it, and the
 /// M2 side writes it immediately before the frame's JSON.
 const FRAME_MARK: u8 = 0x1D;
-/// The arrow of `key => value`.
-pub const OPTION_ARROW: &str = "=>";
-
 /// Appended to every submission, with the submission's number filled in. The statement that closes an input -- see the
 /// M2 side for why the hooks cannot do it alone for a statement that errored. It
 /// hands over the top level's local dictionaries, which only a statement typed
@@ -137,12 +135,14 @@ struct Frame {
     #[serde(default)]
     error: bool,
 
-    value: Option<Rod>,
-    inspection: Option<Rod>,
+    value: Option<Shape>,
+    inspection: Option<Shape>,
+    document: Option<DocPage>,
+    location: Option<String>,
     #[serde(default)]
     previews: Vec<ValuePreview>,
     type_info: Option<String>,
-    type_drawing: Option<Rod>,
+    type_drawing: Option<Shape>,
     #[serde(default)]
     has_value: bool,
     #[serde(default)]
@@ -168,14 +168,18 @@ pub struct M2Response {
     pub transcript: String,
     /// The rendered result, present only when M2 displayed it. A `;`-suppressed
     /// result is `None` here -- deliberately never rendered -- yet still bound.
-    pub value: Option<Rod>,
+    pub value: Option<Shape>,
     /// The value inspected as `peek` inspects it, as Spectral's `speek` draws it.
-    pub inspection: Option<Rod>,
+    pub inspection: Option<Shape>,
+    /// The value as a documentation page, when it is one.
+    pub document: Option<DocPage>,
+    /// Where the value links to, the source of a function or a position.
+    pub location: Option<String>,
     /// Independent M2 formatter results available to the preview selector.
     pub previews: Vec<ValuePreview>,
     pub type_info: Option<String>,
     /// The type annotation as Spectral draws it.
-    pub type_drawing: Option<Rod>,
+    pub type_drawing: Option<Shape>,
     /// Whether M2 bound an `oN` for this input. Not implied by `value`: a
     /// suppressed result binds one without producing rendered text.
     pub has_value: bool,
@@ -472,6 +476,8 @@ impl M2Backend {
                         transcript,
                         value: frame.value,
                         inspection: frame.inspection,
+                        document: frame.document,
+                        location: frame.location,
                         previews: frame.previews,
                         type_info: frame.type_info,
                         type_drawing: frame.type_drawing,

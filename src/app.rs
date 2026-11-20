@@ -28,7 +28,7 @@ use self::documentation::DocumentationBrowser;
 use self::panes::{pane_layout, ratio_for_width, Pane, Panes, MIN_PANE_WIDTH};
 use self::previews::{Opened, OpenedKind, PreviewTab, PreviewTabs};
 use self::session::Session;
-use crate::backend::Rod;
+use crate::backend::DocPage;
 use crate::backend::{Announcement, M2Backend, Versions};
 use crate::code::file as code_file;
 use crate::code::location::SourceLink;
@@ -813,7 +813,11 @@ impl App {
                 );
                 self.workspace.editor.open_reference(
                     vec![Box::new(
-                        OutputBlock::rendered(Rod::document(html, text, width), None)
+                        OutputBlock::value(text, None).documented(Some(DocPage {
+                            html,
+                            example_width: width,
+                            type_names: Vec::new(),
+                        }))
                             .without_frame(),
                     )],
                     None,
@@ -1301,7 +1305,7 @@ impl App {
                 Ok(response) => {
                     self.workspace
                         .session
-                        .prepare_documentation(response.value.as_ref());
+                        .prepare_documentation(response.document.as_ref());
                     let (mut blocks, printed, value) = response_blocks(&response, "");
                     if let Some(printed) = printed {
                         blocks.push(Box::new(printed));

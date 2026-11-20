@@ -1,20 +1,19 @@
 //! Typesetting the drawings M2 sends, with Unicode fallback.
 
 use ratatui::style::{Color, Modifier};
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 
-use crate::backend::Rod;
+use crate::backend::Shape;
 use crate::ui::block::{Link, Text};
 use crate::ui::graphics::{self, ratex::Rgb, Pictured, Slicing, Typesetting};
 use crate::ui::present;
 use crate::ui::theme::groups::{Groups, HLGroup};
-use crate::ui::wrap::WrappedText;
 
 use super::maths::{
-    self, Course, Diagram, Math, MathDisplay, MathInk, MathStyle, Reading, DIRECT_SUM_SIGN,
+    self, Course, Diagram, Math, MathInk, MathStyle, Reading, DIRECT_SUM_SIGN,
     PRODUCT_SIGN, TENSOR_SIGN,
 };
-use crate::ui::graphics::ratex::diagram::Description;
+use crate::ui::graphics::ratex::{diagram::Description, BREAK_MARK};
 
 /// Rendered rows with their interactive links and chosen representation.
 pub struct Drawn {
@@ -25,6 +24,28 @@ pub struct Drawn {
 }
 
 type Picture = fn(Typesetting, Rgb, u16) -> Option<Pictured>;
+
+/// Where TeX being written lies: in the formula's top-level row, which may
+/// break into rows as the Unicode layout's does, or held whole inside a matrix,
+/// a script or brackets of its own. The brackets around the whole formula, as
+/// of a list, hold their row at the top: a long list breaks between its items.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Depth {
+    Top,
+    Held,
+}
+
+impl Depth {
+    /// Where `part` of the top-level row lies: a row nested in it runs on at the
+    /// top, anything else holds its own parts whole.
+    fn of_part(part: &Math) -> Self {
+        match part {
+            Math::Row(_) => Self::Top,
+            Math::Linked { body, .. } => Self::of_part(body),
+            _ => Self::Held,
+        }
+    }
+}
 
 fn paint(text: String, kind: HLGroup, groups: Option<&Groups>) -> String {
     match groups.and_then(|groups| groups.style(kind).fg) {
@@ -37,7 +58,7 @@ fn paint(text: String, kind: HLGroup, groups: Option<&Groups>) -> String {
 /// is a diagram, which TeX alone cannot draw.
 fn formula(math: &Math, groups: Option<&Groups>) -> String {
     let Math::Diagram(diagram) = math else {
-        return tex(math, groups);
+        return tex_at(math, groups, Depth::Top);
     };
     let ink = groups
         .and_then(|groups| groups.style(HLGroup::MapArrow).fg)
@@ -105,6 +126,10 @@ fn diagram_array(diagram: &Diagram, groups: Option<&Groups>) -> String {
 }
 
 fn tex(math: &Math, groups: Option<&Groups>) -> String {
+    tex_at(math, groups, Depth::Held)
+}
+
+fn tex_at(math: &Math, groups: Option<&Groups>, depth: Depth) -> String {
     let recurse = |part| tex(part, groups);
     match math {
         Math::Diagram(diagram) => diagram_array(diagram, groups),
@@ -147,7 +172,7 @@ fn tex(math: &Math, groups: Option<&Groups>) -> String {
             }
             format!(r"\overset{{{}}}{{{}}}", recurse(label), recurse(base))
         }
-        Math::Linked { body, .. } => recurse(body),
+        Math::Linked { body, .. } => tex_at(body, groups, depth),
         Math::Under { base, label } => format!(
             r"\underset{{\vphantom{{\Bigg|}}{}}}{{{}}}",
             recurse(label),
@@ -157,6 +182,19 @@ fn tex(math: &Math, groups: Option<&Groups>) -> String {
             tex, kind, color, ..
         } => paint(tex.clone(), color.unwrap_or(*kind), groups),
         Math::Space => r"\,".into(),
+        Math::Row(parts) if depth == Depth::Top => parts
+            .iter()
+            .enumerate()
+            .map(|(index, part)| {
+                let mark = |breaks: bool| if breaks { BREAK_MARK } else { "" };
+                format!(
+                    "{}{}{}",
+                    mark(index > 0 && part.is_binary()),
+                    tex_at(part, groups, Depth::of_part(part)),
+                    mark(part.is_separator())
+                )
+            })
+            .collect(),
         Math::Row(parts) => parts.iter().map(recurse).collect(),
         // Both scripts of an indexed base sit on its nucleus, stacked as in `x_2^2`:
         // a braced `{x_2}` would be one finished box, its exponent set after the index.
@@ -196,7 +234,7 @@ fn tex(math: &Math, groups: Option<&Groups>) -> String {
                 format!(
                     r"\left{}{}\right{}",
                     fence(left),
-                    recurse(body),
+                    tex_at(body, groups, depth),
                     fence(right)
                 ),
                 HLGroup::Punctuation,
@@ -268,10 +306,17 @@ fn tex(math: &Math, groups: Option<&Groups>) -> String {
     }
 }
 
-fn draw(value: &Rod, width: usize, groups: &Groups, style: MathStyle, picture: Picture) -> Drawn {
+fn draw(
+    value: &Shape,
+    code: &str,
+    width: usize,
+    groups: &Groups,
+    style: MathStyle,
+    picture: Picture,
+) -> Drawn {
     let width = width.max(1);
-    if value.wants_typesetting() && value.html.is_none() && !value.has_links() {
-        let math = Reading::new(value, style).typewritten().math();
+    if value.wants_typesetting() {
+        let math = Reading::new(value, style).math();
         let layout_groups = groups.map_styles(|_, mut style| {
             style.fg = None;
             style
@@ -287,7 +332,7 @@ fn draw(value: &Rod, width: usize, groups: &Groups, style: MathStyle, picture: P
                 Typesetting {
                     tex: &source,
                     painted: &painted,
-                    code: value.code.as_deref().unwrap_or(""),
+                    code,
                     matrix_row_spacing_percent: style.matrix_row_spacing_percent,
                     scale_percent: style.scale_percent,
                     slicing: if math.reads_in_lines() {
@@ -316,77 +361,21 @@ fn draw(value: &Rod, width: usize, groups: &Groups, style: MathStyle, picture: P
     Drawn { lines, links }
 }
 
-/// Preview M2's TeX formatter using the display selected in settings.
-/// Unsupported TeX remains visible as source under the same preview mode.
-pub fn tex_preview(source: &str, width: usize, groups: &Groups, style: MathStyle) -> Drawn {
-    let formula = source
-        .strip_prefix('$')
-        .and_then(|source| source.strip_suffix('$'))
-        .unwrap_or(source);
-    if style.display == MathDisplay::Typeset {
-        if let Some(Color::Rgb(r, g, b)) = groups.style(HLGroup::Value).fg {
-            if let Some(picture) = graphics::typeset_alone(
-                Typesetting {
-                    tex: formula,
-                    painted: formula,
-                    code: source,
-                    matrix_row_spacing_percent: style.matrix_row_spacing_percent,
-                    scale_percent: style.scale_percent,
-                    slicing: Slicing::AtBreaks,
-                },
-                Rgb([r, g, b]),
-                u16::try_from(width).unwrap_or(u16::MAX),
-            ) {
-                return Drawn {
-                    lines: picture.lines,
-                    links: Vec::new(),
-                };
-            }
-        }
-    }
-    let rows = (style.display != MathDisplay::Ascii)
-        .then(|| Math::from_tex(source, style).ok())
-        .flatten()
-        .map(|math| math.layout(style.fractions).into_rows());
-    let lines = rows
-        .map(|rows| {
-            rows.into_iter()
-                .map(|row| {
-                    let text = row.into_iter().map(|span| span.content).collect::<String>();
-                    Line::from(Span::styled(text, groups.value()))
-                })
-                .collect()
-        })
-        .unwrap_or_else(|| {
-            WrappedText::word(source, u16::try_from(width.max(1)).unwrap_or(u16::MAX))
-                .text()
-                .split('\n')
-                .map(|row| Line::raw(row.to_string()))
-                .collect()
-        });
-    Drawn {
-        lines,
-        links: Vec::new(),
-    }
-}
 
 /// Draw the supplied expression directly, without classifying formatted text: as a
-/// picture when M2 asks for some part of it to be typeset, else as terminal text.
-pub fn drawn(value: &Rod, width: usize, groups: &Groups, style: MathStyle) -> Drawn {
-    draw(value, width, groups, style, graphics::typeset_alone)
+/// picture when some part of it is set as maths, else as terminal text; `code`
+/// is what copying the picture gives.
+pub fn drawn(value: &Shape, code: &str, width: usize, groups: &Groups, style: MathStyle) -> Drawn {
+    draw(value, code, width, groups, style, graphics::typeset_alone)
 }
 
 /// Render the type method's output with each component's supplied highlight class.
 pub fn annotation(
-    value: &Rod,
+    value: &Shape,
     width: usize,
     groups: &Groups,
     style: MathStyle,
 ) -> Vec<Line<'static>> {
-    let value = Rod {
-        code: Some(value.render()),
-        ..value.clone()
-    };
     let groups = groups.map_styles(|group, mut style| {
         style.bg = None;
         if !matches!(
@@ -401,5 +390,5 @@ pub fn annotation(
         ink: MathInk::Syntax,
         ..style
     };
-    draw(&value, width, &groups, style, graphics::typeset).lines
+    draw(value, &value.render(), width, &groups, style, graphics::typeset).lines
 }
