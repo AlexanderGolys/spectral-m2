@@ -1786,7 +1786,7 @@ impl ValueSource {
                 PreviewMode::Speek => self.inspection.clone(),
                 _ => self.value.clone().map(|mut value| {
                     // A value drawn as one atom shows the text cut as every text formatter cuts it.
-                    if let Shape::Atom { text, .. } = &mut value.drawing.shape {
+                    if let Shape::Holder((text,)) = &mut value.drawing.shape {
                         *text = self.text().to_string();
                     }
                     value

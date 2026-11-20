@@ -12,16 +12,16 @@ You can read all of it: the backend is written out as `backend.m2` in the [confi
 
 ## Drawing your own types
 
-How a result is drawn is decided by the [Spectral](https://github.com/AlexanderGolys/Spectral) package alone. The backend only calls it; it doesn't hand you its output hooks. A type that already has an `expression` is drawn from it, each class of expression laid out by Spectral's `formatted`: a sum between plus signs, a power as a script, a matrix as a grid. Install `rod` (or `specType`, for the annotation) to draw a type some other way, or `formatted` to lay out an expression class differently. Do it in a cell, or in Spectral's own [`init.m2`](../reference/files.md) to have it in every session:
+How a result is drawn is decided by the [Spectral](https://github.com/AlexanderGolys/Spectral) package alone. The backend only calls it; it doesn't hand you its output hooks. A type that already has an `expression` is drawn from it, each class of expression laid out by Spectral's `formatted`: a sum as a row of its terms between plus signs, a power as a superscript, a matrix as itself. Install `rod` (or `specType`, for the annotation) to draw a type some other way, or `formatted` to lay out an expression class differently. Do it in a cell, or in Spectral's own [`init.m2`](../reference/files.md) to have it in every session:
 
 ```m2
 Point = new Type of List
 expression Point := p -> new FunctionApplication from (symbol point, toSequence p)
 rod new Point from {1, 1/2}     -- a Rod, printed as point(1, 1/2)
-formatted Sum := s -> joined(apply(toList s, rod), " ⊞ ", "Operator")
+formatted Sum := s -> Rod {RowExpression between(Rod {Holder {" ⊞ "}, {Highlight => hl$Operator}}, apply(toList s, rod))}
 ```
 
-A drawing is built from Spectral's shape constructors: `atom(text, class)`, `row`, `joined`, `listed`, `script`, `fraction`, `fence`, `parenthesized`, `grid` and `labelled`. Any part may carry a `Highlight`, a class it is coloured as in place of its own, reaching `Reach` levels below it, or all of them when unset:
+A drawing, a `Rod`, is an expression with how it is drawn: `Rod{shape, meta}`, the shape an expression whose parts are drawings in turn, of one of the classes the shell draws. Spectral lists them as `shapes`: `Holder{text}` for an atom, `RowExpression`, `Parenthesize`, `Divide`, `Subscript`, `Superscript`, the lists, `MatrixExpression`, `Table`, and Spectral's own `AlignedExpression`, `UnderExpression`, `OverExpression`, `DiagramExpression` and `TreeExpression`. The meta may give a `Highlight`, one of the shell's colours, an `HLGroup` such as `hl$Operator`, or a class naming one, the part is coloured as in place of its own, reaching `Reach` levels below it, or all of them when unset:
 
 ```m2
 rod Ideal := I -> (lookup(rod, Thing)) I ++ {Highlight => Keyword, Reach => 1}
@@ -55,17 +55,17 @@ new Pair from {0 => "a", 1 => symbol a}
 
 The first component is a string and the second a symbol. Their colours follow those classes. No shell extension is needed. An expression class with no layout of its own is spelled by its name over its parts, as `Equation{a, b}`.
 
-What a class says about how its values are drawn is a method of the class returning a constant, found up its ancestry as any method is. The colour of a class is its `highlightGroup`, the name of one of the shell's highlight groups, from the nearest ancestor that installs one: numbers are `Number`, ring elements and symbols `Variable`, rings and types `Type`, anything else `Text`. A value drawn whole, as one piece of text, takes the colour of its own class:
+What a class says about how its values are drawn is a method of the class returning a constant, found up its ancestry as any method is. The colour of a class is its `highlightGroup`, one of the `HLGroup` constants, from the nearest ancestor that installs one: numbers are `hl$Number`, ring elements and symbols `hl$Variable`, rings and types `hl$Type`, anything else `hl$Text`. A value drawn whole, as one piece of text, takes the colour of its own class:
 
 ```m2
 Gene = new Type of HashTable;
 expression Gene := g -> hold g;
 toString Gene := g -> g.name;
-highlightGroup Gene := class' -> "Keyword";
+highlightGroup Gene := class' -> hl$Keyword;
 new Gene from {symbol name => "BRCA1"}
 ```
 
-A name that is not a highlight group is reported as an error for the cell, with the names there are.
+The `HLGroup` constants are the colours code can have: `hl$Text`, `hl$Muted`, `hl$Keyword`, `hl$Operator`, `hl$Delimiter`, `hl$Punctuation`, `hl$Comment`, `hl$String`, `hl$Number`, `hl$Boolean`, `hl$Builtin`, `hl$Variable`, `hl$Type`, `hl$Function`, `hl$Macro`, `hl$Option`, `hl$Package`, `hl$MapArrow`, `hl$MarkupLink` and `hl$Canvas`.
 
 `AlignedExpression` sets rows of cells in aligned columns, with each row's last cell running on. When that cell is too long for the pane it wraps beneath where it began, and when the columns before it leave it too little room it moves beneath them, indented. Hash tables draw their pairs this way, so every `=>` stands in one column. Use it for any type that reads as labelled lines:
 
@@ -110,13 +110,13 @@ typeset Ring := class' -> false;    -- spell rings such as QQ as text
 
 ### How deep values unfold
 
-A value is drawn from its `expression`, and unfolding stops at names: a ring, module or variety bound to a symbol is shown by that symbol. Unnamed structures inside a value, such as the quotient ring of a resolution computed from `coker vars (S/I)`, are unfolded only up to the nearest `valueDepth` in the value's type ancestry. Past that depth they keep a conventional placeholder: `R` for a ring, `I` for an ideal, `M` for a module, `X` for a variety, `F` for a sheaf and `C` for a complex. A depth of 1, the default, spells out the outer value and shows the structures it is built over by placeholder. Ring elements, numbers and the items of lists are always drawn in full.
+A value is drawn from its `expression`, and unfolding stops at names. A value assigned with `=` hides behind its name inside other values, as M2 spells a named ring: after `I = ideal(x^3, y^3)`, the quotient `S/I` is drawn as S/I. One assigned with `:=` keeps being drawn whole wherever it appears. The result itself is always spelled out: `I` shows its generators, and `R = QQ[x]` shows QQ[x]. Rings, ideals, modules, matrices, ring maps, complexes and sheaves keep their names this way; install `keepNames` for a type of your own to do the same. Only drawings change: the `net` and `string` previews keep M2's own spelling. Unnamed structures are drawn in full, never under a made-up letter.
 
-A complex unfolds one name at a time. At depth one it is only its chain, `0 ⟵ C₀ ⟵ C₁ ⟵ ⋯ ⟵ C₄ ⟵ 0`, with each arrow labelled by its differential `dᵢ`. At depth two the names give way to the modules and the matrices of the differentials, with their rings as placeholders. Every further level substitutes one more name, the quotient ring first and then the ring it is a quotient of. A complex has depth 2 by default, so a resolution shows its modules and matrices.
+A complex names its own parts until it unfolds further. At depth one it is only its chain, `0 ⟵ C₀ ⟵ C₁ ⟵ ⋯ ⟵ C₄ ⟵ 0`, with each arrow labelled by its differential `dᵢ`. At depth two, the default, the names give way to the modules and the matrices of the differentials. A map of complexes keeps the names on its arrows at depth two and shows their matrices from depth three:
 
 ```m2
-valueDepth Complex := class' -> 3;    -- also spell out the ring of every module
-rod'(3, OO_(Proj(QQ[a,b]))^2)
+valueDepth ComplexMap := class' -> 3;    -- show the matrices of every chain map
+rod'(1, freeResolution coker vars QQ[a,b])  -- only the chain C₀ ⟵ C₁ ⟵ C₂
 ```
 
 An explicit `rod'(depth, value)` overrides the configured depth.

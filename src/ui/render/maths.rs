@@ -305,16 +305,13 @@ fn role_spans(
     }
     let reading = Reading::new(value, style);
     let drawing = &value.drawing;
-    let mut rows = match &drawing.shape {
-        Shape::Tree { branches } => return Ok(hierarchy_rows(branches, width)),
-        Shape::Atom { text, .. } => prose(text, drawing.group(), width),
-        Shape::Fence { left, right, body } => match &body.shape {
-            Shape::Join { items, .. } => MathBlock::fitted(
-                MathBlock::listed(&reading, (*left, *right), items, width, style),
-                width,
-            ),
-            _ => reading.math().wrapped(width, style.fractions),
-        },
+    let mut rows = match (&drawing.shape, drawing.shape.listing()) {
+        (Shape::TreeExpression(branches), _) => return Ok(hierarchy_rows(branches, width)),
+        (Shape::Holder((text,)), _) => prose(text, drawing.group(), width),
+        (_, Some((delimiters, items))) => MathBlock::fitted(
+            MathBlock::listed(&reading, delimiters, items, width, style),
+            width,
+        ),
         _ => reading.math().wrapped(width, style.fractions),
     };
     if let Some(target) = &drawing.target {
@@ -364,7 +361,7 @@ fn hierarchy_rows(branches: &[(Node, Node)], width: usize) -> Vec<SpanLine> {
                 }
                 rows.push(row);
             }
-            if let Shape::Tree { branches } = &subtree.shape {
+            if let Shape::TreeExpression(branches) = &subtree.shape {
                 append(branches, &format!("{prefix}{continuation}"), width, rows);
             }
         }

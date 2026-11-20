@@ -1,112 +1,108 @@
-//! The drawing M2's Spectral package sends for a value: a tree of shapes laid out
-//! as TeX lays out a formula, every atom coloured by the highlight group its M2
-//! class names.
+//! The drawing M2's Spectral package sends for a value: an expression whose
+//! parts are drawings in turn, each node of one of the expression classes the
+//! shell draws, every atom coloured by the highlight group its M2 class names.
 
-use crate::ui::render::maths::{self, GridKind, MathStyle, Place};
+use crate::ui::render::maths::{self, MathStyle, Place};
 use crate::ui::theme::groups::HLGroup;
 use serde::Deserialize;
 
-/// One shaped node of a drawing, with what any node may carry.
+/// One node of a drawing, an expression of one of the [`Shape`]s, with what any
+/// node may carry.
 ///
 /// `x_1^2` arrives as
-/// `{"Shape": "Script", "Base": {"Shape": "Script", "Base": x, "Sub": 1}, "Sup": 2}`,
-/// each of `x`, `1` and `2` an atom.
+/// `{"Shape": "Superscript", "Parts": [{"Shape": "Subscript", "Parts": [x, 1]}, 2]}`,
+/// each of `x`, `1` and `2` a `Holder` atom.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "PascalCase")]
 pub struct Node {
     #[serde(flatten)]
     pub shape: Shape,
+    /// The colour of an atom's class.
+    pub group: Option<HLGroup>,
     /// The group this node and its parts are coloured as, in place of their own.
     pub highlight: Option<HLGroup>,
     /// How many levels below this node its highlight reaches; all when absent.
     pub reach: Option<usize>,
     /// Where the node links to.
     pub target: Option<String>,
+    /// An atom's own TeX.
+    pub tex: Option<String>,
+    /// Whether M2 sets an atom as maths.
+    #[serde(default)]
+    pub typeset: bool,
+    /// A matrix's rows' degrees, beside its rows.
+    pub degrees: Option<Vec<Node>>,
+    /// A diagram for a layout in characters, when this one runs arrows across
+    /// columns.
+    pub straight: Option<Box<Node>>,
 }
 
-/// The layout constructs a drawing is built from.
+/// The expression classes a drawing is built from, each named as the M2 class
+/// it is; Spectral's `shapes` lists the same.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
-#[serde(tag = "Shape", rename_all_fields = "PascalCase")]
+#[serde(tag = "Shape", content = "Parts")]
 #[non_exhaustive]
 pub enum Shape {
-    /// Text coloured as its class's highlight group, with its own TeX when it has
-    /// one; `typeset` when M2 sets it as maths.
-    Atom {
-        text: String,
-        class: HLGroup,
-        tex: Option<String>,
-        #[serde(default)]
-        typeset: bool,
-    },
-    Row {
-        items: Vec<Node>,
-    },
-    /// Items with the separator between each two, as a list's entries are.
-    Join {
-        items: Vec<Node>,
-        separator: Box<Node>,
-    },
-    Script {
-        base: Box<Node>,
-        sub: Option<Box<Node>>,
-        sup: Option<Box<Node>>,
-    },
-    Fraction {
-        numerator: Box<Node>,
-        denominator: Box<Node>,
-    },
-    Fence {
-        left: char,
-        right: char,
-        body: Box<Node>,
-    },
-    /// Rows of cells; a matrix may carry its rows' degrees.
-    Grid {
-        rows: Vec<Vec<Node>>,
-        align: GridKind,
-        degrees: Option<Vec<Node>>,
-    },
-    Over {
-        base: Box<Node>,
-        label: Box<Node>,
-    },
-    Under {
-        base: Box<Node>,
-        label: Box<Node>,
-    },
-    /// Pieces on a grid joined by arrows, each `(from, to, label)`; `straight` is
-    /// the same diagram for a layout in characters when this one runs arrows across.
-    Diagram {
-        pieces: Vec<(Place, Node)>,
-        arrows: Vec<(Place, Place, Option<Node>)>,
-        straight: Option<Box<Node>>,
-    },
+    /// An atom: text in the colour of its class.
+    Holder((String,)),
+    RowExpression(Vec<Node>),
+    Parenthesize((Box<Node>,)),
+    Divide(Box<Node>, Box<Node>),
+    Subscript(Box<Node>, Box<Node>),
+    Superscript(Box<Node>, Box<Node>),
+    List(Vec<Node>),
+    Array(Vec<Node>),
+    Sequence(Vec<Node>),
+    AngleBarList(Vec<Node>),
+    /// Items one under another, between braces.
+    VerticalList(Vec<Node>),
+    MatrixExpression(Vec<Vec<Node>>),
+    /// A bare grid of cells.
+    Table(Vec<Vec<Node>>),
+    /// Rows whose every cell but the last sits in an aligned column, the last
+    /// running on.
+    AlignedExpression(Vec<Vec<Node>>),
+    UnderExpression(Box<Node>, Box<Node>),
+    OverExpression(Box<Node>, Box<Node>),
+    /// Pieces on a grid joined by arrows, each `(from, to, label)`.
+    DiagramExpression(Vec<(Place, Node)>, Vec<(Place, Place, Option<Node>)>),
     /// A hierarchy, each branch a label over its subtree.
-    Tree {
-        branches: Vec<(Node, Node)>,
-    },
+    TreeExpression(Vec<(Node, Node)>),
+}
+
+impl Shape {
+    /// A list's items with the delimiters it is fenced by, its entries between
+    /// commas.
+    pub fn listing(&self) -> Option<((char, char), &[Node])> {
+        match self {
+            Self::List(items) => Some((('{', '}'), items)),
+            Self::Array(items) => Some((('[', ']'), items)),
+            Self::Sequence(items) => Some((('(', ')'), items)),
+            _ => None,
+        }
+    }
 }
 
 impl Node {
-    /// An atom coloured as `class`.
-    pub fn atom(text: impl Into<String>, class: HLGroup) -> Self {
+    /// An atom coloured as `group`.
+    pub fn atom(text: impl Into<String>, group: HLGroup) -> Self {
         Self {
-            shape: Shape::Atom {
-                text: text.into(),
-                class,
-                tex: None,
-                typeset: false,
-            },
+            shape: Shape::Holder((text.into(),)),
+            group: Some(group),
             highlight: None,
             reach: None,
             target: None,
+            tex: None,
+            typeset: false,
+            degrees: None,
+            straight: None,
         }
     }
 
     /// The text of an atom.
     pub fn text(&self) -> Option<&str> {
         match &self.shape {
-            Shape::Atom { text, .. } => Some(text),
+            Shape::Holder((text,)) => Some(text),
             _ => None,
         }
     }
@@ -114,48 +110,44 @@ impl Node {
     /// The colour of an atom standing alone, its highlight's over its class's.
     pub fn group(&self) -> HLGroup {
         match &self.shape {
-            Shape::Atom { class, .. } => self.highlight.unwrap_or(*class),
+            Shape::Holder(_) => self.highlight.or(self.group).unwrap_or(HLGroup::Text),
             _ => HLGroup::Text,
         }
     }
 
     /// The nodes this one is built from, in reading order.
     pub fn parts(&self) -> Vec<&Self> {
-        match &self.shape {
-            Shape::Atom { .. } => Vec::new(),
-            Shape::Row { items } => items.iter().collect(),
-            Shape::Join { items, separator } => items.iter().chain([&**separator]).collect(),
-            Shape::Script { base, sub, sup } => [Some(base), sub.as_ref(), sup.as_ref()]
-                .into_iter()
-                .flatten()
-                .map(|part| &**part)
-                .collect(),
-            Shape::Fraction {
-                numerator,
-                denominator,
-            } => vec![numerator, denominator],
-            Shape::Fence { body, .. } => vec![body],
-            Shape::Grid { rows, degrees, .. } => rows
-                .iter()
-                .flatten()
-                .chain(degrees.iter().flatten())
-                .collect(),
-            Shape::Over { base, label } | Shape::Under { base, label } => vec![base, label],
-            Shape::Diagram {
-                pieces,
-                arrows,
-                straight,
-            } => pieces
+        let own = match &self.shape {
+            Shape::Holder(_) => Vec::new(),
+            Shape::RowExpression(items)
+            | Shape::List(items)
+            | Shape::Array(items)
+            | Shape::Sequence(items)
+            | Shape::AngleBarList(items)
+            | Shape::VerticalList(items) => items.iter().collect(),
+            Shape::Parenthesize((body,)) => vec![&**body],
+            Shape::Divide(first, second)
+            | Shape::Subscript(first, second)
+            | Shape::Superscript(first, second)
+            | Shape::UnderExpression(first, second)
+            | Shape::OverExpression(first, second) => vec![&**first, &**second],
+            Shape::MatrixExpression(rows) | Shape::Table(rows) | Shape::AlignedExpression(rows) => {
+                rows.iter().flatten().collect()
+            }
+            Shape::DiagramExpression(pieces, arrows) => pieces
                 .iter()
                 .map(|(_, piece)| piece)
                 .chain(arrows.iter().filter_map(|(.., label)| label.as_ref()))
-                .chain(straight.as_deref())
                 .collect(),
-            Shape::Tree { branches } => branches
+            Shape::TreeExpression(branches) => branches
                 .iter()
                 .flat_map(|(label, subtree)| [label, subtree])
                 .collect(),
-        }
+        };
+        own.into_iter()
+            .chain(self.degrees.iter().flatten())
+            .chain(self.straight.as_deref())
+            .collect()
     }
 
     /// Whether this node or any below it satisfies `test`.
@@ -214,7 +206,7 @@ impl Rod {
     /// Whether M2 asks for any part of this to be set as typeset maths.
     pub fn wants_typesetting(&self) -> bool {
         self.drawing
-            .any(&|node| matches!(node.shape, Shape::Atom { typeset: true, .. }))
+            .any(&|node| matches!(node.shape, Shape::Holder(_)) && node.typeset)
     }
 
     /// Whether any part of this links somewhere.
@@ -226,13 +218,11 @@ impl Rod {
     /// one atom of no particular class.
     pub fn is_structured(&self) -> bool {
         self.html.is_none()
-            && !matches!(
-                self.drawing.shape,
-                Shape::Atom {
-                    class: HLGroup::Text,
-                    ..
-                }
-            )
+            && !(matches!(self.drawing.shape, Shape::Holder(_))
+                && self
+                    .drawing
+                    .group
+                    .is_none_or(|group| group == HLGroup::Text))
     }
 
     /// Documentation content and the width of its recorded examples.

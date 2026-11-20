@@ -14,6 +14,10 @@ pub const PRODUCT_SIGN: &str = "·";
 pub const TENSOR_SIGN: &str = "⊗";
 /// The sign between the summands of a direct sum.
 pub const DIRECT_SUM_SIGN: &str = "⊕";
+/// What stands between a list's entries, as M2 spells it.
+const LIST_SEPARATOR: &str = ", ";
+/// What stands inside an angle-bar list's brackets, as `<|a, b|>` spells it.
+const ANGLE_BAR: &str = "|";
 /// The signs a drawing sets, each with its spelling in M2's own syntax, which a
 /// layout in ASCII shows instead.
 const ASCII_SPELLINGS: [(&str, &str); 4] = [
@@ -92,16 +96,29 @@ impl<'a> Reading<'a> {
             .or(reaching);
         let part = |part: &Node| self.node(part, reaching.and_then(Reaching::below));
         let boxed = |node: &Node| Box::new(part(node));
-        let body = match &node.shape {
-            Shape::Atom {
-                text,
-                class,
-                tex,
-                typeset,
-            } => {
-                let kind = reaching.map_or(*class, |over| over.group);
-                let typewriter = (self.typewritten && !typeset).then(|| super::typewriter(text));
-                match tex.clone().or(typewriter) {
+        let rows = |rows: &[Vec<Node>]| -> Vec<Vec<Math>> {
+            rows.iter()
+                .map(|row| row.iter().map(part).collect())
+                .collect()
+        };
+        let tinted = |script: &Node, color: super::ScriptColor, base: &Math| {
+            let script = part(script);
+            match color.role(base) {
+                Some(role) => script.tinted(role),
+                None => script,
+            }
+        };
+        let body = match (&node.shape, node.shape.listing()) {
+            (_, Some(((left, right), items))) => Math::Delimited {
+                left,
+                right,
+                body: Box::new(Math::Row(listed(items.iter().map(part)))),
+            },
+            (Shape::Holder((text,)), _) => {
+                let kind = reaching.map_or(node.group(), |over| over.group);
+                let typewriter =
+                    (self.typewritten && !node.typeset).then(|| super::typewriter(text));
+                match node.tex.clone().or(typewriter) {
                     Some(tex) => Math::Native {
                         text: text.clone(),
                         tex,
@@ -111,91 +128,94 @@ impl<'a> Reading<'a> {
                     None => Math::atom(text, kind),
                 }
             }
-            Shape::Row { items } => Math::Row(items.iter().map(part).collect()),
-            Shape::Join { items, separator } => {
-                let separator = part(separator);
-                Math::Row(
-                    items
-                        .iter()
-                        .enumerate()
-                        .flat_map(|(index, item)| {
-                            (index > 0)
-                                .then(|| separator.clone())
-                                .into_iter()
-                                .chain([part(item)])
-                        })
-                        .collect(),
-                )
-            }
-            Shape::Script { base, sub, sup } => {
-                let tinted = |script: &Node, color: super::ScriptColor, base: &Math| {
-                    let script = part(script);
-                    match color.role(base) {
-                        Some(role) => script.tinted(role),
-                        None => script,
-                    }
-                };
+            (Shape::RowExpression(items), _) => Math::Row(items.iter().map(part).collect()),
+            (Shape::Parenthesize((body,)), _) => parenthesized(part(body)),
+            (Shape::Subscript(base, sub), _) => {
                 let base = part(base);
-                let base = match sub {
-                    Some(sub) => Math::Index {
-                        subscript: Box::new(tinted(sub, self.style.index_color, &base)),
-                        base: Box::new(base),
-                    },
-                    None => base,
-                };
-                match sup {
-                    Some(sup) => Math::Power {
-                        exponent: Box::new(tinted(sup, self.style.exponent_color, &base)),
-                        base: Box::new(base),
-                    },
-                    None => base,
+                Math::Index {
+                    subscript: Box::new(tinted(sub, self.style.index_color, &base)),
+                    base: Box::new(base),
                 }
             }
-            Shape::Fraction {
-                numerator,
-                denominator,
-            } => Math::Fraction {
+            (Shape::Superscript(base, sup), _) => {
+                let base = part(base);
+                Math::Power {
+                    exponent: Box::new(tinted(sup, self.style.exponent_color, &base)),
+                    base: Box::new(base),
+                }
+            }
+            (Shape::Divide(numerator, denominator), _) => Math::Fraction {
                 numerator: boxed(numerator),
                 denominator: boxed(denominator),
             },
-            Shape::Fence { left, right, body } => Math::Delimited {
-                left: *left,
-                right: *right,
-                body: boxed(body),
-            },
-            Shape::Grid {
-                rows,
-                align,
-                degrees,
-            } => {
-                let rows = rows
-                    .iter()
-                    .map(|row| row.iter().map(part).collect())
-                    .collect();
-                match degrees {
-                    Some(degrees) => Math::AnnotatedMatrix {
-                        rows,
-                        degrees: degrees.iter().map(part).collect(),
-                    },
-                    None => Math::Grid { rows, kind: *align },
+            (Shape::AngleBarList(items), _) => {
+                let bar = || Math::atom(ANGLE_BAR, HLGroup::Punctuation);
+                Math::Delimited {
+                    left: '⟨',
+                    right: '⟩',
+                    body: Box::new(Math::Row(
+                        [bar()]
+                            .into_iter()
+                            .chain(listed(items.iter().map(part)))
+                            .chain([bar()])
+                            .collect(),
+                    )),
                 }
             }
-            Shape::Over { base, label } => Math::Over {
+            (Shape::VerticalList(items), _) => {
+                let margin = || Math::atom(" ", HLGroup::Canvas);
+                Math::Delimited {
+                    left: '{',
+                    right: '}',
+                    body: Box::new(Math::Row(vec![
+                        margin(),
+                        Math::Grid {
+                            rows: items.iter().map(|item| vec![part(item)]).collect(),
+                            kind: GridKind::LeftAligned,
+                        },
+                        margin(),
+                    ])),
+                }
+            }
+            (Shape::MatrixExpression(cells), _) => match &node.degrees {
+                Some(degrees) => Math::AnnotatedMatrix {
+                    rows: rows(cells),
+                    degrees: degrees.iter().map(part).collect(),
+                },
+                None => Math::Grid {
+                    rows: rows(cells),
+                    kind: GridKind::Matrix,
+                },
+            },
+            (Shape::Table(cells), _) => Math::Grid {
+                rows: rows(cells),
+                kind: GridKind::Bare,
+            },
+            (Shape::AlignedExpression(cells), _) => Math::Grid {
+                rows: rows(cells),
+                kind: GridKind::Aligned,
+            },
+            (Shape::OverExpression(base, label), _) => Math::Over {
                 base: boxed(base),
                 label: boxed(label),
             },
-            Shape::Under { base, label } => Math::Under {
+            (Shape::UnderExpression(base, label), _) => Math::Under {
                 base: boxed(base),
                 label: boxed(label),
             },
-            Shape::Diagram { .. } => Math::Diagram(Box::new(self.diagram(node, reaching))),
-            Shape::Tree { branches } => Math::Grid {
+            (Shape::DiagramExpression(..), _) => {
+                Math::Diagram(Box::new(self.diagram(node, reaching)))
+            }
+            (Shape::TreeExpression(branches), _) => Math::Grid {
                 rows: branches
                     .iter()
                     .map(|(label, subtree)| vec![part(label), part(subtree)])
                     .collect(),
                 kind: GridKind::LeftAligned,
             },
+            (Shape::List(_) | Shape::Array(_) | Shape::Sequence(_), None) => {
+                unreachable!("every list has a listing")
+            }
         };
         match &node.target {
             Some(target) => Math::Linked {
@@ -208,12 +228,7 @@ impl<'a> Reading<'a> {
 
     fn diagram(&self, node: &Node, reaching: Option<Reaching>) -> Diagram {
         let part = |part: &Node| self.node(part, reaching.and_then(Reaching::below));
-        let Shape::Diagram {
-            pieces,
-            arrows,
-            straight,
-        } = &node.shape
-        else {
+        let Shape::DiagramExpression(pieces, arrows) = &node.shape else {
             unreachable!("only a diagram node is read as a diagram")
         };
         Diagram {
@@ -229,11 +244,26 @@ impl<'a> Reading<'a> {
                     label: label.as_ref().map(part),
                 })
                 .collect(),
-            straight: straight
+            straight: node
+                .straight
                 .as_deref()
                 .map(|straight| Box::new(self.diagram(straight, reaching))),
         }
     }
+}
+
+/// A list's entries with a comma between each two.
+fn listed(entries: impl Iterator<Item = Math>) -> Vec<Math> {
+    let comma = Math::atom(LIST_SEPARATOR, HLGroup::Delimiter);
+    entries
+        .enumerate()
+        .flat_map(|(index, entry)| {
+            (index > 0)
+                .then(|| comma.clone())
+                .into_iter()
+                .chain([entry])
+        })
+        .collect()
 }
 
 fn parenthesized(body: Math) -> Math {
