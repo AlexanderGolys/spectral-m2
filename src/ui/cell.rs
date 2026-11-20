@@ -7,11 +7,12 @@
 
 use crate::ui::glyphs::{Charset, Glyphs, Remark, Spelled};
 use std::cell::{Cell, RefCell};
+use std::cmp::Reverse;
 use std::collections::HashMap;
-use std::fmt;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
+use std::{array, fmt, mem};
 use std::{iter, ptr};
 
 use ratatui::buffer::Buffer;
@@ -19,6 +20,7 @@ use ratatui::layout::{Offset, Position, Rect, Size};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
+use strum::{EnumCount, FromRepr};
 use unicode_width::UnicodeWidthStr;
 
 use super::block::{Block, CellPoint, Element, HLSpan, Link, Text};
@@ -77,6 +79,40 @@ impl CellState {
             _ => Self::Null,
         }
     }
+
+    /// Whether the line evaluated to something, shown or not, which M2 then
+    /// recalls by name.
+    pub fn is_valued(self) -> bool {
+        matches!(self, Self::Value | Self::Muted)
+    }
+}
+
+/// The name M2 recalls one of its latest outputs by: `oo` the last line that
+/// evaluated to something, `ooo` the one before, `oooo` the one before that.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumCount, FromRepr)]
+pub enum Recall {
+    Oo,
+    Ooo,
+    Oooo,
+}
+
+/// The lines M2 recalls by name. After lines 3, 5 and 6 evaluated to something
+/// and line 7 to null, line 6 is `oo`, 5 is `ooo` and 3 is `oooo`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Recalled([Option<u32>; Recall::COUNT]);
+
+impl Recalled {
+    /// The lines recalled once those numbered `valued` evaluated to something.
+    pub fn latest(valued: impl IntoIterator<Item = u32>) -> Self {
+        let mut valued = valued.into_iter().collect::<Vec<_>>();
+        valued.sort_unstable_by_key(|&number| Reverse(number));
+        Self(array::from_fn(|age| valued.get(age).copied()))
+    }
+
+    pub fn of(&self, number: u32) -> Option<Recall> {
+        let age = self.0.iter().position(|&line| line == Some(number))?;
+        Recall::from_repr(age)
+    }
 }
 
 /// The blocks a successful `response` to `code` adds after it: warnings, the
@@ -134,7 +170,7 @@ fn warning_blocks(warnings: Vec<String>) -> Vec<Box<dyn Block>> {
 enum CellMarker {
     Bare,
     Empty,
-    Number(u32, CellState),
+    Number(u32, Option<Recall>),
     Pending,
     Queued,
     Failed(u32),
@@ -211,15 +247,11 @@ impl CellMarker {
         Some(match self {
             // The numbers of the cells behind the latest outputs wear the colour of
             // the labels those outputs carry.
-            Self::Number(number, state) => (
+            Self::Number(number, recall) => (
                 number.to_string(),
-                match state {
-                    CellState::Value | CellState::Muted | CellState::Null
-                        if context.is_recent_output(number) =>
-                    {
-                        groups.recent_cell_number()
-                    }
-                    CellState::Value | CellState::Muted | CellState::Null => groups.cell_number(),
+                match recall {
+                    Some(_) => groups.recent_cell_number(),
+                    None => groups.cell_number(),
                 },
             ),
             Self::Pending => {
@@ -255,13 +287,17 @@ impl CellMarker {
 /// One lexical Macaulay2 input cell and the byte ranges highlighted within it.
 pub struct M2CodeCell {
     text: String,
-    number: Option<(u32, CellState)>,
+    number: Option<(u32, Option<Recall>)>,
     spans: Vec<HLSpan>,
     wrap_ranges: Vec<Range<usize>>,
 }
 
 impl M2CodeCell {
-    pub(super) fn new(text: String, number: Option<(u32, CellState)>, spans: Vec<HLSpan>) -> Self {
+    pub(super) fn new(
+        text: String,
+        number: Option<(u32, Option<Recall>)>,
+        spans: Vec<HLSpan>,
+    ) -> Self {
         let wrap_ranges = spans.iter().map(|span| span.content.clone()).collect();
         Self {
             text,
@@ -274,7 +310,7 @@ impl M2CodeCell {
     /// Highlight identified source while keeping wrapping tied to lexical boundaries.
     pub fn highlighted(
         text: String,
-        number: Option<(u32, CellState)>,
+        number: Option<(u32, Option<Recall>)>,
         id: SourceId,
         highlighter: &mut dyn Highlighter,
     ) -> Self {
@@ -303,8 +339,8 @@ impl M2CodeCell {
     }
 
     fn marker(&self) -> CellMarker {
-        self.number.map_or(CellMarker::Empty, |(number, state)| {
-            CellMarker::Number(number, state)
+        self.number.map_or(CellMarker::Empty, |(number, recall)| {
+            CellMarker::Number(number, recall)
         })
     }
 }
@@ -750,7 +786,8 @@ fn cell_lines(
 enum EvaluationState {
     Pending,
     Queued,
-    Succeeded(u32, CellState),
+    /// Its number, how its value shows, and the name M2 recalls it by, if any.
+    Succeeded(u32, CellState, Option<Recall>),
     Failed(u32),
     Invalid,
     /// Code shown rather than submitted, such as documentation's usage.
@@ -762,7 +799,7 @@ impl EvaluationState {
         match self {
             Self::Pending => CellMarker::Pending,
             Self::Queued => CellMarker::Queued,
-            Self::Succeeded(number, state) => CellMarker::Number(*number, *state),
+            Self::Succeeded(number, _, recall) => CellMarker::Number(*number, *recall),
             Self::Failed(number) => CellMarker::Failed(*number),
             Self::Invalid => CellMarker::Invalid,
             Self::Shown => CellMarker::Empty,
@@ -936,7 +973,7 @@ impl EvaluationBlock {
         value: Option<OutputBlock>,
     ) {
         if let Some((_, state)) = self.cells.get_mut(index) {
-            *state = EvaluationState::Succeeded(number, cell_state);
+            *state = EvaluationState::Succeeded(number, cell_state, None);
         }
         if let Some((_, state)) = self.cells.get_mut(index + 1) {
             *state = EvaluationState::Pending;
@@ -970,11 +1007,26 @@ impl EvaluationBlock {
     /// lines included, since they still hold their value, null ones not.
     pub fn valued_numbers(&self) -> impl Iterator<Item = u32> + '_ {
         self.cells.iter().filter_map(|(_, state)| match state {
-            EvaluationState::Succeeded(number, CellState::Value | CellState::Muted) => {
-                Some(*number)
-            }
+            EvaluationState::Succeeded(number, state, _) if state.is_valued() => Some(*number),
             _ => None,
         })
+    }
+
+    /// Name the lines here as `recalled` does, telling whether any name changed.
+    pub fn recall(&mut self, recalled: &Recalled) -> bool {
+        let mut renamed = false;
+        for (_, state) in &mut self.cells {
+            if let EvaluationState::Succeeded(number, _, recall) = state {
+                let named = recalled.of(*number);
+                renamed |= mem::replace(recall, named) != named;
+            }
+        }
+        for output in &mut self.outputs {
+            if let EvaluationOutput::Value(block) = output {
+                renamed |= block.recall(recalled);
+            }
+        }
+        renamed
     }
 
     /// Visit only returned value blocks.
@@ -1520,6 +1572,7 @@ struct OutputCell {
     /// The pictures the rows last laid out for this cell hold.
     pictures: RefCell<Vec<ImageId>>,
     number: Option<u32>,
+    recall: Option<Recall>,
     ty: Option<String>,
     /// The annotation's pieces, set from their structure when M2 sent them.
     type_drawing: Option<Rod>,
@@ -1824,6 +1877,7 @@ impl OutputBlock {
                 }),
                 pictures: RefCell::default(),
                 number: None,
+                recall: None,
                 ty: ty.map(|ty| ty.trim_end().to_string()),
                 type_drawing: None,
                 chosen: Rc::default(),
@@ -1855,6 +1909,7 @@ impl OutputBlock {
                 }),
                 pictures: RefCell::default(),
                 number: None,
+                recall: None,
                 ty,
                 type_drawing: None,
                 chosen: Rc::default(),
@@ -1913,6 +1968,16 @@ impl OutputBlock {
     pub fn numbered(mut self, number: u32) -> Self {
         self.cells[0].number = Some(number);
         self
+    }
+
+    /// Name the values here as `recalled` does, telling whether any name changed.
+    fn recall(&mut self, recalled: &Recalled) -> bool {
+        let mut renamed = false;
+        for cell in &mut self.cells {
+            let named = cell.number.and_then(|number| recalled.of(number));
+            renamed |= mem::replace(&mut cell.recall, named) != named;
+        }
+        renamed
     }
 
     fn append(&mut self, other: Self) {
@@ -2487,9 +2552,9 @@ impl Block for OutputBlock {
                 let label = format!("o{number}");
                 let width = label.chars().count() as u16;
                 let column = (layout.inset() + 2).saturating_sub(width);
-                let style = match context.is_recent_output(number) {
-                    true => theme.recent_output(),
-                    false => theme.output_number(),
+                let style = match cell.recall {
+                    Some(_) => theme.recent_output(),
+                    None => theme.output_number(),
                 };
                 Paragraph::new(Span::styled(label, style))
                     .render(Rect::new(area.x + column, row, width, 1), buf);

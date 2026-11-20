@@ -12,12 +12,12 @@ use ratatui::style::Style;
 use ratatui::widgets::{Block as TuiBlock, Paragraph, Widget};
 
 use super::block::{Block, CellPoint, Link, Reformatted, Resized, Rethemed, Ticked};
-use super::cell::{EvaluationBlock, IncompleteBlock};
+use super::cell::{EvaluationBlock, IncompleteBlock, Recalled};
 use super::config::UI;
 use super::element::{paste, EventListener};
 use super::graphics::{self, kitty::ImageId};
 use super::render::selection::Inclusions;
-use super::render::{RenderContext, RECENT_OUTPUTS};
+use super::render::RenderContext;
 
 mod selection;
 
@@ -302,8 +302,8 @@ pub struct Feed {
     scroll: usize,
     anchor: Option<(usize, u16)>,
     surface: Option<ViewportState>,
-    /// The latest outputs the retained cells were labelled for.
-    labelled: [Option<u32>; RECENT_OUTPUTS],
+    /// The lines the retained cells were last named for.
+    recalled: Recalled,
     /// Whether the block the feed was created with still leads it.
     opened: bool,
     /// The cell or result taken whole, if one is.
@@ -319,7 +319,7 @@ impl Feed {
             scroll: 0,
             anchor: None,
             surface: None,
-            labelled: [None; RECENT_OUTPUTS],
+            recalled: Recalled::default(),
             opened: true,
             selected: None,
         }
@@ -413,22 +413,14 @@ impl Feed {
             .collect()
     }
 
-    /// The lines recalled as `oo`, `ooo` and `oooo`, newest first: the latest that
-    /// evaluated to something, whether or not they showed it. A null line is not
-    /// counted, so it never takes a place in the rotation.
-    pub fn recent_outputs(&self) -> [Option<u32>; RECENT_OUTPUTS] {
-        let mut valued = self
-            .blocks
-            .iter()
-            .flat_map(|block| match &block.content {
-                FeedContent::Evaluation(evaluation) => {
-                    Some(evaluation.valued_numbers()).into_iter().flatten()
-                }
-                FeedContent::Block(_) | FeedContent::Incomplete(_) => None.into_iter().flatten(),
-            })
-            .collect::<Vec<_>>();
-        valued.sort_unstable_by(|first, second| second.cmp(first));
-        std::array::from_fn(|age| valued.get(age).copied())
+    /// The lines M2 recalls as `oo`, `ooo` and `oooo`, among the submissions here.
+    fn recalled(&self) -> Recalled {
+        Recalled::latest(self.blocks.iter().flat_map(|block| match &block.content {
+            FeedContent::Evaluation(evaluation) => {
+                Some(evaluation.valued_numbers()).into_iter().flatten()
+            }
+            FeedContent::Block(_) | FeedContent::Incomplete(_) => None.into_iter().flatten(),
+        }))
     }
 
     /// Collect returned values produced by submissions.
@@ -701,10 +693,18 @@ impl Feed {
                     .map(|row| (index, row))
             });
         }
-        // A new output relabels the ones before it, which moves no row but repaints.
-        if self.labelled != context.recent_outputs() {
-            self.labelled = context.recent_outputs();
-            self.blocks.iter_mut().for_each(|block| block.cells = None);
+        // A new output renames the ones before it, which moves no row but repaints
+        // the blocks holding them.
+        let recalled = self.recalled();
+        if self.recalled != recalled {
+            self.recalled = recalled;
+            for block in &mut self.blocks {
+                if let FeedContent::Evaluation(evaluation) = &mut block.content {
+                    if evaluation.recall(&recalled) {
+                        block.cells = None;
+                    }
+                }
+            }
         }
         let anchor = self.anchor.take().or_else(|| {
             self.surface.as_ref().and_then(|surface| {

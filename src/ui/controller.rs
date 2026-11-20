@@ -1997,7 +1997,6 @@ impl Editor {
     /// The context `view` draws in this frame, `width` columns wide.
     fn render_context(&self, view: ViewKind, width: u16) -> RenderContext {
         RenderContext::new(self.settings, view, width)
-            .with_recent_outputs(self.feed.recent_outputs())
             .with_adopted_relayouts(self.relayouts_adopted)
     }
 

@@ -18,7 +18,7 @@ use crate::code::highlight::Highlighter;
 use crate::ui::action::Action;
 use crate::ui::block::{Block, Element, TextSpan};
 use crate::ui::block::{Reformatted, Rethemed};
-use crate::ui::cell::{CodeBlock, M2CodeCell, TextBlock};
+use crate::ui::cell::{CodeBlock, M2CodeCell, Recalled, TextBlock};
 use crate::ui::cycle::cycled;
 use crate::ui::element::EventListener;
 use crate::ui::feed::BlockView;
@@ -148,10 +148,17 @@ impl Viewport {
             let blocks: Vec<Box<dyn Block>> = match view {
                 ViewKind::Code => (!committed.cells.is_empty())
                     .then(|| {
+                        let recalled = Recalled::latest(
+                            committed
+                                .cells
+                                .iter()
+                                .filter(|cell| cell.state.is_valued())
+                                .map(|cell| cell.number),
+                        );
                         Box::new(CodeBlock::new(committed.cells.iter().map(|cell| {
                             M2CodeCell::highlighted(
                                 cell.code.clone(),
-                                Some((cell.number, cell.state)),
+                                Some((cell.number, recalled.of(cell.number))),
                                 cell.source_id,
                                 highlighter,
                             )

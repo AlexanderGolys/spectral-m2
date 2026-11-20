@@ -26,7 +26,7 @@ use crate::ui::cell::{
 };
 use crate::ui::config::UI;
 use crate::ui::render::selection::Inclusions;
-use crate::ui::render::{RenderContext, RECENT_OUTPUTS};
+use crate::ui::render::RenderContext;
 use crate::ui::theme::groups::HLGroup;
 
 use super::CODE;
@@ -508,9 +508,7 @@ pub fn render(
         rendered.controls.push(EmbeddedControl {
             area: Rect::new(0, top as u16, context.width(), next.lines.len() as u16),
             block: Rc::new(RefCell::new(block)),
-            context: context
-                .with_inline_layout()
-                .with_recent_outputs([None; RECENT_OUTPUTS]),
+            context: context.with_inline_layout(),
         });
         rendered.lines.extend(next.lines);
         rendered.links.extend(
@@ -538,9 +536,7 @@ pub fn render_code(source: &str, page: u64, context: &RenderContext) -> Option<P
 /// `block` painted with its code's gutter left empty and its code's surface
 /// kept to the columns its results' frame takes.
 fn painted(block: &EvaluationBlock, context: &RenderContext) -> Painted {
-    let context = context
-        .with_inline_layout()
-        .with_recent_outputs([None; RECENT_OUTPUTS]);
+    let context = context.with_inline_layout();
     let area = Rect::new(0, 0, context.width(), block.height(&context));
     let mut buffer = Buffer::empty(area);
     block.render_local(&context, &mut buffer);

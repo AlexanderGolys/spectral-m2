@@ -40,11 +40,6 @@ enum BorderPlacement {
     },
 }
 
-// @##TODO
-// add to // /@@settings
-/// How many of the latest outputs M2 also names `oo`, `ooo` and `oooo`.
-pub const RECENT_OUTPUTS: usize = 3;
-
 /// Where a block is drawn and with which settings: the view it shows in, the
 /// columns it has, and everything the settings decide about its look. Made once
 /// per frame by [`RenderContext::new`], then narrowed with
@@ -59,7 +54,6 @@ pub struct RenderContext {
     view: ViewKind,
     width: u16,
     prefix: u16,
-    recent_outputs: [Option<u32>; RECENT_OUTPUTS],
     /// Worker layouts the measured heights already account for; see [`Pending::take`](crate::ui::relayout::Pending::take).
     adopted_relayouts: u64,
     /// Lay values out on the spot rather than on a worker, for drawings kept as
@@ -74,7 +68,6 @@ impl RenderContext {
             view,
             width,
             prefix: 0,
-            recent_outputs: [None; RECENT_OUTPUTS],
             adopted_relayouts: u64::MAX,
             inline_layout: false,
         }
@@ -122,24 +115,6 @@ impl RenderContext {
             style.bg = self.groups().transcript().bg;
         }
         style
-    }
-
-    /// Track the latest outputs, newest first, for highlighting.
-    pub fn with_recent_outputs(self, recent_outputs: [Option<u32>; RECENT_OUTPUTS]) -> Self {
-        Self {
-            recent_outputs,
-            ..self
-        }
-    }
-
-    pub fn recent_outputs(&self) -> [Option<u32>; RECENT_OUTPUTS] {
-        self.recent_outputs
-    }
-
-    /// Whether output `number` is one of the latest, which M2 recalls as `oo`, `ooo`
-    /// and `oooo`.
-    pub fn is_recent_output(&self, number: u32) -> bool {
-        self.recent_outputs.contains(&Some(number))
     }
 
     pub fn renderer_position(&self) -> RendererPosition {
