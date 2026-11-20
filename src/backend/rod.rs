@@ -30,11 +30,20 @@ pub struct Node {
     /// Whether M2 sets an atom as maths.
     #[serde(default)]
     pub typeset: bool,
-    /// A matrix's rows' degrees, beside its rows.
-    pub degrees: Option<Vec<Node>>,
+    /// A matrix's degrees, its rows' standing beside them.
+    pub degrees: Option<Degrees>,
     /// A diagram for a layout in characters, when this one runs arrows across
     /// columns.
     pub straight: Option<Box<Node>>,
+}
+
+/// A matrix's degrees as M2 gives them, `[rows, columns]`, each a degree, a
+/// list of integers, for every row or column: `[[[1], [1]], [[2]]]` for a map
+/// from `R^{-2}` to `R^{-1, -1}`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
+pub struct Degrees {
+    pub rows: Vec<Node>,
+    pub columns: Vec<Node>,
 }
 
 /// The expression classes a drawing is built from, each named as the M2 class
@@ -145,7 +154,11 @@ impl Node {
                 .collect(),
         };
         own.into_iter()
-            .chain(self.degrees.iter().flatten())
+            .chain(
+                self.degrees
+                    .iter()
+                    .flat_map(|degrees| degrees.rows.iter().chain(&degrees.columns)),
+            )
             .chain(self.straight.as_deref())
             .collect()
     }

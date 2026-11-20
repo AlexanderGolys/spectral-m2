@@ -180,7 +180,7 @@ impl<'a> Reading<'a> {
             (Shape::MatrixExpression(cells), _) => match &node.degrees {
                 Some(degrees) => Math::AnnotatedMatrix {
                     rows: rows(cells),
-                    degrees: degrees.iter().map(part).collect(),
+                    degrees: degrees.rows.iter().map(part).collect(),
                 },
                 None => Math::Grid {
                     rows: rows(cells),

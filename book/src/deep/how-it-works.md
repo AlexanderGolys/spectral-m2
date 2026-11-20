@@ -12,19 +12,22 @@ You can read all of it: the backend is written out as `backend.m2` in the [confi
 
 ## Drawing your own types
 
-How a result is drawn is decided by the [Spectral](https://github.com/AlexanderGolys/Spectral) package alone. The backend only calls it; it doesn't hand you its output hooks. A type that already has an `expression` is drawn from it, each class of expression laid out by Spectral's `formatted`: a sum as a row of its terms between plus signs, a power as a superscript, a matrix as itself. Install `rod` (or `specType`, for the annotation) to draw a type some other way, or `formatted` to lay out an expression class differently. Do it in a cell, or in Spectral's own [`init.m2`](../reference/files.md) to have it in every session:
+How a result is drawn is decided by the [Spectral](https://github.com/AlexanderGolys/Spectral) package alone. The backend only calls it; it doesn't hand you its output hooks. A value is drawn by the `rod` installed for its class, which returns a drawing, a `Rod`; a class with none is spelled as M2 spells it. Install `rod` for a type in a cell, or in Spectral's own [`init.m2`](../reference/files.md) to have it in every session:
 
 ```m2
 Point = new Type of List
-expression Point := p -> new FunctionApplication from (symbol point, toSequence p)
-rod new Point from {1, 1/2}     -- a Rod, printed as point(1, 1/2)
-formatted Sum := s -> Rod {RowExpression between(Rod {Holder {" ⊞ "}, Highlight => HLG "Operator"}, apply(toList s, rod))}
+rod Point := p -> rod' FunctionApplication {symbol point, toSequence p}
+new Point from {1, 1/2}     -- drawn as point(1, ½)
 ```
 
-A drawing, a `Rod`, is a table of how something is drawn, `Rod{shape, Highlight => …}`, read as `x.Shape`, `x.Class`, `x.Highlight` and so on. Its `Shape` is an expression whose parts are drawings in turn, of one of the classes the shell draws. They are `Holder{text}` for an atom, `RowExpression`, `Parenthesize`, `Divide`, `Subscript`, `Superscript`, the lists, `MatrixExpression`, `Table`, and Spectral's own `AlignedExpression`, `UnderExpression`, `OverExpression`, `DiagramExpression` and `TreeExpression`. A drawing may give a `Highlight`, one of the shell's colours, an `HLG` such as `HLG "Operator"`, or a class naming one, the part is coloured as in place of its own, reaching `Reach` levels below it, or all of them when unset. A field the shell does not know is an error where it is written:
+`rod'` draws a part of a drawing, here the expression the point is spelled by, laid out as any of M2's expressions is: a function applied to its arguments.
+
+A drawing is a table of how something is drawn, `Rod{shape, Highlight => …}`, read as `x.Shape`, `x.Class`, `x.Highlight` and so on. Its `Shape` is an expression whose parts are drawings in turn, of one of the classes the shell draws. They are `Holder{text}` for an atom, `RowExpression`, `Parenthesize`, `Divide`, `Subscript`, `Superscript`, the lists, `MatrixExpression`, `Table`, and Spectral's own `AlignedExpression`, `UnderExpression`, `OverExpression`, `DiagramExpression` and `TreeExpression`. An atom takes its colour from its `Group`, one of the shell's colours, an `HLG` such as `HLG "Keyword"`. A `Highlight` colours a part and everything in it in place of their own colours, reaching `Reach` levels below it, or all of them when unset. `Typeset => true` sets a part as maths, with the atoms in it unless they say otherwise. A field given as `null` is not set:
 
 ```m2
-rod Ideal := I -> (lookup(rod, Thing)) I ++ {Highlight => Keyword, Reach => 1}
+Gene = new Type of HashTable
+rod Gene := g -> Rod {Holder {g.name}, Group => HLG "Keyword"}
+new Gene from {symbol name => "BRCA1"}
 ```
 
 A drawing that throws falls back to the value's plain text, so a broken `rod` can't break the session.
@@ -33,7 +36,7 @@ A drawing that throws falls back to the value's plain text, so a broken `rod` ca
 
 Each cell is sent to Macaulay2 exactly once and is never replayed behind your back. Deciding whether input is complete, splitting it into cells, highlighting and diagnostics are all done locally, by parsing the text, before anything is sent. An hour-long computation is never started twice.
 
-Each result arrives once, complete: drawn by `rod` with its type from `specType`, and also formatted by M2's own `net`, `toString`, `tex`, `toExternalString` and `peek`, and inspected by Spectral's `speek`. By default `rod` traverses the class's `expression` representation; a value held without further structure keeps its class and textual spelling. Switching renderers uses the data already received. A result that is `null`, or silenced by a trailing `;`, is not formatted at all; a silenced one is still bound to its `oN`.
+Each result arrives once, complete: drawn by `rod` with its type from `specType`, and also formatted by M2's own `net`, `toString`, `tex`, `toExternalString` and `peek`, and its drawing shown by Spectral's `speek`. Switching renderers uses the data already received. A result that is `null`, or silenced by a trailing `;`, is not formatted at all; a silenced one is still bound to its `oN`.
 
 ## Other processes
 
@@ -45,78 +48,43 @@ Typeset maths is set inside `sp2` by the built-in RaTeX engine, encoded off the 
 
 ## Formatting your own types
 
-An `expression` method lets a new type compose the same shapes as ordinary mathematics. Its components keep their own classes, even when their text is identical:
+The shapes compose as M2's expressions do. Draw a type by the expression it reads as, and each of its parts keeps its own class and colour, even when their text is the same:
 
 ```m2
 Pair = new Type of HashTable;
-expression Pair := p -> RowExpression{p#0, p#1};
+rod Pair := p -> rod' RowExpression {p#0, p#1};
 new Pair from {0 => "a", 1 => symbol a}
 ```
 
-The first component is a string and the second a symbol. Their colours follow those classes. No shell extension is needed. An expression class with no layout of its own is spelled by its name over its parts, as `Equation{a, b}`.
-
-What a class says about how its values are drawn is a method of the class returning a constant, found up its ancestry as any method is. The colour of a class is its `highlightGroup`, an `HLG`, from the nearest ancestor that installs one: numbers are `HLG "Number"`, ring elements and symbols `HLG "Variable"`, rings and types `HLG "Type"`, anything else `HLG "Text"`. A value drawn whole, as one piece of text, takes the colour of its own class:
-
-```m2
-Gene = new Type of HashTable;
-expression Gene := g -> hold g;
-toString Gene := g -> g.name;
-highlightGroup Gene := class' -> HLG "Keyword";
-new Gene from {symbol name => "BRCA1"}
-```
-
-`HLG` makes the colours code can have, by name: `Text`, `Muted`, `Keyword`, `Operator`, `Delimiter`, `Punctuation`, `Comment`, `String`, `Number`, `Boolean`, `Builtin`, `Variable`, `Type`, `Function`, `Macro`, `Option`, `Package`, `MapArrow`, `MarkupLink` and `Canvas`. Any other name is an error where it is written, as is a meta field Spectral doesn't know. The field names are Spectral's own and never exported: `Highlight` in your code names Spectral's `Highlight` by its spelling.
+The first part is a string and the second a symbol, coloured as those are.
 
 `AlignedExpression` sets rows of cells in aligned columns, with each row's last cell running on. When that cell is too long for the pane it wraps beneath where it began, and when the columns before it leave it too little room it moves beneath them, indented. Hash tables draw their pairs this way, so every `=>` stands in one column. Use it for any type that reads as labelled lines:
 
 ```m2
 Report = new Type of HashTable;
-expression Report := r -> AlignedExpression apply(sort keys r, k -> {k, symbol :, r#k});
+rod Report := r -> rod' AlignedExpression apply(sort keys r, k -> {k, symbol :, r#k});
 new Report from {"status" => "converged", "steps" => toList(1..40)}
 ```
 
-`MapExpression{target, source, label}` places a label above a leftward arrow. Nest maps in the target position to compose a chain without repeating its modules. `UnderExpression{base, label}` centers a label beneath its base while keeping the base on the surrounding baseline; complexes use it for homological degrees.
+`MapExpression{target, source, label}` places a label above a leftward arrow. Nest maps in the target position to compose a chain without repeating its modules. `UnderExpression{base, label}` centers a label beneath its base while keeping the base on the surrounding baseline; a complex sets each module over its degree this way.
 
-A drawing is a `Rod`, the format string a value is shown by: the expression it lays out, each part keeping its colour and whether it is typeset. Plain M2 prints a `Rod` as the text it lays out. `speek` inspects a value as `peek` does, its class and what it holds, but drawn: `speek {1, 1/2}` is `List{1, ½}`, and `speek'(depth, value)` opens `depth` levels. A `Rod` is a hash table too, so `speek rod x` shows the fields the drawing of `x` is made of. `rod` and `specType` are separate methods, both receiving the original value. You can change a type annotation independently:
+Plain M2 prints a `Rod` as the text it lays out. `speek` shows the drawing itself, the table of fields it is: `speek(1/2)` is `Rod` over `Class => Divide`, `Shape => Divide{1, 2}` and `Typeset => true`. The parts are drawings too, nested as deep as the value is, so `speek` shows them as their text, and `speek'_2 x` opens one more level of them.
 
-```m2
-specType' (ZZ, Pair) := (depth, p) -> rod symbol Pair;
-```
+### Names
 
-Type annotations take their depth from the nearest `typeDepth` method in the value's type ancestry. Most values have depth 1, which keeps them and containers compact; a module has 2, which shows the base ring as `Module[R]`. A subclass inherits its parent's setting unless it installs its own.
-
-Install these in the shell, or keep them in your Spectral `init.m2`:
+Inside a drawing, a ring, an ideal, a module, a matrix, a map of rings, a variety, a coherent sheaf, a map of sheaves, a complex or a map of complexes that a global name holds is drawn by that name, as M2 spells a named ring. After `I = ideal(x^3, y^3)`, the quotient `S/I` is drawn as S/I, while `J := ideal(x^3)` has no global name and leaves `S/J` drawn in full. The result itself is always drawn by its value: `I` shows its generators, and `R = QQ[x]` shows QQ[x]. `rod'_n x` resolves the names inside `x` to their values `n` times over:
 
 ```m2
-typeDepth Array := class' -> 1;
-typeDepth List := class' -> 1;
-typeDepth Module := class' -> 2;
-typeDepth SheafOfRings := class' -> 2;
-typeDepth CoherentSheaf := class' -> 2;
+R = QQ[x, y]; I = ideal(x^3, y^3);
+rod'_1(R/I)     -- QQ[x .. y] over ideal(x³, y³)
 ```
 
-Depth zero or one shows only the outer type. At depth two or greater, modules and matrices show their base ring, coherent sheaves and sheaf maps show the sheaf of rings they are modules over, and a sheaf of rings shows its variety. These are mathematical parameters: a module over `R` displays as `Module[R]`, a sheaf on `X` as `CoherentSheaf[OO_X]`, and `OO_X` as `SheafOfRings[X]`, independently of their presentation matrices or twists. Depth three looks into the variety under `OO_X` when it has no name. A named parameter keeps its name. An unnamed one shows a placeholder at depth two, and each further level spells it out one more step: `specType'(3, (ZZ/7[t])^2)` shows the ring as `ZZ/7[t]`.
+Only drawings change: the `net` and `string` previews keep M2's own spelling. A complex is drawn as its modules, each over its degree, and the differentials between them; a map of complexes as its two complexes, one above the other, with its components between them.
 
-Other types use a bounded fold of their expression components. Install `typeDepth Array := class' -> 2` to display `[1, 1.]` as `Array[ZZ, RR]`. The depth must be a non-negative integer. A bad setting leaves the ordinary class annotation available, while a direct `specType` call reports the error.
+### Types
 
-An explicit `specType'(depth, value)` overrides the configured depth: `specType'(2, [1, 1.])` expands one layer to `Array[ZZ, RR]`; `specType'(3, [[1, 1.], ["a"]])` gives `Array[Array[ZZ, RR], Array[String]]`. Repeated components remain present at explicitly requested depths. Install `specType'` for `(ZZ, YourType)` to customize which parameters a type exposes.
-
-A type's `typeset` method chooses whether its values are set as typeset maths. The nearest one in the type's ancestry applies, and everything inside a typeset part is typeset with it. Values are not typeset unless their class says so; `RingElement`, `Ring`, `Module`, `Matrix` and the expressions `Divide`, `Power`, `Subscript` and `MatrixExpression` are `true`. Turn it on for a type of your own, or off for one you prefer as text:
+`specType x` is the class of `x`, over the values its type is over, by their names: `R^2` is `Module[R]`, an ideal is `Ideal[R]`, a matrix `Matrix[R ⟵ R²]`, a sheaf of rings `SheafOfRings[X]`, a complex `Complex[R]`. `specType'_n x` resolves those names `n` times, so `specType'_1(R^2)` is `Module[QQ[x .. y]]`. What a type is over is what `typeParameters` of its class gives, none for most types; install it for a type of your own, or `specType` to draw its annotation some other way:
 
 ```m2
-typeset Pair := class' -> true;     -- draw pairs as typeset maths
-typeset Ring := class' -> false;    -- spell rings such as QQ as text
+typeParameters Pair := p -> {class p#0, class p#1};   -- Pair[String, Symbol]
 ```
-
-### How deep values unfold
-
-A value is drawn from its `expression`, and unfolding stops at names. A value assigned with `=` hides behind its name inside other values, as M2 spells a named ring: after `I = ideal(x^3, y^3)`, the quotient `S/I` is drawn as S/I. One assigned with `:=` keeps being drawn whole wherever it appears. The result itself is always spelled out: `I` shows its generators, and `R = QQ[x]` shows QQ[x]. Rings, ideals, modules, matrices, ring maps, complexes and sheaves keep their names this way; install `keepNames` for a type of your own to do the same. Only drawings change: the `net` and `string` previews keep M2's own spelling. Unnamed structures are drawn in full, never under a made-up letter.
-
-A complex names its own parts until it unfolds further. At depth one it is only its chain, `0 ⟵ C₀ ⟵ C₁ ⟵ ⋯ ⟵ C₄ ⟵ 0`, with each arrow labelled by its differential `dᵢ`. At depth two, the default, the names give way to the modules and the matrices of the differentials. A map of complexes keeps the names on its arrows at depth two and shows their matrices from depth three:
-
-```m2
-valueDepth ComplexMap := class' -> 3;    -- show the matrices of every chain map
-rod'(1, freeResolution coker vars QQ[a,b])  -- only the chain C₀ ⟵ C₁ ⟵ C₂
-```
-
-An explicit `rod'(depth, value)` overrides the configured depth.
