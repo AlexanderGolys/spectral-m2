@@ -6,9 +6,11 @@
 
 use crate::ui::block::{Element, HLSpan, Text};
 use crate::ui::config::UI;
+use crate::ui::controller::ViewKind;
 use crate::ui::glyphs::{Glyphs, Spelled};
-use crate::ui::render::maths::{FractionStyle, MathDisplay, MathInk, MathStyle, ScriptColor};
+use crate::ui::render::maths::MathStyle;
 use crate::ui::settings::rendering::RendererPosition;
+use crate::ui::settings::Settings;
 use crate::ui::theme::groups::{scheme, Groups};
 use crate::ui::wrap::WrapMode;
 use ratatui::buffer::Buffer;
@@ -43,18 +45,21 @@ enum BorderPlacement {
 /// How many of the latest outputs M2 also names `oo`, `ooo` and `oooo`.
 pub const RECENT_OUTPUTS: usize = 3;
 
-/// Runtime rendering inputs shared by every block without owning application state.
+/// Where a block is drawn and with which settings: the view it shows in, the
+/// columns it has, and everything the settings decide about its look. Made once
+/// per frame by [`RenderContext::new`], then narrowed with
+/// [`with_width`](Self::with_width) for each nested element.
+///
+/// Whatever differs between views follows from the view: in the *reference* view
+/// code may take the transcript's background, the *output* view numbers what each
+/// cell printed, and both show returned values whole.
 #[derive(Clone, Copy)]
 pub struct RenderContext {
+    settings: Settings,
+    view: ViewKind,
     width: u16,
-    code_wrap: WrapMode,
     prefix: u16,
-    output_limit: Option<usize>,
-    math: MathStyle,
     recent_outputs: [Option<u32>; RECENT_OUTPUTS],
-    numbers_printed: bool,
-    swapped_code_background: bool,
-    renderer_position: RendererPosition,
     /// Worker layouts the measured heights already account for; see [`Pending::take`](crate::ui::relayout::Pending::take).
     adopted_relayouts: u64,
     /// Lay values out on the spot rather than on a worker, for drawings kept as
@@ -63,22 +68,25 @@ pub struct RenderContext {
 }
 
 impl RenderContext {
-    pub fn new(width: u16, prefix: u16) -> Self {
+    pub fn new(settings: Settings, view: ViewKind, width: u16) -> Self {
         Self {
+            settings,
+            view,
             width,
-            code_wrap: WrapMode::default(),
-            prefix,
-            output_limit: Some(UI::MAX_OUTPUT_ROWS),
-            math: MathStyle::default(),
+            prefix: 0,
             recent_outputs: [None; RECENT_OUTPUTS],
-            numbers_printed: false,
-            swapped_code_background: false,
-            renderer_position: Default::default(),
             adopted_relayouts: u64::MAX,
             inline_layout: false,
         }
     }
 
+    /// Leave `prefix` columns before the text, for a prompt.
+    pub fn with_prefix(self, prefix: u16) -> Self {
+        Self { prefix, ..self }
+    }
+
+    /// A drawing kept as it is first painted: laid out on the spot, and with its
+    /// values whole, as it has no fold to open.
     pub fn with_inline_layout(self) -> Self {
         Self {
             inline_layout: true,
@@ -103,75 +111,17 @@ impl RenderContext {
         self.adopted_relayouts
     }
 
-    /// Choose the line-breaking policy used by source cells.
-    pub fn with_code_wrap(self, code_wrap: WrapMode) -> Self {
-        Self { code_wrap, ..self }
-    }
-
-    /// The configured source line-breaking policy.
     pub fn code_wrap(&self) -> WrapMode {
-        self.code_wrap
-    }
-
-    /// Exchange the code background with the transcript background in a reference view.
-    pub fn with_swapped_code_background(self, swapped: bool) -> Self {
-        Self {
-            swapped_code_background: swapped,
-            ..self
-        }
+        self.settings.editor.code_wrap
     }
 
     /// Source styling for this view, preserving its syntax foregrounds.
     pub fn code_style(&self) -> Style {
         let mut style = self.groups().code();
-        if self.swapped_code_background {
+        if self.view == ViewKind::Reference && self.settings.rendering.reference_code_background {
             style.bg = self.groups().transcript().bg;
         }
         style
-    }
-
-    /// Fold returned values taller than `rows`.
-    pub fn with_output_limit(self, rows: usize) -> Self {
-        Self {
-            output_limit: Some(rows.max(UI::MIN_OUTPUT_ROWS)),
-            ..self
-        }
-    }
-
-    /// Prefer typeset maths at a percentage of the terminal text size.
-    pub fn with_math_size(self, percent: u16) -> Self {
-        Self {
-            math: MathStyle {
-                scale_percent: percent.clamp(UI::MIN_MATH_SIZE_PERCENT, UI::MAX_MATH_SIZE_PERCENT),
-                ..self.math
-            },
-            ..self
-        }
-    }
-
-    /// Space the rows of typeset matrices at `percent` of TeX's own distance.
-    pub fn with_matrix_row_spacing(self, percent: u16) -> Self {
-        Self {
-            math: MathStyle {
-                matrix_row_spacing_percent: percent.clamp(
-                    UI::MIN_MATRIX_ROW_SPACING_PERCENT,
-                    UI::MAX_MATRIX_ROW_SPACING_PERCENT,
-                ),
-                ..self.math
-            },
-            ..self
-        }
-    }
-
-    /// Set returned maths with fractions in `fractions`.
-    pub fn with_fractions(self, fractions: FractionStyle) -> Self {
-        Self {
-            math: MathStyle {
-                fractions,
-                ..self.math
-            },
-            ..self
-        }
     }
 
     /// Track the latest outputs, newest first, for highlighting.
@@ -192,68 +142,14 @@ impl RenderContext {
         self.recent_outputs.contains(&Some(number))
     }
 
-    /// Draw rings as blackboard glyphs (`ℤ`) rather than by name (`ZZ`).
-    pub fn with_blackboard(self, blackboard: bool) -> Self {
-        Self {
-            math: MathStyle {
-                blackboard,
-                ..self.math
-            },
-            ..self
-        }
-    }
-
-    /// Draw returned maths with `display`.
-    pub fn with_display(self, display: MathDisplay) -> Self {
-        Self {
-            math: MathStyle {
-                display,
-                ..self.math
-            },
-            ..self
-        }
-    }
-
-    pub fn with_ink(self, ink: MathInk) -> Self {
-        Self {
-            math: MathStyle { ink, ..self.math },
-            ..self
-        }
-    }
-
-    pub fn with_script_colors(self, index_color: ScriptColor, exponent_color: ScriptColor) -> Self {
-        Self {
-            math: MathStyle {
-                index_color,
-                exponent_color,
-                ..self.math
-            },
-            ..self
-        }
-    }
-
-    pub fn with_renderer_position(self, renderer_position: RendererPosition) -> Self {
-        Self {
-            renderer_position,
-            ..self
-        }
-    }
-
     pub fn renderer_position(&self) -> RendererPosition {
-        self.renderer_position
+        self.settings.rendering.renderer_position
     }
 
-    /// Label printed text with the number of the cell that printed it, as the
-    /// views apart from the shell do.
-    pub fn with_printed_numbers(self) -> Self {
-        Self {
-            numbers_printed: true,
-            ..self
-        }
-    }
-
+    /// Whether printed text is labelled with the number of the cell that printed
+    /// it: only where no code cell stands above it to say so.
     pub fn numbers_printed(&self) -> bool {
-        self.numbers_printed
+        self.view == ViewKind::Output
     }
 
     pub fn width(&self) -> u16 {
@@ -266,19 +162,14 @@ impl RenderContext {
     }
 
     pub fn math(&self) -> MathStyle {
-        self.math
+        MathStyle::from(&self.settings.rendering)
     }
 
-    /// Render returned values without the shell's row limit.
-    pub fn full_output(&self) -> Self {
-        Self {
-            output_limit: None,
-            ..*self
-        }
-    }
-
+    /// Rows a returned value shows before its middle folds away, if it folds.
     pub fn output_limit(&self) -> Option<usize> {
-        self.output_limit
+        let whole =
+            self.inline_layout || matches!(self.view, ViewKind::Reference | ViewKind::Output);
+        (!whole).then(|| self.settings.editor.output_rows.max(UI::MIN_OUTPUT_ROWS))
     }
 
     pub fn prefix(&self) -> u16 {

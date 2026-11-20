@@ -19,17 +19,17 @@ use crate::ui::theme::scheme;
 
 /// What a floating panel can show.
 pub trait FloatingContent {
-    /// The content laid out `width` columns wide.
-    fn lines(&self, width: u16) -> Vec<Line<'static>>;
+    /// The content laid out as `context` draws, in its width.
+    fn lines(&self, context: &RenderContext) -> Vec<Line<'static>>;
 
-    /// The columns the content needs, never more than `max`.
-    fn width(&self, max: u16) -> u16 {
-        self.lines(max)
+    /// The columns the content needs, never more than the context's width.
+    fn width(&self, context: &RenderContext) -> u16 {
+        self.lines(context)
             .iter()
             .map(|line| line.width() as u16)
             .max()
             .unwrap_or(0)
-            .min(max)
+            .min(context.width())
     }
 }
 
@@ -68,17 +68,24 @@ impl Floating {
 
     /// The panel's place within `area`: above its anchor where it fits and else
     /// below it, `cursor` standing for the input's cursor.
-    pub fn area(&self, area: Rect, cursor: Option<Position>) -> Option<Rect> {
+    pub fn area(
+        &self,
+        area: Rect,
+        cursor: Option<Position>,
+        context: &RenderContext,
+    ) -> Option<Rect> {
         let anchor = match self.anchor {
             Anchor::InputCursor => cursor?,
             Anchor::At(position) => position,
         };
         let inner = self.content.width(
-            FloatingPanelLimits::MAX_WIDTH
-                .min(area.width)
-                .saturating_sub(2),
+            &context.with_width(
+                FloatingPanelLimits::MAX_WIDTH
+                    .min(area.width)
+                    .saturating_sub(2),
+            ),
         );
-        let rows = self.rows(inner, area).len() as u16;
+        let rows = self.rows(&context.with_width(inner), area).len() as u16;
         if inner == 0 || rows == 0 {
             return None;
         }
@@ -92,9 +99,10 @@ impl Floating {
         Some(Rect::new(x, y.max(area.y), width, height.min(area.height)))
     }
 
-    /// The content's rows at `width`, as many as the panel shows within `area`.
-    fn rows(&self, width: u16, area: Rect) -> Vec<Line<'static>> {
-        let mut lines = self.content.lines(width);
+    /// The content's rows in the context's width, as many as the panel shows
+    /// within `area`.
+    fn rows(&self, context: &RenderContext, area: Rect) -> Vec<Line<'static>> {
+        let mut lines = self.content.lines(context);
         while lines.last().is_some_and(|line| line.width() == 0) {
             lines.pop();
         }
@@ -104,15 +112,21 @@ impl Floating {
         lines
     }
 
-    pub fn draw(&self, buffer: &mut Buffer, area: Rect, cursor: Option<Position>) {
-        let Some(panel) = self.area(area, cursor) else {
+    pub fn draw(
+        &self,
+        buffer: &mut Buffer,
+        area: Rect,
+        cursor: Option<Position>,
+        context: &RenderContext,
+    ) {
+        let Some(panel) = self.area(area, cursor, context) else {
             return;
         };
         let block = TuiBlock::bordered()
             .border_set(Glyphs::SQUARE_BORDER.current())
             .style(scheme().transcript().patch(scheme().value()))
             .border_style(scheme().floating_border());
-        let lines = self.rows(panel.width - 2, area);
+        let lines = self.rows(&context.with_width(panel.width - 2), area);
         Clear.render(panel, buffer);
         Paragraph::new(lines).block(block).render(panel, buffer);
     }
@@ -133,9 +147,8 @@ impl MarkupContent {
 }
 
 impl FloatingContent for MarkupContent {
-    fn lines(&self, width: u16) -> Vec<Line<'static>> {
-        let context = RenderContext::new(width, 0);
-        markup::lines(&self.html, usize::from(width), &context)
+    fn lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
+        markup::lines(&self.html, usize::from(context.width()), context)
             .map(|lines| lines.iter().cloned().collect())
             .unwrap_or_default()
     }
@@ -143,7 +156,7 @@ impl FloatingContent for MarkupContent {
 
 /// A call's signature, the parameter the cursor is at set apart.
 impl FloatingContent for Signature {
-    fn lines(&self, _width: u16) -> Vec<Line<'static>> {
+    fn lines(&self, _context: &RenderContext) -> Vec<Line<'static>> {
         let code = scheme().value();
         let active = self.active.clone().unwrap_or(0..0);
         let parts = [
@@ -165,9 +178,9 @@ impl FloatingContent for Signature {
 }
 
 impl FloatingContent for Vec<Signature> {
-    fn lines(&self, width: u16) -> Vec<Line<'static>> {
+    fn lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
         self.iter()
-            .flat_map(|signature| signature.lines(width))
+            .flat_map(|signature| signature.lines(context))
             .collect()
     }
 }

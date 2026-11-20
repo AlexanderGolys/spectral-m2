@@ -392,8 +392,6 @@ impl Editor {
         self.input.hide();
         let theme = *scheme();
         frame.render_widget(Clear, area);
-        let reference = view == ViewKind::Reference;
-        let swapped = reference && self.settings.rendering.reference_code_background;
         let canvas = self.view_canvas();
         TuiBlock::default()
             .style(canvas)
@@ -411,21 +409,16 @@ impl Editor {
             Constraint::Length(status_height),
         ])
         .split(area);
-        let context = self
-            .render_context(viewport.width.width(sections[0].width))
-            .with_swapped_code_background(swapped);
+        let context = self.render_context(view, viewport.width.width(sections[0].width));
         self.feed_area = sections[0];
         self.picker_area = sections[1];
 
         match view {
             ViewKind::Notes => self.draw_notes(frame, sections[0]),
             ViewKind::Reference => {
-                let (_, inclusions) = self.reference.render(
-                    &context.full_output(),
-                    sections[0],
-                    frame.buffer_mut(),
-                    canvas,
-                );
+                let (_, inclusions) =
+                    self.reference
+                        .render(&context, sections[0], frame.buffer_mut(), canvas);
                 self.selection_inclusions.merge(inclusions);
             }
             ViewKind::Shell => unreachable!("shells use Editor::draw"),
@@ -452,7 +445,6 @@ impl Editor {
                     ));
             }
             ViewKind::Output => {
-                let context = context.full_output().with_printed_numbers();
                 let blocks = match self.settings.rendering.output_view {
                     OutputView::Everything => self.feed.outputs(),
                     OutputView::Values => self.feed.values(),
@@ -472,6 +464,7 @@ impl Editor {
         // Blocks such as printed text paint a band of their own; a view keeps one
         // background under all of them.
         let background = canvas.bg.unwrap_or(Color::Reset);
+        let reference = view == ViewKind::Reference;
         if !reference {
             for position in sections[0].positions() {
                 frame.buffer_mut()[position].set_bg(background);

@@ -179,9 +179,9 @@ impl TextDecorator for Decorator {
 type HtmlLine = TaggedLine<Vec<RichAnnotation>>;
 
 /// Lay HTML out at the available width, retaining document and code semantics.
-pub fn spans(html: &str, width: usize) -> Option<Vec<SpanLine>> {
+pub fn spans(html: &str, width: usize, blackboard: bool) -> Option<Vec<SpanLine>> {
     let width = width.clamp(1, usize::from(u16::MAX));
-    let (tagged, cells) = layout(html, width, MathStyle::default().blackboard)?;
+    let (tagged, cells) = layout(html, width, blackboard)?;
     Some(
         (0..tagged.len())
             .flat_map(|index| prose(&tagged, index, width, &cells))

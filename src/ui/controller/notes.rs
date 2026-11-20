@@ -9,13 +9,13 @@ use ratatui::Frame;
 
 use super::Editor;
 use super::Reaction;
+use super::ViewKind;
 use crate::code::file;
 use crate::code::highlight::SyntaxHighlighter;
 use crate::input::{InputAction, InputCode, InputContext};
 use crate::ui::action::Action;
 use crate::ui::config::UI;
 use crate::ui::key::KeyEvent;
-use crate::ui::render::RenderContext;
 use crate::ui::settings::session::SessionSettings;
 use crate::ui::text_object::TextDirection;
 
@@ -143,7 +143,9 @@ impl Editor {
     /// Draw the notebook and keep its caret visible while it has focus.
     pub fn draw_notes(&mut self, frame: &mut Frame, area: Rect) {
         self.notes.refresh();
-        let context = RenderContext::new(area.width, UI::PROMPT_WIDTH);
+        let context = self
+            .render_context(ViewKind::Notes, area.width)
+            .with_prefix(UI::PROMPT_WIDTH);
         self.notes.input.set_settings(self.settings);
         let focused = self.pane_focused && !self.picker_open();
         if let Some(cursor) = self.notes.input.render(

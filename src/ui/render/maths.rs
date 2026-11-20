@@ -16,6 +16,7 @@ use crate::ui::cycle::cyclic;
 use crate::ui::glyphs::{Glyphs, Spelled};
 use crate::ui::graphics;
 use crate::ui::present::{wrap, SpanLine};
+use crate::ui::settings::rendering::RenderingSettings;
 use crate::ui::theme::groups::HLGroup;
 use crate::ui::wrap::WordWrap;
 use serde::{Deserialize, Serialize};
@@ -246,6 +247,28 @@ impl From<FractionStyle> for MathStyle {
         }
     }
 }
+
+/// The sizes are clamped again here, a settings file being editable by hand.
+impl From<&RenderingSettings> for MathStyle {
+    fn from(rendering: &RenderingSettings) -> Self {
+        Self {
+            ink: rendering.math_ink,
+            scale_percent: rendering
+                .math_size_percent
+                .clamp(UI::MIN_MATH_SIZE_PERCENT, UI::MAX_MATH_SIZE_PERCENT),
+            index_color: rendering.index_color,
+            exponent_color: rendering.exponent_color,
+            fractions: rendering.fractions,
+            blackboard: rendering.math_fonts,
+            display: rendering.maths,
+            matrix_row_spacing_percent: rendering.matrix_row_spacing_percent.clamp(
+                UI::MIN_MATRIX_ROW_SPACING_PERCENT,
+                UI::MAX_MATRIX_ROW_SPACING_PERCENT,
+            ),
+            ..Self::default()
+        }
+    }
+}
 /// Render an M2 value as coloured rows no wider than `width`, or refuse and name what
 /// stopped it.
 ///
@@ -277,7 +300,7 @@ fn role_spans(
     style: MathStyle,
 ) -> Result<Vec<SpanLine>, UnsupportedTeX> {
     if let Some(html) = &value.html {
-        return markup::spans(html, width)
+        return markup::spans(html, width, style.blackboard)
             .ok_or_else(|| UnsupportedTeX("markup that does not read as HTML".into()));
     }
     let reading = Reading::new(value, style);

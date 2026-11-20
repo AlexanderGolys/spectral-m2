@@ -509,7 +509,7 @@ pub fn render(
             area: Rect::new(0, top as u16, context.width(), next.lines.len() as u16),
             block: Rc::new(RefCell::new(block)),
             context: context
-                .full_output()
+                .with_inline_layout()
                 .with_recent_outputs([None; RECENT_OUTPUTS]),
         });
         rendered.lines.extend(next.lines);
@@ -539,7 +539,6 @@ pub fn render_code(source: &str, page: u64, context: &RenderContext) -> Option<P
 /// kept to the columns its results' frame takes.
 fn painted(block: &EvaluationBlock, context: &RenderContext) -> Painted {
     let context = context
-        .full_output()
         .with_inline_layout()
         .with_recent_outputs([None; RECENT_OUTPUTS]);
     let area = Rect::new(0, 0, context.width(), block.height(&context));

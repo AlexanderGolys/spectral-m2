@@ -603,7 +603,6 @@ impl CodeBlock {
     }
 
     pub(super) fn preview_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
-        let context = RenderContext::new(context.width(), 0);
         let layout = CellLayout::plain();
         let mut rendered = Vec::new();
         for cell in &self.cells {
@@ -611,7 +610,7 @@ impl CodeBlock {
                 cell,
                 CellMarker::Bare,
                 layout,
-                &context,
+                context,
                 context.code_style(),
                 true,
             ));

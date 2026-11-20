@@ -1994,24 +1994,11 @@ impl Editor {
         }
     }
 
-    /// Shared rendering preferences for transcript and reference content.
-    fn render_context(&self, width: u16) -> RenderContext {
-        RenderContext::new(width, 0)
-            .with_code_wrap(self.settings.editor.code_wrap)
-            .with_fractions(self.settings.rendering.fractions)
-            .with_blackboard(self.settings.rendering.math_fonts)
-            .with_matrix_row_spacing(self.settings.rendering.matrix_row_spacing_percent)
-            .with_math_size(self.settings.rendering.math_size_percent)
-            .with_display(self.settings.rendering.maths)
-            .with_ink(self.settings.rendering.math_ink)
-            .with_script_colors(
-                self.settings.rendering.index_color,
-                self.settings.rendering.exponent_color,
-            )
-            .with_renderer_position(self.settings.rendering.renderer_position)
+    /// The context `view` draws in this frame, `width` columns wide.
+    fn render_context(&self, view: ViewKind, width: u16) -> RenderContext {
+        RenderContext::new(self.settings, view, width)
             .with_recent_outputs(self.feed.recent_outputs())
             .with_adopted_relayouts(self.relayouts_adopted)
-            .with_output_limit(self.settings.editor.output_rows)
     }
 
     /// Tell the pictures how far their blocks stand from the viewport, for both feeds
@@ -2101,8 +2088,10 @@ impl Editor {
                 (sections[2], sections[3])
             };
         let feed_width = self.feed_width.width(editor_area.width);
-        let context = self.render_context(feed_width);
-        let input_context = RenderContext::new(editor_area.width, input_prefix);
+        let context = self.render_context(ViewKind::Shell, feed_width);
+        let input_context = context
+            .with_width(editor_area.width)
+            .with_prefix(input_prefix);
 
         self.feed_area = sections[0];
         self.picker_area = sections[1];
@@ -2135,7 +2124,7 @@ impl Editor {
             self.input_cursor = Some(cursor);
         }
         if let Some(floating) = &self.floating {
-            floating.draw(frame.buffer_mut(), area, self.input_cursor);
+            floating.draw(frame.buffer_mut(), area, self.input_cursor, &context);
         }
         TuiBlock::default()
             .style(theme.statusline_bg())
