@@ -2,16 +2,13 @@
 
 use std::time::{Duration, Instant};
 
-use crate::ui::config::UI;
+use crate::ui::config::ResizeRelayout;
 
 /// The width a view's content is laid out at. It follows the pane's width only
-/// once that holds still for [`ResizeConfig::settle`], or every
-/// [`ResizeConfig::max_stale`] while it keeps moving; until then the content
+/// once that holds still for [`ResizeRelayout::SETTLE`], or every
+/// [`ResizeRelayout::MAX_STALE`] while it keeps moving; until then the content
 /// keeps the layout it has, cropped or padded to the pane, so a border being
 /// dragged moves at once instead of waiting for every block to wrap again.
-///
-/// [`ResizeConfig::settle`]: crate::ui::config::ResizeConfig::settle
-/// [`ResizeConfig::max_stale`]: crate::ui::config::ResizeConfig::max_stale
 ///
 /// ```ignore
 /// let mut width = SettlingWidth::default();
@@ -57,9 +54,9 @@ impl SettlingWidth {
 
     fn remaining(&self, now: Instant) -> Option<Duration> {
         let (_, changed) = self.pending?;
-        let held = UI.resize.settle.saturating_sub(now - changed);
+        let held = ResizeRelayout::SETTLE.saturating_sub(now - changed);
         let stale = self.stale_since.map_or(Duration::MAX, |since| {
-            UI.resize.max_stale.saturating_sub(now - since)
+            ResizeRelayout::MAX_STALE.saturating_sub(now - since)
         });
         Some(held.min(stale))
     }

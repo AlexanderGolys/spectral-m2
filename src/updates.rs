@@ -88,8 +88,8 @@ impl Source {
     /// cannot change while it runs.
     fn interval(self) -> Duration {
         match self {
-            Self::Published => UI.published_check_interval,
-            Self::Installed => UI.installed_check_interval,
+            Self::Published => UI::PUBLISHED_CHECK_INTERVAL,
+            Self::Installed => UI::INSTALLED_CHECK_INTERVAL,
             Self::Carried => Duration::MAX,
         }
     }

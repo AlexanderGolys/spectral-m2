@@ -6,6 +6,7 @@
 
 use crate::ui::block::{Element, HLSpan, Text};
 use crate::ui::config::UI;
+use crate::ui::glyphs::{Glyphs, Spelled};
 use crate::ui::render::maths::{FractionStyle, MathDisplay, MathInk, MathStyle, ScriptColor};
 use crate::ui::settings::rendering::RendererPosition;
 use crate::ui::theme::groups::{scheme, Groups};
@@ -14,7 +15,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block as TuiBlock, BorderType, Padding, Paragraph, Widget};
+use ratatui::widgets::{Block as TuiBlock, Padding, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
 pub mod markdown;
@@ -67,7 +68,7 @@ impl RenderContext {
             width,
             code_wrap: WrapMode::default(),
             prefix,
-            output_limit: Some(UI.max_output_rows),
+            output_limit: Some(UI::MAX_OUTPUT_ROWS),
             math: MathStyle::default(),
             recent_outputs: [None; RECENT_OUTPUTS],
             numbers_printed: false,
@@ -132,7 +133,7 @@ impl RenderContext {
     /// Fold returned values taller than `rows`.
     pub fn with_output_limit(self, rows: usize) -> Self {
         Self {
-            output_limit: Some(rows.max(UI.min_output_rows)),
+            output_limit: Some(rows.max(UI::MIN_OUTPUT_ROWS)),
             ..self
         }
     }
@@ -141,7 +142,7 @@ impl RenderContext {
     pub fn with_math_size(self, percent: u16) -> Self {
         Self {
             math: MathStyle {
-                scale_percent: percent.clamp(UI.min_math_size_percent, UI.max_math_size_percent),
+                scale_percent: percent.clamp(UI::MIN_MATH_SIZE_PERCENT, UI::MAX_MATH_SIZE_PERCENT),
                 ..self.math
             },
             ..self
@@ -153,8 +154,8 @@ impl RenderContext {
         Self {
             math: MathStyle {
                 matrix_row_spacing_percent: percent.clamp(
-                    UI.min_matrix_row_spacing_percent,
-                    UI.max_matrix_row_spacing_percent,
+                    UI::MIN_MATRIX_ROW_SPACING_PERCENT,
+                    UI::MAX_MATRIX_ROW_SPACING_PERCENT,
                 ),
                 ..self.math
             },
@@ -315,9 +316,9 @@ impl Text for Prompt {
         vec![Span::styled(
             format!(
                 "{}{:1}{}",
-                " ".repeat(UI.prompt_margin.into()),
+                " ".repeat(UI::PROMPT_MARGIN.into()),
                 self.label,
-                " ".repeat(usize::from(UI.prompt_text_gap).saturating_sub(overhang))
+                " ".repeat(usize::from(UI::PROMPT_TEXT_GAP).saturating_sub(overhang))
             ),
             self.style,
         )]
@@ -437,8 +438,8 @@ impl Bordered {
         }
         let width = area
             .width
-            .saturating_sub(layout.inset + UI.right_margin)
-            .max(UI.min_box_width);
+            .saturating_sub(layout.inset + UI::RIGHT_MARGIN)
+            .max(UI::MIN_BOX_WIDTH);
         Rect::new(area.x + layout.inset, area.y, width, area.height)
     }
 
@@ -500,7 +501,7 @@ impl Element for Bordered {
     fn render(&self, (): &(), area: Rect, buf: &mut Buffer) {
         let mut block = Self::frame(self.layout)
             .style(self.surface)
-            .border_type(BorderType::Rounded)
+            .border_set(Glyphs::ROUNDED_BORDER.current())
             .border_style(self.border_style);
         if let Some(title) = &self.title {
             block = block.title(title.clone());

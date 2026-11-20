@@ -473,8 +473,8 @@ pub fn render(
     page: u64,
     context: &RenderContext,
 ) -> Option<Painted> {
-    let gutter = UI.cell_margin + UI.min_number_digits + UI.cell_gap;
-    if context.width() < gutter + UI.min_box_width {
+    let gutter = UI::CELL_MARGIN + UI::MIN_NUMBER_DIGITS + UI::CELL_GAP;
+    if context.width() < gutter + UI::MIN_BOX_WIDTH {
         return None;
     }
     let mut rendered = Painted {
@@ -526,7 +526,7 @@ pub fn render(
 /// with nothing following it; `None` for text that is not M2 code.
 pub fn render_code(source: &str, page: u64, context: &RenderContext) -> Option<Painted> {
     let source = source.trim_matches('\n');
-    if context.width() < UI.min_number_digits + UI.cell_gap + UI.min_box_width {
+    if context.width() < UI::MIN_NUMBER_DIGITS + UI::CELL_GAP + UI::MIN_BOX_WIDTH {
         return None;
     }
     parse_native(source).ok()?;

@@ -1,3 +1,5 @@
+//! Records kept between sessions, each a JSON file under the configuration directory.
+
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 

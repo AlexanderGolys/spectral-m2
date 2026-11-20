@@ -3,8 +3,6 @@
 //! An action binding consumes its terminal key and emits an [`Action`]. Keys
 //! without a binding continue to the focused component as ordinary input.
 
-// Keep mathematical notation and interface symbols legible in their native spelling.
-#![allow(clippy::non_ascii_literal)]
 use std::collections::{BTreeSet, HashMap};
 
 use crossterm::event::KeyCode;
@@ -17,6 +15,7 @@ use crate::input::{InputAction, Traversal};
 use crate::ui::action::Action;
 use crate::ui::controller::picker::{PickerInput, PickerItem, PickerMode, PickerTab, Row};
 use crate::ui::controller::EditorEvent;
+use crate::ui::glyphs::{Glyphs, Spelled};
 use crate::ui::key::{KeyEvent, KeyMod};
 use crate::ui::theme::groups::{scheme, HLGroup};
 use KeyMod::{Alt, Ctrl, Shift};
@@ -303,7 +302,7 @@ impl PickerItem for KeymapRow {
     fn cells(&self) -> Vec<Line<'static>> {
         let groups = scheme();
         let shortcut = if self.capturing {
-            "Type keybind… (Esc cancels)".to_string()
+            format!("Type keybind{} (Esc cancels)", Glyphs::Ellipsis.current())
         } else {
             self.key.to_string()
         };

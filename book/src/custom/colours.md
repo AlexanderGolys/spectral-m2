@@ -80,4 +80,4 @@ CompletionHint = { link = "Muted", italic = true }
 
 ## Plain glyphs for limited terminals
 
-Turn on *ascii* in the rendering tab of the [settings](../reference/settings.md) for simple prompt, divider, separator and spinner symbols, for a font without Nerd Font icons.
+Set *symbols* in the rendering tab of the [settings](../reference/settings.md) to `unicode` for a font without Nerd Font icons, or to `ascii` for plain prompt, divider, separator and spinner symbols any font has.

@@ -5,9 +5,7 @@
 //! receives its highlighter separately because highlighting is an application-wide
 //! service rather than editor state.
 
-// Keep mathematical notation and interface symbols legible in their native spelling.
-#![allow(clippy::non_ascii_literal)]
-use crate::ui::glyphs::Glyphs;
+use crate::ui::glyphs::{Charset, Glyphs, Remark, Spelled};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
@@ -43,7 +41,6 @@ use crate::backend::{M2Response, PreviewMode, Rod, ValuePreview};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::SourceId;
 use crate::ui::config::UI;
-use crate::ui::glyphs::Glyph;
 use crate::ui::render::maths::MathStyle;
 use crate::ui::theme::groups::Groups;
 
@@ -52,7 +49,9 @@ use crate::ui::theme::groups::Groups;
 const LINE_NUMBER_ROOM: u32 = 100;
 /// Stands in for a value a worker is still laying out, or for its text before a
 /// worker has drawn it.
-const LAYING_OUT: &str = "… laying out …";
+const LAYING_OUT: Remark = Remark("laying out");
+/// Stands in for the rows a preview leaves out, over the render limit.
+const PREVIEW_TRUNCATED: Remark = Remark("output preview truncated (render limit)");
 
 macro_rules! row_count {
     ($rows:expr) => {
@@ -155,18 +154,18 @@ impl CellLayout {
         } else {
             number.ilog10() as u16 + 1
         };
-        if own > UI.min_number_digits {
+        if own > UI::MIN_NUMBER_DIGITS {
             own
         } else {
-            UI.min_number_digits
+            UI::MIN_NUMBER_DIGITS
         }
     }
 
     const fn numbered(number: u32) -> Self {
         let digits = Self::digits(number);
         Self(FrameLayout::gutter(
-            UI.cell_margin + digits + UI.cell_gap,
-            UI.cell_margin + digits,
+            UI::CELL_MARGIN + digits + UI::CELL_GAP,
+            UI::CELL_MARGIN + digits,
         ))
     }
 
@@ -186,7 +185,7 @@ impl CellLayout {
         let x = self.0.inset();
         for y in 0..height {
             buf[(x, y)]
-                .set_symbol(Glyphs::CellSeparator.glyph().current())
+                .set_symbol(Glyphs::CellSeparator.current())
                 .set_style(style);
         }
     }
@@ -228,12 +227,12 @@ impl CellMarker {
                 (frame.content.into(), frame.style(groups))
             }
             Self::Queued => (
-                Glyphs::UnevaluatedCell.glyph().current().into(),
+                Glyphs::UnevaluatedCell.current().into(),
                 groups.queued_cell_marker(),
             ),
             Self::Failed(number) => (number.to_string(), groups.failed_cell_marker()),
             Self::Invalid => (
-                Glyphs::RejectedCell.glyph().current().into(),
+                Glyphs::RejectedCell.current().into(),
                 groups.rejected_cell_marker(),
             ),
             Self::Bare | Self::Empty => return None,
@@ -248,7 +247,7 @@ impl CellMarker {
         if let Some((label, style)) = self.label(context) {
             let width = label.chars().count() as u16;
             Paragraph::new(Span::styled(label, style.patch(base)))
-                .render(Rect::new(area.x + UI.cell_margin, row, width, 1), buf);
+                .render(Rect::new(area.x + UI::CELL_MARGIN, row, width, 1), buf);
         }
     }
 }
@@ -484,7 +483,7 @@ impl Block for SourceBlock {
         let (separator, gutter) = self.gutter();
         let style = context.groups().fold_marker();
         let number_style = context.groups().cell_number();
-        let number_width = usize::from(separator.saturating_sub(UI.cell_margin + 2));
+        let number_width = usize::from(separator.saturating_sub(UI::CELL_MARGIN + 2));
         let code = self.code.borrow();
         for (index, row) in Self::line_starts(&rows) {
             let Some(y) = shown[index]
@@ -494,7 +493,7 @@ impl Block for SourceBlock {
                 continue;
             };
             buffer.set_string(
-                area.x + UI.cell_margin,
+                area.x + UI::CELL_MARGIN,
                 y,
                 format!("{:>number_width$}", row.line + 1),
                 number_style,
@@ -504,8 +503,8 @@ impl Block for SourceBlock {
             };
             let folded = self.folds.is_folded(row.line);
             let glyph = match folded {
-                true => Glyphs::FoldClosed.glyph(),
-                false => Glyphs::FoldOpen.glyph(),
+                true => Glyphs::FoldClosed,
+                false => Glyphs::FoldOpen,
             };
             buffer.set_string(
                 area.x + separator.saturating_sub(1),
@@ -519,7 +518,7 @@ impl Block for SourceBlock {
                 buffer.set_stringn(
                     x,
                     y,
-                    format!("{} {hidden} lines", Glyphs::FoldedLines.glyph().current()),
+                    format!("{} {hidden} lines", Glyphs::FoldedLines.current()),
                     usize::from(area.right().saturating_sub(x)),
                     style,
                 );
@@ -1428,7 +1427,7 @@ impl Block for TextBlock {
     fn height(&self, context: &RenderContext) -> u16 {
         row_count!(self.body(context).len()).saturating_add(match self.kind {
             TextKind::System => 2,
-            TextKind::Printed { .. } => 2 * UI.printed_margin,
+            TextKind::Printed { .. } => 2 * UI::PRINTED_MARGIN,
         })
     }
 
@@ -1451,15 +1450,15 @@ impl Block for TextBlock {
             TextKind::Printed { number } => {
                 let prefix = usize::from(Self::printed_layout(number).prefix());
                 let number = number.filter(|_| context.numbers_printed());
-                let margin = || (0..UI.printed_margin).map(|_| Line::default());
+                let margin = || (0..UI::PRINTED_MARGIN).map(|_| Line::default());
                 // The number sits where a code cell's does, on the first line only.
                 let gutter = |row: usize| match number.filter(|_| row == 0) {
                     Some(number) => Span::styled(
                         format!(
                             "{:margin$}{number:<width$}",
                             "",
-                            margin = usize::from(UI.cell_margin),
-                            width = prefix - usize::from(UI.cell_margin),
+                            margin = usize::from(UI::CELL_MARGIN),
+                            width = prefix - usize::from(UI::CELL_MARGIN),
                         ),
                         theme.printed_cell_number(),
                     ),
@@ -1483,7 +1482,7 @@ impl Block for TextBlock {
     fn items(&self, context: &RenderContext) -> Vec<Item> {
         let (margin, number) = match self.kind {
             TextKind::System => (0, None),
-            TextKind::Printed { number } => (UI.printed_margin, number),
+            TextKind::Printed { number } => (UI::PRINTED_MARGIN, number),
         };
         let rows = margin..self.height(context).saturating_sub(margin);
         vec![Item::new(ItemKind::Note, rows, number, self.text.clone())]
@@ -1493,7 +1492,7 @@ impl Block for TextBlock {
         if matches!(self.kind, TextKind::Printed { .. }) {
             let body = self.body(context);
             inclusions.mark_wrapped_rows(
-                UI.printed_margin,
+                UI::PRINTED_MARGIN,
                 context.width(),
                 body.iter().map(String::as_str),
                 &self.text,
@@ -1529,18 +1528,21 @@ struct OutputCell {
     chosen: Rc<Cell<Option<PreviewMode>>>,
 }
 
-impl PreviewMode {
-    fn glyph(self) -> Glyph {
+impl Spelled for PreviewMode {
+    type Spelling = &'static str;
+
+    fn spelled(&self, charset: Charset) -> &'static str {
         match self {
-            Self::Rod => Glyphs::RendererRod.glyph(),
-            Self::Net => Glyphs::RendererNet.glyph(),
-            Self::String => Glyphs::RendererString.glyph(),
-            Self::Tex => Glyphs::RendererTex.glyph(),
-            Self::Markup => Glyphs::RendererMarkup.glyph(),
-            Self::External => Glyphs::RendererExternal.glyph(),
-            Self::Peek => Glyphs::RendererPeek.glyph(),
-            Self::Speek => Glyphs::RendererSpeek.glyph(),
+            Self::Rod => Glyphs::RendererRod,
+            Self::Net => Glyphs::RendererNet,
+            Self::String => Glyphs::RendererString,
+            Self::Tex => Glyphs::RendererTex,
+            Self::Markup => Glyphs::RendererMarkup,
+            Self::External => Glyphs::RendererExternal,
+            Self::Peek => Glyphs::RendererPeek,
+            Self::Speek => Glyphs::RendererSpeek,
         }
+        .spelled(charset)
     }
 }
 
@@ -1657,13 +1659,6 @@ struct ValueSource {
     value: Option<Rod>,
 }
 
-/// A value's rows and the links among them.
-#[derive(Debug, Default)]
-struct Laid {
-    lines: Vec<Line<'static>>,
-    links: Vec<Link>,
-}
-
 impl ValueSource {
     /// The plain text, drawn here when no one has yet: never on the drawing thread.
     fn text(&self) -> &str {
@@ -1675,8 +1670,11 @@ impl ValueSource {
     }
 
     /// The plain text if a worker has drawn it, else a placeholder.
-    fn text_drawn(&self) -> &str {
-        self.text.get().map_or(LAYING_OUT, String::as_str)
+    fn text_drawn(&self) -> String {
+        self.text
+            .get()
+            .cloned()
+            .unwrap_or_else(|| LAYING_OUT.current())
     }
 
     fn preview_text(&self, mode: PreviewMode) -> Option<&str> {
@@ -1771,18 +1769,23 @@ impl ValueSource {
     }
 }
 
+/// A value's rows and the links among them.
+#[derive(Debug, Default)]
+struct Laid {
+    lines: Vec<Line<'static>>,
+    links: Vec<Link>,
+}
+
 impl Laid {
     /// The rows a preview keeps within the render limit, the middle cut out.
     fn truncated(mut self, block_width: u16) -> Self {
-        let limit = (UI.max_output_preview_cells / usize::from(block_width.max(1))).max(1);
+        let limit = (UI::MAX_OUTPUT_PREVIEW_CELLS / usize::from(block_width.max(1))).max(1);
         if self.lines.len() > limit {
             let head = limit.saturating_sub(1) / 2;
             let tail = limit.saturating_sub(head + 1);
             let end = self.lines.len().saturating_sub(tail);
-            self.lines.splice(
-                head..end,
-                [Line::raw("… output preview truncated (render limit) …")],
-            );
+            self.lines
+                .splice(head..end, [Line::raw(PREVIEW_TRUNCATED.current())]);
             // Only the rows above the cut stay where they were laid out.
             self.links
                 .retain(|link| link.cells.iter().all(|cells| usize::from(cells.y) < head));
@@ -1947,8 +1950,8 @@ impl OutputBlock {
             .iter()
             .map(Line::width)
             .max()
-            .map_or(0, |type_width| type_width + UI.type_gap);
-        match column as f32 <= f32::from(width) * UI.max_type_share {
+            .map_or(0, |type_width| type_width + UI::TYPE_GAP);
+        match column as f32 <= f32::from(width) * UI::MAX_TYPE_SHARE {
             true => u16::try_from(usize::from(width) - column).unwrap_or(width),
             false => width,
         }
@@ -2039,7 +2042,7 @@ impl OutputBlock {
                 cell.relayout.take();
                 return Ok(cell.source.laid(key));
             }
-            None => Rc::new(vec![Line::raw(LAYING_OUT)]),
+            None => Rc::new(vec![Line::raw(LAYING_OUT.current())]),
         };
         let requested = cell
             .relayout
@@ -2098,8 +2101,7 @@ impl OutputBlock {
     fn unwrapped_text(cell: &OutputCell, context: &RenderContext) -> String {
         let _ = context;
         cell.preview_text(cell.preview_mode())
-            .unwrap_or(cell.source.text_drawn())
-            .to_string()
+            .map_or_else(|| cell.source.text_drawn(), str::to_string)
     }
 
     /// Value rows with three rows for the fold control.
@@ -2121,14 +2123,15 @@ impl OutputBlock {
     fn fold_lines(hidden: usize, width: u16, context: &RenderContext) -> [Line<'static>; 3] {
         let style = context.groups().output_number();
         let rule = Line::from(Span::styled(
-            Glyphs::FoldRule
-                .glyph()
-                .current()
-                .repeat(usize::from(width)),
+            Glyphs::FoldRule.current().repeat(usize::from(width)),
             style,
         ));
-        let label = format!("⋯ {hidden} rows hidden · double-click to expand");
-        let padding = usize::from(width).saturating_sub(label.len()) / 2;
+        let label = format!(
+            "{} {hidden} rows hidden {} double-click to expand",
+            Glyphs::FoldedLines.current(),
+            Glyphs::HintSeparator.current()
+        );
+        let padding = usize::from(width).saturating_sub(label.width()) / 2;
         [
             rule.clone(),
             Line::from(Span::styled(
@@ -2182,7 +2185,7 @@ impl OutputBlock {
                 } else {
                     context.groups().muted().add_modifier(Modifier::DIM)
                 };
-                spans.push(Span::styled(mode.glyph().current().to_string(), style));
+                spans.push(Span::styled(mode.current().to_string(), style));
                 spans.push(Span::raw(" "));
             }
             let line = Line::from(spans);
@@ -2194,7 +2197,7 @@ impl OutputBlock {
                 let icons = modes
                     .iter()
                     .map(|mode| {
-                        let width = row_count!(mode.glyph().current().width());
+                        let width = row_count!(mode.current().width());
                         let rect = Rect::new(column, area.y, width, 1).intersection(area);
                         column += width + 1;
                         (rect, *mode)
@@ -2528,7 +2531,7 @@ impl Block for OutputBlock {
                     ItemKind::Output,
                     row..row.saturating_add(shown),
                     cell.number,
-                    cell.source.text_drawn().to_string(),
+                    cell.source.text_drawn(),
                 )
                 .with_type(match &cell.type_drawing {
                     Some(drawing) if !context.math().original_text => Some(drawing.render()),
@@ -2719,7 +2722,7 @@ fn code_lines(source: &str, width: u16, groups: &Groups) -> Vec<Line<'static>> {
 }
 
 fn output_preview(text: &str) -> String {
-    let budget = UI.max_output_preview_bytes;
+    let budget = UI::MAX_OUTPUT_PREVIEW_BYTES;
     if text.len() <= budget {
         return text.to_string();
     }
@@ -2732,8 +2735,9 @@ fn output_preview(text: &str) -> String {
         tail += 1;
     }
     format!(
-        "{}\n… output preview truncated (render limit) …\n{}",
+        "{}\n{}\n{}",
         &text[..head],
+        PREVIEW_TRUNCATED.current(),
         &text[tail..]
     )
 }

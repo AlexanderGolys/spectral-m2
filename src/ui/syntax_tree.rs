@@ -1,7 +1,5 @@
 //! Syntax-tree preview element.
 
-// Keep mathematical notation and interface symbols legible in their native spelling.
-#![allow(clippy::non_ascii_literal)]
 use m2_syn::{PrettyDetail, PrettyDetailRole, PrettyNode, PrettyNodeRole};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -15,6 +13,7 @@ use super::config::UI;
 use super::render::selection::Inclusions;
 use super::render::RenderContext;
 use crate::span;
+use crate::ui::glyphs::{Glyphs, Spelled};
 use crate::ui::theme::groups::HLGroup;
 
 /// One committed cell followed by its typed syntax presentation.
@@ -123,9 +122,10 @@ fn compact_source(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         text
     } else {
+        let ellipsis = Glyphs::Ellipsis.current();
         text.chars()
-            .take(width.saturating_sub(1))
-            .chain(['…'])
+            .take(width.saturating_sub(ellipsis.chars().count()))
+            .chain(ellipsis.chars())
             .collect()
     }
 }
@@ -249,7 +249,7 @@ impl SyntaxTreeBlock {
             if !delimiter && node.role() != PrettyNodeRole::Token {
                 let occupied = Line::from(spans.clone()).width()
                     + location.as_ref().map_or(0, |text| text.chars().count())
-                    + UI.tree_location_gap
+                    + UI::TREE_LOCATION_GAP
                     + 1;
                 let width = usize::from(context.width())
                     .saturating_sub(occupied)
@@ -291,8 +291,8 @@ impl SyntaxTreeBlock {
             context: &RenderContext,
             lines: &mut Vec<Row>,
         ) {
-            let branch = if last { "╰─" } else { "├─" };
-            let nested = format!("{prefix}{}", if last { "  " } else { "│ " });
+            let (branch, trunk) = Glyphs::tree_limb(last).current();
+            let nested = format!("{prefix}{trunk}");
             match item {
                 TreeItem::Row(entry) => {
                     lines.push(line(
@@ -313,7 +313,14 @@ impl SyntaxTreeBlock {
                     lines.push(line(opening.node, None, prefix, branch, true, context));
                     walk_items(contents, &nested, closing.is_none(), context, lines);
                     if let Some(closing) = closing {
-                        lines.push(line(closing.node, None, &nested, "╰─", true, context));
+                        lines.push(line(
+                            closing.node,
+                            None,
+                            &nested,
+                            Glyphs::TreeLast.current(),
+                            true,
+                            context,
+                        ));
                     }
                 }
             }
@@ -326,7 +333,7 @@ impl SyntaxTreeBlock {
             .map(|(structure, _)| structure.width())
             .max()
             .unwrap_or(0)
-            + UI.tree_location_gap;
+            + UI::TREE_LOCATION_GAP;
         let muted = context.groups().muted();
         let mut lines: Vec<Line<'static>> = lines
             .into_iter()
@@ -336,7 +343,7 @@ impl SyntaxTreeBlock {
                         usize::from(context.width()).saturating_sub(location.chars().count());
                     let start = column
                         .min(room)
-                        .max(structure.width() + UI.tree_location_gap);
+                        .max(structure.width() + UI::TREE_LOCATION_GAP);
                     structure
                         .spans
                         .push(Span::styled(" ".repeat(start - structure.width()), muted));
@@ -351,7 +358,7 @@ impl SyntaxTreeBlock {
 
     /// The block's rows inside the margin kept clear to its left.
     fn lines(&self, context: &RenderContext) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
-        let inner = context.with_width(context.width().saturating_sub(UI.feed_margin));
+        let inner = context.with_width(context.width().saturating_sub(UI::FEED_MARGIN));
         (self.code.preview_lines(&inner), self.tree_lines(&inner))
     }
 }
@@ -377,12 +384,11 @@ impl Block for SyntaxTreeBlock {
         let (source, tree) = self.lines(context);
         buf.set_style(area, groups.code());
         let source_height = u16::try_from(source.len()).unwrap_or(u16::MAX);
-        let margin = UI.feed_margin.min(area.width);
+        let margin = UI::FEED_MARGIN.min(area.width);
         let inner_width = area.width - margin;
         let mut rule = |row: u16| {
             Paragraph::new(Line::from(Span::styled(
-                // @##non_ascii
-                "─".repeat(area.width.into()),
+                Glyphs::TreeRule.current().repeat(area.width.into()),
                 groups.syntax_tree_border(),
             )))
             .style(groups.code())
@@ -418,7 +424,7 @@ impl Block for SyntaxTreeBlock {
     fn local_selection_inclusions(&self, context: &RenderContext, inclusions: &mut Inclusions) {
         let (source, tree) = self.lines(context);
         let rows = |lines: &[Line<'static>]| u16::try_from(lines.len()).unwrap_or(u16::MAX);
-        let margin = UI.feed_margin.min(context.width());
+        let margin = UI::FEED_MARGIN.min(context.width());
         let width = context.width() - margin;
         let tree_top = SOURCE_LEAD.saturating_add(rows(&source)).saturating_add(1);
         inclusions.push(Rect::new(margin, SOURCE_LEAD, width, rows(&source)));

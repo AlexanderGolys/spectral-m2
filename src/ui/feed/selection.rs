@@ -227,7 +227,7 @@ impl Feed {
             return;
         };
         let rows = first.rows.start.max(start)..last.rows.end.min(start + area.height);
-        let left = area.x.saturating_sub(UI.feed_margin);
+        let left = area.x.saturating_sub(UI::FEED_MARGIN);
         for row in rows {
             let y = area.y + row - start;
             for x in Rect::new(left, y, area.right() - left, 1)

@@ -14,6 +14,7 @@ use unicode_width::UnicodeWidthStr;
 use super::block::{Element, Text, TextSpan};
 use super::config::UI;
 use super::debug::mebibytes;
+use super::glyphs::{Charset, Glyphs, Spelled};
 use super::graphics::Usage;
 use super::theme::groups::{scheme, Groups, HLGroup};
 use crate::ui::settings::statusline::{StatusComponent, StatusLineSettings, STATUS_SLOT_COUNT};
@@ -46,10 +47,41 @@ pub struct StatusDiagnostics {
     pub frames_per_second: u32,
 }
 
+/// Keys and what each does, as the status line lists them:
+/// `↑↓ move · y yank · esc deselect`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KeyHints(pub Vec<(String, &'static str)>);
+
+impl Spelled for KeyHints {
+    type Spelling = Vec<TextSpan>;
+
+    fn spelled(&self, charset: Charset) -> Vec<TextSpan> {
+        let separator = format!(" {} ", Glyphs::HintSeparator.spelled(charset));
+        self.0
+            .iter()
+            .enumerate()
+            .flat_map(|(index, (key, label))| {
+                let separator = (index > 0)
+                    .then(|| TextSpan::new(separator.as_str(), HLGroup::StatuslineSeparator));
+                separator.into_iter().chain([
+                    TextSpan::new(format!("{key} "), HLGroup::KeymapHint),
+                    TextSpan::new(*label, HLGroup::StatuslineHintLabel),
+                ])
+            })
+            .collect()
+    }
+}
+
+impl<const N: usize> From<[(String, &'static str); N]> for KeyHints {
+    fn from(hints: [(String, &'static str); N]) -> Self {
+        Self(hints.into())
+    }
+}
+
 /// The statusline's transient key hints, retained independently of its layout.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StatusLine {
-    pub state_keys: Option<Vec<TextSpan>>,
+    pub state_keys: Option<KeyHints>,
 }
 
 /// Theme and working directory supplied by the editor.
@@ -64,7 +96,7 @@ pub struct StatusLocation {
 pub struct StatusLineContext {
     pub layout: StatusLineSettings,
     pub location: Option<StatusLocation>,
-    pub hints: Vec<TextSpan>,
+    pub hints: KeyHints,
     pub state: Option<TextSpan>,
     pub center: Option<Vec<TextSpan>>,
     pub right: Vec<TextSpan>,
@@ -74,7 +106,7 @@ pub struct StatusLineContext {
 }
 
 impl StatusLineContext {
-    fn segments(&self, state_keys: Option<&[TextSpan]>) -> [Vec<TextSpan>; STATUS_SLOT_COUNT] {
+    fn segments(&self, state_keys: Option<&KeyHints>) -> [Vec<TextSpan>; STATUS_SLOT_COUNT] {
         let mut contents: [Vec<TextSpan>; STATUS_SLOT_COUNT] = std::array::from_fn(|_| Vec::new());
         for &component in StatusComponent::CHOICES {
             let Some(slot) = self.layout.placement(component).slot() else {
@@ -95,11 +127,7 @@ impl StatusLineContext {
 
 impl StatusComponent {
     /// Resolve the selected content without assigning it to a screen position.
-    fn content(
-        self,
-        context: &StatusLineContext,
-        state_keys: Option<&[TextSpan]>,
-    ) -> Vec<TextSpan> {
+    fn content(self, context: &StatusLineContext, state_keys: Option<&KeyHints>) -> Vec<TextSpan> {
         let text = |value: String, group| vec![TextSpan::new(value, group)];
         let version = |name: &str, value: Option<String>| {
             text(
@@ -115,16 +143,11 @@ impl StatusComponent {
             Self::Directory => context.location.as_ref().map_or_else(Vec::new, |location| {
                 text(location.directory.clone(), HLGroup::Statusline1)
             }),
-            Self::KeyHints => state_keys.map_or_else(
-                || {
-                    if context.right.is_empty() {
-                        context.hints.clone()
-                    } else {
-                        context.right.clone()
-                    }
-                },
-                <[TextSpan]>::to_vec,
-            ),
+            Self::KeyHints => match state_keys {
+                Some(keys) => keys.current(),
+                None if context.right.is_empty() => context.hints.current(),
+                None => context.right.clone(),
+            },
             Self::View => context.center.clone().unwrap_or_default(),
             Self::State => context.state.iter().cloned().collect(),
             Self::MathRenderer => text(context.math_renderer.clone(), HLGroup::Statusline1),
@@ -271,7 +294,7 @@ impl Element for StatusLine {
     type Context = StatusLineContext;
 
     fn render(&self, context: &StatusLineContext, area: Rect, buf: &mut Buffer) {
-        let margin = UI.statusline_margin.min(area.width / 2);
+        let margin = UI::STATUSLINE_MARGIN.min(area.width / 2);
         let area = Rect::new(
             area.x + margin,
             area.y,
@@ -281,7 +304,7 @@ impl Element for StatusLine {
         if area.is_empty() {
             return;
         }
-        let contents = context.segments(self.state_keys.as_deref());
+        let contents = context.segments(self.state_keys.as_ref());
         let groups = scheme();
         let width = usize::from(area.width);
         let mut regions = SlotRegion::occupied(width, &contents);

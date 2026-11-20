@@ -1,14 +1,12 @@
 //! The application's session, its panes, and the terminal event loop.
 
-// Keep mathematical notation and interface symbols legible in their native spelling.
-#![allow(clippy::non_ascii_literal)]
 mod documentation;
 mod examples;
 mod panes;
 mod previews;
 pub mod session;
 
-use crate::ui::glyphs::Glyphs;
+use crate::ui::glyphs::{Glyphs, Spelled};
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -51,7 +49,6 @@ use crate::ui::controller::{
 };
 use crate::ui::floating::{Anchor, Floating, MarkupContent};
 use crate::ui::fold::FoldRanges;
-use crate::ui::glyphs::Glyph;
 use crate::ui::graphics;
 use crate::ui::key::{KeyEvent, Keyboard};
 use crate::ui::relayout;
@@ -301,7 +298,7 @@ impl App {
                 // A cancel meant for a run that just ended must not clear or quit.
                 let just_ended = self
                     .last_busy
-                    .is_some_and(|at| at.elapsed() < UI.cancel_grace);
+                    .is_some_and(|at| at.elapsed() < UI::CANCEL_GRACE);
                 if just_ended && !self.workspace.session.busy() {
                     return true;
                 }
@@ -942,8 +939,8 @@ impl App {
             Rect::new(area.x, area.y, area.width, 1),
         );
         let controls = [
-            (PreviewControl::Back, Glyphs::TabBack.glyph()),
-            (PreviewControl::Bookmark, Glyphs::TabPin.glyph()),
+            (PreviewControl::Back, Glyphs::TabBack),
+            (PreviewControl::Bookmark, Glyphs::TabPin),
         ];
         for (index, (control, glyph)) in controls.into_iter().enumerate() {
             let column = area.x + 1 + 2 * index as u16;
@@ -953,10 +950,10 @@ impl App {
         let opened = self.previews.opened_tabs().collect::<Vec<_>>();
         for (index, tab) in opened.into_iter().enumerate() {
             let glyph = match (tab, self.previews.opened(tab).map(|opened| opened.kind)) {
-                (PreviewTab::Bookmark, _) => Glyphs::TabBookmark.glyph(),
-                (_, Some(OpenedKind::Documentation)) => Glyphs::TabDocumentation.glyph(),
-                (_, Some(OpenedKind::Hover)) => Glyphs::TabHover.glyph(),
-                _ => Glyphs::TabSource.glyph(),
+                (PreviewTab::Bookmark, _) => Glyphs::TabBookmark,
+                (_, Some(OpenedKind::Documentation)) => Glyphs::TabDocumentation,
+                (_, Some(OpenedKind::Hover)) => Glyphs::TabHover,
+                _ => Glyphs::TabSource,
             };
             let column = area.x + 1 + 2 * index as u16;
             self.draw_header_cell(
@@ -969,10 +966,10 @@ impl App {
         let fixed = ViewKind::PREVIEWS;
         for (index, view) in fixed.into_iter().enumerate() {
             let glyph = match view {
-                ViewKind::Code => Glyphs::TabCode.glyph(),
-                ViewKind::SyntaxTree => Glyphs::TabSyntaxTree.glyph(),
-                ViewKind::Notes => Glyphs::TabNotes.glyph(),
-                _ => Glyphs::TabOutput.glyph(),
+                ViewKind::Code => Glyphs::TabCode,
+                ViewKind::SyntaxTree => Glyphs::TabSyntaxTree,
+                ViewKind::Notes => Glyphs::TabNotes,
+                _ => Glyphs::TabOutput,
             };
             let column = area
                 .right()
@@ -991,7 +988,7 @@ impl App {
         &mut self,
         frame: &mut Frame<'_>,
         at: Position,
-        glyph: Glyph,
+        glyph: Glyphs,
         control: PreviewControl,
     ) {
         let theme = scheme();
@@ -1026,8 +1023,9 @@ impl App {
                 let block = SourceBlock::new(code, page, focus).with_folds(folds);
                 let blocks: Vec<Box<dyn Block>> = vec![
                     Box::new(TextBlock::system(format!(
-                        "{} — F8 runs this file",
-                        path.display()
+                        "{} {} F8 runs this file",
+                        path.display(),
+                        Glyphs::Dash.current()
                     ))),
                     Box::new(block),
                 ];
@@ -1076,7 +1074,10 @@ impl App {
             },
         );
         self.workspace.editor.open_reference(
-            vec![Box::new(TextBlock::system("opening documentation…"))],
+            vec![Box::new(TextBlock::system(format!(
+                "opening documentation{}",
+                Glyphs::Ellipsis.current()
+            )))],
             None,
         );
         let request = self
@@ -1136,7 +1137,7 @@ impl App {
         let margin = Rect::new(
             screen.x,
             screen.y,
-            UI.screen_margin.min(screen.width),
+            UI::SCREEN_MARGIN.min(screen.width),
             screen.height,
         );
         let mut area = Rect::new(
@@ -1158,6 +1159,7 @@ impl App {
             let border = TuiBlock::default()
                 .style(self.workspace.editor.view_canvas())
                 .borders(Borders::ALL)
+                .border_set(Glyphs::SQUARE_BORDER.current())
                 .border_style(scheme().view_divider());
             let inner = border.inner(*area);
             frame.render_widget(border, *area);
@@ -1233,7 +1235,7 @@ impl App {
     fn cursor_settles_in(&self) -> Option<Duration> {
         let (at, since) = self.cursor_seen?;
         (self.asked_at != Some(at))
-            .then(|| UI.cursor_question_settle.saturating_sub(since.elapsed()))
+            .then(|| UI::CURSOR_QUESTION_SETTLE.saturating_sub(since.elapsed()))
             .filter(|remaining| !remaining.is_zero())
     }
 
@@ -1242,7 +1244,7 @@ impl App {
     fn frame_interval(&self) -> Duration {
         let moving = self.workspace.session.busy() || relayout::busy() || graphics::encoding();
         match moving {
-            true => UI.frame_interval,
+            true => UI::FRAME_INTERVAL,
             false => IDLE_POLL_INTERVAL,
         }
     }

@@ -10,6 +10,7 @@ use super::Settings;
 use crate::ui::config::UI;
 use crate::ui::controller::picker::{PickerItem, PickerOption, PickerValue};
 use crate::ui::cycle::cyclic;
+use crate::ui::glyphs::Charset;
 use crate::ui::graphics;
 use crate::ui::render::maths::{FractionStyle, MathDisplay, MathInk, ScriptColor};
 
@@ -93,9 +94,8 @@ pub struct RenderingSettings {
     pub renderer_position: RendererPosition,
     /// Whether text may be drawn in italics.
     pub italics: bool,
-    /// Whether the shell's chrome is drawn with plain symbols (`>`, `|`) rather
-    /// than with Nerd Font ones; colours stay as they are.
-    pub ascii: bool,
+    /// The symbols the shell's chrome is drawn with; colours stay as they are.
+    pub charset: Charset,
     pub fractions: FractionStyle,
     /// Whether rings are drawn as blackboard glyphs (`ℤ`) rather than by name (`ZZ`).
     pub math_fonts: bool,
@@ -112,16 +112,16 @@ impl Default for RenderingSettings {
         Self {
             reference_code_background: false,
             maths: MathDisplay::default(),
-            math_size_percent: UI.math_size_percent,
+            math_size_percent: UI::MATH_SIZE_PERCENT,
             math_ink: MathInk::default(),
             index_color: ScriptColor::default(),
             exponent_color: ScriptColor::default(),
             renderer_position: RendererPosition::default(),
             italics: true,
-            ascii: false,
+            charset: Charset::default(),
             fractions: FractionStyle::default(),
             math_fonts: false,
-            matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
+            matrix_row_spacing_percent: UI::MATRIX_ROW_SPACING_PERCENT,
             example_seconds: 0,
             output_view: OutputView::default(),
         }
@@ -156,6 +156,7 @@ impl RenderingSettings {
             self.fractions,
             self.math_fonts,
             self.matrix_row_spacing_percent,
+            self.charset,
         ) != (
             other.reference_code_background,
             other.maths,
@@ -167,6 +168,7 @@ impl RenderingSettings {
             other.fractions,
             other.math_fonts,
             other.matrix_row_spacing_percent,
+            other.charset,
         )
     }
 
@@ -188,7 +190,7 @@ cyclic! {
         IndexColor = "index colours",
         ExponentColor = "exponent colours",
         Italics = "italics",
-        Ascii = "ascii",
+        Charset = "symbols",
         Fractions = "fractions",
         MathFonts = "math fonts",
         MatrixRowSpacing = "matrix row spacing",
@@ -224,7 +226,7 @@ impl SettingRow for RenderingSetting {
             Self::IndexColor => "colour of subscripts: their own, their symbol's, or the operator colour; delimiters and punctuation keep theirs",
             Self::ExponentColor => "colour of exponents: their own, their symbol's, or the operator colour; delimiters and punctuation keep theirs",
             Self::Italics => "draw emphasised and commented text in italics",
-            Self::Ascii => "draw prompts, dividers and the spinner with plain symbols, for fonts without Nerd Font icons",
+            Self::Charset => "draw prompts, dividers, icons and the spinner with Nerd Font icons, Unicode symbols, or plain ASCII for fonts with neither",
             Self::Fractions => "how rational values are drawn",
             Self::MathFonts => "use TeX math fonts like mathbb, mathcal",
             Self::MatrixRowSpacing => {
@@ -272,7 +274,9 @@ impl SettingRow for RenderingSetting {
             }
             Self::MathSize => PickerValue::Stepped(format!("{}%", rendering.math_size_percent)),
             Self::Italics => switch(rendering.italics, "on"),
-            Self::Ascii => switch(rendering.ascii, "on"),
+            Self::Charset => PickerValue::among(Charset::CHOICES, &rendering.charset, |charset| {
+                charset.label().into()
+            }),
             Self::Fractions => {
                 PickerValue::among(FractionStyle::CHOICES, &rendering.fractions, |&style| {
                     style.label().into()
@@ -305,30 +309,30 @@ impl SettingRow for RenderingSetting {
                 rendering.renderer_position = rendering.renderer_position.cycle(delta)
             }
             Self::MathSize => {
-                let step = u16::from(delta.unsigned_abs()) * UI.math_size_step;
+                let step = u16::from(delta.unsigned_abs()) * UI::MATH_SIZE_STEP;
                 rendering.math_size_percent = if delta > 0 {
                     rendering.math_size_percent.saturating_add(step)
                 } else {
                     rendering.math_size_percent.saturating_sub(step)
                 }
-                .clamp(UI.min_math_size_percent, UI.max_math_size_percent);
+                .clamp(UI::MIN_MATH_SIZE_PERCENT, UI::MAX_MATH_SIZE_PERCENT);
             }
             Self::MathInk => rendering.math_ink = rendering.math_ink.cycle(delta),
             Self::IndexColor => rendering.index_color = rendering.index_color.cycle(delta),
             Self::ExponentColor => rendering.exponent_color = rendering.exponent_color.cycle(delta),
             Self::Italics => rendering.italics = !rendering.italics,
-            Self::Ascii => rendering.ascii = !rendering.ascii,
+            Self::Charset => rendering.charset = rendering.charset.cycle(delta),
             Self::Fractions => rendering.fractions = rendering.fractions.cycle(delta),
             Self::MathFonts => rendering.math_fonts = !rendering.math_fonts,
             Self::MatrixRowSpacing => {
-                let step = u16::from(delta.unsigned_abs()) * UI.matrix_row_spacing_step;
+                let step = u16::from(delta.unsigned_abs()) * UI::MATRIX_ROW_SPACING_STEP;
                 rendering.matrix_row_spacing_percent = match delta > 0 {
                     true => rendering.matrix_row_spacing_percent.saturating_add(step),
                     false => rendering.matrix_row_spacing_percent.saturating_sub(step),
                 }
                 .clamp(
-                    UI.min_matrix_row_spacing_percent,
-                    UI.max_matrix_row_spacing_percent,
+                    UI::MIN_MATRIX_ROW_SPACING_PERCENT,
+                    UI::MAX_MATRIX_ROW_SPACING_PERCENT,
                 );
             }
             Self::OutputView => rendering.output_view = rendering.output_view.cycle(delta),

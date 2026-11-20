@@ -71,7 +71,7 @@ impl Default for EditorSettings {
     fn default() -> Self {
         Self {
             max_input_height_percent: 75,
-            output_rows: UI.max_output_rows,
+            output_rows: UI::MAX_OUTPUT_ROWS,
             scrolloff: 2,
             scroll_rows: 3,
             complete_after: 1,
@@ -196,7 +196,7 @@ impl SettingRow for EditorSetting {
                 layout.output_rows = layout
                     .output_rows
                     .saturating_add_signed(delta.into())
-                    .max(UI.min_output_rows);
+                    .max(UI::MIN_OUTPUT_ROWS);
             }
             Self::Scrolloff => layout.scrolloff = layout.scrolloff.saturating_add_signed(delta),
             Self::ScrollRows => {

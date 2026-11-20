@@ -38,8 +38,8 @@ index colours, exponent colours
 italics
 : Draw emphasised and commented text in italics. Typeset pictures keep TeX's math italic either way. Default: on.
 
-ascii
-: Draw the prompt, dividers, separators and spinner with plain symbols such as `>` and `|`, for a font without Nerd Font icons. Colours stay as they are. When the screen is too garbled to reach the picker, set `"ascii": true` under `rendering` in [`settings.json`](files.md) by hand. Default: off.
+symbols
+: `nerd font`, `unicode` or `ascii`: the symbols the prompt, dividers, separators, tree branches, icons and spinner are drawn with. `nerd font` draws Nerd Font icons, `unicode` only symbols most fonts have, such as `❯` and `│`, and `ascii` plain ones such as `>` and `|`. Colours stay as they are. When the screen is too garbled to reach the picker, set `"charset": "ascii"` under `rendering` in [`settings.json`](files.md) by hand; an older `"ascii": true` still reads as `ascii`. Default: `nerd font`.
 
 fractions
 : `stacked`, `underlined` or `inline`. Default: `stacked`. Greyed out while maths is typeset.

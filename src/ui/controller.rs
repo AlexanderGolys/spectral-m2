@@ -1,8 +1,6 @@
 //! Interactive editor: submitted feed, live input and history, navigation,
 //! scrolling, and rendering.
 
-// Keep mathematical notation and interface symbols legible in their native spelling.
-#![allow(clippy::non_ascii_literal)]
 pub mod commands;
 mod completion;
 mod highlight_debug;
@@ -41,8 +39,8 @@ use super::render::selection::Inclusions;
 use super::render::spin;
 use super::render::RenderContext;
 use super::statusline::{
-    LanguageServerState, StatusDiagnostics, StatusLine, StatusLineContext, StatusLocation,
-    StatusRuntime,
+    KeyHints, LanguageServerState, StatusDiagnostics, StatusLine, StatusLineContext,
+    StatusLocation, StatusRuntime,
 };
 use super::{
     action::Action,
@@ -55,7 +53,7 @@ use crate::code::semantic::SEMANTIC_GROUPS;
 use crate::env::ENV;
 use crate::input::{InputCode, InputContext};
 use crate::ui::floating::{Anchor, Floating};
-use crate::ui::glyphs::Glyphs;
+use crate::ui::glyphs::{Glyphs, Spelled};
 use crate::ui::relayout;
 use crate::ui::settings::selection::CopyFormat;
 use crate::ui::settings::statusline::{StatusComponent, StatusLinePosition, StatusSegment};
@@ -361,7 +359,7 @@ impl Editor {
         settings.session.apply();
         let mut input = InputCode::new();
         input.set_settings(settings);
-        Glyphs::choose_ascii(settings.rendering.ascii);
+        settings.rendering.charset.choose();
         let mut editor = Self {
             feed: Feed::new(Box::new(TextBlock::system(welcome))),
             reference: Feed::new(Box::new(TextBlock::system(String::new()))),
@@ -455,15 +453,13 @@ impl Editor {
         self.feed.on_event(&Ticked);
         let show_hint = self
             .processing_started
-            .is_some_and(|started| started.elapsed() >= UI.cancel_hint_delay);
+            .is_some_and(|started| started.elapsed() >= UI::CANCEL_HINT_DELAY);
         if self.cancel_hint_shown != show_hint {
             self.cancel_hint_shown = show_hint;
             self.refresh_status_line();
         }
         true
     }
-
-    const COPY_NOTICE: Duration = Duration::from_millis(UI.copy_notice_ms);
 
     /// Say in the status line what a copy took, for a moment.
     pub fn note_copied(&mut self, text: &str) {
@@ -481,7 +477,7 @@ impl Editor {
         let notice = self
             .copied
             .as_ref()
-            .and_then(|(at, _)| Self::COPY_NOTICE.checked_sub(at.elapsed()));
+            .and_then(|(at, _)| UI::COPY_NOTICE.checked_sub(at.elapsed()));
         [
             self.input.typing_remaining(),
             notice,
@@ -498,7 +494,7 @@ impl Editor {
         let lapsed = self
             .copied
             .as_ref()
-            .is_some_and(|(at, _)| at.elapsed() >= Self::COPY_NOTICE);
+            .is_some_and(|(at, _)| at.elapsed() >= UI::COPY_NOTICE);
         if lapsed {
             self.copied = None;
         }
@@ -1671,6 +1667,7 @@ impl Editor {
     }
 
     fn set_settings(&mut self, settings: Settings) {
+        settings.rendering.charset.choose();
         if settings.lsp.language_server != self.settings.lsp.language_server {
             self.status_runtime.language_server = LanguageServerState::Starting;
         }
@@ -1685,7 +1682,6 @@ impl Editor {
         self.settings = settings;
         settings.session.apply();
         self.input.set_settings(settings);
-        Glyphs::choose_ascii(settings.rendering.ascii);
         self.save_settings();
         self.refresh_settings_picker();
     }
@@ -1796,9 +1792,10 @@ impl Editor {
         }
         let sections = self.highlight_debug_sections();
         let title = format!(
-            " {} {} · debug ",
+            " {} {} {} debug ",
             self.settings.appearance.scheme().label(),
-            self.settings.appearance.variant().label()
+            self.settings.appearance.variant().label(),
+            Glyphs::HintSeparator.current()
         );
         let entry_widths = sections
             .iter()
@@ -1895,6 +1892,7 @@ impl Editor {
         );
         let base = scheme().transcript().patch(scheme().value());
         let block = TuiBlock::bordered()
+            .border_set(Glyphs::SQUARE_BORDER.current())
             .style(base)
             .border_style(scheme().highlight_inspector_border())
             .title(Span::styled(title, scheme().highlight_inspector_title()));
@@ -1902,7 +1900,11 @@ impl Editor {
             let first = self.highlight_debug_scroll + 1;
             let last = self.highlight_debug_scroll + shown_rows;
             block.title_bottom(Span::styled(
-                format!(" ↑↓ {first}–{last} of {rows} "),
+                format!(
+                    " {} {first}{}{last} of {rows} ",
+                    Glyphs::UpDown.current(),
+                    Glyphs::Range.current()
+                ),
                 scheme().highlight_inspector_title(),
             ))
         } else {
@@ -1917,28 +1919,13 @@ impl Editor {
     /// the state calls for any.
     fn refresh_status_line(&mut self) {
         self.status_line.state_keys = if self.cancel_hint_shown {
-            Some(vec![
-                TextSpan::new(
-                    format!(
-                        "{} ",
-                        self.keymaps
-                            .key_for(Action::CancelExecution)
-                            .unwrap_or_default()
-                    ),
-                    HLGroup::KeymapHint,
-                ),
-                TextSpan::new("to cancel", HLGroup::StatuslineHintLabel),
-            ])
+            let cancel = self.keymaps.key_for(Action::CancelExecution);
+            Some(KeyHints::from([(cancel.unwrap_or_default(), "to cancel")]))
         } else if let Some(controller) = self.pickers.last() {
             Some(controller.hints())
         } else if self.continuation.is_some() && self.input.text().is_empty() {
-            Some(vec![
-                TextSpan::new(
-                    format!("{} ", KeyCode::Up + KeyMod::Ctrl),
-                    HLGroup::KeymapHint,
-                ),
-                TextSpan::new("continue", HLGroup::StatuslineHintLabel),
-            ])
+            let continuation = (KeyCode::Up + KeyMod::Ctrl).to_string();
+            Some(KeyHints::from([(continuation, "continue")]))
         } else {
             None
         };
@@ -1946,40 +1933,19 @@ impl Editor {
 
     /// The key hints segment of the idle line; typing leaves no use for the
     /// commands picker's key.
-    fn idle_hints(&self) -> Vec<TextSpan> {
+    fn idle_hints(&self) -> KeyHints {
         if self.feed.has_selection() {
-            return [("↑↓ ", "move · "), ("y ", "yank · "), ("Esc ", "deselect")]
-                .into_iter()
-                .flat_map(|(key, label)| {
-                    [
-                        TextSpan::new(key, HLGroup::KeymapHint),
-                        TextSpan::new(label, HLGroup::StatuslineHintLabel),
-                    ]
-                })
-                .collect();
+            return KeyHints::from([
+                (Glyphs::UpDown.current().to_string(), "move"),
+                ("y".to_string(), "yank"),
+                (KeyEvent::from(KeyCode::Esc).to_string(), "deselect"),
+            ]);
         }
-        let settings_key = self
-            .keymaps
-            .key_for(Action::OpenSettings)
-            .unwrap_or_default();
-        let settings = [
-            TextSpan::new(format!("{settings_key} "), HLGroup::KeymapHint),
-            TextSpan::new("settings", HLGroup::StatuslineHintLabel),
-        ];
+        let key = |action| self.keymaps.key_for(action).unwrap_or_default();
+        let settings = (key(Action::OpenSettings), "settings");
         match self.input.text().is_empty() {
-            true => {
-                let commands_key = self
-                    .keymaps
-                    .key_for(Action::OpenCommands)
-                    .unwrap_or_default();
-                let mut hints = vec![
-                    TextSpan::new(format!("{commands_key} "), HLGroup::KeymapHint),
-                    TextSpan::new("commands · ", HLGroup::StatuslineHintLabel),
-                ];
-                hints.extend(settings);
-                hints
-            }
-            false => settings.into(),
+            true => KeyHints::from([(key(Action::OpenCommands), "commands"), settings]),
+            false => KeyHints::from([settings]),
         }
     }
 
@@ -2076,7 +2042,7 @@ impl Editor {
         }
         self.selection_inclusions.clear();
         let theme = *scheme();
-        let input_prefix = UI.prompt_width();
+        let input_prefix = UI::PROMPT_WIDTH;
         frame.render_widget(Clear, area);
 
         let editor_area = area;

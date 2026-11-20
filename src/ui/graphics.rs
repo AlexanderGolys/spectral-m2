@@ -29,7 +29,7 @@ use resvg::tiny_skia::{Pixmap, PixmapPaint, Transform};
 use resvg::usvg::{Options, Tree};
 
 use crate::env::ENV;
-use crate::ui::config::UI;
+use crate::ui::config::TypesetSizing;
 use crate::ui::debug::mebibytes;
 use kitty::{ImageId, KittyImage, Passthrough, Piece};
 use ratex::{Break, Rgb, EM, PADDING};
@@ -698,7 +698,7 @@ impl Raster {
         let cell_width = f32::from(canvas.cell.width);
         let cell_height = f32::from(canvas.cell.height);
         let natural =
-            cell_height * UI.typeset.em_per_cell_height / EM * f32::from(scale_percent) / 100.0;
+            cell_height * TypesetSizing::EM_PER_CELL_HEIGHT / EM * f32::from(scale_percent) / 100.0;
         let room = f32::from(width) * cell_width / natural;
         let across = tree.size().width();
         let breaks = match slicing {
@@ -715,7 +715,7 @@ impl Raster {
             .map(|row| row.end - row.start)
             .fold(0.0, f32::max);
         let shrink = (room / widest).min(1.0);
-        if shrink < UI.typeset.min_scale {
+        if shrink < TypesetSizing::MIN_SCALE {
             return None;
         }
         let scale = natural * shrink;
@@ -723,7 +723,7 @@ impl Raster {
         let above = (formula.baseline * tree.size().height() - top) * scale;
         let below = (height * scale - above).max(0.0);
         let padding = PADDING * scale;
-        let text_baseline = UI.typeset.baseline_per_cell_height * cell_height;
+        let text_baseline = TypesetSizing::BASELINE_PER_CELL_HEIGHT * cell_height;
         // The rows ink needs past its own, the padding being there to spend.
         let rows_past = |reach: f32, room: f32| {
             ((reach - 2.0 * padding - room) / cell_height)

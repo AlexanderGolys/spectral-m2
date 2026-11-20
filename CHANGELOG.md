@@ -4,6 +4,11 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- The *ascii* switch in the rendering settings is now *symbols*, with three choices: `nerd font`, `unicode` (no Nerd Font icons) and `ascii`. A saved `ascii` choice carries over. The choice now also reaches the spinner, tree branches, key hints, ellipses and documentation rules, and changing it redraws results at once.
+- Picker key hints spell arrow keys as arrows (`↑↓ select`, `←→ change`) instead of `updown`.
+
 ## [1.4.0] - 2026-11-18
 
 ### Added

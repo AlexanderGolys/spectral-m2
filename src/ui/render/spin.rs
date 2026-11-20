@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::ui::block::HLSpan;
 use crate::ui::config::UI;
+use crate::ui::glyphs::{Spelled, Spellings};
 
 /// One spinner frame: text whose style comes from the active scheme's group.
 pub type SpinnerFrame = HLSpan<&'static str>;
@@ -89,13 +90,14 @@ impl Spinner {
     }
 }
 
-/// The configured spinner's clock, shared by every cell that spins.
+/// The pending cell spinner's clock, shared by every cell that spins.
 pub fn clock() -> &'static SpinnerClock {
-    static CLOCK: LazyLock<SpinnerClock> = LazyLock::new(|| SpinnerClock::new(UI.spinner.active()));
+    static CLOCK: LazyLock<SpinnerClock> =
+        LazyLock::new(|| SpinnerClock::new(UI::PENDING_CELL_SPINNER));
     &CLOCK
 }
 
-/// A spinner's own clock: while running, a thread of its own turns the frame as
+/// A spinner's own clock, spelled for the charset at each frame: while running, a thread of its own turns the frame as
 /// each one's time is up. It only moves the spinner's state; drawing reads that
 /// state at the drawing's own rate, so any number of spinners never makes more
 /// frames than the loop does.
@@ -107,15 +109,15 @@ pub fn clock() -> &'static SpinnerClock {
 /// ```
 #[derive(Debug)]
 pub struct SpinnerClock {
-    spinner: Spinner,
+    spinner: Spellings<Spinner>,
     turns: Arc<AtomicU64>,
     running: Arc<AtomicBool>,
     thread: Thread,
 }
 
 impl SpinnerClock {
-    pub fn new(spinner: Spinner) -> Self {
-        let turns = Arc::new(AtomicU64::new(spinner.turns_at(EPOCH.elapsed())));
+    pub fn new(spinner: Spellings<Spinner>) -> Self {
+        let turns = Arc::new(AtomicU64::new(spinner.current().turns_at(EPOCH.elapsed())));
         let running = Arc::new(AtomicBool::new(false));
         let (turning, ticking) = (turns.clone(), running.clone());
         let thread = thread::spawn(move || loop {
@@ -123,6 +125,7 @@ impl SpinnerClock {
                 thread::park();
                 continue;
             }
+            let spinner = spinner.current();
             thread::sleep(spinner.until_next_frame());
             turning.store(spinner.turns_at(EPOCH.elapsed()), Ordering::Release);
         })
@@ -142,7 +145,7 @@ impl SpinnerClock {
     }
 
     pub fn current_frame(&self) -> &'static SpinnerFrame {
-        self.spinner.frame_of(self.turns())
+        self.spinner.current().frame_of(self.turns())
     }
 
     pub fn run(&self, running: bool) {

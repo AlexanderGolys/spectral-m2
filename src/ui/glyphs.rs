@@ -1,87 +1,211 @@
-//! Symbols the shell's chrome draws from a Nerd Font, each with its spelling in
-//! *ascii* mode: plain symbols any font has.
+//! Text the shell draws in a spelling for each [`Charset`]: the symbols any font
+//! has, Unicode, or Nerd Font icons.
+//!
+//! A [`Glyph`] spells itself; anything drawn from glyphs implements [`Spelled`]
+//! by spelling its pieces with the charset it was given, so one choice in the
+//! settings respells the whole interface.
 #![allow(clippy::non_ascii_literal)]
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
 
-/// A preferred symbol and its *ascii*-mode spelling.
-#[derive(Clone, Copy, Debug)]
-pub struct Glyph {
-    preferred: &'static str,
-    ascii: &'static str,
+use ratatui::symbols::border::{self, Set};
+use serde::{Deserialize, Serialize};
+
+use crate::ui::cycle::cyclic;
+
+cyclic! {
+    /// The symbols the terminal's font is trusted with, each charset adding to the
+    /// one before it.
+    #[non_exhaustive]
+    #[discriminated_str(label)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Charset {
+        /// Plain ASCII: `>`, `|`, `...`.
+        Ascii = "ascii",
+        /// Unicode symbols most fonts have: `❯`, `│`, `…`.
+        Unicode = "unicode",
+        /// Unicode and Nerd Font icons.
+        #[default]
+        Nerd = "nerd font",
+    }
 }
 
-impl Glyph {
-    pub const fn for_ascii(self, ascii: bool) -> &'static str {
-        if ascii {
-            self.ascii
-        } else {
-            self.preferred
+/// The charset the shell draws with now, as the position of its variant.
+static CHARSET: AtomicU8 = AtomicU8::new(Charset::Nerd as u8);
+
+impl Charset {
+    pub fn current() -> Self {
+        Self::CHOICES[usize::from(CHARSET.load(Relaxed))]
+    }
+
+    pub fn choose(self) {
+        CHARSET.store(self as u8, Relaxed);
+    }
+}
+
+/// Anything drawn whose text depends on the charset.
+pub trait Spelled {
+    type Spelling;
+
+    fn spelled(&self, charset: Charset) -> Self::Spelling;
+
+    fn current(&self) -> Self::Spelling {
+        self.spelled(Charset::current())
+    }
+}
+
+impl<A: Spelled, B: Spelled> Spelled for (A, B) {
+    type Spelling = (A::Spelling, B::Spelling);
+
+    fn spelled(&self, charset: Charset) -> Self::Spelling {
+        (self.0.spelled(charset), self.1.spelled(charset))
+    }
+}
+
+/// One thing spelled for every charset, a richer charset keeping the plainer
+/// spelling unless given its own:
+/// `Spellings::new("⋯", "...").nerd("󰇘")` is `...` in ASCII, `⋯` in Unicode and
+/// `󰇘` with a Nerd Font, while `Spellings::plain("d").nerd("󰗚")` is `d` until
+/// Nerd Font icons are there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Spellings<T> {
+    ascii: T,
+    unicode: T,
+    nerd: T,
+}
+
+impl<T: Copy> Spellings<T> {
+    pub const fn plain(ascii: T) -> Self {
+        Self::new(ascii, ascii)
+    }
+
+    pub const fn new(unicode: T, ascii: T) -> Self {
+        Self {
+            ascii,
+            unicode,
+            nerd: unicode,
         }
     }
 
-    /// Select the symbol the shell draws now.
-    pub fn current(self) -> &'static str {
-        self.for_ascii(Glyphs::ascii())
-    }
-
-    pub const fn new(preferred: &'static str, ascii: &'static str) -> Self {
-        Self { preferred, ascii }
+    pub const fn nerd(self, nerd: T) -> Self {
+        Self { nerd, ..self }
     }
 }
 
-/// UI symbols that *ascii* mode spells differently.
+impl<T: Copy> Spelled for Spellings<T> {
+    type Spelling = T;
+
+    fn spelled(&self, charset: Charset) -> T {
+        match charset {
+            Charset::Ascii => self.ascii,
+            Charset::Unicode => self.unicode,
+            Charset::Nerd => self.nerd,
+        }
+    }
+}
+
+/// A symbol in its spelling for each charset.
+pub type Glyph = Spellings<&'static str>;
+
+/// The symbols of the shell's chrome.
 #[enum_fn(pub const glyph -> Glyph)]
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Glyphs {
-    Prompt = Glyph::new("", ">"),
-    PromptTyping = Glyph::new(" ", ">>"),
+    Prompt = Glyph::new("❯", ">").nerd(""),
+    PromptTyping = Glyph::new("»", ">>").nerd(" "),
     SplitDivider = Glyph::new("│", "|"),
     CellSeparator = Glyph::new("│", "|"),
-    PendingSeparator = Glyph::new("󰇘", "-"),
-    TreeBranch = Glyph::new("├─", "+- "),
-    TreeLast = Glyph::new("╰─", "`- "),
+    PendingSeparator = Glyph::new("⋯", "-").nerd("󰇘"),
+    /// Tree rows are spelled three columns wide, so a child's branch starts under
+    /// its parent's label.
+    TreeBranch = Glyph::new("├─ ", "+- "),
+    TreeLast = Glyph::new("╰─ ", "`- "),
     TreeContinue = Glyph::new("│  ", "|  "),
-    TreeIndent = Glyph::new("  ", "   "),
+    TreeIndent = Glyph::plain("   "),
+    TreeRule = Glyph::new("─", "-"),
     FoldRule = Glyph::new("─", "-"),
     FoldOpen = Glyph::new("▾", "v"),
     FoldClosed = Glyph::new("▸", ">"),
     FoldedLines = Glyph::new("⋯", "..."),
-    UnevaluatedCell = Glyph::new("", "."),
-    RejectedCell = Glyph::new("", "x"),
-    RendererMarkup = Glyph::new("󱚊", "m"),
-    RendererExternal = Glyph::new("", "e"),
-    RendererTex = Glyph::new("", "t"),
-    RendererNet = Glyph::new("󰊉", "n"),
-    RendererRod = Glyph::new("󰎃", "*"),
-    RendererString = Glyph::new("", "s"),
-    RendererPeek = Glyph::new("󰈈", "p"),
-    RendererSpeek = Glyph::new("󰛐", "P"),
-    Trimmed = Glyph::new("..󰴏", "[..]"),
-    StepBack = Glyph::new("", "<"),
-    StepForward = Glyph::new("", ">"),
+    Ellipsis = Glyph::new("…", "..."),
+    HintSeparator = Glyph::new("·", "-"),
+    UpDown = Glyph::new("↑↓", "^v"),
+    LeftRight = Glyph::new("←→", "<>"),
+    Range = Glyph::new("–", "-"),
+    Dash = Glyph::new("—", "--"),
+    UnevaluatedCell = Glyph::new("○", ".").nerd(""),
+    RejectedCell = Glyph::new("✗", "x").nerd(""),
+    RendererMarkup = Glyph::plain("m").nerd("󱚊"),
+    RendererExternal = Glyph::plain("e").nerd(""),
+    RendererTex = Glyph::plain("t").nerd(""),
+    RendererNet = Glyph::plain("n").nerd("󰊉"),
+    RendererRod = Glyph::plain("*").nerd("󰎃"),
+    RendererString = Glyph::plain("s").nerd(""),
+    RendererPeek = Glyph::plain("p").nerd("󰈈"),
+    RendererSpeek = Glyph::plain("P").nerd("󰛐"),
+    Trimmed = Glyph::new("[…]", "[..]").nerd("..󰴏"),
+    StepBack = Glyph::new("‹", "<").nerd(""),
+    StepForward = Glyph::new("›", ">").nerd(""),
     PickerRule = Glyph::new("─", "-"),
-    TabDocumentation = Glyph::new("󰗚", "d"),
-    TabHover = Glyph::new("󰋽", "i"),
-    TabSource = Glyph::new("󰈮", "f"),
-    TabBookmark = Glyph::new(" ", "*"),
-    TabCode = Glyph::new("󰅩 ", "c"),
-    TabOutput = Glyph::new("󰞷 ", "o"),
-    TabSyntaxTree = Glyph::new("󱁉 ", "t"),
-    TabNotes = Glyph::new("󱓧 ", "n"),
+    HeadingRule = Glyph::new("─", "="),
+    StackedCellRule = Glyph::new("┄", "-"),
+    TabDocumentation = Glyph::plain("d").nerd("󰗚"),
+    TabHover = Glyph::plain("i").nerd("󰋽"),
+    TabSource = Glyph::plain("f").nerd("󰈮"),
+    TabBookmark = Glyph::plain("*").nerd(" "),
+    TabCode = Glyph::plain("c").nerd("󰅩 "),
+    TabOutput = Glyph::plain("o").nerd("󰞷 "),
+    TabSyntaxTree = Glyph::plain("t").nerd("󱁉 "),
+    TabNotes = Glyph::plain("n").nerd("󱓧 "),
     TabBack = Glyph::new("‹", "<"),
-    TabPin = Glyph::new(" ", "+"),
+    TabPin = Glyph::plain("+").nerd(" "),
 }
 
-/// Whether the *ascii* setting is on, published for every drawing.
-static ASCII: AtomicBool = AtomicBool::new(false);
+impl Spelled for Glyphs {
+    type Spelling = &'static str;
+
+    fn spelled(&self, charset: Charset) -> &'static str {
+        self.glyph().spelled(charset)
+    }
+}
+
+/// The corners and sides of a box in their spelling for each charset.
+pub type Border = Spellings<Set<'static>>;
+
+/// A remark standing in for content, set off by ellipses: `… laying out …`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Remark(pub &'static str);
+
+impl Spelled for Remark {
+    type Spelling = String;
+
+    fn spelled(&self, charset: Charset) -> String {
+        let ellipsis = Glyphs::Ellipsis.spelled(charset);
+        format!("{ellipsis} {} {ellipsis}", self.0)
+    }
+}
 
 impl Glyphs {
-    pub fn ascii() -> bool {
-        ASCII.load(Relaxed)
-    }
+    pub const SQUARE_BORDER: Border = Border::new(border::PLAIN, Self::ASCII_BORDER);
+    pub const ROUNDED_BORDER: Border = Border::new(border::ROUNDED, Self::ASCII_BORDER);
+    const ASCII_BORDER: Set<'static> = Set {
+        top_left: "+",
+        top_right: "+",
+        bottom_left: "+",
+        bottom_right: "+",
+        vertical_left: "|",
+        vertical_right: "|",
+        horizontal_top: "-",
+        horizontal_bottom: "-",
+    };
 
-    pub fn choose_ascii(ascii: bool) {
-        ASCII.store(ascii, Relaxed);
+    /// The branch leading to a row of a drawn tree, and the trunk carried past it
+    /// to its children's rows.
+    pub const fn tree_limb(last: bool) -> (Self, Self) {
+        match last {
+            true => (Self::TreeLast, Self::TreeIndent),
+            false => (Self::TreeBranch, Self::TreeContinue),
+        }
     }
 }

@@ -143,7 +143,7 @@ impl Editor {
     /// Draw the notebook and keep its caret visible while it has focus.
     pub fn draw_notes(&mut self, frame: &mut Frame, area: Rect) {
         self.notes.refresh();
-        let context = RenderContext::new(area.width, UI.prompt_width());
+        let context = RenderContext::new(area.width, UI::PROMPT_WIDTH);
         self.notes.input.set_settings(self.settings);
         let focused = self.pane_focused && !self.picker_open();
         if let Some(cursor) = self.notes.input.render(

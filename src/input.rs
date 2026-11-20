@@ -10,7 +10,7 @@ mod hints;
 mod history;
 mod undo;
 
-use crate::ui::glyphs::Glyphs;
+use crate::ui::glyphs::{Glyphs, Spelled};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -848,7 +848,7 @@ impl InputCode {
     /// How much longer the typing prompt shows, if a keystroke changed the text
     /// recently enough for it.
     pub fn typing_remaining(&self) -> Option<Duration> {
-        Duration::from_millis(UI.typing_prompt_ms).checked_sub(self.typed_at?.elapsed())
+        UI::TYPING_PROMPT.checked_sub(self.typed_at?.elapsed())
     }
 
     fn typing(&self) -> bool {
@@ -1030,9 +1030,9 @@ impl InputCode {
             let marker = if index + 1 != visual_lines.len() {
                 ""
             } else if self.typing() {
-                Glyphs::PromptTyping.glyph().current()
+                Glyphs::PromptTyping.current()
             } else {
-                Glyphs::Prompt.glyph().current()
+                Glyphs::Prompt.current()
             };
             let mut spans = Prompt::new(marker, prompt).spans(&());
             let mut line = self.highlights.paint(
@@ -1107,8 +1107,8 @@ impl InputCode {
         let cap = editor_height
             .saturating_mul(self.settings.editor.max_input_height_percent.into())
             .saturating_div(100)
-            .max(UI.min_input_height);
-        rows.saturating_add(chrome).clamp(UI.min_input_height, cap)
+            .max(UI::MIN_INPUT_HEIGHT);
+        rows.saturating_add(chrome).clamp(UI::MIN_INPUT_HEIGHT, cap)
     }
 
     /// Render the input locally and return its terminal cursor when focused.
@@ -1177,7 +1177,6 @@ impl InputCode {
             lines.push(rows[0].clone());
             lines.push(Line::from(Span::styled(
                 Glyphs::PendingSeparator
-                    .glyph()
                     .current()
                     .repeat(usize::from(area.width)),
                 groups.pending_separator().patch(code),
@@ -1189,7 +1188,7 @@ impl InputCode {
         if clipped && !self.pinned_first_row && area.height > 1 {
             for x in area.x..area.right() {
                 buffer[(x, area.bottom() - 1)]
-                    .set_symbol(Glyphs::PendingSeparator.glyph().current())
+                    .set_symbol(Glyphs::PendingSeparator.current())
                     .set_style(groups.pending_separator().patch(code));
             }
         }

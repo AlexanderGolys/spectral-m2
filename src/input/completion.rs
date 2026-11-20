@@ -7,6 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
+use crate::ui::glyphs::{Glyphs, Spelled};
 use crate::ui::theme::groups::Groups;
 
 /// What the typed text in `range` may be completed to, in order of preference.
@@ -100,6 +101,7 @@ impl Completion {
             .block(
                 Block::default()
                     .borders(Borders::TOP | Borders::BOTTOM)
+                    .border_set(Glyphs::SQUARE_BORDER.current())
                     .border_style(groups.picker_border()),
             )
             .render(area, buffer);

@@ -7,10 +7,10 @@
 //! its own under the user's configuration directory.
 
 pub mod appearance;
-pub mod config;
 pub mod editor;
 pub mod keymap;
 pub mod lsp;
+pub mod persisted;
 pub mod rendering;
 pub mod row;
 pub mod selection;
@@ -21,15 +21,16 @@ use ratatui::text::Span;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-pub use self::config::*;
 use self::editor::EditorSettings;
 pub use self::keymap::*;
 use self::lsp::LspSettings;
+pub use self::persisted::*;
 use self::rendering::RenderingSettings;
 use self::row::SettingsTab;
 use self::statusline::StatusLineSettings;
 use crate::ui::controller::picker::{PickerItem, PickerTab, Row};
 use crate::ui::controller::EditorEvent;
+use crate::ui::glyphs::Charset;
 use crate::ui::theme::groups::scheme;
 use crate::ui::theme::AppearanceSettings;
 
@@ -119,7 +120,8 @@ impl StoredSettings {
     /// `layout`, and before that every value lay in flat `editor` and `input`
     /// records with no `rendering` section; the selection was a section of its
     /// own; the language server's values were among the rendering and editor
-    /// ones; *ascii* was `basic_glyphs`, kept only while `ascii` is unwritten.
+    /// ones; the charset was an `ascii` switch, earlier `basic_glyphs`, its on
+    /// position read as the ASCII charset while no charset is written.
     /// A section reads only its own fields, so a larger record is harmless.
     fn upgraded(mut self) -> Self {
         if !self.0.contains_key("rendering") {
@@ -154,8 +156,10 @@ impl StoredSettings {
             self.0.insert("lsp".to_string(), Value::Object(lsp));
         }
         let rendering = self.section("rendering");
-        if let Some(ascii) = rendering.remove("basic_glyphs") {
-            rendering.entry("ascii").or_insert(ascii);
+        let ascii = [rendering.remove("ascii"), rendering.remove("basic_glyphs")];
+        if ascii.into_iter().flatten().next() == Some(Value::Bool(true)) {
+            let charset = serde_json::to_value(Charset::Ascii).expect("a charset serializes");
+            rendering.entry("charset").or_insert(charset);
         }
         self
     }

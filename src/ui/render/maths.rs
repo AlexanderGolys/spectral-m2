@@ -13,7 +13,7 @@ use crate::backend::{Rod, OPTION_ARROW};
 use crate::ui::block::TextSpan;
 use crate::ui::config::UI;
 use crate::ui::cycle::cyclic;
-use crate::ui::glyphs::Glyphs;
+use crate::ui::glyphs::{Glyphs, Spelled};
 use crate::ui::graphics;
 use crate::ui::present::{wrap, SpanLine};
 use crate::ui::theme::groups::HLGroup;
@@ -226,14 +226,14 @@ impl Default for MathStyle {
     fn default() -> Self {
         Self {
             ink: MathInk::default(),
-            scale_percent: UI.math_size_percent,
+            scale_percent: UI::MATH_SIZE_PERCENT,
             index_color: ScriptColor::default(),
             exponent_color: ScriptColor::default(),
             original_text: false,
             fractions: FractionStyle::default(),
             blackboard: false,
             display: MathDisplay::default(),
-            matrix_row_spacing_percent: UI.matrix_row_spacing_percent,
+            matrix_row_spacing_percent: UI::MATRIX_ROW_SPACING_PERCENT,
         }
     }
 }
@@ -314,20 +314,7 @@ fn hierarchy_rows(branches: &[(Node, Node)], width: usize) -> Vec<SpanLine> {
     fn append(branches: &[(Node, Node)], prefix: &str, width: usize, rows: &mut Vec<SpanLine>) {
         for (index, (label, subtree)) in branches.iter().enumerate() {
             let last = index + 1 == branches.len();
-            let branch = if last {
-                Glyphs::TreeLast
-            } else {
-                Glyphs::TreeBranch
-            }
-            .glyph()
-            .current();
-            let continuation = if last {
-                Glyphs::TreeIndent
-            } else {
-                Glyphs::TreeContinue
-            }
-            .glyph()
-            .current();
+            let (branch, continuation) = Glyphs::tree_limb(last).current();
             let indent = format!("{prefix}{branch}");
             let room = width.saturating_sub(indent.width()).max(1);
             let label = label.text().unwrap_or_default();

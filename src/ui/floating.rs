@@ -12,7 +12,8 @@ use ratatui::widgets::{Block as TuiBlock, Clear, Paragraph, Widget};
 use ratatui::text::Span;
 
 use crate::code::semantic::query::Signature;
-use crate::ui::config::UI;
+use crate::ui::config::FloatingPanelLimits;
+use crate::ui::glyphs::{Glyphs, Spelled};
 use crate::ui::render::{markdown, markup, RenderContext};
 use crate::ui::theme::scheme;
 
@@ -72,9 +73,11 @@ impl Floating {
             Anchor::InputCursor => cursor?,
             Anchor::At(position) => position,
         };
-        let inner = self
-            .content
-            .width(UI.floating.max_width.min(area.width).saturating_sub(2));
+        let inner = self.content.width(
+            FloatingPanelLimits::MAX_WIDTH
+                .min(area.width)
+                .saturating_sub(2),
+        );
         let rows = self.rows(inner, area).len() as u16;
         if inner == 0 || rows == 0 {
             return None;
@@ -96,7 +99,7 @@ impl Floating {
             lines.pop();
         }
         lines.truncate(usize::from(
-            UI.floating.max_rows.min(area.height.saturating_sub(2)),
+            FloatingPanelLimits::MAX_ROWS.min(area.height.saturating_sub(2)),
         ));
         lines
     }
@@ -106,6 +109,7 @@ impl Floating {
             return;
         };
         let block = TuiBlock::bordered()
+            .border_set(Glyphs::SQUARE_BORDER.current())
             .style(scheme().transcript().patch(scheme().value()))
             .border_style(scheme().floating_border());
         let lines = self.rows(panel.width - 2, area);

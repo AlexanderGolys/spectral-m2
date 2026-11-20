@@ -1,7 +1,5 @@
 //! Documentation markup, as M2 sends it in HTML, drawn as coloured rows.
 
-// Keep mathematical notation and interface symbols legible in their native spelling.
-#![allow(clippy::non_ascii_literal)]
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -27,6 +25,7 @@ use super::maths::{inline, MathStyle, Shift};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
 use crate::code::semantic::PageColors;
 use crate::ui::block::{HLSpan, Link, Text, TextSpan};
+use crate::ui::glyphs::{Glyphs, Spelled};
 use crate::ui::present::{wrap, SpanLine};
 use crate::ui::render::markup::examples::EmbeddedControl;
 use crate::ui::render::selection::Inclusions;
@@ -87,12 +86,11 @@ const UNCOLOURED_WITHIN: [&str; 3] = ["a", "pre", "sub"];
 /// The narrowest a table column may be drawn before its text has to wrap, so a
 /// type's name stays whole beside a long value. Text longer than this may wrap.
 const TABLE_COLUMN_MIN_WIDTH: usize = 24;
-/// What a table too wide to fit draws between the cells it stacks in a row,
-/// and what is drawn in its place.
 /// The tags of a table's cells.
 const TABLE_CELLS: [&str; 2] = ["td", "th"];
+/// What a table too wide to fit draws between the cells it stacks in a row,
+/// drawn as [`Glyphs::StackedCellRule`].
 const STACKED_CELL_BORDER: char = '/';
-const STACKED_CELL_RULE: &str = "┄";
 
 /// Where a documentation node was written, `Package/file.m2:line:column`: a
 /// location to read, not code.
@@ -104,8 +102,7 @@ static SOURCE_LOCATION: LazyLock<Regex> =
 /// `Graphs.m2:1868:0`, `Macaulay2Doc` of `Macaulay2Doc/functions/det-doc.m2:25:0`.
 /// A file prose names, such as `PackageName.m2`, has no position.
 static DOCUMENT_SOURCE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^([^/\s]+?)(?:/\S+)?\.m2:[0-9]+:[0-9]+$")
-        .expect("valid document source pattern")
+    Regex::new(r"^([^/\s]+?)(?:/\S+)?\.m2:[0-9]+:[0-9]+$").expect("valid document source pattern")
 });
 
 /// The typewriter spans M2 sets locations and code in, as its HTML spells them.
@@ -490,7 +487,11 @@ fn preformatted_sources(html: &str) -> Vec<String> {
 pub fn source_package(html: &str) -> Option<String> {
     TYPEWRITER
         .captures_iter(html)
-        .filter_map(|text| DOCUMENT_SOURCE.captures(&text[1]).map(|source| source[1].to_string()))
+        .filter_map(|text| {
+            DOCUMENT_SOURCE
+                .captures(&text[1])
+                .map(|source| source[1].to_string())
+        })
         .last()
 }
 
@@ -676,7 +677,7 @@ fn prose(tagged: &[HtmlLine], index: usize, width: usize, cells: &CellCode) -> V
     let title_ends = is_title(&tagged[index]) && !tagged.get(index + 1).is_some_and(is_title);
     if title_ends {
         rows.push(vec![TextSpan::new(
-            "─".repeat(width),
+            Glyphs::HeadingRule.current().repeat(width),
             HLGroup::MarkupHeading1,
         )]);
     }
@@ -691,7 +692,7 @@ fn stacked_cell_rule(line: &HtmlLine, width: usize) -> Option<String> {
     (text.width() == width
         && !border.is_empty()
         && border.chars().all(|ch| ch == STACKED_CELL_BORDER))
-    .then(|| text.replace(STACKED_CELL_BORDER, STACKED_CELL_RULE))
+    .then(|| text.replace(STACKED_CELL_BORDER, Glyphs::StackedCellRule.current()))
 }
 
 fn fitted_row(line: &HtmlLine, width: usize, cells: &CellCode) -> Vec<SpanLine> {

@@ -676,13 +676,13 @@ impl Feed {
         canvas: Style,
     ) -> (bool, Inclusions) {
         TuiBlock::default().style(canvas).render(
-            Rect::new(area.x, area.y, UI.feed_margin.min(area.width), area.height),
+            Rect::new(area.x, area.y, UI::FEED_MARGIN.min(area.width), area.height),
             target,
         );
         let area = Rect::new(
-            area.x + UI.feed_margin,
+            area.x + UI::FEED_MARGIN,
             area.y,
-            area.width.saturating_sub(UI.feed_margin),
+            area.width.saturating_sub(UI::FEED_MARGIN),
             area.height,
         );
         if area.is_empty() {
@@ -691,7 +691,7 @@ impl Feed {
         }
         // Content keeps the width it was given, settled behind a dragged border; the
         // viewport crops or pads it to the area meanwhile.
-        let context = context.with_width(context.width().saturating_sub(UI.feed_margin));
+        let context = context.with_width(context.width().saturating_sub(UI::FEED_MARGIN));
         if std::mem::take(&mut self.focus_pending) {
             self.anchor = self.blocks.iter().enumerate().find_map(|(index, block)| {
                 block
@@ -729,7 +729,7 @@ impl Feed {
         if area.width > 0 {
             for y in 0..area.height {
                 let bg = target[(area.x, area.y + y)].bg;
-                for x in 1..=UI.feed_margin.min(area.x) {
+                for x in 1..=UI::FEED_MARGIN.min(area.x) {
                     target[(area.x - x, area.y + y)].set_bg(bg);
                 }
             }

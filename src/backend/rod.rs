@@ -226,7 +226,13 @@ impl Rod {
     /// one atom of no particular class.
     pub fn is_structured(&self) -> bool {
         self.html.is_none()
-            && !matches!(self.drawing.shape, Shape::Atom { class: HLGroup::Text, .. })
+            && !matches!(
+                self.drawing.shape,
+                Shape::Atom {
+                    class: HLGroup::Text,
+                    ..
+                }
+            )
     }
 
     /// Documentation content and the width of its recorded examples.

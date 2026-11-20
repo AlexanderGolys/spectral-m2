@@ -1,7 +1,7 @@
 //! Views of the session shown beside its shell: what each shows, the pane state
 //! it scrolls with, and how the editor draws it.
 
-use crate::ui::glyphs::Glyphs;
+use crate::ui::glyphs::{Glyphs, Spelled};
 use crate::ui::settling::SettlingWidth;
 use std::fs;
 use std::path::PathBuf;
@@ -351,7 +351,7 @@ impl Editor {
         let buffer = frame.buffer_mut();
         for y in area.top()..area.bottom() {
             buffer[(area.x, y)]
-                .set_symbol(Glyphs::SplitDivider.glyph().current())
+                .set_symbol(Glyphs::SplitDivider.current())
                 .set_style(style);
         }
     }

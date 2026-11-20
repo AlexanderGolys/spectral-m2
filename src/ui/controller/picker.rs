@@ -1,30 +1,29 @@
 //! Stateful text pickers rendered above the input.
 
 // Keep mathematical notation and interface symbols legible in their native spelling.
-use crate::ui::glyphs::Glyphs;
+use crate::ui::glyphs::{Glyphs, Spelled};
 use crate::ui::theme::AppearanceSettings;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block as TuiBlock, BorderType, Borders, Paragraph, Widget};
+use ratatui::widgets::{Block as TuiBlock, Borders, Paragraph, Widget};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::EditorEvent;
 use crate::ui::action::Action;
-use crate::ui::block::{Element, TextSpan};
+use crate::ui::block::Element;
 use crate::ui::config::UI;
 use crate::ui::key::KeyEvent;
-use crate::ui::theme::groups::{scheme, HLGroup};
+use crate::ui::statusline::KeyHints;
+use crate::ui::theme::groups::scheme;
 use crate::ui::wrap::{WordWrap, WrapPolicy};
 
 /// Gutter in front of the selected row.
 const SELECTED_MARKER: &str = " > ";
 /// Gutter in front of every other row, as wide as [`SELECTED_MARKER`].
 const MARKER: &str = "   ";
-/// Between the key hints a picker gives the status line.
-const HINT_SEPARATOR: &str = " · ";
 
 /// Input delivered to the selected picker row after command lookup.
 #[derive(Clone, Copy)]
@@ -109,8 +108,8 @@ impl PickerValue {
 
     fn arrows() -> (String, String) {
         (
-            format!("{} ", Glyphs::StepBack.glyph().current()),
-            format!(" {}", Glyphs::StepForward.glyph().current()),
+            format!("{} ", Glyphs::StepBack.current()),
+            format!(" {}", Glyphs::StepForward.current()),
         )
     }
 
@@ -133,7 +132,7 @@ impl PickerValue {
                 .flat_map(|(index, option)| {
                     let gap = match index {
                         0 => String::new(),
-                        1 => format!("   {}   ", Glyphs::SplitDivider.glyph().current()),
+                        1 => format!("   {}   ", Glyphs::SplitDivider.current()),
                         _ => "  ".into(),
                     };
                     let checked = index == *chosen;
@@ -175,7 +174,7 @@ impl PickerValue {
             }
             Self::Stepped(shown) => (shown, value, None),
             Self::Slider(percent) => {
-                let cells = UI.slider_width;
+                let cells = UI::SLIDER_WIDTH;
                 let filled =
                     usize::from(*percent) * cells / usize::from(AppearanceSettings::CONTRAST_MAX);
                 slider = format!(
@@ -188,7 +187,7 @@ impl PickerValue {
             Self::Checklist { .. } => unreachable!("checklists are rendered together above"),
         };
         let (back, forward) = Self::arrows();
-        let note = note.map(|note| format!("{}{note}", " ".repeat(UI.picker_column_gap)));
+        let note = note.map(|note| format!("{}{note}", " ".repeat(UI::PICKER_COLUMN_GAP)));
         let room = room.saturating_sub(back.width() + forward.width());
         let note = note.filter(|note| shown.width() + note.width() <= room);
         let text = trimmed(shown, room);
@@ -207,7 +206,7 @@ fn trimmed(text: &str, width: usize) -> String {
     if text.width() <= width {
         return text.to_string();
     }
-    let glyph = Glyphs::Trimmed.glyph().current();
+    let glyph = Glyphs::Trimmed.current();
     let mut used = glyph.width();
     let kept = text
         .chars()
@@ -457,7 +456,7 @@ impl Picker {
     /// `description` broken into the rows it takes beneath the gutter at `width`.
     fn wrapped(description: &str, width: usize) -> Vec<String> {
         let room = width
-            .saturating_sub(MARKER.len() + UI.picker_right_margin)
+            .saturating_sub(MARKER.len() + UI::PICKER_RIGHT_MARGIN)
             .max(1);
         WordWrap
             .wrap(description, room as u16)
@@ -541,7 +540,7 @@ impl Picker {
         self.tabs.iter().position(|tab| {
             let right = left + Self::tab_label(tab).width() as u16;
             let hit = (left..right).contains(&position.x);
-            left = right + Glyphs::SplitDivider.glyph().current().width() as u16;
+            left = right + Glyphs::SplitDivider.current().width() as u16;
             hit
         })
     }
@@ -687,12 +686,12 @@ impl Picker {
             .column_widths
             .iter()
             .scan(0, |start, &column| {
-                *start += UI.picker_tab_stop(column);
+                *start += UI::picker_tab_stop(column);
                 Some(*start)
             })
             .collect::<Vec<_>>();
         let starts = [0].into_iter().chain(starts).collect::<Vec<_>>();
-        let room = width.saturating_sub(MARKER.len() + UI.picker_right_margin);
+        let room = width.saturating_sub(MARKER.len() + UI::PICKER_RIGHT_MARGIN);
         let cells_fit = (starts.len() < 2)
             || starts[starts.len() - 2] + self.column_widths.last().unwrap() <= room;
         let values = self
@@ -701,7 +700,7 @@ impl Picker {
             .filter(|tab| tab.mode == self.mode())
             .flat_map(|tab| &tab.items)
             .any(|item| item.value().is_some());
-        let value_fits = !values || starts.last().unwrap() + UI.picker_min_value_width <= room;
+        let value_fits = !values || starts.last().unwrap() + UI::PICKER_MIN_VALUE_WIDTH <= room;
         (cells_fit && value_fits).then_some(starts)
     }
 
@@ -729,7 +728,7 @@ impl Picker {
         let start = |index: usize, used: usize| match starts {
             Some(starts) => starts[index],
             None if index == 0 => 0,
-            None => used + UI.picker_column_gap,
+            None => used + UI::PICKER_COLUMN_GAP,
         };
         for (index, mut cell) in cells.into_iter().enumerate() {
             if index == 0 && selected {
@@ -744,7 +743,7 @@ impl Picker {
         }
         if let Some(value) = item.value() {
             let start = start(columns, used).max(used);
-            let room = width.saturating_sub(marker.len() + start + UI.picker_right_margin);
+            let room = width.saturating_sub(marker.len() + start + UI::PICKER_RIGHT_MARGIN);
             let value = value.line(room, selected);
             spans.push(Span::raw(" ".repeat(start - used)));
             used = start + value.width();
@@ -773,7 +772,7 @@ impl Picker {
         if let Some(button) = &self.button {
             let selected = !self.on_tab_bar && self.selected == self.items().len();
             lines.push(Self::line(button.as_ref(), selected, None, width));
-            let rule = Glyphs::PickerRule.glyph().current().repeat(width);
+            let rule = Glyphs::PickerRule.current().repeat(width);
             lines.push(Span::styled(rule, groups.picker_border()).into());
         }
         let mut description = self
@@ -832,7 +831,7 @@ impl Picker {
         for (index, tab) in self.tabs.iter().enumerate() {
             if index > 0 {
                 spans.push(Span::styled(
-                    Glyphs::SplitDivider.glyph().current(),
+                    Glyphs::SplitDivider.current(),
                     row.patch(groups.picker_tab()),
                 ));
             }
@@ -857,7 +856,7 @@ impl Picker {
         TuiBlock::default()
             .style(groups.picker())
             .borders(Borders::TOP | Borders::BOTTOM)
-            .border_type(BorderType::Rounded)
+            .border_set(Glyphs::ROUNDED_BORDER.current())
             .border_style(groups.picker_border())
             .title_alignment(Alignment::Center)
     }
@@ -901,38 +900,23 @@ impl PickerController {
     }
 
     /// The keys this picker answers, each followed by what it does.
-    pub fn hints(&self) -> Vec<TextSpan> {
-        let keys = |codes: &[KeyCode]| {
-            codes
-                .iter()
-                .map(|&code| KeyEvent::from(code).to_string())
-                .collect::<String>()
-        };
-        let mut hints = vec![(keys(&[KeyCode::Up, KeyCode::Down]), "select")];
+    pub fn hints(&self) -> KeyHints {
+        let key = |code: KeyCode| KeyEvent::from(code).to_string();
+        let (up_down, left_right) = (Glyphs::UpDown, Glyphs::LeftRight).current();
+        let mut hints = vec![(up_down.to_string(), "select")];
         hints.push(match (self.picker.on_tab_bar, self.active_mode()) {
-            (true, _) => (keys(&[KeyCode::Left, KeyCode::Right]), "switch tabs"),
-            (_, PickerMode::Settings) => (keys(&[KeyCode::Left, KeyCode::Right]), "change"),
+            (true, _) => (left_right.to_string(), "switch tabs"),
+            (_, PickerMode::Settings) => (left_right.to_string(), "change"),
             (_, PickerMode::Commands | PickerMode::FilteredCommands) => {
-                (keys(&[KeyCode::Enter]), "run")
+                (key(KeyCode::Enter), "run")
             }
-            (_, PickerMode::Keymaps) => (keys(&[KeyCode::Enter]), "rebind"),
+            (_, PickerMode::Keymaps) => (key(KeyCode::Enter), "rebind"),
         });
         if self.picker.has_tabs() && !self.picker.on_tab_bar {
-            hints.push((keys(&[KeyCode::Tab]), "switch tabs"));
+            hints.push((key(KeyCode::Tab), "switch tabs"));
         }
-        hints.push((keys(&[KeyCode::Esc]), "close"));
-        hints
-            .into_iter()
-            .enumerate()
-            .flat_map(|(index, (keys, label))| {
-                let separator = (index > 0)
-                    .then(|| TextSpan::new(HINT_SEPARATOR, HLGroup::StatuslineSeparator));
-                separator.into_iter().chain([
-                    TextSpan::new(format!("{keys} "), HLGroup::KeymapHint),
-                    TextSpan::new(label, HLGroup::StatuslineHintLabel),
-                ])
-            })
-            .collect()
+        hints.push((key(KeyCode::Esc), "close"));
+        KeyHints(hints)
     }
 
     /// Handle navigation, row behavior, or mode-specific fallback behavior.
