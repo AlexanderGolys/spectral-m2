@@ -33,7 +33,7 @@ output mode position
 : Place the output mode controls in the border: `upper left`, `upper center`, `upper right`, `lower left`, `lower center` or `lower right`; `off` hides them. Default: `upper right`. The icons select the output representation (`rod`, `net`, `string`, `tex`, `markup` or `external`). The maths setting controls display within that preview.
 
 maths size
-: Preferred typeset size relative to terminal text, from 50% to 200% in 10% steps. Default: 100%. Every picture is drawn at this size whatever the room: a long formula wraps at its break points and is never shrunk to fit.
+: Preferred typeset size relative to terminal text, from 50% to 200% in 10% steps. Default: 100%. A long formula wraps at its break points at this size; only a part with nowhere to break shrinks, and never below 50%.
 
 italics
 : Draw emphasised and commented text in italics. Typeset pictures keep TeX's math italic either way. Default: on.
