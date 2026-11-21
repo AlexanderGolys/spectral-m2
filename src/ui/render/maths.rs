@@ -12,7 +12,7 @@ use crate::ui::block::TextSpan;
 use crate::ui::config::UI;
 use crate::ui::cycle::cyclic;
 use crate::ui::glyphs::{Glyphs, Spelled};
-use crate::ui::graphics;
+use crate::ui::graphics::{self, ratex::diagram::ArrowLengths};
 use crate::ui::present::{wrap, SpanLine};
 use crate::ui::settings::rendering::RenderingSettings;
 use crate::ui::theme::groups::HLGroup;
@@ -224,6 +224,8 @@ pub struct MathStyle {
     /// Whether a map in a complex or a diagram is labelled by its matrix rather
     /// than by its name.
     pub matrix_labels: bool,
+    /// How long the arrows of typeset complexes and diagrams are drawn.
+    pub arrows: ArrowLengths,
 }
 
 impl Default for MathStyle {
@@ -240,6 +242,7 @@ impl Default for MathStyle {
             matrix_row_spacing_percent: UI::MATRIX_ROW_SPACING_PERCENT,
             matrix_degrees: false,
             matrix_labels: false,
+            arrows: ArrowLengths::default(),
         }
     }
 }
@@ -272,6 +275,7 @@ impl From<&RenderingSettings> for MathStyle {
             ),
             matrix_degrees: rendering.matrix_degrees,
             matrix_labels: rendering.matrix_labels,
+            arrows: rendering.arrows.clamped(),
             ..Self::default()
         }
     }
@@ -1151,6 +1155,15 @@ impl Math {
             Self::Atom { kind, .. } => *kind == HLGroup::Type,
             Self::Row(pieces) => !pieces.is_empty() && pieces.iter().all(Self::is_type_name),
             _ => false,
+        }
+    }
+
+    /// The group a lone piece of text is coloured as, none for anything built of parts.
+    pub fn kind(&self) -> Option<HLGroup> {
+        match self {
+            Self::Atom { kind, .. } | Self::Native { kind, .. } => Some(*kind),
+            Self::Linked { body, .. } => body.kind(),
+            _ => None,
         }
     }
 

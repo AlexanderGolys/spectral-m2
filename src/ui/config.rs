@@ -107,6 +107,13 @@ impl UI {
     pub const MAX_MATRIX_ROW_SPACING_PERCENT: u16 = 300;
     /// Percentage points one picker step moves the matrix row spacing.
     pub const MATRIX_ROW_SPACING_STEP: u16 = 5;
+    /// The length of a typeset arrow, as a percentage of its shortest: at this one
+    /// it is as short as its label lets it be.
+    pub const ARROW_LENGTH_PERCENT: u16 = 100;
+    pub const MIN_ARROW_LENGTH_PERCENT: u16 = 50;
+    pub const MAX_ARROW_LENGTH_PERCENT: u16 = 400;
+    /// Percentage points one picker step moves an arrow length.
+    pub const ARROW_LENGTH_STEP: u16 = 10;
 
     /// Columns kept between a syntax tree's deepest row and its source ranges.
     pub const TREE_LOCATION_GAP: usize = 2;

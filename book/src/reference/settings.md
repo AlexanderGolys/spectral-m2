@@ -56,6 +56,12 @@ matrix degrees
 matrix labels
 : Label the maps of a complex or a map of complexes by their matrices. Off, each is labelled by its name: a differential by `dd_i`, a component of a map by the map's name, or `f` when no global name holds it, as `f_i`. Default: off.
 
+arrow length
+: How long the arrows along a row of a typeset complex or diagram run, from 50% to 400% of the shortest arrow. Every arrow gains the same length, whatever its label: at 150% each is half a shortest arrow longer. Below 100% an arrow shortens only as far as its label lets it, and the arrows of a complex, which TeX sets, stay as they are. Default: 100%. Greyed out unless maths is typeset.
+
+arrow height
+: How far the arrows between the rows of a typeset diagram, such as a map of complexes, run down, from 50% to 400% of the shortest, in the same way. Default: 100%. Greyed out unless maths is typeset.
+
 ## Side panel { #side-panel }
 
 The [views beside the session](../shell/views.md): the code, output and syntax-tree views and the reference pane.

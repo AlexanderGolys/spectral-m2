@@ -4,7 +4,12 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+### Added
+- *arrow length* and *arrow height* rendering settings scale the arrows of typeset complexes and diagrams, along a row and between rows, from 50% to 400% of the shortest arrow.
+
 ### Changed
+- A typeset subscript stands against its letter, under the lean of an italic one, as in `F_2`, instead of past it.
+- The degrees under a typeset map of complexes are set small, as those under a complex are.
 - A typeset diagram widens to hold a label standing past its outer columns, as the label of a component leaving the last column of a map of complexes does, instead of cutting it off.
 - The maps of a complex and of a map of complexes are labelled by their names, `dd_i` for a differential and `f_i` for a component of a map `f` (the map's global name, or `f`), unless the new *matrix labels* rendering setting is on, which labels them by their matrices. A matrix's degrees are drawn whole in grey, braces too.
 - Matrix degrees are hidden unless the new *matrix degrees* rendering setting is on, and are greyed out when shown; a complex numbers its degrees in the same grey, a new `Degree` highlight group linked to `Muted`. The zero modules a complex begins and ends with are white, not number-coloured.

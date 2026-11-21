@@ -10,7 +10,7 @@ use crate::ui::config::UI;
 use crate::ui::controller::picker::{PickerItem, PickerOption, PickerValue};
 use crate::ui::cycle::cyclic;
 use crate::ui::glyphs::Charset;
-use crate::ui::graphics;
+use crate::ui::graphics::{self, ratex::diagram::ArrowLengths};
 use crate::ui::render::maths::{FractionStyle, MathDisplay, MathInk, ScriptColor};
 
 cyclic! {
@@ -89,6 +89,8 @@ pub struct RenderingSettings {
     /// Whether the maps of a complex or a diagram are labelled by their matrices
     /// rather than their names.
     pub matrix_labels: bool,
+    /// How long the arrows of typeset complexes and diagrams are drawn.
+    pub arrows: ArrowLengths,
 }
 
 impl Default for RenderingSettings {
@@ -107,6 +109,7 @@ impl Default for RenderingSettings {
             matrix_row_spacing_percent: UI::MATRIX_ROW_SPACING_PERCENT,
             matrix_degrees: false,
             matrix_labels: false,
+            arrows: ArrowLengths::default(),
         }
     }
 }
@@ -150,7 +153,20 @@ cyclic! {
         MatrixRowSpacing = "matrix row spacing",
         MatrixDegrees = "matrix degrees",
         MatrixLabels = "matrix labels",
+        ArrowLength = "arrow length",
+        ArrowHeight = "arrow height",
     }
+}
+
+/// `percent` moved `delta` picker steps of `step` points each, kept between
+/// `least` and `most`.
+fn stepped(percent: u16, delta: i8, step: u16, (least, most): (u16, u16)) -> u16 {
+    let moved = u16::from(delta.unsigned_abs()) * step;
+    match delta > 0 {
+        true => percent.saturating_add(moved),
+        false => percent.saturating_sub(moved),
+    }
+    .clamp(least, most)
 }
 
 /// An off/on value at `chosen`, its on option named `on`.
@@ -183,6 +199,8 @@ impl SettingRow for RenderingSetting {
             }
             Self::MatrixDegrees => "show the degrees of a matrix's rows beside them, greyed out",
             Self::MatrixLabels => "label the maps of complexes and diagrams by their matrices rather than their names, dd_i or f_i",
+            Self::ArrowLength => "how long the arrows along a row of a typeset complex or diagram run, relative to the shortest; never shorter than their labels",
+            Self::ArrowHeight => "how far the arrows between the rows of a typeset diagram run down, relative to the shortest; never shorter than their labels",
         }
     }
 
@@ -219,52 +237,73 @@ impl SettingRow for RenderingSetting {
             }
             Self::MatrixDegrees => switch(rendering.matrix_degrees, "on"),
             Self::MatrixLabels => switch(rendering.matrix_labels, "on"),
+            Self::ArrowLength => {
+                PickerValue::Stepped(format!("{}%", rendering.arrows.across_percent))
+            }
+            Self::ArrowHeight => {
+                PickerValue::Stepped(format!("{}%", rendering.arrows.down_percent))
+            }
         }
     }
 
     fn adjust(self, settings: &mut Settings, delta: i8) {
         let rendering = &mut settings.rendering;
+        let arrow = |percent: u16| {
+            stepped(
+                percent,
+                delta,
+                UI::ARROW_LENGTH_STEP,
+                (UI::MIN_ARROW_LENGTH_PERCENT, UI::MAX_ARROW_LENGTH_PERCENT),
+            )
+        };
         match self {
             Self::Maths => rendering.maths = rendering.maths.cycle(delta),
             Self::RendererPosition => {
                 rendering.renderer_position = rendering.renderer_position.cycle(delta)
             }
             Self::MathSize => {
-                let step = u16::from(delta.unsigned_abs()) * UI::MATH_SIZE_STEP;
-                rendering.math_size_percent = if delta > 0 {
-                    rendering.math_size_percent.saturating_add(step)
-                } else {
-                    rendering.math_size_percent.saturating_sub(step)
-                }
-                .clamp(UI::MIN_MATH_SIZE_PERCENT, UI::MAX_MATH_SIZE_PERCENT);
+                rendering.math_size_percent = stepped(
+                    rendering.math_size_percent,
+                    delta,
+                    UI::MATH_SIZE_STEP,
+                    (UI::MIN_MATH_SIZE_PERCENT, UI::MAX_MATH_SIZE_PERCENT),
+                );
             }
             Self::Italics => rendering.italics = !rendering.italics,
             Self::Charset => rendering.charset = rendering.charset.cycle(delta),
             Self::Fractions => rendering.fractions = rendering.fractions.cycle(delta),
             Self::MathFonts => rendering.math_fonts = !rendering.math_fonts,
             Self::MatrixRowSpacing => {
-                let step = u16::from(delta.unsigned_abs()) * UI::MATRIX_ROW_SPACING_STEP;
-                rendering.matrix_row_spacing_percent = match delta > 0 {
-                    true => rendering.matrix_row_spacing_percent.saturating_add(step),
-                    false => rendering.matrix_row_spacing_percent.saturating_sub(step),
-                }
-                .clamp(
-                    UI::MIN_MATRIX_ROW_SPACING_PERCENT,
-                    UI::MAX_MATRIX_ROW_SPACING_PERCENT,
+                rendering.matrix_row_spacing_percent = stepped(
+                    rendering.matrix_row_spacing_percent,
+                    delta,
+                    UI::MATRIX_ROW_SPACING_STEP,
+                    (
+                        UI::MIN_MATRIX_ROW_SPACING_PERCENT,
+                        UI::MAX_MATRIX_ROW_SPACING_PERCENT,
+                    ),
                 );
             }
             Self::MatrixDegrees => rendering.matrix_degrees = !rendering.matrix_degrees,
             Self::MatrixLabels => rendering.matrix_labels = !rendering.matrix_labels,
+            Self::ArrowLength => {
+                rendering.arrows.across_percent = arrow(rendering.arrows.across_percent)
+            }
+            Self::ArrowHeight => {
+                rendering.arrows.down_percent = arrow(rendering.arrows.down_percent)
+            }
         }
     }
 
     /// Semantic colors need the language server, typeset pictures set fractions
-    /// and fonts themselves, and only they space matrix rows.
+    /// and fonts themselves, and only they space matrix rows and scale arrows.
     fn applies(self, settings: Settings) -> bool {
         let rendering = settings.rendering;
         match self {
             Self::Fractions | Self::MathFonts => !rendering.pictured(),
-            Self::MathSize | Self::MatrixRowSpacing => rendering.pictured(),
+            Self::MathSize | Self::MatrixRowSpacing | Self::ArrowLength | Self::ArrowHeight => {
+                rendering.pictured()
+            }
             _ => true,
         }
     }

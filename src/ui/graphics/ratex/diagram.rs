@@ -4,6 +4,7 @@
 
 use std::fmt::Write;
 
+use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 
 use ratex_types::color::Color;
@@ -11,6 +12,7 @@ use ratex_types::display_item::{DisplayItem, DisplayList};
 use ratex_types::path_command::PathCommand;
 
 use super::{set, Rgb, Unset};
+use crate::ui::config::UI;
 
 /// The first line of a diagram's description, which no formula starts with.
 const MARK: &str = "%diagram";
@@ -19,8 +21,8 @@ const MARK: &str = "%diagram";
 const COLUMN_GAP: f64 = 1.2;
 /// Ems between rows no arrow joins.
 const ROW_GAP: f64 = 0.5;
-/// The shortest arrow along a row, in ems.
-const MIN_ARROW: f64 = 1.6;
+/// The shortest arrow along a row, in ems: as long as TeX's `\longleftarrow`.
+pub const MIN_ARROW: f64 = 1.6;
 /// The fewest ems an arrow between two rows runs down.
 const MIN_BAND: f64 = 2.2;
 /// Ems between a piece and the end of an arrow at it.
@@ -41,11 +43,66 @@ const HEAD_NOTCH: f64 = 0.55;
 /// How many label heights the band under a leaning labelled arrow holds.
 const LEANING_BAND: f64 = 2.0;
 
+/// How long arrows are drawn, each way as a percentage of the shortest arrow
+/// that way: at 150 an arrow along a row is half a shortest arrow longer than
+/// it would be, whatever its label, and at 50 half of one shorter, though
+/// never shorter than its label.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArrowLengths {
+    /// Of arrows along a row.
+    pub across_percent: u16,
+    /// Of arrows between rows.
+    pub down_percent: u16,
+}
+
+impl Default for ArrowLengths {
+    fn default() -> Self {
+        Self {
+            across_percent: UI::ARROW_LENGTH_PERCENT,
+            down_percent: UI::ARROW_LENGTH_PERCENT,
+        }
+    }
+}
+
+impl ArrowLengths {
+    /// Ems an arrow along a row gains over its length unscaled; negative when
+    /// it shortens.
+    pub fn gain_across(self) -> f64 {
+        Self::gain(self.across_percent, MIN_ARROW)
+    }
+
+    fn gain_down(self) -> f64 {
+        Self::gain(self.down_percent, MIN_BAND)
+    }
+
+    fn gain(percent: u16, shortest: f64) -> f64 {
+        (f64::from(percent) / f64::from(UI::ARROW_LENGTH_PERCENT) - 1.0) * shortest
+    }
+
+    /// Both lengths within the bounds settings keep them in.
+    pub fn clamped(self) -> Self {
+        let clamped = |percent: u16| {
+            percent.clamp(UI::MIN_ARROW_LENGTH_PERCENT, UI::MAX_ARROW_LENGTH_PERCENT)
+        };
+        Self {
+            across_percent: clamped(self.across_percent),
+            down_percent: clamped(self.down_percent),
+        }
+    }
+}
+
+/// How long an arrow runs: `shortest`, or as far as its label `needs` when that
+/// is further, and `gain` more, yet no shorter than the label needs.
+fn lengthened(shortest: f64, needs: f64, gain: f64) -> f64 {
+    needs.max(needs.max(shortest) + gain)
+}
+
 /// A diagram written as text a formula's place can carry, read back by
 /// [`composed`]: pieces on a grid and arrows between places, each in TeX.
 ///
 /// ```ignore
-/// let mut description = Description::new(None);
+/// let mut description = Description::new(None, ArrowLengths::default());
 /// description.piece((0, 0), "A");
 /// description.piece((1, 0), "B");
 /// description.arrow((0, 0), (1, 0), Some("f"));
@@ -55,9 +112,17 @@ const LEANING_BAND: f64 = 2.0;
 pub struct Description(String);
 
 impl Description {
-    /// A diagram whose arrows are drawn in `ink`, else in the formula's colour.
-    pub fn new(ink: Option<Rgb>) -> Self {
+    /// A diagram whose arrows are drawn in `ink`, else in the formula's colour,
+    /// as long as `lengths` has them.
+    pub fn new(ink: Option<Rgb>, lengths: ArrowLengths) -> Self {
         let mut text = format!("{MARK}\n");
+        let _ = writeln!(
+            text,
+            "{} {} {}",
+            Line::Lengths,
+            lengths.across_percent,
+            lengths.down_percent
+        );
         if let Some(Rgb([r, g, b])) = ink {
             let _ = writeln!(text, "{} {r} {g} {b}", Line::Ink);
         }
@@ -102,6 +167,8 @@ fn one_line(tex: &str) -> String {
 enum Line {
     /// The arrows' colour, as red, green and blue channels.
     Ink,
+    /// The arrows' lengths along a row and between rows, as [`ArrowLengths`] has them.
+    Lengths,
     /// A cell and the TeX set in it.
     Piece,
     /// The cells an arrow joins, and the TeX of its label if it has one.
@@ -117,10 +184,11 @@ type Extent = (f64, f64, f64);
 /// An arrow from one cell to another, with its label's TeX if it has one.
 type Joint<'a> = (Cell, Cell, Option<&'a str>);
 
-/// A description read back: its ink, pieces and arrows.
+/// A description read back: its ink, its arrows' lengths, pieces and arrows.
 #[derive(Debug, Default)]
 struct Read<'a> {
     ink: Option<Rgb>,
+    lengths: ArrowLengths,
     pieces: Vec<(Cell, &'a str)>,
     arrows: Vec<Joint<'a>>,
 }
@@ -140,6 +208,13 @@ impl<'a> Read<'a> {
                         .collect::<Result<Vec<u8>, _>>()
                         .ok()?;
                     read.ink = Some(Rgb(channels.try_into().ok()?));
+                }
+                Line::Lengths => {
+                    let (across, down) = rest.split_once(' ')?;
+                    read.lengths = ArrowLengths {
+                        across_percent: across.parse().ok()?,
+                        down_percent: down.parse().ok()?,
+                    };
                 }
                 Line::Piece => {
                     let mut fields = rest.splitn(3, ' ');
@@ -283,9 +358,9 @@ fn compose(layout: &Read, paint: &Read, colour: Rgb, spacing: u16) -> Result<Dis
                     grid.rising[from.0] = grid.rising[from.0].max(reach);
                 }
             }
-            grid.gaps[left] = grid.gaps[left]
-                .max(MIN_ARROW + 2.0 * CLEARANCE)
-                .max(label_width + 2.0 * LABEL_SIDE);
+            let needs = label_width + 2.0 * (LABEL_SIDE - CLEARANCE);
+            let length = lengthened(MIN_ARROW, needs, layout.lengths.gain_across());
+            grid.gaps[left] = grid.gaps[left].max(length + 2.0 * CLEARANCE);
             continue;
         }
         // A leaning arrow crosses its label's height in proportion to how short
@@ -295,9 +370,9 @@ fn compose(layout: &Read, paint: &Read, colour: Rgb, spacing: u16) -> Result<Dis
             true => label_height,
             false => LEANING_BAND * label_height,
         };
-        grid.bands[top] = grid.bands[top]
-            .max(MIN_BAND)
-            .max(room + 2.0 * (LABEL_CLEARANCE + RULE));
+        let needs = room + 2.0 * (LABEL_CLEARANCE + RULE);
+        grid.bands[top] =
+            grid.bands[top].max(lengthened(MIN_BAND, needs, layout.lengths.gain_down()));
     }
     let sizes = pieces
         .iter()

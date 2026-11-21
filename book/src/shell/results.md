@@ -103,6 +103,7 @@ The *rendering* settings shape the details; each is in the [settings reference](
 - *matrix row spacing* for typeset matrices;
 - *matrix degrees*: the degrees of a matrix's rows beside them, or none;
 - *matrix labels*: the maps of complexes labelled by their matrices, or by their names `dd_i` and `f_i`;
+- *arrow length* and *arrow height*: how long the arrows of typeset complexes and diagrams run, along a row and between rows;
 - *output mode position*: where the mode controls sit in each output border.
 
 `showClassStructure()` returns a hierarchy rather than a flat table summary. The structured preview draws each branch on its own row and wraps labels within the pane, so large `Descent` objects remain readable. Choose the `net` preview for Macaulay2's original two-dimensional layout.
