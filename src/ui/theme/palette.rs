@@ -3,6 +3,54 @@
 use ratatui::style::Color;
 use std::collections::HashMap;
 
+/// The sRGB transfer function and the WCAG 2 luminance and contrast definitions.
+struct Srgb;
+
+impl Srgb {
+    /// Encoded channels at most this are on the transfer curve's linear segment.
+    const LINEAR_SEGMENT_END: f32 = 0.04045;
+    /// Slope of that linear segment.
+    const LINEAR_SLOPE: f32 = 12.92;
+    /// Offset and scale of the power segment `((c + a) / (1 + a))^γ`.
+    const POWER_OFFSET: f32 = 0.055;
+    const GAMMA: f32 = 2.4;
+    /// Weights of linear red, green and blue in relative luminance (Rec. 709 primaries).
+    const LUMINANCE_WEIGHTS: [f32; 3] = [0.2126, 0.7152, 0.0722];
+    /// Flare added to both luminances of a contrast ratio, so black on black reads 1.
+    const FLARE: f32 = 0.05;
+
+    fn linear(channel: u8) -> f32 {
+        let encoded = f32::from(channel) / f32::from(u8::MAX);
+        match encoded <= Self::LINEAR_SEGMENT_END {
+            true => encoded / Self::LINEAR_SLOPE,
+            false => {
+                ((encoded + Self::POWER_OFFSET) / (1.0 + Self::POWER_OFFSET)).powf(Self::GAMMA)
+            }
+        }
+    }
+
+    fn luminance(color: Color) -> Option<f32> {
+        let Color::Rgb(r, g, b) = color else {
+            return None;
+        };
+        let channels = [r, g, b].map(Self::linear);
+        Some(
+            Self::LUMINANCE_WEIGHTS
+                .iter()
+                .zip(channels)
+                .map(|(w, c)| w * c)
+                .sum(),
+        )
+    }
+}
+
+/// The WCAG contrast ratio of two RGB colors, from 1 for equal ones to 21 for
+/// black against white; `None` unless both are RGB.
+pub fn contrast_ratio(one: Color, other: Color) -> Option<f32> {
+    let (one, other) = (Srgb::luminance(one)?, Srgb::luminance(other)?);
+    Some((one.max(other) + Srgb::FLARE) / (one.min(other) + Srgb::FLARE))
+}
+
 /// Blend RGB colors by the fraction of `toward`, rounding each channel once.
 pub fn blend(from: Color, toward: Color, amount: f32) -> Result<Color, String> {
     if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {

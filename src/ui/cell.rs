@@ -1782,7 +1782,9 @@ impl ValueSource {
             };
             match drawing.as_ref() {
                 Some(value) if style.display == MathDisplay::Typeset => {
-                    let code = self.preview_text(PreviewMode::String).unwrap_or(self.text());
+                    let code = self
+                        .preview_text(PreviewMode::String)
+                        .unwrap_or(self.text());
                     let drawn = typeset::drawn(value, code, width, theme, style);
                     links = drawn.links;
                     drawn.lines

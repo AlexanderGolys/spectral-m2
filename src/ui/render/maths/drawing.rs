@@ -126,7 +126,13 @@ impl<'a> Reading<'a> {
                     ])),
                 }
             }
-            (Shape::MatrixExpression { rows: cells, degrees }, _) => match degrees {
+            (
+                Shape::MatrixExpression {
+                    rows: cells,
+                    degrees,
+                },
+                _,
+            ) => match degrees {
                 Some(degrees) if self.style.matrix_degrees => Math::AnnotatedMatrix {
                     rows: rows(cells),
                     degrees: degrees.rows.iter().map(part).collect(),

@@ -6,13 +6,13 @@ Pick a scheme in a few keystrokes, or edit any colour of any part of the shell i
 
 ## Choose a scheme
 
-Open the settings with `Ctrl+O`; the *appearance* tab has four rows:
+Open the settings with `Ctrl+O`; the *appearance* tab has these rows, followed by the [maths colours](../reference/settings.md#appearance):
 
 theme
 : The scheme family: Catppuccin, Everforest, Gruvbox, Gruvbox Material, Kanagawa, Rosé Pine or Tokyo Night.
 
 contrast
-: A continuous 0–100% slider through the family's variants for the current mode, in declaration order: for example Everforest hard, medium and soft. Native stops keep their original colours; intermediate positions interpolate RGB channels. A mode with one variant keeps its palette throughout the range.
+: A continuous 0–100% slider from the family's lowest contrast variant for the current mode to its highest, measured as plain text against the canvas: for Everforest, from soft to hard. The two ends keep their original colours; positions between interpolate RGB channels linearly. A mode with one variant keeps its palette throughout the range.
 
 mode
 : Dark or light, where the family has both.

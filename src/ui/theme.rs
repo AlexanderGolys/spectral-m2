@@ -57,6 +57,18 @@ impl ColorVariant {
     fn groups(&self) -> Groups {
         self.variant().groups
     }
+
+    /// The contrast ratio of plain text against the canvas; 1, none at all, when
+    /// either is left to the terminal.
+    fn contrast(&self) -> f32 {
+        let groups = self.groups();
+        groups
+            .Text
+            .fg
+            .zip(groups.Canvas.bg)
+            .and_then(|(text, canvas)| contrast_ratio(text, canvas))
+            .unwrap_or(1.0)
+    }
 }
 
 /// A named colour scheme and the variants actually supplied for it.
@@ -86,6 +98,22 @@ impl Scheme {
         (0..self.variants.len())
             .filter(|&variant| self.variants[variant].mode() == mode)
             .collect()
+    }
+
+    /// The variants of `mode` with the lowest and the highest contrast, the same
+    /// one when the mode has a single variant.
+    fn contrast_extremes(&self, mode: Mode) -> (&ColorVariant, &ColorVariant) {
+        let variants = || {
+            self.variants
+                .iter()
+                .filter(move |variant| variant.mode() == mode)
+        };
+        let by_contrast = |one: &&ColorVariant, other: &&ColorVariant| {
+            one.contrast().total_cmp(&other.contrast())
+        };
+        let lowest = variants().min_by(by_contrast);
+        let highest = variants().max_by(by_contrast);
+        lowest.zip(highest).expect("a mode in use has a variant")
     }
 }
 
@@ -451,20 +479,13 @@ impl AppearanceSettings {
     /// End of the percentage scale used by the contrast slider.
     pub const CONTRAST_MAX: u8 = 100;
 
-    /// Adjacent native variants and their interpolation fraction. At each native
-    /// stop the original colours are recovered exactly; between stops each RGB
-    /// channel follows the line segment joining those colours.
+    /// The mode's lowest and highest contrast variants and how far the slider is
+    /// from the first toward the second: each RGB channel follows the line
+    /// segment joining their colours, recovering them exactly at 0% and 100%.
     fn contrast_interval(self) -> (&'static ColorVariant, &'static ColorVariant, f32) {
-        let variants = self.scheme().variants_in(self.mode());
-        let position =
-            f32::from(self.contrast) / f32::from(Self::CONTRAST_MAX) * (variants.len() - 1) as f32;
-        let lower = position.floor() as usize;
-        let upper = (lower + 1).min(variants.len() - 1);
-        (
-            &self.scheme().variants()[variants[lower]],
-            &self.scheme().variants()[variants[upper]],
-            position.fract(),
-        )
+        let (lowest, highest) = self.scheme().contrast_extremes(self.mode());
+        let amount = f32::from(self.contrast) / f32::from(Self::CONTRAST_MAX);
+        (lowest, highest, amount)
     }
 
     /// This appearance in each mode the current scheme offers.
@@ -629,15 +650,7 @@ impl TryFrom<StoredAppearance> for AppearanceSettings {
             transparent_background: stored.transparent_background,
             contrast: stored
                 .contrast
-                .unwrap_or_else(|| {
-                    let variants = SCHEMES[scheme].variants_in(stored.mode);
-                    let index = variants
-                        .iter()
-                        .position(|&index| index == variant)
-                        .expect("the stored variant belongs to its mode");
-                    (index * usize::from(Self::CONTRAST_MAX)
-                        / variants.len().saturating_sub(1).max(1)) as u8
-                })
+                .unwrap_or_else(|| Self::default().contrast)
                 .min(Self::CONTRAST_MAX),
         })
     }

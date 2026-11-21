@@ -75,12 +75,11 @@ cyclic! {
     }
 }
 
-/// The values of the *rendering* tab.
+/// The values of the *rendering* tab, and the maths colours the *appearance*
+/// tab shows: they change how values lay out, as every rendering value does.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RenderingSettings {
-    /// Swap code and canvas backgrounds in the reference pane.
-    pub reference_code_background: bool,
     pub maths: MathDisplay,
     /// Preferred typeset formula size relative to terminal text.
     pub math_size_percent: u16,
@@ -115,7 +114,6 @@ pub struct RenderingSettings {
 impl Default for RenderingSettings {
     fn default() -> Self {
         Self {
-            reference_code_background: false,
             maths: MathDisplay::default(),
             math_size_percent: UI::MATH_SIZE_PERCENT,
             math_ink: MathInk::default(),
@@ -176,9 +174,6 @@ cyclic! {
         Maths = "maths",
         MathSize = "maths size",
         RendererPosition = "output mode position",
-        MathInk = "maths colours",
-        IndexColor = "index colours",
-        ExponentColor = "exponent colours",
         Italics = "italics",
         Charset = "symbols",
         Fractions = "fractions",
@@ -187,7 +182,6 @@ cyclic! {
         MatrixDegrees = "matrix degrees",
         MatrixLabels = "matrix labels",
         ExampleTimeout = "compute examples",
-        ReferenceCodeBackground = "swap reference backgrounds",
         OutputView = "output view",
     }
 }
@@ -210,13 +204,9 @@ impl SettingRow for RenderingSetting {
             Self::Maths if !settings.rendering.maths.available() => {
                 "this terminal shows no pictures: kitty and Ghostty do, inside tmux too; drawn as unicode meanwhile"
             }
-            Self::ReferenceCodeBackground => "exchange the reference pane canvas and code backgrounds",
             Self::MathSize => "preferred formula size; formulas wrap at the available width",
             Self::Maths => "draw returned maths as Unicode text, plain ASCII, or typeset pictures",
             Self::RendererPosition => "place the available output modes and current mode name in the value border",
-            Self::MathInk => "colour returned maths by role, or in the value colour with types in the type colour",
-            Self::IndexColor => "colour of subscripts: their own, their symbol's, or the operator colour; delimiters and punctuation keep theirs",
-            Self::ExponentColor => "colour of exponents: their own, their symbol's, or the operator colour; delimiters and punctuation keep theirs",
             Self::Italics => "draw emphasised and commented text in italics",
             Self::Charset => "draw prompts, dividers, icons and the spinner with Nerd Font icons, Unicode symbols, or plain ASCII for fonts with neither",
             Self::Fractions => "how rational values are drawn",
@@ -238,7 +228,6 @@ impl SettingRow for RenderingSetting {
     fn value(self, settings: Settings) -> PickerValue {
         let rendering = settings.rendering;
         match self {
-            Self::ReferenceCodeBackground => switch(rendering.reference_code_background, "on"),
             Self::Maths => PickerValue::among(MathDisplay::CHOICES, &rendering.maths, |&display| {
                 PickerOption {
                     label: display.label().to_string(),
@@ -253,19 +242,6 @@ impl SettingRow for RenderingSetting {
                 &rendering.renderer_position,
                 |position| position.label().into(),
             ),
-            Self::MathInk => PickerValue::among(MathInk::CHOICES, &rendering.math_ink, |&ink| {
-                ink.label().into()
-            }),
-            Self::IndexColor => {
-                PickerValue::among(ScriptColor::CHOICES, &rendering.index_color, |&color| {
-                    color.label().into()
-                })
-            }
-            Self::ExponentColor => {
-                PickerValue::among(ScriptColor::CHOICES, &rendering.exponent_color, |&color| {
-                    color.label().into()
-                })
-            }
             Self::MathSize => PickerValue::Stepped(format!("{}%", rendering.math_size_percent)),
             Self::Italics => switch(rendering.italics, "on"),
             Self::Charset => PickerValue::among(Charset::CHOICES, &rendering.charset, |charset| {
@@ -297,9 +273,6 @@ impl SettingRow for RenderingSetting {
     fn adjust(self, settings: &mut Settings, delta: i8) {
         let rendering = &mut settings.rendering;
         match self {
-            Self::ReferenceCodeBackground => {
-                rendering.reference_code_background = !rendering.reference_code_background
-            }
             Self::Maths => rendering.maths = rendering.maths.cycle(delta),
             Self::RendererPosition => {
                 rendering.renderer_position = rendering.renderer_position.cycle(delta)
@@ -313,9 +286,6 @@ impl SettingRow for RenderingSetting {
                 }
                 .clamp(UI::MIN_MATH_SIZE_PERCENT, UI::MAX_MATH_SIZE_PERCENT);
             }
-            Self::MathInk => rendering.math_ink = rendering.math_ink.cycle(delta),
-            Self::IndexColor => rendering.index_color = rendering.index_color.cycle(delta),
-            Self::ExponentColor => rendering.exponent_color = rendering.exponent_color.cycle(delta),
             Self::Italics => rendering.italics = !rendering.italics,
             Self::Charset => rendering.charset = rendering.charset.cycle(delta),
             Self::Fractions => rendering.fractions = rendering.fractions.cycle(delta),

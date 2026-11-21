@@ -10,8 +10,8 @@ use crate::ui::present;
 use crate::ui::theme::groups::{Groups, HLGroup};
 
 use super::maths::{
-    self, Course, Diagram, Math, MathInk, MathStyle, Reading, DIRECT_SUM_SIGN,
-    PRODUCT_SIGN, TENSOR_SIGN,
+    self, Course, Diagram, Math, MathInk, MathStyle, Reading, DIRECT_SUM_SIGN, PRODUCT_SIGN,
+    TENSOR_SIGN,
 };
 use crate::ui::graphics::ratex::{diagram::Description, BREAK_MARK};
 
@@ -367,7 +367,6 @@ fn draw(
     Drawn { lines, links }
 }
 
-
 /// Draw the supplied expression directly, without classifying formatted text: as a
 /// picture when some part of it is set as maths, else as terminal text; `code`
 /// is what copying the picture gives.
@@ -396,5 +395,13 @@ pub fn annotation(
         ink: MathInk::Syntax,
         ..style
     };
-    draw(value, &value.render(), width, &groups, style, graphics::typeset).lines
+    draw(
+        value,
+        &value.render(),
+        width,
+        &groups,
+        style,
+        graphics::typeset,
+    )
+    .lines
 }

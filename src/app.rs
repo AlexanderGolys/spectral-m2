@@ -813,11 +813,12 @@ impl App {
                 );
                 self.workspace.editor.open_reference(
                     vec![Box::new(
-                        OutputBlock::value(text, None).documented(Some(DocPage {
-                            html,
-                            example_width: width,
-                            type_names: Vec::new(),
-                        }))
+                        OutputBlock::value(text, None)
+                            .documented(Some(DocPage {
+                                html,
+                                example_width: width,
+                                type_names: Vec::new(),
+                            }))
                             .without_frame(),
                     )],
                     None,

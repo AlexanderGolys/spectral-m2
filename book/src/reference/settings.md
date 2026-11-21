@@ -1,6 +1,6 @@
 # Settings
 
-Open the settings with `Ctrl+O` or `/settings`. They are kept between sessions: the appearance in `appearance.json`, everything else, keys included, in `settings.json`, both in the [configuration directory](files.md).
+Open the settings with `Ctrl+O` or `/settings`. They are kept between sessions: the scheme, contrast, mode and background in `appearance.json`, everything else, keys and the maths colours of the appearance tab included, in `settings.json`, both in the [configuration directory](files.md).
 
 The picker has seven tabs along its top; `Tab` and `Shift+Tab` switch them, or move onto the row of tabs and use `Left` and `Right`. `Up` and `Down` pick a row, `Left` and `Right` change it (`Space` also steps right), and the selected row describes itself under the list. *Restore defaults*, beneath the rows, resets everything: settings, keys and appearance.
 
@@ -10,13 +10,19 @@ theme
 : The colour-scheme family. Default: Everforest. See [Colour schemes](../custom/colours.md).
 
 contrast
-: A continuous slider from 0% to 100% between the current mode's native palette variants. Each arrow changes one percentage point. Default: 50% (Everforest medium). A mode with one variant keeps that palette throughout the range.
+: A continuous slider from the current mode's lowest contrast variant at 0% to its highest at 100%, blending their colours linearly in between; contrast is that of plain text against the canvas. Each arrow changes one percentage point. Default: 50%. A mode with one variant keeps that palette throughout the range.
 
 mode
 : Dark or light. Default: dark.
 
 background
 : An opaque canvas, or a transparent one that lets the terminal show through.
+
+maths colours
+: `syntax` colours maths by role; `monochrome` draws it in the value colour. Default: `syntax`.
+
+index colours, exponent colours
+: `original`, the indexed symbol's colour (`symbol`), or the `operator` colour, for subscripts and exponents. Delimiters and punctuation keep their own. Default: `original`.
 
 ## Rendering { #rendering }
 
@@ -28,12 +34,6 @@ output mode position
 
 maths size
 : Preferred typeset size relative to terminal text, from 50% to 200% in 10% steps. Default: 100%. Long formulas wrap at available break points before shrinking to fit the pane.
-
-maths colours
-: `syntax` colours maths by role; `monochrome` draws it in the value colour. Default: `syntax`.
-
-index colours, exponent colours
-: `original`, the indexed symbol's colour (`symbol`), or the `operator` colour, for subscripts and exponents. Delimiters and punctuation keep their own. Default: `original`.
 
 italics
 : Draw emphasised and commented text in italics. Typeset pictures keep TeX's math italic either way. Default: on.
@@ -58,9 +58,6 @@ matrix labels
 
 compute examples
 : How long each documentation example may run when it is computed again, so its value is drawn from its structure. Default: off, which keeps the output the documentation recorded. See [Documentation](../shell/documentation.md#examples-computed-for-real).
-
-swap reference backgrounds
-: Use the feed background for code in the reference pane. Default: off.
 
 output view
 : What the [output view](../shell/views.md) shows: `everything` in the feed except the code, only returned `values`, or only `printed` text. Default: everything.

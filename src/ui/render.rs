@@ -108,13 +108,9 @@ impl RenderContext {
         self.settings.editor.code_wrap
     }
 
-    /// Source styling for this view, preserving its syntax foregrounds.
+    /// Source styling, preserving its syntax foregrounds.
     pub fn code_style(&self) -> Style {
-        let mut style = self.groups().code();
-        if self.view == ViewKind::Reference && self.settings.rendering.reference_code_background {
-            style.bg = self.groups().transcript().bg;
-        }
-        style
+        self.groups().code()
     }
 
     pub fn renderer_position(&self) -> RendererPosition {

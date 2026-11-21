@@ -33,7 +33,10 @@ pub enum SRodFont {
 impl SRodFont {
     /// Whether text in this face is set as maths.
     pub fn is_maths(self) -> bool {
-        !matches!(self, Self::TextTT | Self::TextNormal | Self::TextBf | Self::TextIt)
+        !matches!(
+            self,
+            Self::TextTT | Self::TextNormal | Self::TextBf | Self::TextIt
+        )
     }
 
     /// The TeX command setting text in this face, none for TeX's own maths.
@@ -52,7 +55,6 @@ impl SRodFont {
             Self::TextIt => "textit",
         })
     }
-
 }
 
 /// How an atom is drawn: the highlight group it is coloured as and its face.
@@ -140,7 +142,6 @@ pub struct DocPage {
 }
 
 impl Shape {
-
     /// A list's items with the delimiters it is fenced by, its entries between
     /// commas.
     pub fn listing(&self) -> Option<((char, char), &[Shape])> {
@@ -188,7 +189,11 @@ impl Shape {
             Self::MatrixExpression { rows, degrees } => rows
                 .iter()
                 .flatten()
-                .chain(degrees.iter().flat_map(|degrees| degrees.rows.iter().chain(&degrees.columns)))
+                .chain(
+                    degrees
+                        .iter()
+                        .flat_map(|degrees| degrees.rows.iter().chain(&degrees.columns)),
+                )
                 .collect(),
             Self::Table(rows) | Self::AlignedExpression(rows) => rows.iter().flatten().collect(),
             Self::DiagramExpression {

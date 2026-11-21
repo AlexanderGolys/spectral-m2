@@ -178,7 +178,6 @@ impl TextDecorator for Decorator {
 
 type HtmlLine = TaggedLine<Vec<RichAnnotation>>;
 
-
 /// Render Text-package markup, composing archived examples from the same blocks
 /// as live inputs and outputs while prose retains its HTML layout. The examples
 /// were run at `example_width`, M2's print width for examples.

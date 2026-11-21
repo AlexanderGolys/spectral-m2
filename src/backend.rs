@@ -292,7 +292,9 @@ impl M2Backend {
                 .arg(format!("needsPackage {}", m2_string_literal(package)));
         }
         // The shell's highlight groups, which Spectral checks a drawing's HLG against.
-        let groups = HLGroup::ALL.iter().map(|group| m2_string_literal(group.description()));
+        let groups = HLGroup::ALL
+            .iter()
+            .map(|group| m2_string_literal(group.description()));
         command.arg("-e").arg(format!(
             r#"User#"spectral highlight groups" = {{{}}}"#,
             groups.collect::<Vec<_>>().join(", ")
