@@ -141,8 +141,14 @@ fn tex_at(math: &Math, groups: Option<&Groups>, depth: Depth) -> String {
                 (HLGroup::Operator, TENSOR_SIGN) => r"\otimes ".into(),
                 (HLGroup::Operator, DIRECT_SUM_SIGN) => r"\oplus ".into(),
                 (HLGroup::Operator, "+" | "-" | "=") => text.clone(),
-                (HLGroup::Number, _) => maths::typewriter(text).replacen("texttt", "mathrm", 1),
-                (HLGroup::Variable, _) => maths::typewriter(text).replacen("texttt", "mathit", 1),
+                // Numerals and names are set in TeX's own maths face, letters italic
+                // and digits upright, whatever a name holds: a ring's, coloured as a
+                // type, is set as x is.
+                (HLGroup::Number | HLGroup::Variable | HLGroup::Type, _)
+                    if *kind != HLGroup::Type || text.chars().all(char::is_alphanumeric) =>
+                {
+                    maths::in_face("mathnormal", text)
+                }
                 _ => {
                     let content = maths::typewriter(text);
                     if groups.is_some_and(|groups| {

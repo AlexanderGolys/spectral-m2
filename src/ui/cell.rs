@@ -48,9 +48,6 @@ use crate::ui::theme::groups::Groups;
 /// A source file's gutter is as wide as its last line number times this: two
 /// columns more, for a space and the fold marker after the number.
 const LINE_NUMBER_ROOM: u32 = 100;
-/// Stands in for a value a worker is still laying out, or for its text before a
-/// worker has drawn it.
-const LAYING_OUT: Remark = Remark("laying out");
 /// Stands in for the rows a preview leaves out, over the render limit.
 const PREVIEW_TRUNCATED: Remark = Remark("output preview truncated (render limit)");
 
@@ -1716,12 +1713,9 @@ impl ValueSource {
         })
     }
 
-    /// The plain text if a worker has drawn it, else a placeholder.
+    /// The plain text if a worker has drawn it, else nothing yet.
     fn text_drawn(&self) -> String {
-        self.text
-            .get()
-            .cloned()
-            .unwrap_or_else(|| LAYING_OUT.current())
+        self.text.get().cloned().unwrap_or_default()
     }
 
     fn preview_text(&self, mode: PreviewMode) -> Option<&str> {
@@ -2080,8 +2074,8 @@ impl OutputBlock {
 
     /// `cell`'s value laid out under `key`, always by a worker unless the context
     /// asks for it on the spot. Until the worker is done, the rows laid out last
-    /// stay on screen whatever moved, and a placeholder row only when nothing was
-    /// laid out before.
+    /// stay on screen whatever moved, and an empty row only when nothing was laid
+    /// out before, which laying out ahead of the viewport keeps off screen.
     fn relaid(
         cell: &OutputCell,
         key: &LayoutKey,
@@ -2109,7 +2103,7 @@ impl OutputBlock {
                 cell.relayout.take();
                 return Ok(cell.source.laid(key));
             }
-            None => Rc::new(vec![Line::raw(LAYING_OUT.current())]),
+            None => Rc::new(vec![Line::default()]),
         };
         let requested = cell
             .relayout

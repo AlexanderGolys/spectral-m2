@@ -736,8 +736,29 @@ impl Feed {
         }
         self.scroll = surface.scroll;
         self.surface = Some(surface);
+        self.lay_out_ahead(&context, area.height);
         self.paint_selection(&context, target);
         (underfilled, inclusions)
+    }
+
+    /// Lay out the blocks above the viewport, [`UI::LAID_OUT_AHEAD_SCREENS`] screens
+    /// of them, their values on workers, so each is ready before it scrolls into
+    /// view. The walk that draws the viewport has laid out every block below it.
+    fn lay_out_ahead(&mut self, context: &RenderContext, height: u16) {
+        let Some(&(top, ..)) = self
+            .surface
+            .as_ref()
+            .and_then(|surface| surface.placements.first())
+        else {
+            return;
+        };
+        let mut ahead = UI::LAID_OUT_AHEAD_SCREENS * usize::from(height);
+        for block in self.blocks[..top].iter_mut().rev() {
+            if ahead == 0 {
+                break;
+            }
+            ahead = ahead.saturating_sub(block.height(context).into());
+        }
     }
 
     /// Every picture any block holds, wherever the viewport stands.

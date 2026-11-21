@@ -78,6 +78,9 @@ impl UI {
     pub const PICKER_MIN_VALUE_WIDTH: usize = 14;
 
     pub const STATUSLINE_MARGIN: u16 = 2;
+    /// Screens of the feed above the viewport laid out before they are scrolled to,
+    /// so that scrolling up reaches only blocks the workers have laid out.
+    pub const LAID_OUT_AHEAD_SCREENS: usize = 4;
 
     pub const MAX_OUTPUT_ROWS: usize = 40;
     /// Bytes of flat output admitted to synchronous preview formatting.
