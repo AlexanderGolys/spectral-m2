@@ -178,13 +178,34 @@ fn is_mark(item: &DisplayItem) -> bool {
     matches!(item, DisplayItem::Line { width, thickness, .. } if *width == 0.0 && *thickness == 0.0)
 }
 
-/// Where the formula may be cut into rows: at each [`BREAK_MARK`].
+/// Where the formula may be cut into rows: at each [`BREAK_MARK`] nothing
+/// drawn reaches across. The marks of a matrix column stand before each of its
+/// entries, so only the one before its widest entry cuts clear of them all.
 fn marked(list: &DisplayList) -> Vec<Break> {
     let cuts = list.items.iter().filter_map(|item| match item {
         DisplayItem::Line { x, .. } if is_mark(item) => Some(*x),
         _ => None,
     });
-    breaks(list, rows_after(list, cuts))
+    breaks(list, unbridged(list, cuts))
+}
+
+/// The rows after those of `cuts` that nothing drawn reaches across, as a
+/// fraction bar, a radical or a wider entry of the same column would.
+fn unbridged(
+    list: &DisplayList,
+    cuts: impl Iterator<Item = f64>,
+) -> impl Iterator<Item = (f64, f64)> {
+    let extents = list
+        .items
+        .iter()
+        .filter(|item| !is_mark(item))
+        .map(extent)
+        .collect::<Vec<_>>();
+    rows_after(list, cuts).filter(move |(end, start)| {
+        !extents
+            .iter()
+            .any(|(left, right)| *left < end - BREAK_TOLERANCE && right > start)
+    })
 }
 
 /// Where TeX written without marks may be cut into rows: after each separator
@@ -208,13 +229,7 @@ fn separated(list: &DisplayList) -> Vec<Break> {
             .then(|| Some(x + get_char_metrics(FontId::MainRegular, *char_code)?.width * scale))
             .flatten()
     });
-    let extents = list.items.iter().map(extent).collect::<Vec<_>>();
-    let unbridged = rows_after(list, cuts).filter(|(end, start)| {
-        !extents
-            .iter()
-            .any(|(left, right)| *left < end - BREAK_TOLERANCE && right > start)
-    });
-    breaks(list, unbridged)
+    breaks(list, unbridged(list, cuts))
 }
 
 /// Each of `cuts` across the formula, in ems, as where a row ends and where

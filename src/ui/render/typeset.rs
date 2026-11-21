@@ -106,6 +106,19 @@ impl Writer<'_> {
         description.into()
     }
 
+    /// A row of a grid. One that `breaks` may break before any column but its
+    /// first: a matrix too wide for its room is cut between columns into strips.
+    fn grid_row(&self, row: &[Math], breaks: bool) -> String {
+        row.iter()
+            .enumerate()
+            .map(|(column, entry)| {
+                let mark = if breaks && column > 0 { BREAK_MARK } else { "" };
+                format!("{mark}{}", self.tex(entry))
+            })
+            .collect::<Vec<_>>()
+            .join("&")
+    }
+
     /// A diagram inside other maths, as TeX can set it: its pieces in an array, an
     /// arrow between rows a symbol beside the column it leaves.
     fn diagram_array(&self, diagram: &Diagram) -> String {
@@ -318,10 +331,7 @@ impl Writer<'_> {
                     .enumerate()
                     .map(|(index, row)| {
                         let phantom = degrees.get(index).map(recurse).unwrap_or_default();
-                        format!(
-                            r"\vphantom{{{phantom}}}{}",
-                            row.iter().map(recurse).collect::<Vec<_>>().join("&")
-                        )
+                        format!(r"\vphantom{{{phantom}}}{}", self.grid_row(row, true))
                     })
                     .collect::<Vec<_>>()
                     .join(r"\\");
@@ -332,9 +342,10 @@ impl Writer<'_> {
                     HLGroup::Punctuation)
             }
             Math::Grid { rows, kind } => {
+                let breaks = matches!(kind, maths::GridKind::Matrix | maths::GridKind::Bare);
                 let body = rows
                     .iter()
-                    .map(|row| row.iter().map(recurse).collect::<Vec<_>>().join("&"))
+                    .map(|row| self.grid_row(row, breaks))
                     .collect::<Vec<_>>()
                     .join(r"\\");
                 if matches!(
