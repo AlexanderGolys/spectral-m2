@@ -50,6 +50,41 @@ impl WrapPolicy for CharacterWrap {
     }
 }
 
+cyclic! {
+    /// What a line of code wider than its pane does: breaks onto further rows, or
+    /// is cut at the right edge. For example, trimmed to 8 columns, `f = x -> x^2`
+    /// shows as `f = x ->`.
+    #[discriminated_str(label)]
+    #[non_exhaustive]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CodeOverflow {
+        #[default]
+        Wrap = "wrap",
+        Trim = "trim",
+    }
+}
+
+/// How code is laid out across rows: wrapped as a [`WrapMode`] breaks it, or
+/// each line on a row of its own, cut at the right edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodeLayout {
+    Wrapped(WrapMode),
+    Trimmed,
+}
+
+/// Keep each line on one row, dropping whatever passes the right edge.
+struct Trim;
+
+impl WrapPolicy for Trim {
+    fn wrap_logical_line(&self, line: &str, width: u16, offset: usize) -> Vec<VisualLine> {
+        vec![VisualLine {
+            range: offset..offset + offset_at_column(line, width.into()),
+            hard_continuation: false,
+        }]
+    }
+}
+
 impl WrapMode {
     /// Wrap editable input and retain an empty row for a caret at a full edge.
     pub fn caret_lines(self, text: &str, width: u16) -> Vec<VisualLine> {
@@ -131,11 +166,13 @@ impl WrappedText {
         Self::from_lines(source, WordWrap.wrap(source, width))
     }
 
-    /// Wrap code at whitespace and parsed span boundaries.
-    pub fn code(source: &str, width: u16, spans: &[Range<usize>], mode: WrapMode) -> Self {
-        let lines = match mode {
-            WrapMode::Word => SpanWrap(spans).wrap(source, width),
-            WrapMode::Character => CharacterWrap.wrap(source, width),
+    /// Lay out code as `layout` chooses, word wrapping it at whitespace and parsed
+    /// span boundaries.
+    pub fn code(source: &str, width: u16, spans: &[Range<usize>], layout: CodeLayout) -> Self {
+        let lines = match layout {
+            CodeLayout::Wrapped(WrapMode::Word) => SpanWrap(spans).wrap(source, width),
+            CodeLayout::Wrapped(WrapMode::Character) => CharacterWrap.wrap(source, width),
+            CodeLayout::Trimmed => Trim.wrap(source, width),
         };
         Self::from_lines(source, lines)
     }

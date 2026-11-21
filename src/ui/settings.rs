@@ -10,6 +10,7 @@ pub mod appearance;
 pub mod editor;
 pub mod keymap;
 pub mod lsp;
+pub mod panel;
 pub mod persisted;
 pub mod rendering;
 pub mod row;
@@ -24,6 +25,7 @@ use serde_json::{Map, Value};
 use self::editor::EditorSettings;
 pub use self::keymap::*;
 use self::lsp::LspSettings;
+use self::panel::PanelSettings;
 pub use self::persisted::*;
 use self::rendering::RenderingSettings;
 use self::row::SettingsTab;
@@ -61,6 +63,7 @@ sections! {
     #[serde(skip)]
     appearance: AppearanceSettings,
     rendering: RenderingSettings,
+    panel: PanelSettings,
     lsp: LspSettings,
     editor: EditorSettings,
     statusline: StatusLineSettings,
@@ -72,6 +75,7 @@ impl Settings {
     pub fn reformats(&self, other: &Self) -> bool {
         self.editor.output_rows != other.editor.output_rows
             || self.editor.code_wrap != other.editor.code_wrap
+            || self.panel.code_overflow != other.panel.code_overflow
             || self.rendering.reformats(&other.rendering)
     }
 
@@ -120,8 +124,9 @@ impl StoredSettings {
     /// `layout`, and before that every value lay in flat `editor` and `input`
     /// records with no `rendering` section; the selection was a section of its
     /// own; the language server's values were among the rendering and editor
-    /// ones; the charset was an `ascii` switch, earlier `basic_glyphs`, its on
-    /// position read as the ASCII charset while no charset is written.
+    /// ones, and the side panel's among the rendering ones; the charset was an
+    /// `ascii` switch, earlier `basic_glyphs`, its on position read as the ASCII
+    /// charset while no charset is written.
     /// A section reads only its own fields, so a larger record is harmless.
     fn upgraded(mut self) -> Self {
         if !self.0.contains_key("rendering") {
@@ -154,6 +159,10 @@ impl StoredSettings {
                 .chain(self.section("editor").clone())
                 .collect();
             self.0.insert("lsp".to_string(), Value::Object(lsp));
+        }
+        if !self.0.contains_key("panel") {
+            let panel = self.section("rendering").clone();
+            self.0.insert("panel".to_string(), Value::Object(panel));
         }
         let rendering = self.section("rendering");
         let ascii = [rendering.remove("ascii"), rendering.remove("basic_glyphs")];

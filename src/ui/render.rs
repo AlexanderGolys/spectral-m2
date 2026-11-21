@@ -12,7 +12,7 @@ use crate::ui::render::maths::MathStyle;
 use crate::ui::settings::rendering::RendererPosition;
 use crate::ui::settings::Settings;
 use crate::ui::theme::groups::{scheme, Groups};
-use crate::ui::wrap::WrapMode;
+use crate::ui::wrap::{CodeLayout, CodeOverflow};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
@@ -104,8 +104,15 @@ impl RenderContext {
         self.adopted_relayouts
     }
 
-    pub fn code_wrap(&self) -> WrapMode {
-        self.settings.editor.code_wrap
+    /// How code meets the right edge: the shell wraps it, the side panel's views
+    /// wrap or trim it as the side panel's code overflow setting chooses.
+    pub fn code_layout(&self) -> CodeLayout {
+        match (self.view, self.settings.panel.code_overflow) {
+            (ViewKind::Shell, _) | (_, CodeOverflow::Wrap) => {
+                CodeLayout::Wrapped(self.settings.editor.code_wrap)
+            }
+            (_, CodeOverflow::Trim) => CodeLayout::Trimmed,
+        }
     }
 
     /// Source styling, preserving its syntax foregrounds.

@@ -24,7 +24,7 @@ use crate::ui::element::EventListener;
 use crate::ui::feed::BlockView;
 use crate::ui::feed::Feed;
 use crate::ui::graphics::kitty::ImageId;
-use crate::ui::settings::rendering::OutputView;
+use crate::ui::settings::panel::OutputView;
 use crate::ui::statusline::{StatusLine, StatusLineContext};
 use crate::ui::syntax_tree::SyntaxTreeBlock;
 use crate::ui::theme::groups::{scheme, HLGroup};
@@ -452,7 +452,7 @@ impl Editor {
                     ));
             }
             ViewKind::Output => {
-                let blocks = match self.settings.rendering.output_view {
+                let blocks = match self.settings.panel.output_view {
                     OutputView::Everything => self.feed.outputs(),
                     OutputView::Values => self.feed.values(),
                     OutputView::Printed => self.feed.printed(),

@@ -1,7 +1,6 @@
 //! The *rendering* tab: how returned values and their maths are drawn.
 
 use ratatui::layout::Rect;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -60,21 +59,6 @@ impl RendererPosition {
     }
 }
 
-cyclic! {
-    /// What the output view beside the session shows of the feed.
-    #[non_exhaustive]
-    #[discriminated_str(label)]
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    pub enum OutputView {
-        /// Everything in the feed except the code: printed text, values and messages.
-        #[default]
-        Everything = "everything",
-        Values = "values",
-        Printed = "printed",
-    }
-}
-
 /// The values of the *rendering* tab, and the maths colours the *appearance*
 /// tab shows: they change how values lay out, as every rendering value does.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -105,10 +89,6 @@ pub struct RenderingSettings {
     /// Whether the maps of a complex or a diagram are labelled by their matrices
     /// rather than their names.
     pub matrix_labels: bool,
-    /// Seconds each documentation example may take to be computed again, so
-    /// its value is drawn from its structure; none computes nothing.
-    pub example_seconds: u16,
-    pub output_view: OutputView,
 }
 
 impl Default for RenderingSettings {
@@ -127,8 +107,6 @@ impl Default for RenderingSettings {
             matrix_row_spacing_percent: UI::MATRIX_ROW_SPACING_PERCENT,
             matrix_degrees: false,
             matrix_labels: false,
-            example_seconds: 0,
-            output_view: OutputView::default(),
         }
     }
 }
@@ -142,22 +120,13 @@ impl SettingsTab for RenderingSettings {
 }
 
 impl RenderingSettings {
-    /// How long each documentation example may take to be computed again; zero
-    /// when they are not.
-    pub fn example_timeout(&self) -> Duration {
-        Duration::from_secs(self.example_seconds.into())
-    }
-
     /// Whether returned values lay out differently, moving their heights: any
-    /// setting differs but italics, the examples' timeout and the output view.
+    /// setting differs but italics.
     pub(super) fn reformats(&self, other: &Self) -> bool {
-        let unlaid = Self {
+        Self {
             italics: other.italics,
-            example_seconds: other.example_seconds,
-            output_view: other.output_view,
             ..*self
-        };
-        unlaid != *other
+        } != *other
     }
 
     /// Whether maths is drawn as typeset pictures here, not only chosen to be.
@@ -181,8 +150,6 @@ cyclic! {
         MatrixRowSpacing = "matrix row spacing",
         MatrixDegrees = "matrix degrees",
         MatrixLabels = "matrix labels",
-        ExampleTimeout = "compute examples",
-        OutputView = "output view",
     }
 }
 
@@ -216,12 +183,6 @@ impl SettingRow for RenderingSetting {
             }
             Self::MatrixDegrees => "show the degrees of a matrix's rows beside them, greyed out",
             Self::MatrixLabels => "label the maps of complexes and diagrams by their matrices rather than their names, dd_i or f_i",
-            Self::ExampleTimeout => {
-                "run documentation examples again, each for at most this long, to draw their values"
-            }
-            Self::OutputView => {
-                "what the output view beside the session shows: everything but the code, values, or printed text"
-            }
         }
     }
 
@@ -258,15 +219,6 @@ impl SettingRow for RenderingSetting {
             }
             Self::MatrixDegrees => switch(rendering.matrix_degrees, "on"),
             Self::MatrixLabels => switch(rendering.matrix_labels, "on"),
-            Self::OutputView => {
-                PickerValue::among(OutputView::CHOICES, &rendering.output_view, |view| {
-                    view.label().into()
-                })
-            }
-            Self::ExampleTimeout => PickerValue::Stepped(match rendering.example_seconds {
-                0 => "off".to_string(),
-                seconds => format!("{seconds}s"),
-            }),
         }
     }
 
@@ -303,12 +255,6 @@ impl SettingRow for RenderingSetting {
             }
             Self::MatrixDegrees => rendering.matrix_degrees = !rendering.matrix_degrees,
             Self::MatrixLabels => rendering.matrix_labels = !rendering.matrix_labels,
-            Self::OutputView => rendering.output_view = rendering.output_view.cycle(delta),
-            Self::ExampleTimeout => {
-                rendering.example_seconds = rendering
-                    .example_seconds
-                    .saturating_add_signed(delta.into());
-            }
         }
     }
 

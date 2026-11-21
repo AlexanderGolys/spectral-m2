@@ -28,7 +28,7 @@ Each opened page takes a tab of the pane; `Ctrl+Shift+B` returns to the previous
 
 ## Examples computed for real
 
-Documentation examples carry the output M2 recorded when the docs were built, as plain text. Turn on *compute examples* in the [rendering settings](../reference/settings.md#rendering) to have each page's examples run again, each for at most the time you choose, so their values are drawn from their structure like your own results.
+Documentation examples carry the output M2 recorded when the docs were built, as plain text. Turn on *compute examples* in the [side panel settings](../reference/settings.md#side-panel) to have each page's examples run again, each for at most the time you choose, so their values are drawn from their structure like your own results.
 
 Each page runs in a fresh Macaulay2 of its own with its package loaded, never in your session, and stops at the first example that runs out of time or answers differently from the record.
 

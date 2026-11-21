@@ -2,7 +2,7 @@
 
 Open the settings with `Ctrl+O` or `/settings`. They are kept between sessions: the scheme, contrast, mode and background in `appearance.json`, everything else, keys and the maths colours of the appearance tab included, in `settings.json`, both in the [configuration directory](files.md).
 
-The picker has seven tabs along its top; `Tab` and `Shift+Tab` switch them, or move onto the row of tabs and use `Left` and `Right`. `Up` and `Down` pick a row, `Left` and `Right` change it (`Space` also steps right), and the selected row describes itself under the list. *Restore defaults*, beneath the rows, resets everything: settings, keys and appearance.
+The picker has eight tabs along its top; `Tab` and `Shift+Tab` switch them, or move onto the row of tabs and use `Left` and `Right`. `Up` and `Down` pick a row, `Left` and `Right` change it (`Space` also steps right), and the selected row describes itself under the list. *Restore defaults*, beneath the rows, resets everything: settings, keys and appearance.
 
 ## Appearance
 
@@ -56,11 +56,18 @@ matrix degrees
 matrix labels
 : Label the maps of a complex or a map of complexes by their matrices. Off, each is labelled by its name: a differential by `dd_i`, a component of a map by the map's name, or `f` when no global name holds it, as `f_i`. Default: off.
 
-compute examples
-: How long each documentation example may run when it is computed again, so its value is drawn from its structure. Default: off, which keeps the output the documentation recorded. See [Documentation](../shell/documentation.md#examples-computed-for-real).
+## Side panel { #side-panel }
+
+The [views beside the session](../shell/views.md): the code, output and syntax-tree views and the reference pane.
 
 output view
 : What the [output view](../shell/views.md) shows: `everything` in the feed except the code, only returned `values`, or only `printed` text. Default: everything.
+
+code overflow
+: What code wider than the panel does: `wrap` breaks it onto further rows as *code wrapping* in the editor settings chooses, `trim` cuts each line at the right edge. Default: `wrap`. Code in the shell always wraps.
+
+compute examples
+: How long each documentation example may run when it is computed again, so its value is drawn from its structure. Default: off, which keeps the output the documentation recorded. See [Documentation](../shell/documentation.md#examples-computed-for-real).
 
 ## LSP
 

@@ -26,7 +26,7 @@ Each scheme uses its upstream palette with its own colour names and RGB values, 
 
 With the language server [`m2-ls`](https://crates.io/crates/m2-ls) installed (`cargo install m2-ls`, 2.0 or later), code also takes colours from what the server knows: a method apart from a variable, a ring generator, an option name, the head of a method installation, a library function. They are laid over the syntax colours, the way Neovim lays LSP highlights over tree-sitter ones, and while you type the previous colours stay until new ones arrive.
 
-They apply to the input, submitted cells, code views and documentation examples. Analysis reads your session's source; it never evaluates code, so names created dynamically may stay unknown. Without the server, or if it stops, code keeps its syntax colours. The *language server* and *semantic highlighting* rows of the [rendering settings](../reference/settings.md#rendering) switch it.
+They apply to the input, submitted cells, code views and documentation examples. Analysis reads your session's source; it never evaluates code, so names created dynamically may stay unknown. Without the server, or if it stops, code keeps its syntax colours. The *language server* and *semantic highlighting* rows of the [LSP settings](../reference/settings.md#lsp) switch it.
 
 ## Edit any colour
 

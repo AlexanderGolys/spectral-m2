@@ -36,7 +36,7 @@ use super::render::selection::Inclusions;
 use super::render::{markup, maths, spin, typeset};
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::settings::rendering::RendererPosition;
-use super::wrap::{offset_at_column, SpanWrap, WrapPolicy, WrappedText};
+use super::wrap::{offset_at_column, CodeLayout, SpanWrap, WrapPolicy, WrappedText};
 use crate::backend::transcript::{captured_error, captured_output, strip_m2_location};
 use crate::backend::{DocPage, M2Response, PreviewMode, Shape, ValuePreview};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
@@ -333,8 +333,8 @@ impl M2CodeCell {
         true
     }
 
-    fn wrapped(&self, width: u16, mode: crate::ui::wrap::WrapMode) -> WrappedText {
-        WrappedText::code(&self.text, width, &self.wrap_ranges, mode)
+    fn wrapped(&self, width: u16, layout: CodeLayout) -> WrappedText {
+        WrappedText::code(&self.text, width, &self.wrap_ranges, layout)
     }
 
     fn marker(&self) -> CellMarker {
@@ -399,22 +399,25 @@ impl SourceBlock {
         let code = self.code.borrow();
         let cell = &code.cells[0];
         let gutter = cell.marker().width(code.layout());
-        cell.wrapped(context.width().saturating_sub(gutter), context.code_wrap())
-            .source_lines()
-            .enumerate()
-            .filter_map(|(row, (range, _))| {
-                let start = range.start.max(focus.start);
-                let end = range.end.min(focus.end);
-                (start < end).then(|| {
-                    Rect::new(
-                        gutter + cell.text[range.start..start].width() as u16,
-                        row as u16 + 1,
-                        cell.text[start..end].width() as u16,
-                        1,
-                    )
-                })
+        cell.wrapped(
+            context.width().saturating_sub(gutter),
+            context.code_layout(),
+        )
+        .source_lines()
+        .enumerate()
+        .filter_map(|(row, (range, _))| {
+            let start = range.start.max(focus.start);
+            let end = range.end.min(focus.end);
+            (start < end).then(|| {
+                Rect::new(
+                    gutter + cell.text[range.start..start].width() as u16,
+                    row as u16 + 1,
+                    cell.text[start..end].width() as u16,
+                    1,
+                )
             })
-            .collect()
+        })
+        .collect()
     }
 
     /// Every row of the layout with nothing folded, none for the padding around the code.
@@ -424,14 +427,17 @@ impl SourceBlock {
         let gutter = cell.marker().width(code.layout());
         let mut rows = vec![None];
         rows.extend(
-            cell.wrapped(context.width().saturating_sub(gutter), context.code_wrap())
-                .source_lines()
-                .map(|(range, _)| {
-                    Some(SourceRow {
-                        line: cell.text[..range.start].matches('\n').count() as u32,
-                        text: range.clone(),
-                    })
-                }),
+            cell.wrapped(
+                context.width().saturating_sub(gutter),
+                context.code_layout(),
+            )
+            .source_lines()
+            .map(|(range, _)| {
+                Some(SourceRow {
+                    line: cell.text[..range.start].matches('\n').count() as u32,
+                    text: range.clone(),
+                })
+            }),
         );
         rows.resize_with(usize::from(code.height(context)), || None);
         rows
@@ -614,7 +620,7 @@ impl CodeBlock {
             .map(|cell| {
                 cell.wrapped(
                     context.width().saturating_sub(cell.marker().width(layout)),
-                    context.code_wrap(),
+                    context.code_layout(),
                 )
                 .height()
             })
@@ -713,7 +719,7 @@ impl Block for CodeBlock {
             row = row.saturating_add(
                 cell.wrapped(
                     context.width().saturating_sub(marker.width(layout)),
-                    context.code_wrap(),
+                    context.code_layout(),
                 )
                 .height(),
             );
@@ -729,7 +735,7 @@ impl Block for CodeBlock {
         let mut row = 1;
         for cell in &self.cells {
             let width = context.width().saturating_sub(cell.marker().width(layout));
-            let wrapped = cell.wrapped(width, context.code_wrap());
+            let wrapped = cell.wrapped(width, context.code_layout());
             inclusions.mark_wrapped_rows(
                 row,
                 context.width(),
@@ -756,7 +762,7 @@ fn cell_lines(
     highlight: bool,
 ) -> Vec<Line<'static>> {
     let width = marker.width(layout);
-    cell.wrapped(context.width().saturating_sub(width), context.code_wrap())
+    cell.wrapped(context.width().saturating_sub(width), context.code_layout())
         .source_lines()
         .enumerate()
         .map(|(index, (range, _))| {
@@ -1099,7 +1105,7 @@ impl EvaluationBlock {
             height.saturating_add(
                 cell.wrapped(
                     width.saturating_sub(marker.width(layout)),
-                    context.code_wrap(),
+                    context.code_layout(),
                 )
                 .height(),
             )
@@ -1213,7 +1219,7 @@ impl Block for EvaluationBlock {
         let mut row = 1;
         for (index, (cell, state)) in self.cells.iter().enumerate() {
             let prefix = state.marker().width(layout);
-            let wrapped = cell.wrapped(code_width.saturating_sub(prefix), context.code_wrap());
+            let wrapped = cell.wrapped(code_width.saturating_sub(prefix), context.code_layout());
             let next = row + wrapped.height();
             if (row..next).contains(&position.y) {
                 let (range, _) = wrapped.source_lines().nth(usize::from(position.y - row))?;
@@ -1258,7 +1264,7 @@ impl Block for EvaluationBlock {
             let next = row.saturating_add(
                 cell.wrapped(
                     code_width.saturating_sub(marker.width(layout)),
-                    context.code_wrap(),
+                    context.code_layout(),
                 )
                 .height(),
             );
@@ -1318,7 +1324,7 @@ impl Block for EvaluationBlock {
             let height = cell
                 .wrapped(
                     code_width.saturating_sub(marker.width(layout)),
-                    context.code_wrap(),
+                    context.code_layout(),
                 )
                 .height();
             items.push(Item::new(
@@ -1376,7 +1382,7 @@ impl Block for EvaluationBlock {
         for (cell, state) in &self.cells {
             let wrapped = cell.wrapped(
                 code_width.saturating_sub(state.marker().width(layout)),
-                context.code_wrap(),
+                context.code_layout(),
             );
             inclusions.mark_wrapped_rows(
                 row,

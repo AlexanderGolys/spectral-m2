@@ -515,7 +515,7 @@ impl Editor {
 
     /// How long each documentation example may take to be computed again.
     pub fn example_timeout(&self) -> Duration {
-        self.settings.rendering.example_timeout()
+        self.settings.panel.example_timeout()
     }
 
     /// Whether text may be drawn in italics.

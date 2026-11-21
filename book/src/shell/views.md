@@ -10,10 +10,12 @@ Open a second look at the same session beside it: just your code, just its outpu
 : Your committed input as one highlighted file, without pending or rejected code. The place to select setup lines worth [keeping](sessions.md#keep-a-starting-point).
 
 `/output`, `F5`
-: What the session answered, without the code. The *output view* setting in the [rendering settings](../reference/settings.md#rendering) chooses what: `everything` (printed text, values and messages, the default), only returned `values` with their types, or only `printed` text, each piece numbered by the cell that printed it.
+: What the session answered, without the code. The *output view* setting in the [side panel settings](../reference/settings.md#side-panel) chooses what: `everything` (printed text, values and messages, the default), only returned `values` with their types, or only `printed` text, each piece numbered by the cell that printed it.
 
 `/ast`, `F6`
 : The syntax tree of every committed cell, opening at the newest: highlighted source between two rules, then its tree. Node types come before field labels, brackets enclose what they hold, and source ranges line up in one column.
+
+Code wider than the pane wraps as it does in the shell, or is cut at the right edge when *code overflow* in the [side panel settings](../reference/settings.md#side-panel) is `trim`.
 
 A view opens to the right of the shell and focus stays in the shell, so you can keep evaluating while it follows. Each new input or result brings every view back to its newest content. Opening the view already showing closes it again.
 
