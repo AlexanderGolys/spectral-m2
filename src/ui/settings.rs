@@ -19,6 +19,7 @@ pub mod session;
 pub mod statusline;
 
 use ratatui::text::Span;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -98,6 +99,8 @@ pub struct SavedSettings {
     /// Every rebind made, in order. Replaying them over the default keymaps restores
     /// the swaps they caused as well as the keys they set.
     pub rebinds: Vec<ShortcutKey>,
+    /// Every way of opening links moved to another mouse chord, in order.
+    pub gestures: Vec<GestureChord>,
 }
 
 impl Persisted for SavedSettings {
@@ -111,10 +114,12 @@ struct StoredSettings(Map<String, Value>);
 impl From<StoredSettings> for SavedSettings {
     fn from(stored: StoredSettings) -> Self {
         let mut stored = stored.upgraded();
-        let rebinds = stored.take_rebinds();
+        let rebinds = stored.take_list("rebinds");
+        let gestures = stored.take_list("gestures");
         Self {
             settings: serde_json::from_value(Value::Object(stored.0)).unwrap_or_default(),
             rebinds,
+            gestures,
         }
     }
 }
@@ -187,10 +192,11 @@ impl StoredSettings {
             .expect("the section was just made an object")
     }
 
-    /// The saved rebinds this version still reads: one naming an action since
-    /// removed is dropped rather than losing every other setting.
-    fn take_rebinds(&mut self) -> Vec<ShortcutKey> {
-        match self.0.remove("rebinds") {
+    /// The entries of the list saved under `key` that this version still reads:
+    /// a rebind naming an action since removed is dropped rather than losing
+    /// every other setting.
+    fn take_list<T: DeserializeOwned>(&mut self, key: &str) -> Vec<T> {
+        match self.0.remove(key) {
             Some(Value::Array(rebinds)) => rebinds
                 .into_iter()
                 .filter_map(|rebind| serde_json::from_value(rebind).ok())

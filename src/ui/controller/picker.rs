@@ -15,7 +15,7 @@ use super::EditorEvent;
 use crate::ui::action::Action;
 use crate::ui::block::Element;
 use crate::ui::config::UI;
-use crate::ui::key::KeyEvent;
+use crate::ui::key::{KeyEvent, MouseChord};
 use crate::ui::statusline::KeyHints;
 use crate::ui::theme::groups::scheme;
 use crate::ui::wrap::{WordWrap, WrapPolicy};
@@ -32,6 +32,8 @@ pub enum PickerInput {
     Action(Action),
     /// Unmapped input interpreted privately by the picker.
     Key(KeyEvent),
+    /// A mouse button pressed while a row waits for one.
+    Mouse(MouseChord),
 }
 
 /// One option a [`PickerValue::Choice`] offers.
@@ -922,6 +924,11 @@ impl PickerController {
     /// Handle navigation, row behavior, or mode-specific fallback behavior.
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<EditorEvent> {
         self.handle(PickerInput::Key(key))
+    }
+
+    /// Offer a pressed mouse chord to the row waiting for one.
+    pub fn handle_mouse(&mut self, chord: MouseChord) -> Option<EditorEvent> {
+        self.handle(PickerInput::Mouse(chord))
     }
 
     /// Handle a mapped action without retaining its originating key.

@@ -5,7 +5,7 @@ use std::ops::Add;
 
 use crossterm::event::{
     KeyCode, KeyEvent as CrosstermKeyEvent, KeyEventKind, KeyModifiers as CrosstermModifiers,
-    ModifierKeyCode,
+    ModifierKeyCode, MouseButton, MouseEvent, MouseEventKind,
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +23,50 @@ pub enum KeyMod {
 pub struct KeyEvent {
     pub code: KeyCode,
     modifiers: u8,
+}
+
+/// A mouse button pressed with modifiers held, such as Ctrl with the middle
+/// button, written `ctrl+middle click`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MouseChord {
+    pub button: MouseButton,
+    modifiers: u8,
+}
+
+impl MouseChord {
+    pub const fn new(button: MouseButton) -> Self {
+        Self {
+            button,
+            modifiers: 0,
+        }
+    }
+
+    /// The chord `event` presses; none unless it is a button going down.
+    pub fn pressed(event: &MouseEvent) -> Option<Self> {
+        let MouseEventKind::Down(button) = event.kind else {
+            return None;
+        };
+        Some(Self {
+            button,
+            modifiers: KeyMod::held(event.modifiers),
+        })
+    }
+
+    /// Whether no modifier is held with the button.
+    pub const fn bare(self) -> bool {
+        self.modifiers == 0
+    }
+}
+
+impl Add<KeyMod> for MouseButton {
+    type Output = MouseChord;
+
+    fn add(self, modifier: KeyMod) -> Self::Output {
+        MouseChord {
+            button: self,
+            modifiers: modifier as u8,
+        }
+    }
 }
 
 /// Held modifier state used when a terminal omits modifiers from another key.
@@ -59,6 +103,23 @@ impl Keyboard {
 }
 
 impl KeyMod {
+    /// The logical modifiers among those a terminal reports held, as bits.
+    fn held(modifiers: CrosstermModifiers) -> u8 {
+        let ctrl = if cfg!(target_os = "macos") {
+            CrosstermModifiers::SUPER
+        } else {
+            CrosstermModifiers::CONTROL
+        };
+        [
+            (ctrl, Self::Ctrl),
+            (CrosstermModifiers::ALT, Self::Alt),
+            (CrosstermModifiers::SHIFT, Self::Shift),
+        ]
+        .into_iter()
+        .filter(|(reported, _)| modifiers.intersects(*reported))
+        .fold(0, |held, (_, modifier)| held | modifier as u8)
+    }
+
     fn from(code: ModifierKeyCode) -> Option<Self> {
         use ModifierKeyCode::*;
         match code {
@@ -168,27 +229,49 @@ macro_rules! key {
 }
 
 literally_literal_string! {
-    impl Display for KeyEvent {
-        fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-            use KeyCode::*;
-            let mut parts = Vec::new();
-            if self.ctrl() {
-                parts.push(if cfg!(target_os = "macos") {
+    impl KeyMod {
+        /// The names of the modifiers in `modifiers`, in the order a chord is
+        /// written.
+        fn names(modifiers: u8) -> Vec<String> {
+            let held = |modifier: Self| modifiers & modifier as u8 != 0;
+            let mut names = Vec::new();
+            if held(Self::Ctrl) {
+                names.push(if cfg!(target_os = "macos") {
                     @@"cmd"
                 } else {
                     @@"ctrl"
                 });
             }
-            if self.alt() {
-                parts.push(if cfg!(target_os = "macos") {
+            if held(Self::Alt) {
+                names.push(if cfg!(target_os = "macos") {
                     @@"option"
                 } else {
                     @@"alt"
                 });
             }
-            if self.shift() {
-                parts.push(@@"shift");
+            if held(Self::Shift) {
+                names.push(@@"shift");
             }
+            names
+        }
+    }
+
+    impl Display for MouseChord {
+        fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+            let mut parts = KeyMod::names(self.modifiers);
+            parts.push(match self.button {
+                MouseButton::Left => @@"click",
+                MouseButton::Middle => @@"middle click",
+                MouseButton::Right => @@"right click",
+            });
+            formatter.write_str(&parts.join("+"))
+        }
+    }
+
+    impl Display for KeyEvent {
+        fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+            use KeyCode::*;
+            let mut parts = KeyMod::names(self.modifiers);
             parts.push(match self.code {
                 Char(character) => character.into(),
                 Enter => @@"enter",
@@ -221,22 +304,9 @@ impl From<KeyCode> for KeyEvent {
 
 impl From<CrosstermKeyEvent> for KeyEvent {
     fn from(event: CrosstermKeyEvent) -> Self {
-        use KeyMod::*;
-        let mut key = Self::new(event.code);
-        let ctrl = if cfg!(target_os = "macos") {
-            CrosstermModifiers::SUPER
-        } else {
-            CrosstermModifiers::CONTROL
-        };
-        if event.modifiers.intersects(ctrl) {
-            key = key + Ctrl;
+        Self {
+            code: event.code,
+            modifiers: KeyMod::held(event.modifiers),
         }
-        if event.modifiers.contains(CrosstermModifiers::ALT) {
-            key = key + Alt;
-        }
-        if event.modifiers.contains(CrosstermModifiers::SHIFT) {
-            key = key + Shift;
-        }
-        key
     }
 }

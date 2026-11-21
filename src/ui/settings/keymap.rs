@@ -4,19 +4,20 @@
 //! without a binding continue to the focused component as ordinary input.
 
 use std::collections::{BTreeSet, HashMap};
+use std::fmt::Display;
 
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, MouseButton};
 use KeyCode::*;
 
 use ratatui::text::{Line, Span};
 use serde::{Deserialize, Serialize};
 
 use crate::input::{InputAction, Traversal};
-use crate::ui::action::Action;
+use crate::ui::action::{Action, Opening};
 use crate::ui::controller::picker::{PickerInput, PickerItem, PickerMode, PickerTab, Row};
 use crate::ui::controller::EditorEvent;
 use crate::ui::glyphs::{Glyphs, Spelled};
-use crate::ui::key::{KeyEvent, KeyMod};
+use crate::ui::key::{KeyEvent, KeyMod, MouseChord};
 use crate::ui::theme::groups::{scheme, HLGroup};
 use KeyMod::{Alt, Ctrl, Shift};
 
@@ -112,11 +113,18 @@ struct Keymap {
 /// the user made, or a binding as it stands.
 pub type ShortcutKey = (Shortcut, KeyEvent);
 
-/// The editor's exact normalized-key bindings.
+/// A way of opening links and the mouse chord it sits on, such as a new tab on
+/// the middle button.
+pub type GestureChord = (Opening, MouseChord);
+
+/// The editor's exact normalized-key bindings, and the mouse chords that open
+/// links.
 #[derive(Clone)]
 pub struct Keymaps {
     bindings: HashMap<KeyEvent, Keymap>,
     rebinds: Vec<ShortcutKey>,
+    gestures: HashMap<MouseChord, Opening>,
+    gesture_rebinds: Vec<GestureChord>,
 }
 
 impl Keymaps {
@@ -136,6 +144,11 @@ impl Keymaps {
                     })
             })
             .collect::<Vec<_>>();
+        let mut gestures = self.gestures.iter().collect::<Vec<_>>();
+        gestures.sort_by_key(|(_, opening)| **opening);
+        items.extend(gestures.into_iter().map(|(&chord, &opening)| {
+            Box::new(KeymapRow::new(opening, chord)) as Box<dyn PickerItem>
+        }));
         items.push(Self::restore_button());
         PickerTab {
             mode: Some(PickerMode::Keymaps),
@@ -188,13 +201,47 @@ impl Keymaps {
         self.key(shortcut).map(|key| key.to_string())
     }
 
-    /// The default keymaps with `rebinds` made over them, in order.
-    pub fn replaying(rebinds: &[ShortcutKey]) -> Self {
+    /// The default keymaps with `rebinds` and `gestures` made over them, in order.
+    pub fn replaying(rebinds: &[ShortcutKey], gestures: &[GestureChord]) -> Self {
         let mut keymaps = Self::default();
         for &(shortcut, key) in rebinds {
             keymaps.rebind(shortcut, key);
         }
+        for &(opening, chord) in gestures {
+            keymaps.rebind_gesture(opening, chord);
+        }
         keymaps
+    }
+
+    /// How the link under a press of `chord` opens, if the chord opens links.
+    pub fn opening(&self, chord: MouseChord) -> Option<Opening> {
+        self.gestures.get(&chord).copied()
+    }
+
+    /// Every gesture rebind that took effect, in the order made.
+    pub fn gesture_rebinds(&self) -> &[GestureChord] {
+        &self.gesture_rebinds
+    }
+
+    /// Move `opening` onto `chord`, swapping with the opening already there. A
+    /// bare left click never opens links, as it places the cursor and selects.
+    pub fn rebind_gesture(&mut self, opening: Opening, chord: MouseChord) -> bool {
+        let selecting = chord.bare() && chord.button == MouseButton::Left;
+        let target = self
+            .gestures
+            .iter()
+            .find_map(|(bound, there)| (*there == opening).then_some(*bound));
+        let Some(target) = target.filter(|_| !selecting) else {
+            return false;
+        };
+        if chord != target {
+            match self.gestures.insert(chord, opening) {
+                Some(displaced) => self.gestures.insert(target, displaced),
+                None => self.gestures.remove(&target),
+            };
+            self.gesture_rebinds.push((opening, chord));
+        }
+        true
     }
 
     /// Every rebind that took effect, in the order made.
@@ -280,40 +327,107 @@ impl Keymaps {
     }
 }
 
-/// A shortcut row that captures a replacement only after Enter.
-pub struct KeymapRow {
-    shortcut: Shortcut,
-    key: KeyEvent,
+/// Something the user binds to a chord of its own kind: a shortcut to a key, a
+/// way of opening links to a mouse button.
+pub trait Bindable: Copy + Send + 'static {
+    type Chord: Copy + Display + Send;
+
+    fn description(self) -> &'static str;
+
+    /// The group the binding is listed in, named beneath the list.
+    fn group(self) -> &'static str;
+
+    /// What to do to give the binding a new chord.
+    const PROMPT: &'static str;
+
+    /// The chord `input` offers a binding of this kind, if any.
+    fn offered(input: &PickerInput) -> Option<Self::Chord>;
+
+    fn rebound(self, chord: Self::Chord) -> EditorEvent;
+}
+
+impl Bindable for Shortcut {
+    type Chord = KeyEvent;
+    const PROMPT: &'static str = "Type keybind";
+
+    fn description(self) -> &'static str {
+        Shortcut::description(self)
+    }
+
+    fn group(self) -> &'static str {
+        self.context().label()
+    }
+
+    fn offered(input: &PickerInput) -> Option<KeyEvent> {
+        match input {
+            PickerInput::Key(key) => Some(*key),
+            _ => None,
+        }
+    }
+
+    fn rebound(self, key: KeyEvent) -> EditorEvent {
+        EditorEvent::Rebind(self, key)
+    }
+}
+
+impl Bindable for Opening {
+    type Chord = MouseChord;
+    const PROMPT: &'static str = "Click with the new button";
+
+    fn description(self) -> &'static str {
+        Opening::description(&self)
+    }
+
+    fn group(self) -> &'static str {
+        "mouse"
+    }
+
+    fn offered(input: &PickerInput) -> Option<MouseChord> {
+        match input {
+            PickerInput::Mouse(chord) => Some(*chord),
+            _ => None,
+        }
+    }
+
+    fn rebound(self, chord: MouseChord) -> EditorEvent {
+        EditorEvent::RebindGesture(self, chord)
+    }
+}
+
+/// A binding's row, which captures a replacement chord only after Enter.
+pub struct KeymapRow<B: Bindable = Shortcut> {
+    bound: B,
+    chord: B::Chord,
     capturing: bool,
 }
 
-impl KeymapRow {
-    /// Show a shortcut and its current key.
-    pub fn new(shortcut: Shortcut, key: KeyEvent) -> Self {
+impl<B: Bindable> KeymapRow<B> {
+    /// Show a binding and its current chord.
+    pub fn new(bound: B, chord: B::Chord) -> Self {
         Self {
-            shortcut,
-            key,
+            bound,
+            chord,
             capturing: false,
         }
     }
 }
 
-impl PickerItem for KeymapRow {
+impl<B: Bindable> PickerItem for KeymapRow<B> {
     fn cells(&self) -> Vec<Line<'static>> {
         let groups = scheme();
-        let shortcut = if self.capturing {
-            format!("Type keybind{} (Esc cancels)", Glyphs::Ellipsis.current())
+        let chord = if self.capturing {
+            format!("{}{} (Esc cancels)", B::PROMPT, Glyphs::Ellipsis.current())
         } else {
-            self.key.to_string()
+            self.chord.to_string()
         };
         vec![
-            Span::styled(self.shortcut.description(), groups.keymap_action_label()).into(),
-            Span::styled(shortcut, groups.style(HLGroup::KeymapHint)).into(),
+            Span::styled(self.bound.description(), groups.keymap_action_label()).into(),
+            Span::styled(chord, groups.style(HLGroup::KeymapHint)).into(),
         ]
     }
 
     fn description(&self) -> Option<&str> {
-        Some(self.shortcut.context().label())
+        Some(self.bound.group())
     }
 
     fn capturing(&self) -> bool {
@@ -322,18 +436,15 @@ impl PickerItem for KeymapRow {
 
     fn handle(&mut self, input: PickerInput) -> Option<EditorEvent> {
         match input {
-            PickerInput::Key(key) if self.capturing => {
-                if key.code == Esc {
-                    self.capturing = false;
-                    None
-                } else {
-                    Some(EditorEvent::Rebind(self.shortcut, key))
-                }
+            PickerInput::Key(KeyEvent { code: Esc, .. }) if self.capturing => {
+                self.capturing = false;
+                None
             }
-            PickerInput::Action(Action::Submit) => {
+            PickerInput::Action(Action::Submit) if !self.capturing => {
                 self.capturing = true;
                 None
             }
+            input if self.capturing => B::offered(&input).map(|chord| self.bound.rebound(chord)),
             _ => None,
         }
     }
@@ -481,6 +592,12 @@ impl Default for Keymaps {
                 keymap!(I::HistoryNext => Down + Ctrl),
             ]),
             rebinds: Vec::new(),
+            gestures: HashMap::from([
+                (MouseButton::Left + Ctrl, Opening::Here),
+                (MouseChord::new(MouseButton::Middle), Opening::Beside),
+                (MouseButton::Middle + Ctrl, Opening::BesideAndJump),
+            ]),
+            gesture_rebinds: Vec::new(),
         }
     }
 }

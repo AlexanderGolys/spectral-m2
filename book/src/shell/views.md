@@ -38,7 +38,7 @@ A link opens in one of three ways:
 | Middle-click | in a new tab to the right, staying where you are |
 | `Ctrl`+middle-click | in a new tab to the right, and goes to it |
 
-It works the same on links in the feed and in the pane; from the feed the pane opens if it was hidden. `Enter` on a link under the [view cursor](select.md) opens it in the tab showing.
+The buttons can be [rebound](../custom/keymaps.md#rebind-a-mouse-button). It works the same on links in the feed and in the pane; from the feed the pane opens if it was hidden. `Enter` on a link under the [view cursor](select.md) opens it in the tab showing.
 
 ### History
 

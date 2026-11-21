@@ -33,7 +33,7 @@ use super::config::UI;
 use super::debug::{resident_bytes, FrameStats};
 use super::element::EventListener;
 use super::feed::Feed;
-use super::key::{KeyEvent, KeyMod};
+use super::key::{KeyEvent, KeyMod, MouseChord};
 use super::render::maths::MathDisplay;
 use super::render::selection::Inclusions;
 use super::render::spin;
@@ -259,6 +259,7 @@ pub enum EditorEvent {
     RestoreKeymaps,
     SetSettings(Settings),
     Rebind(Shortcut, KeyEvent),
+    RebindGesture(Opening, MouseChord),
 }
 
 /// The editor child that receives an otherwise unclaimed input event.
@@ -367,7 +368,7 @@ impl Editor {
             input,
             notes: notes::Notes::default(),
             settings,
-            keymaps: Keymaps::replaying(&saved.rebinds),
+            keymaps: Keymaps::replaying(&saved.rebinds, &saved.gestures),
             status_line: StatusLine::default(),
             status_runtime: StatusRuntime::default(),
             continuation: None,
@@ -826,6 +827,9 @@ impl Editor {
     /// through the input's lines, everywhere else it scrolls the feed. A double click on a folded
     /// value expands it, and on an expanded one folds it back.
     fn route_mouse(&mut self, event: MouseEvent) -> Reaction {
+        if self.capture_gesture(event) {
+            return Reaction::Continue;
+        }
         let pointer = Position::new(event.column, event.row);
         self.pointer = Some(pointer);
         self.control_held = event.modifiers.contains(KeyModifiers::CONTROL);
@@ -847,7 +851,7 @@ impl Editor {
                 );
             }
         }
-        if let Some(opening) = Self::link_click(event) {
+        if let Some(opening) = self.link_click(event) {
             if let Some(link) = self.feed.link_at(pointer) {
                 self.screen_selection = None;
                 return Reaction::Follow(link.target.to_string(), opening);
@@ -924,16 +928,9 @@ impl Editor {
         clicked
     }
 
-    /// Where the link under a press opens: Ctrl-left in the tab showing, middle
-    /// in a new tab left for later, Ctrl-middle in a new tab shown at once.
-    fn link_click(event: MouseEvent) -> Option<Opening> {
-        let control = event.modifiers.contains(KeyModifiers::CONTROL);
-        match (event.kind, control) {
-            (MouseEventKind::Down(MouseButton::Left), true) => Some(Opening::Here),
-            (MouseEventKind::Down(MouseButton::Middle), false) => Some(Opening::Beside),
-            (MouseEventKind::Down(MouseButton::Middle), true) => Some(Opening::BesideAndJump),
-            _ => None,
-        }
+    /// Where the link under a press opens, as the mouse chords are bound.
+    fn link_click(&self, event: MouseEvent) -> Option<Opening> {
+        self.keymaps.opening(MouseChord::pressed(&event)?)
     }
 
     /// Track Ctrl pressed or released on its own, which no mouse event reports.
@@ -985,6 +982,9 @@ impl Editor {
         if matches!(event.kind, MouseEventKind::Down(_)) {
             self.caret = None;
         }
+        if self.capture_gesture(event) {
+            return Reaction::Continue;
+        }
         let pointer = Position::new(event.column, event.row);
         self.pointer = Some(pointer);
         self.control_held = event.modifiers.contains(KeyModifiers::CONTROL);
@@ -993,7 +993,7 @@ impl Editor {
         {
             return Reaction::Continue;
         }
-        if let Some(opening) = Self::link_click(event) {
+        if let Some(opening) = self.link_click(event) {
             if let Some(link) = self.reference.link_at(pointer) {
                 self.screen_selection = None;
                 return Reaction::Follow(link.target.to_string(), opening);
@@ -1664,13 +1664,36 @@ impl Editor {
             }
             EditorEvent::SetSettings(settings) => self.set_settings(settings),
             EditorEvent::Rebind(shortcut, key) => {
-                if self.keymaps.rebind(shortcut, key) {
-                    self.save_settings();
-                    self.refresh_settings_picker();
-                }
+                self.rebound(|keymaps| keymaps.rebind(shortcut, key))
+            }
+            EditorEvent::RebindGesture(opening, chord) => {
+                self.rebound(|keymaps| keymaps.rebind_gesture(opening, chord))
             }
         }
         Reaction::Continue
+    }
+
+    /// Keep and show a rebind that `rebind` made, if it took effect.
+    fn rebound(&mut self, rebind: impl FnOnce(&mut Keymaps) -> bool) {
+        if rebind(&mut self.keymaps) {
+            self.save_settings();
+            self.refresh_settings_picker();
+        }
+    }
+
+    /// Give a press to the keymap row waiting for a mouse chord, if one is.
+    fn capture_gesture(&mut self, event: MouseEvent) -> bool {
+        let capturing = self
+            .pickers
+            .last()
+            .is_some_and(|controller| controller.picker.capturing());
+        let Some(chord) = MouseChord::pressed(&event).filter(|_| capturing) else {
+            return false;
+        };
+        if let Some(event) = self.pickers.last_mut().unwrap().handle_mouse(chord) {
+            self.handle_picker_event(event);
+        }
+        true
     }
 
     fn set_settings(&mut self, settings: Settings) {
@@ -1698,6 +1721,7 @@ impl Editor {
         SavedSettings {
             settings: self.settings,
             rebinds: self.keymaps.rebinds().to_vec(),
+            gestures: self.keymaps.gesture_rebinds().to_vec(),
         }
         .save();
     }

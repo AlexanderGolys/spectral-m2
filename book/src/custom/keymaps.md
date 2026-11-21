@@ -10,6 +10,10 @@ Every command and every editing key can be rebound, in the same picker as the ot
 
 Rows come in five contexts: **global** commands, and the **movement**, **selection**, **editing** and **recall** keys of the input. The selected row names its context below the list.
 
+## Rebind a mouse button
+
+The last rows are the three ways a click [opens a link](../shell/views.md#open-links), under **mouse**: in the tab showing, in a new tab, and in a new tab you go to. Select one, press `Enter`, and click with the button and modifiers you want; `Esc` keeps the old one. A plain left click cannot be taken, as it places the cursor and selects.
+
 ## What can be a shortcut
 
 - a character with `Ctrl` or `Alt`;
