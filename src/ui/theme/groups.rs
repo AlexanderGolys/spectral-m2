@@ -189,6 +189,8 @@ macro_rules! highlight_groups {
         )+}
 
         impl HLGroup {
+            pub const ALL: &[Self] = &[$(Self::$group),+];
+
             pub fn named(name: &str) -> Result<Self, String> {
                 match name {
                     $(stringify!($group) => Ok(Self::$group),)+

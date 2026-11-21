@@ -1,13 +1,13 @@
 -- Spectral, the package every result is drawn with, loaded as any package is:
 -- from the user's Macaulay2, where their own code can load it too and install
--- `rod` or `formatted` for types of their own. The shell needs a version that
+-- `shape` or `typeShape` for types of their own. The shell needs a version that
 -- sends what it reads, and carries one, written beside this file, which it
 -- installs first when the user's Macaulay2 has none as recent.
 carried := currentFileDirectory | "Spectral.m2"
--- The first version sending drawings as the shell reads them, a product's
--- sign only where it is to be seen; raised only when what Spectral sends
--- changes in a way the shell would read wrongly.
-minimumVersion := "0.8.1"
+-- The first version sending drawings as the shell reads them and taking the
+-- shell's highlight groups as it starts; raised only when what Spectral sends
+-- or reads changes in a way the shell would get wrong.
+minimumVersion := "1.0.0"
 
 -- A session started with -q leaves out the user's own packages, where Spectral
 -- is installed, so they are put back: their prefix, and the files' directory.

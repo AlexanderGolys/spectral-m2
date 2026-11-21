@@ -6,37 +6,39 @@ Spectral is a front end to one real, long-running Macaulay2 process. Knowing a l
 
 When `sp2` starts, it launches `M2` with your startup options, loads its backend, and lets M2 enter its normal top level, reading the whole session from standard input, exactly as an interactive M2 does. So `x := 1` in one cell is visible in the next, `exit` closes the shell, and your packages and `init.m2` behave as usual.
 
-What the backend changes is only how results come back: instead of printing `oN =` and `oN :` lines, M2 hands each value over already laid out, as a tree of rows, scripts, fractions, fences, grids and diagrams, each piece of text tagged with its class. Separate `rod` and `specType` methods lay out the value and its type; they come from the [Spectral](https://github.com/AlexanderGolys/Spectral) package, which works in a plain M2 too. The shell fits that layout to the pane, as text or as a typeset picture, and colours each piece by its class. Printed text and errors arrive as M2 produced them, in order.
+What the backend changes is only how results come back: instead of printing `oN =` and `oN :` lines, M2 hands each value over already laid out, as a tree of rows, scripts, fractions, fences, grids and diagrams, each piece of text tagged with its class. Separate `shape` and `typeShape` methods lay out the value and its type; they come from the [Spectral](https://github.com/AlexanderGolys/Spectral) package, which works in a plain M2 too. The shell fits that layout to the pane, as text or as a typeset picture, and colours each piece by its class. Printed text and errors arrive as M2 produced them, in order.
 
 You can read all of it: the backend is written out as `backend.m2` in the [configuration directory](../reference/files.md), so `code` shows Spectral's hooks like any other M2 code.
 
 ## Drawing your own types
 
-How a result is drawn is decided by the [Spectral](https://github.com/AlexanderGolys/Spectral) package alone. The backend only calls it; it doesn't hand you its output hooks. A value is drawn by the `rod` installed for its class, which returns a drawing, a `Rod`; a class with none is spelled as M2 spells it. Install `rod` for a type in a cell, or in Spectral's own [`init.m2`](../reference/files.md) to have it in every session:
+How a result is drawn is decided by the [Spectral](https://github.com/AlexanderGolys/Spectral) package alone. The backend only calls it; it doesn't hand you its output hooks. A value is drawn by `shape`, which draws most values through their M2 `expression`, so a class whose expression reads well needs nothing. Install `shape` for a type in a cell, or in Spectral's own [`init.m2`](../reference/files.md) to have it in every session:
 
 ```m2
 Point = new Type of List
-rod Point := p -> rod' FunctionApplication {symbol point, toSequence p}
+shape Point := p -> shape FunctionApplication {symbol point, toSequence p}
 new Point from {1, 1/2}     -- drawn as point(1, ½)
 ```
 
-`rod'` draws a part of a drawing, here the expression the point is spelled by, laid out as any of M2's expressions is: a function applied to its arguments.
+`shape` of an expression draws it as any of M2's expressions is laid out, here a function applied to its arguments, each part drawn by `shape` in turn.
 
-A drawing is a table of how something is drawn, `Rod{shape, Highlight => …}`, read as `x.Shape`, `x.Class`, `x.Highlight` and so on. Its `Shape` is an expression whose parts are drawings in turn, of one of the classes the shell draws. They are `Holder{text}` for an atom, `RowExpression`, `Parenthesize`, `Divide`, `Subscript`, `Superscript`, the lists, `MatrixExpression`, `Table`, and Spectral's own `AlignedExpression`, `UnderExpression`, `OverExpression`, `DiagramExpression` and `TreeExpression`. An atom takes its colour from its `Group`, one of the shell's colours, an `HLG` such as `HLG "Keyword"`. A `Highlight` colours a part and everything in it in place of their own colours, reaching `Reach` levels below it, or all of them when unset. A `Font` sets the text of a part in a font by its name: `"MathNormal"` for TeX's own maths, a maths alphabet such as `"MathBB"`, where `Q` is ℚ, or a text face such as `"TextTT"`, the typewriter face; the atoms in it take it unless they name their own. A field given as `null` is not set:
+A drawing is an expression of one of the classes the shell draws, its parts drawings in turn, down to atoms of text: `RowExpression`, `Parenthesize`, `Divide`, `Subscript`, `Superscript`, the lists, `MatrixExpression`, `Table`, and Spectral's own `AlignedExpression`, `UnderExpression`, `OverExpression`, `DiagramExpression` and `TreeExpression`. An atom, `atom(text, group, font)`, is text in one of the shell's highlight groups, an `HLG` such as `HLG "Keyword"`, set in a font by its name: `"MathNormal"` for TeX's own maths, a maths alphabet such as `"MathBB"`, where `Q` is ℚ, or a text face such as `"TextTT"`, the typewriter face:
 
 ```m2
 Gene = new Type of HashTable
-rod Gene := g -> Rod {Holder {g.name}, Group => HLG "Keyword"}
+shape Gene := g -> atom(g.name, HLG "Keyword", "TextTT")
 new Gene from {symbol name => "BRCA1"}
 ```
 
-A drawing that throws falls back to the value's plain text, so a broken `rod` can't break the session.
+The shell tells Spectral its highlight groups as it starts, so `HLG "Keywrd"` is an error where it is written. A value M2 spells by itself, and a name standing for one, is an atom coloured as `highlightGroup` of its class says and set in the class's `font`; install both for a class of your own, as `highlightGroup Point := T -> HLG "Operator"`.
+
+A drawing that throws falls back to the value's plain text, so a broken `shape` can't break the session.
 
 ## Your code runs once
 
 Each cell is sent to Macaulay2 exactly once and is never replayed behind your back. Deciding whether input is complete, splitting it into cells, highlighting and diagnostics are all done locally, by parsing the text, before anything is sent. An hour-long computation is never started twice.
 
-Each result arrives once, complete: drawn by `rod` with its type from `specType`, its drawing shown by Spectral's `speek`, and also spelled by M2's own `net`, `toString` and `toExternalString`, every one of them cheap. Each piece of text in the drawing comes with the colour and the font it is drawn in, so the shell only lays it out. Switching renderers uses the data already received. A result that is `null`, or silenced by a trailing `;`, is not formatted at all; a silenced one is still bound to its `oN`.
+Each result arrives once, complete: drawn by `shape` with its type from `typeShape`, the tree of its expression's classes beside it, and also spelled by M2's own `net`, `toString` and `toExternalString`, every one of them cheap. Each piece of text in the drawing comes with the colour and the font it is drawn in, so the shell only lays it out. Switching renderers uses the data already received. A result that is `null`, or silenced by a trailing `;`, is not formatted at all; a silenced one is still bound to its `oN`.
 
 ## Other processes
 
@@ -52,7 +54,7 @@ The shapes compose as M2's expressions do. Draw a type by the expression it read
 
 ```m2
 Pair = new Type of HashTable;
-rod Pair := p -> rod' RowExpression {p#0, p#1};
+shape Pair := p -> shape RowExpression {p#0, p#1};
 new Pair from {0 => "a", 1 => symbol a}
 ```
 
@@ -62,29 +64,24 @@ The first part is a string and the second a symbol, coloured as those are.
 
 ```m2
 Report = new Type of HashTable;
-rod Report := r -> rod' AlignedExpression apply(sort keys r, k -> {k, symbol :, r#k});
+shape Report := r -> shape AlignedExpression ((k -> {k, symbol :, r#k}) \ sort keys r);
 new Report from {"status" => "converged", "steps" => toList(1..40)}
 ```
 
 `MapExpression{target, source, label}` places a label above a leftward arrow. Nest maps in the target position to compose a chain without repeating its modules. `UnderExpression{base, label}` centers a label beneath its base while keeping the base on the surrounding baseline; a complex sets each module over its degree this way.
 
-Plain M2 prints a `Rod` as the text it lays out. `speek` shows the drawing itself, the table of fields it is: `speek(1/2)` is `Rod` over `Class => Divide`, `Shape => Divide{1, 2}` and `Typeset => true`. The parts are drawings too, nested as deep as the value is, so `speek` shows them as their text, and `speek'_2 x` opens one more level of them.
+Plain M2 shows a drawing as the table it is, `Shape` naming its class and `Parts` holding its parts: `shape(1/2)` is a `Divide` of two atoms.
 
 ### Names
 
-Inside a drawing, a ring, an ideal, a module, a matrix, a map of rings, a variety, a coherent sheaf, a map of sheaves, a complex or a map of complexes that a global name holds is drawn by that name, as M2 spells a named ring. After `I = ideal(x^3, y^3)`, the quotient `S/I` is drawn as S/I, while `J := ideal(x^3)` has no global name and leaves `S/J` drawn in full. The result itself is always drawn by its value: `I` shows its generators, and `R = QQ[x]` shows QQ[x]. `rod'_n x` resolves the names inside `x` to their values `n` times over:
+A name M2's own expressions keep is kept in a drawing: after `S = QQ[x, y]`, the quotient `S/ideal(x^3)` is drawn as S over its ideal, and the ideal by its generators. The result itself is always drawn by its value, so `R = QQ[x]` shows QQ[x]. The doubled-letter rings are set in the alphabet maths writes them in: `QQ`, `ZZ`, `RR` and `CC` as ℚ, ℤ, ℝ and ℂ, `OO` as 𝒪.
 
-```m2
-R = QQ[x, y]; I = ideal(x^3, y^3);
-rod'_1(R/I)     -- QQ[x .. y] over ideal(x³, y³)
-```
-
-Only drawings change: the `net` and `string` previews keep M2's own spelling. A complex is drawn as its modules, each over its degree, and the differentials between them; a map of complexes as its two complexes, one above the other, with its components between them.
+A complex is drawn as its modules, each over its degree, and the differentials between them; a map of complexes as its two complexes, one above the other, with its components between them.
 
 ### Types
 
-`specType x` is the class of `x`, over the values its type is over, by their names: `R^2` is `Module[R]`, an ideal is `Ideal[R]`, a matrix `Matrix[R ⟵ R²]`, a sheaf of rings `SheafOfRings[X]`, a complex `Complex[R]`. `specType'_n x` resolves those names `n` times, so `specType'_1(R^2)` is `Module[QQ[x .. y]]`. What a type is over is what `typeParameters` of its class gives, none for most types; install it for a type of your own, or `specType` to draw its annotation some other way:
+`typeShape x` is the class of `x`, over the values its type is built over: `R^2` is `Module[R]`, an ideal is `Ideal[R]`, a matrix `Matrix[R ⟵ R²]`, a sheaf of rings `SheafOfRings[X]`, a complex `Complex[R]`; any other value is its class alone. Install it for a type of your own:
 
 ```m2
-typeParameters Pair := p -> {class p#0, class p#1};   -- Pair[String, Symbol]
+typeShape Pair := p -> shape FunctionApplication {class p, new Array from {class p#0, class p#1}};   -- Pair[String, Symbol]
 ```

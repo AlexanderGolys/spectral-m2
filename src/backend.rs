@@ -19,6 +19,7 @@ use std::{fs, mem, thread};
 use crate::cli::M2Options;
 use crate::env::ENV;
 use crate::errors::{Error, Result};
+use crate::ui::theme::groups::HLGroup;
 use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
 use serde::Deserialize;
@@ -40,8 +41,7 @@ const STARTUP_SCRIPT: EmbeddedSource = EmbeddedSource {
 /// and the package's main file there.
 const PACKAGE_DIRECTORY: &str = "package";
 const PACKAGE_MAIN: &str = "Spectral.m2";
-/// Loads the `Spectral` package, which defines `Rod` and `rod` that every result
-/// is drawn from: the user's installed copy when it is as recent as the carried
+/// Loads the `Spectral` package, whose `shape` every result is drawn from: the user's installed copy when it is as recent as the carried
 /// one, else the carried one, installing it for the user's M2 meanwhile.
 const PACKAGE_LOADER: EmbeddedSource = EmbeddedSource {
     file_name: "load.m2",
@@ -169,7 +169,7 @@ pub struct M2Response {
     /// The rendered result, present only when M2 displayed it. A `;`-suppressed
     /// result is `None` here -- deliberately never rendered -- yet still bound.
     pub value: Option<Shape>,
-    /// The value inspected as `peek` inspects it, as Spectral's `speek` draws it.
+    /// The value inspected: the tree of its expression's classes, each over its parts.
     pub inspection: Option<Shape>,
     /// The value as a documentation page, when it is one.
     pub document: Option<DocPage>,
@@ -273,7 +273,7 @@ impl M2Backend {
         command.arg("--silent").arg("--no-readline");
         command.args(options.arguments());
         // The display package comes first, so the init file and a requested
-        // package can already install `rod` for classes of their own.
+        // package can already install `shape` for classes of their own.
         command.arg("-e").arg(format!(
             "load {}",
             m2_string_literal(package_path.display())
@@ -291,6 +291,12 @@ impl M2Backend {
                 .arg("-e")
                 .arg(format!("needsPackage {}", m2_string_literal(package)));
         }
+        // The shell's highlight groups, which Spectral checks a drawing's HLG against.
+        let groups = HLGroup::ALL.iter().map(|group| m2_string_literal(group.description()));
+        command.arg("-e").arg(format!(
+            r#"User#"spectral highlight groups" = {{{}}}"#,
+            groups.collect::<Vec<_>>().join(", ")
+        ));
         let mut process = command
             .process_group(0)
             .arg("-e")

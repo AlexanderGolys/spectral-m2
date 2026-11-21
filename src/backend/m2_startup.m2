@@ -30,7 +30,7 @@ spectralShell := (() -> (
 	-- The mode M2 dispatches on: a symbol no session can name, whose hooks are
 	-- installed on Thing alone. The protocol they keep is the shell's own, not
 	-- something to override; a session changes how values are drawn through the
-	-- Spectral package's `rod` and `specType`, which these hooks only call.
+	-- Spectral package's `shape` and `typeShape`, which these hooks only call.
 	shell := local SpectralShell;
 	standardStage := (stage, value) -> (lookup({ Standard, stage }, class value)
 			?? identity) value;
@@ -106,18 +106,20 @@ spectralShell := (() -> (
 	-- Its text joins the pieces' nets along their baselines, as M2 prints it.
 	annotationPieces := value -> select(deepSplice sequence value, item -> item =!= null);
 
-	-- What a value is drawn as is the Spectral package's business: `rod`,
+	-- What a value is drawn as is the Spectral package's business: `shape`,
 	-- which a session may install for a class of its own. The formatting hooks are
 	-- taken once, before any user code runs, so rebinding a name later cannot
 	-- change what is called here. `drawnAs`, `inspectedAs` and `typedAs` are
-	-- `rod`, `speek` and `specType` held to giving a drawing as the shell is
-	-- sent it, `drawnAs` with its "location" and "document"; `forgetDrawing` clears
-	-- what a drawing that threw part-way may have left behind.
+	-- `shape`, the tree of an expression's classes and `typeShape` held to
+	-- giving a drawing as the shell is sent it, `drawnAs` with its "location"
+	-- and "document".
 	spectral := Spectral#"private dictionary";
 	drawnAs := value spectral#"drawnAs";
 	typedAs := value spectral#"typedAs";
-	forgetDrawing := value spectral#"forgetDrawing";
 	inspectedAs := value spectral#"inspectedAs";
+	-- The shell's highlight groups, which a drawing's HLG names one of: told to
+	-- Spectral, so a misspelt group is an error where it is written.
+	spectral#"knownGroups" <- User#"spectral highlight groups";
 	-- A class in a frame -- the role of a word, the kind of a list -- is sent as
 	-- its ancestors, nearest first, for the shell to read by the first it knows.
 	typeName := lookup(toString, Type);
@@ -202,7 +204,6 @@ spectralShell := (() -> (
 		typeDrawing = null;
 		evaluatedLine = null;
 		failed = false;
-		forgetDrawing();
 	);
 
 	-- A result, recorded once and whole: the value under every formatter the
@@ -240,7 +241,7 @@ spectralShell := (() -> (
 	-- forgetting what an earlier statement of the same cell recorded, since only
 	-- the last one is sent; Print records the result; every stage prints nothing.
 	--
-	-- Every call into session code -- `rod`, `specType`, an `AfterPrint`
+	-- Every call into session code -- `shape`, `typeShape`, an `AfterPrint`
 	-- method -- already falls back to plain text when it throws. A recording that
 	-- throws all the same is reported as M2 reports any error and marks the
 	-- statement failed. Left to M2, the error would open the debugger in this

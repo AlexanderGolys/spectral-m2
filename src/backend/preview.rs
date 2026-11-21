@@ -25,8 +25,7 @@ cyclic! {
         /// M2's re-readable spelling, `toExternalString`.
         #[serde(rename = "external")]
         External = "external",
-        /// The value inspected as `peek` inspects it, drawn as Spectral's
-        /// `speek` draws it.
+        /// The value inspected: the tree of its expression's classes.
         #[serde(rename = "speek")]
         Speek = "speek",
     }
