@@ -50,6 +50,9 @@ math fonts
 matrix row spacing
 : Distance between the rows of a typeset matrix, relative to TeX's own, from 100% to 300%. Default: 125%. Greyed out unless maths is typeset.
 
+matrix degrees
+: Show the degrees of a matrix's rows beside them, greyed out in the `Degree` colour. Default: off.
+
 compute examples
 : How long each documentation example may run when it is computed again, so its value is drawn from its structure. Default: off, which keeps the output the documentation recorded. See [Documentation](../shell/documentation.md#examples-computed-for-real).
 

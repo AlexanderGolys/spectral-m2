@@ -101,6 +101,8 @@ pub struct RenderingSettings {
     pub math_fonts: bool,
     /// Distance between the rows of a typeset matrix, as a percentage of TeX's own.
     pub matrix_row_spacing_percent: u16,
+    /// Whether a matrix shows the degrees of its rows beside them.
+    pub matrix_degrees: bool,
     /// Seconds each documentation example may take to be computed again, so
     /// its value is drawn from its structure; none computes nothing.
     pub example_seconds: u16,
@@ -122,6 +124,7 @@ impl Default for RenderingSettings {
             fractions: FractionStyle::default(),
             math_fonts: false,
             matrix_row_spacing_percent: UI::MATRIX_ROW_SPACING_PERCENT,
+            matrix_degrees: false,
             example_seconds: 0,
             output_view: OutputView::default(),
         }
@@ -156,6 +159,7 @@ impl RenderingSettings {
             self.fractions,
             self.math_fonts,
             self.matrix_row_spacing_percent,
+            self.matrix_degrees,
             self.charset,
         ) != (
             other.reference_code_background,
@@ -168,6 +172,7 @@ impl RenderingSettings {
             other.fractions,
             other.math_fonts,
             other.matrix_row_spacing_percent,
+            other.matrix_degrees,
             other.charset,
         )
     }
@@ -194,6 +199,7 @@ cyclic! {
         Fractions = "fractions",
         MathFonts = "math fonts",
         MatrixRowSpacing = "matrix row spacing",
+        MatrixDegrees = "matrix degrees",
         ExampleTimeout = "compute examples",
         ReferenceCodeBackground = "swap reference backgrounds",
         OutputView = "output view",
@@ -232,6 +238,7 @@ impl SettingRow for RenderingSetting {
             Self::MatrixRowSpacing => {
                 "distance between the rows of a typeset matrix, relative to TeX's own"
             }
+            Self::MatrixDegrees => "show the degrees of a matrix's rows beside them, greyed out",
             Self::ExampleTimeout => {
                 "run documentation examples again, each for at most this long, to draw their values"
             }
@@ -286,6 +293,7 @@ impl SettingRow for RenderingSetting {
             Self::MatrixRowSpacing => {
                 PickerValue::Stepped(format!("{}%", rendering.matrix_row_spacing_percent))
             }
+            Self::MatrixDegrees => switch(rendering.matrix_degrees, "on"),
             Self::OutputView => {
                 PickerValue::among(OutputView::CHOICES, &rendering.output_view, |view| {
                     view.label().into()
@@ -335,6 +343,7 @@ impl SettingRow for RenderingSetting {
                     UI::MAX_MATRIX_ROW_SPACING_PERCENT,
                 );
             }
+            Self::MatrixDegrees => rendering.matrix_degrees = !rendering.matrix_degrees,
             Self::OutputView => rendering.output_view = rendering.output_view.cycle(delta),
             Self::ExampleTimeout => {
                 rendering.example_seconds = rendering

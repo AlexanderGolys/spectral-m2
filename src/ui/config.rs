@@ -129,9 +129,6 @@ impl TypesetSizing {
     /// A one-row formula is set on it, so neighbouring formulas share a baseline
     /// with the terminal text beside them rather than each centring its own ink.
     pub const BASELINE_PER_CELL_HEIGHT: f32 = 0.77;
-    /// The smallest share of its natural size a formula may shrink to fit a width;
-    /// below it the formula is drawn as text instead.
-    pub const MIN_SCALE: f32 = 0.6;
 }
 
 /// The size limits of a panel floating beside a point, such as hover or

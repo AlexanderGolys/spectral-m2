@@ -236,8 +236,8 @@ enum Placement {
 }
 
 /// Typeset `formula` in `colour` to stand beside text, retaining its code for
-/// copying. Returns placeholder lines no wider than `width`, or none when pictures
-/// are unavailable or the formula cannot be set legibly in that width.
+/// copying. Returns placeholder lines no wider than `width`, the formula shrunk
+/// to fit them however far that takes, or none when pictures are unavailable.
 pub fn typeset(formula: Typesetting, colour: Rgb, width: u16) -> Option<Pictured> {
     pictured(formula, colour, width, Placement::AmongText)
 }
@@ -542,7 +542,7 @@ impl Gallery {
             })
             .clone()?;
         let raster =
-            Raster::fitted_at_scale(&formula, canvas, width, placement, scale_percent, slicing)?;
+            Raster::fitted_at_scale(&formula, canvas, width, placement, scale_percent, slicing);
         let baseline = raster.baseline_row();
         let image_key = (
             key,
@@ -694,7 +694,7 @@ impl Raster {
         placement: Placement,
         scale_percent: u16,
         slicing: Slicing,
-    ) -> Option<Self> {
+    ) -> Self {
         let tree = &formula.tree;
         // Font ascender/descender metrics can reserve more space than the ink,
         // particularly for delimiters. Only visible bounds determine occupied rows.
@@ -722,9 +722,6 @@ impl Raster {
             .map(|row| row.end - row.start)
             .fold(0.0, f32::max);
         let shrink = (room / widest).min(1.0);
-        if shrink < TypesetSizing::MIN_SCALE {
-            return None;
-        }
         let scale = natural * shrink;
         let cover = |extent: f32, cell: f32| ((extent * scale / cell).ceil() as u16).max(1);
         let above = (formula.baseline * tree.size().height() - top) * scale;
@@ -758,7 +755,7 @@ impl Raster {
                 .max(above - padding)
                 - above
         };
-        Some(Self {
+        Self {
             scale,
             top,
             offset,
@@ -770,7 +767,7 @@ impl Raster {
             row_cells,
             slice_baseline,
             cell: canvas.cell,
-        })
+        }
     }
 
     /// The row a neighbour lines up with: the baseline's in a picture of one slice,

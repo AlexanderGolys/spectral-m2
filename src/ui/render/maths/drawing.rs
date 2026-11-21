@@ -127,11 +127,11 @@ impl<'a> Reading<'a> {
                 }
             }
             (Shape::MatrixExpression { rows: cells, degrees }, _) => match degrees {
-                Some(degrees) => Math::AnnotatedMatrix {
+                Some(degrees) if self.style.matrix_degrees => Math::AnnotatedMatrix {
                     rows: rows(cells),
                     degrees: degrees.rows.iter().map(part).collect(),
                 },
-                None => Math::Grid {
+                _ => Math::Grid {
                     rows: rows(cells),
                     kind: GridKind::Matrix,
                 },

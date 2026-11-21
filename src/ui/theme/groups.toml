@@ -98,6 +98,7 @@ MatchingBracket = { link = "Accent", bold = true, bg_from = "Selection.bg" }
 SignatureActiveParameter = { link = "Parameter", bold = true, underline = true }
 Value = { link = "Text" }
 MapArrow = { link = "Text" }
+Degree = { link = "Muted" }
 FractionRule = { sp_from = "Operator.fg", underline = true }
 Printed = { link = "String", bg_from = "Raised.bg", saturation = 55.0, lightening = 15.0 }
 Picker = { link = "Raised" }

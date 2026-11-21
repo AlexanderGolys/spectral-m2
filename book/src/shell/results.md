@@ -74,9 +74,9 @@ Place the controls with *output mode position* in the rendering settings: upper 
 
 With *maths* set to `typeset`, mathematical values become pictures in your theme's colours, with matrices and fractions at their full height. Each piece of text in a drawing is set in a font its atom names: TeX's own maths, a maths alphabet such as the blackboard `ℚ` or the calligraphic `𝒪`, or the typewriter face code is spelled in. Numbers, ring elements, rings, modules, matrices and fractions are maths, while names of types, strings and packages stay typewritten. Strings, nets, booleans, `null` and function names never become maths. Containers such as a matrix or a table only hold their entries, which keep their own font. Change any of this with the `font` of a class, or the font of the atoms a type's `shape` returns, as `shape Gene := g -> atom(g.name, HLG "Variable", "MathNormal")`. When a value mixes the two, such as a matrix in a list beside a string, the whole value is one picture so its brackets fit what they hold, and the parts that are not maths keep the typewriter face. M2's tensor operators read as such: `M ** N` as M ⊗ N and `M ^** n` as a tensor power. The `net` and `string` formatters retain their terminal text.
 
-Set *maths size* to choose the preferred formula size independently of the terminal font. Matrix degrees sit beside their rows, and tuple subscripts follow M2's TeX spelling without extra parentheses.
+Set *maths size* to choose the preferred formula size independently of the terminal font. With *matrix degrees* on, a matrix's degrees sit beside its rows, greyed out; they are off by default. Tuple subscripts follow M2's TeX spelling without extra parentheses.
 
-Pictures scroll, fold and split with the panes, and a theme change repaints them. A value too wide for the pane wraps onto more rows after separators and suitable operators; a part that cannot break shrinks while it stays readable, and past that it is drawn in Unicode instead. A value made of lines, such as a hash table, is never cut apart: it shrinks to fit, or is drawn in Unicode with each entry wrapping beneath itself. Typewriter words, such as the `ideal` in `ideal(x, y)`, use the font your kitty or Ghostty configuration names, so they match the code around them.
+Pictures scroll, fold and split with the panes, and a theme change repaints them. A value too wide for the pane wraps onto more rows after separators and suitable operators; a part that cannot break shrinks until it fits, however small that makes it, and stays a picture. A value made of lines, such as a hash table, is never cut apart: it shrinks to fit. Typewriter words, such as the `ideal` in `ideal(x, y)`, use the font your kitty or Ghostty configuration names, so they match the code around them.
 
 You need a terminal speaking the kitty graphics protocol with Unicode placeholders: kitty and Ghostty do, inside tmux too, with [two lines of tmux setup](../troubleshooting.md#typeset-tmux). Elsewhere `typeset` is still offered, marked unavailable in that terminal, and values are drawn in Unicode meanwhile.
 
@@ -101,6 +101,7 @@ The *rendering* settings shape the details; each is in the [settings reference](
 - *maths colours*: by role, or monochrome;
 - *index colours* and *exponent colours*: their own colour, their symbol's, or the operator colour;
 - *matrix row spacing* for typeset matrices;
+- *matrix degrees*: the degrees of a matrix's rows beside them, or none;
 - *output mode position*: where the mode controls sit in each output border.
 
 `showClassStructure()` returns a hierarchy rather than a flat table summary. The structured preview draws each branch on its own row and wraps labels within the pane, so large `Descent` objects remain readable. Choose the `net` preview for Macaulay2's original two-dimensional layout.

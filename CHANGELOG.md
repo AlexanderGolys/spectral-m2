@@ -5,6 +5,10 @@ All notable changes to Spectral M2 are documented here.
 ## [Unreleased]
 
 ### Changed
+- Matrix degrees are hidden unless the new *matrix degrees* rendering setting is on, and are greyed out when shown; a complex numbers its degrees in the same grey, a new `Degree` highlight group linked to `Muted`. The zero modules a complex begins and ends with are white, not number-coloured.
+- A map of complexes draws every component between modules both complexes are concentrated in, a zero one too, so a zero map of degree 1 still shows how it shifts degrees; none goes to or from the bounding zeros.
+- A typeset value too wide for the pane always stays a picture, shrinking as far as it takes, instead of falling back to Unicode text past 60%.
+- `subquotient` modules, and `HH` of a map of complexes, are drawn instead of falling back to M2's text.
 
 - The *ascii* switch in the rendering settings is now *symbols*, with three choices: `nerd font`, `unicode` (no Nerd Font icons) and `ascii`. A saved `ascii` choice carries over. The choice now also reaches the spinner, tree branches, key hints, ellipses and documentation rules, and changing it redraws results at once.
 - Picker key hints spell arrow keys as arrows (`↑↓ select`, `←→ change`) instead of `updown`.

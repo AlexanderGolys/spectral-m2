@@ -219,6 +219,8 @@ pub struct MathStyle {
     pub display: MathDisplay,
     /// Distance between the rows of a typeset matrix, as a percentage of TeX's own.
     pub matrix_row_spacing_percent: u16,
+    /// Whether a matrix shows the degrees of its rows beside them.
+    pub matrix_degrees: bool,
 }
 
 impl Default for MathStyle {
@@ -233,6 +235,7 @@ impl Default for MathStyle {
             blackboard: false,
             display: MathDisplay::default(),
             matrix_row_spacing_percent: UI::MATRIX_ROW_SPACING_PERCENT,
+            matrix_degrees: false,
         }
     }
 }
@@ -263,6 +266,7 @@ impl From<&RenderingSettings> for MathStyle {
                 UI::MIN_MATRIX_ROW_SPACING_PERCENT,
                 UI::MAX_MATRIX_ROW_SPACING_PERCENT,
             ),
+            matrix_degrees: rendering.matrix_degrees,
             ..Self::default()
         }
     }
