@@ -312,7 +312,7 @@ fn role_spans(
 ) -> Result<Vec<SpanLine>, UnsupportedTeX> {
     let reading = Reading::new(value, style);
     Ok(match (value, value.listing()) {
-        (Shape::TreeExpression(branches), _) => return Ok(hierarchy_rows(branches, width)),
+        (Shape::TreeExpression(branches), _) => hierarchy_rows(branches, width, style)?,
         (Shape::Atom { text, style }, _) if !style.font.is_maths() => {
             prose(text, style.highlight, width)
         }
@@ -325,46 +325,49 @@ fn role_spans(
 }
 
 /// Lay out a class hierarchy a branch at a time, so no subtree forces its
-/// siblings into a shared wide column. Wrapped labels keep their branch indent.
-fn hierarchy_rows(branches: &[(Shape, Shape)], width: usize) -> Vec<SpanLine> {
-    fn append(branches: &[(Shape, Shape)], prefix: &str, width: usize, rows: &mut Vec<SpanLine>) {
+/// siblings into a shared wide column. Each label is laid out as the value it is,
+/// `ℤ` or `Number` in its own colours, and its rows past the first keep the
+/// branch's indent.
+fn hierarchy_rows(
+    branches: &[(Shape, Shape)],
+    width: usize,
+    style: MathStyle,
+) -> Result<Vec<SpanLine>, UnsupportedTeX> {
+    fn append(
+        branches: &[(Shape, Shape)],
+        prefix: &str,
+        width: usize,
+        style: MathStyle,
+        rows: &mut Vec<SpanLine>,
+    ) -> Result<(), UnsupportedTeX> {
         for (index, (label, subtree)) in branches.iter().enumerate() {
             let last = index + 1 == branches.len();
             let (branch, continuation) = Glyphs::tree_limb(last).current();
             let indent = format!("{prefix}{branch}");
             let room = width.saturating_sub(indent.width()).max(1);
-            let label = label.text().unwrap_or_default();
-            for (line, content) in prose(label, HLGroup::Type, room).into_iter().enumerate() {
+            for (line, content) in role_spans(label, room, style)?.into_iter().enumerate() {
                 let leading = if line == 0 {
                     indent.clone()
                 } else {
-                    format!("{prefix}{}", continuation)
+                    format!("{prefix}{continuation}")
                 };
-                let mut row = vec![TextSpan::new(leading, HLGroup::Punctuation)];
-                row.extend(content);
                 // A hierarchy can be deeper than the terminal is wide. Clip only
                 // its indentation, leaving at least one column for the label.
-                if row[0].content.width() >= width {
-                    row[0].content = row[0]
-                        .content
-                        .chars()
-                        .rev()
-                        .take(width.saturating_sub(1))
-                        .collect::<String>()
-                        .chars()
-                        .rev()
-                        .collect();
-                }
+                let clipped = leading.chars().count().saturating_sub(width.saturating_sub(1));
+                let leading: String = leading.chars().skip(clipped).collect();
+                let mut row = vec![TextSpan::new(leading, HLGroup::Punctuation)];
+                row.extend(content);
                 rows.push(row);
             }
             if let Shape::TreeExpression(branches) = subtree {
-                append(branches, &format!("{prefix}{continuation}"), width, rows);
+                append(branches, &format!("{prefix}{continuation}"), width, style, rows)?;
             }
         }
+        Ok(())
     }
     let mut rows = Vec::new();
-    append(branches, "", width, &mut rows);
-    rows
+    append(branches, "", width, style, &mut rows)?;
+    Ok(rows)
 }
 
 /// Text that can run long, so it breaks at words, in `group`'s colour.

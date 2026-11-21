@@ -213,7 +213,7 @@ pub enum Slicing {
     /// Be cut into strips after its separators, as TeX written without marks
     /// can only be.
     AtSeparators,
-    /// Stay whole, shrinking as far as a picture may: its rows read as lines,
+    /// Stay whole, shrinking as little as a picture may: its rows read as lines,
     /// and a cut through all of them at once would scatter their tails beneath
     /// the picture.
     Whole,
@@ -238,8 +238,9 @@ enum Placement {
 
 /// Typeset `formula` in `colour` to stand beside text, retaining its code for
 /// copying. Returns placeholder lines no wider than `width`: the formula broken
-/// into rows where it may be, shrunk only for a row no break shortens and never
-/// below the smallest maths size, then cut off at the right edge; or none when
+/// into rows where it may be, shrunk only for a row no break shortens, by at most
+/// [`UI::MAX_MATH_SHRINK_PERCENT`] and never below the smallest maths size, then
+/// cut off at the right edge; or none when
 /// pictures are unavailable.
 pub fn typeset(formula: Typesetting, colour: Rgb, width: u16) -> Option<Pictured> {
     pictured(formula, colour, width, Placement::AmongText)
@@ -726,10 +727,11 @@ impl Raster {
             .fold(0.0, f32::max);
         // A picture keeps its size wherever breaking brings it inside, so text
         // reads at one size throughout the feed. Only a row no break shortens
-        // shrinks, and no further than the smallest size the maths size setting
-        // offers; what still passes the edge is cut off.
+        // shrinks, by a little at most and never below the smallest size the
+        // maths size setting offers; what still passes the edge is cut off.
         let smallest = f32::from(UI::MIN_MATH_SIZE_PERCENT) / f32::from(scale_percent);
-        let shrink = (room / widest).clamp(smallest.min(1.0), 1.0);
+        let least = 1.0 - f32::from(UI::MAX_MATH_SHRINK_PERCENT) / 100.0;
+        let shrink = (room / widest).clamp(smallest.max(least).min(1.0), 1.0);
         let scale = natural * shrink;
         let cover = |extent: f32, cell: f32| ((extent * scale / cell).ceil() as u16).max(1);
         let above = (formula.baseline * tree.size().height() - top) * scale;

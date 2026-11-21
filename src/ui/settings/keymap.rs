@@ -594,8 +594,8 @@ impl Default for Keymaps {
             rebinds: Vec::new(),
             gestures: HashMap::from([
                 (MouseButton::Left + Ctrl, Opening::Here),
-                (MouseChord::new(MouseButton::Middle), Opening::Beside),
-                (MouseButton::Middle + Ctrl, Opening::BesideAndJump),
+                (MouseChord::new(MouseButton::Middle), Opening::BesideAndJump),
+                (MouseButton::Middle + Ctrl, Opening::Beside),
             ]),
             gesture_rebinds: Vec::new(),
         }

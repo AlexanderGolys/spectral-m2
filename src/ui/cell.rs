@@ -130,7 +130,7 @@ pub fn response_blocks(
         response.type_info.as_deref(),
     );
     let warnings = warning_blocks(output.warnings);
-    let printed = (!output.printed.is_empty()).then(|| TextBlock::printed(output.printed));
+    let printed = TextBlock::printed_visible(output.printed);
     let value = match (response.value.clone(), output.value, response.has_value) {
         (Some(value), Some(rendered), true) => Some(
             OutputBlock::rendered(value, rendered.type_info)
@@ -153,7 +153,7 @@ pub fn error_blocks(
     code: &str,
 ) -> (Vec<Box<dyn Block>>, Option<TextBlock>, String) {
     let error = captured_error(&response.transcript, code);
-    let printed = (!error.printed.is_empty()).then(|| TextBlock::printed(error.printed));
+    let printed = TextBlock::printed_visible(error.printed);
     (warning_blocks(error.warnings), printed, error.diagnostic)
 }
 
@@ -1463,6 +1463,12 @@ impl TextBlock {
     /// Create text printed by evaluated M2 code.
     pub fn printed(text: impl Into<String>) -> Self {
         Self::new(text, TextKind::Printed { number: None })
+    }
+
+    /// Text printed by evaluated M2 code, or none when it printed nothing to see:
+    /// a page's transcript keeps the newlines around the warnings taken out of it.
+    pub fn printed_visible(text: String) -> Option<Self> {
+        (!text.trim().is_empty()).then(|| Self::printed(text))
     }
 
     /// Number printed text as the cell that printed it; system text has none.

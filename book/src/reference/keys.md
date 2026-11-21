@@ -126,8 +126,8 @@ After `Ctrl+E` the cursor sits on the last text of the focused pane, the feed or
 | Double-click | Select a word, a bracketed block or a formula; outside text, a whole cell or result; on a folded value, expand it. |
 | Triple-click | Select a paragraph; outside text, a whole submission. |
 | `Ctrl`+click a link | Open it in the tab showing beside the session. |
-| Middle-click a link | Open it in a new tab, staying on this one. |
-| `Ctrl`+middle-click a link | Open it in a new tab and go to it. |
+| Middle-click a link | Open it in a new tab and go to it. |
+| `Ctrl`+middle-click a link | Open it in a new tab, staying on this one. |
 | Click an output's icon | Draw that value the next available way. |
 | Click a pane | Focus it; drag the divider to resize. |
 

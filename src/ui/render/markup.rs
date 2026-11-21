@@ -71,6 +71,9 @@ const ELIDED_STAND_IN: &str = "etc";
 /// The attribute typeset maths names each piece's highlight group by, until
 /// the document is parsed and the piece can be told to sit inside a link.
 const GROUP_ATTRIBUTE: &str = "data-group";
+/// The attribute Spectral marks a link to a topic with: a node named by its title,
+/// as `Hilbert functions and free resolutions` is, rather than by code.
+const TOPIC_ATTRIBUTE: &str = "data-topic";
 /// The groups of the `token` classes M2 sets a value's text in.
 /// @##HLG
 const TOKEN_GROUPS: [(&str, HLGroup); 4] = [
@@ -110,11 +113,14 @@ static TYPEWRITER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<span class="tt">([^<]*)</span>"#).expect("valid typewriter span pattern")
 });
 
-/// What M2 sets maths in: TeX between `$` signs, for a web page's MathJax to typeset.
-/// Code is matched first so a `$` inside it is left as written.
+/// What M2 sets maths in: TeX between `$` signs, or `$$` ones for displayed maths,
+/// for a web page's MathJax to typeset. Code is matched first so a `$` inside it is
+/// left as written, and `$$` before `$` so its signs never pair with an inline one's.
 static MATHS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<pre\b.*?</pre>|<code\b.*?</code>|<tt\b.*?</tt>|\$(?<tex>[^$<>]+)\$")
-        .expect("valid maths pattern")
+    Regex::new(
+        r"(?s)<pre\b.*?</pre>|<code\b.*?</code>|<tt\b.*?</tt>|\$\$(?<display>[^$<>]+)\$\$|\$(?<tex>[^$<>]+)\$",
+    )
+    .expect("valid maths pattern")
 });
 
 static PROMPT: LazyLock<Regex> =
@@ -713,6 +719,7 @@ fn typeset_maths(html: &str, blackboard: bool) -> Cow<'_, str> {
     MATHS.replace_all(html, |captures: &Captures| {
         captures
             .name("tex")
+            .or_else(|| captures.name("display"))
             .and_then(|tex| inline(&unescape_text(tex.as_str()), blackboard))
             .map_or_else(
                 || captures[0].to_string(),
@@ -1070,7 +1077,10 @@ fn decorate_inline(node: &Handle, described: &mut bool, page: u64) {
     {
         return;
     }
-    if tag.as_deref() == Some("a") && is_code_link(node) {
+    if tag.as_deref() == Some("a") && attribute(node, TOPIC_ATTRIBUTE).is_some() {
+        let children = node.children.take();
+        node.children.replace(vec![group_link(HLGroup::MarkupTopicLink, children)]);
+    } else if tag.as_deref() == Some("a") && is_code_link(node) {
         let children = node.children.take();
         node.children.replace(vec![adopt("code", children)]);
     }
@@ -1127,6 +1137,7 @@ fn is_code_link(node: &Handle) -> bool {
     let text = inline_text(node);
     let text = text.trim();
     (text.contains('(') || names_its_target(node))
+        && attribute(node, TOPIC_ATTRIBUTE).is_none()
         && !SOURCE_LOCATION.is_match(text)
         && parse_native(text).is_ok()
 }
@@ -1256,11 +1267,12 @@ fn plain_text(node: &Handle) -> Option<String> {
 
 /// Whether typewriter text is M2 code, to be coloured as such. Typewriter face
 /// also sets prose apart -- a sentence shown as typed, a file's location -- so
-/// only text that parses whole as M2 counts.
+/// only text that parses whole as M2 counts, its elided arguments `...` read as
+/// names: `{d_0,...,d_(n-1)}`.
 fn reads_as_code(node: &Handle) -> bool {
     plain_text(node).is_some_and(|text| {
         let text = text.trim();
-        !SOURCE_LOCATION.is_match(text) && parse_native(text).is_ok()
+        !SOURCE_LOCATION.is_match(text) && analysable(text).is_some()
     })
 }
 

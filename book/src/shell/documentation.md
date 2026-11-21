@@ -20,7 +20,7 @@ A link keeps the colours of its text, prose or code, with only a soft underline;
 : Opens the page, or the source file, in the tab showing in the **reference pane** beside the session, replacing what was there; `Ctrl+O` goes back to it.
 
 Middle-click
-: Opens it in a new tab and leaves you where you are; `Ctrl`+middle-click goes to the new tab.
+: Opens it in a new tab and goes to it; `Ctrl`+middle-click opens it in the background, leaving you where you are.
 
 Nothing is submitted either way: your feed, input numbers and variables stay as they were. To have a page in the feed, type `help "page"`.
 

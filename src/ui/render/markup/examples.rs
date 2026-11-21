@@ -311,7 +311,7 @@ impl Example {
     /// The example answered as its documentation recorded.
     fn block(self, page: u64) -> EvaluationBlock {
         let mut block = self.input(page);
-        let printed = (!self.printed.is_empty()).then(|| TextBlock::printed(self.printed));
+        let printed = TextBlock::printed_visible(self.printed);
         if let Some(error) = self.error {
             block.fail(0, self.number, Vec::new(), printed, error);
         } else {

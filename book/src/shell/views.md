@@ -45,8 +45,8 @@ A link opens in one of three ways:
 | Click | Opens the link |
 | --- | --- |
 | `Ctrl`+click | in the tab showing, replacing its page |
-| Middle-click | in a new tab to the right, staying where you are |
-| `Ctrl`+middle-click | in a new tab to the right, and goes to it |
+| Middle-click | in a new tab to the right, and goes to it |
+| `Ctrl`+middle-click | in a new tab to the right, staying where you are |
 
 The buttons can be [rebound](../custom/keymaps.md#rebind-a-mouse-button). It works the same on links in the feed and in the pane; from the feed the pane opens if it was hidden. `Enter` on a link under the [view cursor](select.md) opens it in the tab showing.
 

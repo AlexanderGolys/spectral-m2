@@ -100,6 +100,9 @@ impl UI {
     pub const MIN_MATH_SIZE_PERCENT: u16 = 50;
     pub const MAX_MATH_SIZE_PERCENT: u16 = 200;
     pub const MATH_SIZE_STEP: u16 = 10;
+    /// The most a typeset picture with nowhere to break shrinks below its
+    /// maths size to fit its room; what still passes the edge is cut off.
+    pub const MAX_MATH_SHRINK_PERCENT: u16 = 15;
     /// Distance between the rows of a typeset matrix, as a percentage of TeX's own,
     /// which leaves stacked fractions in neighbouring rows almost touching.
     pub const MATRIX_ROW_SPACING_PERCENT: u16 = 125;
