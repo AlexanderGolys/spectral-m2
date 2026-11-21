@@ -32,7 +32,7 @@ impl UI {
         ),
     )
     .nerd(Spinner::new(
-        spinner_frames![PendingCellMarker: "󰋙 ", "󰫃 ", "󰫄 ", "󰫅 ", "󰫆 ", "󰫇 ", "󰫈 ", "󰋘 ", " "],
+        spinner_frames![PendingCellMarker: "󰋙 ", "󰫃 ", "󰫄 ", "󰫅 ", "󰫆 ", "󰫇 ", "󰫈 ", "󰋘 ", "\u{e667} "],
         Duration::from_millis(80),
     ));
 
