@@ -213,8 +213,9 @@ pub enum Slicing {
     /// Be cut into strips after its separators, as TeX written without marks
     /// can only be.
     AtSeparators,
-    /// Only shrink: its rows read as lines, and a cut through all of them at once
-    /// would scatter their tails beneath the picture.
+    /// Stay whole, what passes the right edge cut off: its rows read as lines,
+    /// and a cut through all of them at once would scatter their tails beneath
+    /// the picture.
     Whole,
 }
 
@@ -236,8 +237,9 @@ enum Placement {
 }
 
 /// Typeset `formula` in `colour` to stand beside text, retaining its code for
-/// copying. Returns placeholder lines no wider than `width`, the formula shrunk
-/// to fit them however far that takes, or none when pictures are unavailable.
+/// copying. Returns placeholder lines no wider than `width`, the formula at its
+/// own size whatever the room, broken into rows where it may be and cut off at
+/// the right edge where it may not, or none when pictures are unavailable.
 pub fn typeset(formula: Typesetting, colour: Rgb, width: u16) -> Option<Pictured> {
     pictured(formula, colour, width, Placement::AmongText)
 }
@@ -721,8 +723,9 @@ impl Raster {
             .iter()
             .map(|row| row.end - row.start)
             .fold(0.0, f32::max);
-        let shrink = (room / widest).min(1.0);
-        let scale = natural * shrink;
+        // A picture keeps its size whatever the room, so text reads at one size
+        // throughout the feed; what no break brings inside is cut off.
+        let scale = natural;
         let cover = |extent: f32, cell: f32| ((extent * scale / cell).ceil() as u16).max(1);
         let above = (formula.baseline * tree.size().height() - top) * scale;
         let below = (height * scale - above).max(0.0);

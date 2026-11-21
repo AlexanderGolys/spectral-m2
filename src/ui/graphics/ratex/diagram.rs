@@ -466,6 +466,21 @@ fn compose(layout: &Read, paint: &Read, colour: Rgb, spacing: u16) -> Result<Dis
             place_list(&mut diagram, label, left, baseline);
         }
     }
+    // A diagram too wide for its room breaks before a column, the arrow into
+    // the column staying with the one it leaves.
+    diagram.items.extend(
+        grid.lefts()
+            .into_iter()
+            .skip(1)
+            .map(|left| DisplayItem::Line {
+                x: left,
+                y: 0.0,
+                width: 0.0,
+                thickness: 0.0,
+                color: ink,
+                dashed: false,
+            }),
+    );
     let (leftmost, rightmost) = reach;
     if leftmost < 0.0 || rightmost > width {
         let mut framed = DisplayList {

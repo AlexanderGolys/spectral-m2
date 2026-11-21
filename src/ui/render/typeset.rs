@@ -395,10 +395,11 @@ fn draw(
                     code,
                     matrix_row_spacing_percent: style.matrix_row_spacing_percent,
                     scale_percent: style.scale_percent,
-                    slicing: if math.reads_in_lines() {
-                        Slicing::Whole
-                    } else {
-                        Slicing::AtBreaks
+                    // A diagram alone breaks between its columns; rows read as
+                    // lines cannot be cut through.
+                    slicing: match math.reads_in_lines() && !matches!(math, Math::Diagram(_)) {
+                        true => Slicing::Whole,
+                        false => Slicing::AtBreaks,
                     },
                 },
                 Rgb([r, g, b]),
