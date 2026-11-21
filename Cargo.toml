@@ -1,6 +1,6 @@
 [package]
 name = "spectral-m2"
-version = "1.4.1-shitshow.1.32"
+version = "1.4.1"
 edition = "2021"
 description = "A syntax-aware terminal shell for Macaulay2"
 license = "MIT OR Apache-2.0"
@@ -16,6 +16,7 @@ include = [
     "Spectral/Spectral.m2",
     "Spectral/Spectral/*.m2",
     "src/**/*.toml",
+    "src/**/*.scm",
     "Cargo.lock",
     "CHANGELOG.md",
     "LICENSE-APACHE",

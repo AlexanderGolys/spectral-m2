@@ -4,19 +4,27 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-21
+
 ### Added
+
 - *arrow length* and *arrow height* rendering settings scale the arrows of typeset complexes and diagrams, along a row and between rows, from 50% to 400% of the shortest arrow.
+- As many tabs beside the session as wanted, with one history across them: `Ctrl+click` opens a link in the tab showing, a middle click in a new tab and goes to it, `Ctrl`+middle click in a new tab in the background; `Ctrl+O` / `Ctrl+I` walk back and forward, reopening a closed tab, `Ctrl+Q` closes one, `Shift+Tab` moves between the session and the view and `Ctrl+B` hides and shows it. Settings move to `Ctrl+,`.
+- The three ways a click opens a link can be moved to other mouse chords in the keymap tab.
+- The side panel has a settings tab of its own, with the output view, compute examples and a *code overflow* setting that wraps or trims code in the views beside the session.
+- The syntax tree view (`/ast`, `F6`) shows each cell's code as it was entered over a tree of one node a row, the field a node fills before what it is, tokens as the parser names them (`Token[^]`, `Token[SPACE]`), and beside every row the cell's code once more, the row's node in a lighter grey. Clicking a row, or the code above, picks a node: its code keeps its colours while the rest is greyed out, and the same code is marked in the shell. A row holding others folds by its marker or a double click.
+- Notes are Markdown, laid out with the input's prompt gutter and highlighted with tree-sitter-md.
 
 ### Changed
+
 - A typeset subscript stands against its letter, under the lean of an italic one, as in `F_2`, instead of past it.
 - The degrees under a typeset map of complexes are set small, as those under a complex are.
 - A typeset diagram widens to hold a label standing past its outer columns, as the label of a component leaving the last column of a map of complexes does, instead of cutting it off.
 - The maps of a complex and of a map of complexes are labelled by their names, `dd_i` for a differential and `f_i` for a component of a map `f` (the map's global name, or `f`), unless the new *matrix labels* rendering setting is on, which labels them by their matrices. A matrix's degrees are drawn whole in grey, braces too.
 - Matrix degrees are hidden unless the new *matrix degrees* rendering setting is on, and are greyed out when shown; a complex numbers its degrees in the same grey, a new `Degree` highlight group linked to `Muted`. The zero modules a complex begins and ends with are white, not number-coloured.
 - A map of complexes draws every component between modules both complexes are concentrated in, a zero one too, so a zero map of degree 1 still shows how it shifts degrees; none goes to or from the bounding zeros.
-- A typeset value too wide for the pane always stays a picture, shrinking as far as it takes, instead of falling back to Unicode text past 60%.
+- A typeset value too wide for the pane stays a picture: it breaks into rows first, a matrix, complex or diagram between its columns, and only a part with nowhere to break shrinks, by 15% at most; what still does not fit is cut off at the edge.
 - `subquotient` modules, and `HH` of a map of complexes, are drawn instead of falling back to M2's text.
-
 - The *ascii* switch in the rendering settings is now *symbols*, with three choices: `nerd font`, `unicode` (no Nerd Font icons) and `ascii`. A saved `ascii` choice carries over. The choice now also reaches the spinner, tree branches, key hints, ellipses and documentation rules, and changing it redraws results at once.
 - Picker key hints spell arrow keys as arrows (`↑↓ select`, `←→ change`) instead of `updown`.
 - The `speek` preview shows the drawing of the value, the table of fields it is, its parts one level deep; `speek'_n x` opens `n` levels.
@@ -25,3 +33,396 @@ All notable changes to Spectral M2 are documented here.
 - Spectral 0.7.0: what a class says about how its values are drawn is in the drawing its `rod` returns, an atom's `Group`, `Typeset`, a `Highlight`, in place of the setting methods `highlightGroup`, `typeset`, `typesetOperands`, `typewriter`, `typeDepth`, `valueDepth` and `keepNames` and the `formatted` hook. A class without a `rod` is spelled as M2 spells it. `rod'_n x` draws `x` with its names resolved `n` times; `specType x` is its class over its `typeParameters` by name, `Module[R]`, and `specType'_n x` resolves them. A `Rod` prints in plain M2 as the text it lays out.
 - Spectral 0.8.0: a drawing names the `Font` its text is set in, `"MathNormal"`, a maths alphabet such as `"MathBB"` or a text face such as `"TextTT"`, in place of `Typeset` and an atom's `Tex`; `QQ` is the letter `Q` in the blackboard alphabet. A result arrives drawn with every piece of text in its colour and font, the drawing alone deciding how it looks.
 - Spectral 1.0.0: a value is drawn by `shape`, the shape of its M2 expression down to atoms, `atom(text, HLG "Keyword", "TextTT")`, and typed by `typeShape`, in place of `rod`, `rod'`, `Rod`, `specType`, `typeParameters` and `speek'`; `highlightGroup` and `font` of a class colour and set its values. sp2 tells Spectral its highlight groups at startup, so a misspelt `HLG "Keywrd"` is an error where it is written. Strings are coloured as strings again. Inside a drawing only the names M2's own expressions keep are kept, a ring's; an ideal or a module is drawn by its value. The `speek` preview shows the tree of a value's expression classes.
+- The maths, index and exponent colours move to the appearance tab; the *swap reference backgrounds* setting, which no longer did anything, is gone.
+- Highlighting uses tree-sitter-macaulay2 6.4.0: installed methods have their own capture, and `exit`, `end`, `quit` and `restart` are directives.
+- A link in documentation to a topic, a page named by its title such as *Hilbert functions and free resolutions*, is one colour, the new `MarkupTopicLink` group linked to `Documentation`, instead of being coloured as code.
+- Spectral 1.0.1: a ring's generators are set in maths whatever their names hold, as the `T` of a degrees ring; every class in a class hierarchy is drawn as the value it is, `ZZ` as ℤ and `RR'` as ℝ_*, commands and functors in their own colours.
+
+### Removed
+
+- The `tex` and `peek` previews: a result is spelled only by M2's cheap `net`, `toString` and `toExternalString` beside Spectral's `rod` and `speek`, so no result waits on formatting it is never shown in.
+
+### Fixed
+
+- The Nerd Font icons lost when the charsets were spelled out are back: the output mode icons, the prompts, the cell marks, the step arrows and the spinner's last frame.
+- Text after displayed maths (`$$…$$`) in documentation keeps its spaces instead of being typeset as maths, as in `help poincare`.
+- Typewriter code with elided arguments, such as `{d_0,...,d_(n-1)}`, is coloured as code.
+- A class hierarchy (`showStructure`) shows every row, ℤ and ℝ ones included, which vanished in the text layout.
+- A documentation page shows no empty printed block above its warnings.
+- Warnings Core and packages print as comments, `-- warning:` and `--warning:`, get their own warning blocks.
+- Documentation examples are computed again on pages whose prose names a package file.
+- The side panel keeps the editor's background in the transparent mode.
+
+## [1.4.0] - 2026-11-18
+
+### Added
+
+- [`Spectral`](https://github.com/AlexanderGolys/Spectral), the package results are drawn with, is an ordinary package of your Macaulay2: sp2 loads the one installed there, which your own code can load and extend too. sp2 carries the version it was built with and installs it, documentation and source files included, only when Macaulay2 has none or one too old for it to read; when it carries a newer one, it says how to install it, as it does for its own updates. The welcome message names the Spectral version.
+- The running sp2 and m2-ls versions show a `*` wherever they appear once a newer one is found; the installed binaries are checked every minute and crates.io every half hour, not only at startup.
+- Completion enable, ordering, candidate-list visibility and height settings, plus independent input and source wrapping policies.
+- Repository-local session/history storage, `/recent` for inspecting the previous session, and an automatically saved editable `/notes` pane.
+- Remappable `Alt+S`, `Alt+.`, and `Alt+T` shortcuts for shuffle, dot and tensor operators.
+
+### Changed
+
+- `SpecNet` and `specNet` are now `Rod` and `rod`, and the `specNet` output mode is `rod`; a saved `specNet` choice carries over.
+- Updated the native parser to `m2-syn` 0.8, including its corrected syntax handling and reshaped syntax trees.
+- The input's diagnostic line stands above its code instead of below it.
+- A function applied by juxtaposition is spaced from its argument as M2 spells it: `frac R` and `cokernel M`, while `R[t]` and `OO_X(1)` stay together.
+- The *basic glyphs* setting is now *ascii*, and only the setting decides it: `TERM=dumb` no longer forces plain symbols on. A saved *basic glyphs* choice carries over.
+- Spectral now sends each result already laid out, as a tree of rows, scripts, fractions, fences, grids and diagrams with each piece of text tagged by its class, so how every class of value and expression is formatted lives in the package, where a session can change it with `formatted`, `rod` and the shape constructors; a `Highlight` recolours any part, as deep as its `Reach`. sp2 only fits the layout to the pane and colours it. `speek` spells the drawing one level deep, as `peek` spells an object.
+- Contrast is a continuous slider through native theme variants; saved native-variant choices migrate to their matching stops.
+- Picker tabs have separators, the side pane has a frame, palette names use their own colours, and key hints take priority when statusline space is tight.
+- `Descent` values retain their hierarchy and render one branch per row.
+
+### Fixed
+
+- Up and down move between the rows a long input line wraps into, recalling history only from its first or last row, and a click past the end of a wrapped row puts the cursor on that row.
+- Changing any rendering setting keeps each value's current drawing on screen until its new layout is ready, instead of flashing `… laying out …` in its place.
+- A numeric literal after `symbol`, `local`, `global` or `threadLocal` is reported as a syntax error instead of leaving the shell waiting for Macaulay2.
+- A power of an indexed variable, such as `x_2^2`, stacks its exponent over the index in typeset maths, as TeX sets it, instead of after it.
+- Every `warning:` M2 writes gets its own warning block, with the indented `: …` lines that continue it, including Core's unlocated warnings, the documentation tools' `-- *** warning:` lines and warnings raised before an error.
+- Smoother while anything moves: the screen redraws at up to 60 frames a second during a run or background work (80 ms when idle), keys are read on a thread of their own so none waits on a frame, and the spinner turns on its own clock.
+- A huge result no longer freezes sp2: values are laid out and turned into text on worker threads, showing `… laying out …` until ready, so the spinner keeps moving and Ctrl+C cancels the run.
+- A Ctrl+C arriving within half a second after a run ends is ignored instead of clearing the input or quitting, and input left unread at exit no longer spills into the shell.
+- sp2 no longer hangs on a blank screen when Macaulay2 dies while starting; it reports why.
+- A value laid out again in the background (after a resize or theme change) no longer crashes sp2 by growing taller in the middle of a frame.
+- Dragging the border between the feed and a side pane keeps the feed's layout until the width settles, as intended, instead of re-wrapping every block on every frame.
+- Failed source in Everforest uses its native error background across dark/light modes and all contrast positions.
+
+
+## [1.3.1] - 2026-11-14
+
+### Added
+
+- Three keys jump from the name under the cursor to a tab beside the session: `Ctrl+]` its source, `Alt+]` everything the language server knows about it, `Ctrl+K` its documentation page, which needs no language server. Files opened beside the session number their lines.
+- `Ctrl+E` puts a cursor into the feed or the view beside it: it moves, selects and copies, follows links, folds values, switches formatters, and asks the language server about the session code under it. Input motions share one model of words, paragraphs and brackets, with the bracket at the cursor and its partner marked; `Alt+PageUp`/`Alt+PageDown` jump to the start or end of a block.
+- `peek` and `speek` join the output formatters, and `toExternalString` takes the place of HTML.
+- The pane beside the session names what it shows on a title row and lists its tabs beneath as icons.
+- Maps of complexes draw as their two complexes aligned by degree, labelled arrows between them, slanting components named and zero components left out.
+
+### Changed
+
+- A link under the pointer keeps its text colour and lights the background behind it instead, so documentation links drawn in the text colour show the hover too.
+- The language server is asked about the cursor only once it rests, so moving and typing no longer queue a question per step. A slow answer is cancelled instead of stopping the server, a server that stops is restarted after a growing delay, and an answer about a cursor that has moved on is ignored.
+- Settings keep one section per tab: the language-server options form their own `lsp` section and the selection belongs to `editor`. Older settings files are read into the new shape.
+- Hash tables align keys and arrows in columns, each value wrapping beneath where it began; values unfold through their expressions until they reach a name.
+- Operators typeset their operands, tensor products draw as such, and numbers typeset.
+- Complexes compose labelled map expressions, with differential matrices above arrows and homological degrees beneath modules, in structured Unicode and typeset previews.
+
+- Output mode controls sit in the value border as icons, the current one bold and the alternatives dimmed; clicking an icon selects that mode. Their position is configurable.
+
+- Tabbed pickers open with the row of tabs selected, and clicking a tab name shows that tab.
+
+- Numbered vertical lists number their entries `0.`, `1.`, … as M2's TeX does, without `=>`. The controls select M2 representations (`specNet`, `net`, `string`, `tex`, `markup` and `html`), independently of the display capabilities chosen in settings. Select `net` for M2's own terminal spelling.
+
+- Values retain M2 expression structure and component classes through `specNet`, with independent `specType` formatting for type annotations. Type descriptions default to the outer type; `specType'(depth, value)` controls the number of constructor layers, with `specType value` defaulting to one. Custom types compose existing expression constructors without shell changes; unsupported constructors retain their class and children.
+- Mathematical output uses the transmitted classes for highlighting in Unicode and typeset rendering, without recovering roles from TeX. Type annotations use a uniform type colour; map arrows have their own theme group.
+
+### Fixed
+
+- Documentation examples that show nothing leave a single row before the next example instead of an empty line.
+- A documentation example's recorded answer is shown as M2's string, never labelled `specNet`, even when its computed twin uses `specNet`.
+- Code wraps only between tokens, measured in terminal columns; code in documentation table cells stays inside its column and keeps its colours.
+- Content keeps its layout while its pane is resized and follows once the width settles; values are laid out again beside the drawing thread, keeping their old rows until the new ones arrive.
+- A language server that exits reports its status and recent stderr.
+
+- Map types name the modules they go between, as M2 does: a matrix is typed `Matrix[N ⟵ M]` and a sheaf map `SheafMap[G ⟵ F]`, shown by default. A sheaf's type is over its sheaf of rings, as `CoherentSheaf[OO_X]` for a sheaf of `OO_X`-modules, and an ideal's over its ring.
+
+- Empty vertical lists and hash tables, such as `hooks` for a method with none, draw as empty braces instead of stopping the shell.
+
+- Typeset previews wider than the screen break between matrix columns and across other wide blanks, so a large matrix wraps instead of shrinking. Structured previews cut wide rows at columns blank in every row, never through a word.
+
+- Italic package names retain their semantic colour in typeset output.
+
+- Hash tables retain structured rendering around opaque nested values. Numbered vertical lists show zero-based indices and left-aligned entries. Typeset package names respect the theme's italic styling.
+
+- Structured brackets and matrix parentheses follow `Punctuation`, matching brackets in code. Commas follow `Delimiter`; arrows use `MapArrow`, inheriting the normal text colour.
+
+- Embedded formatter controls respond to clicks, mode labels keep their icon positions, and output mode position accepts `off`. Unsupported structures and archived terminal examples use `net` instead of a generic structured preview.
+- Documentation signatures and examples use M2's resolved type names for highlighting. Matrix degrees remain outside the matrix body, map labels use stretched arrows, and tuple subscripts follow M2's TeX spelling. Formula spans inherit their containing background.
+- Typeset maths size is adjustable, with wrapping at separators and suitable operators. Type annotations retain copyable text. Automatic diagnostics and signature hints have separate settings, both off by default; enabled signature hints retain all returned overloads.
+
+- Output blocks share one formatter selector on the outer border, without internal separators. Typeset symbols retain their typeface when neighbouring numbers or strings change.
+
+- Plain TeX previews use a single foreground colour; semantic highlighting comes from the component classes in `specNet`.
+- Changing exponent or index colours preserves the original mathematical typefaces.
+- Typeset typewriter text uses the terminal font’s contextual shaping, including operator ligatures such as `=>`.
+
+- `Ctrl+PageUp`, `Ctrl+PageDown`, `Left` and `Right` no longer crash the shell while a documentation or source page is open beside the session; the page stays where it is.
+
+## [1.3.0] - 2026-11-10
+
+### Added
+
+- The language server now does more than colour code. `Alt+K` (or a middle click on code in the input) floats a small panel with what the name is. `Alt+Shift+K` describes it in full beside the session, in a view that takes no tab. `Ctrl+]` (or Shift+click) goes to its definition: in the input, in an earlier cell or in a file. Problems the server finds are underlined, with the message for the one under the cursor below the input. Occurrences of the name under the cursor are shaded. Signatures of known functions show while typing a call. Names bound in the session complete before they have run. `Alt+Shift+F` formats the input. A file shown beside the session folds where the server says it can: double-click the ▾ in its gutter. See *What the language server knows* in the book.
+- A new book, in `book/`, replaces the old one in `docs/`: a guided tour of the shell, every command, key, setting and option, and how the shell works with Macaulay2. Its Macaulay2 examples are highlighted by `mdbook-tsitter` 4 from the grammar itself, with no parser to build first.
+- Whole cells and results can be selected: double-click outside any text for the one under the click, triple-click for its whole submission, or step through them with `Alt+Up` and `Alt+Down`, then `Up`, `Down`, `y` (or `Ctrl+Y`) and `Esc`. A *copy cells as* selection setting copies them as raw text or as a session, `i1 : code` and `o1 = value`.
+- Triple-click selects a paragraph in the input, the feed and the previews, and the status line says what a copy took.
+- A crash is recorded, with its backtrace, in `$XDG_STATE_HOME/spectral-m2/crash.log` (default `~/.local/state/spectral-m2/crash.log`), and its one-line cause and the path are printed once the terminal is restored; until now the message was discarded together with stderr while the screen was drawn.
+- A `FilePosition` value in the output is a link to its source, as source locations in documentation are: click it to open the file at that position.
+- A **debug** statusline component shows the `sp2` version and memory, the M2 process's memory, the pictures held by the terminal, and the frame rate. The highlight debug view names the version as well.
+- Keymaps joins Settings as its sixth tab; `/keymaps` opens it directly. Statusline destination checklists separate off from the five segment choices.
+- A statusline component checklist assigns each item to one of five fixed segments or hides it. Components sharing a segment follow list order, including rendering settings and individual or combined process versions. Empty segments give neighbours more room without moving their anchors.
+- Middle-click documentation and source links to open them in the reference pane, or Ctrl-click to open them in the feed.
+- A rendering setting swaps the reference pane canvas and code backgrounds.
+- A saved-session browser (`/sessions`, `F7`) with source previews and `Ctrl+Enter` to restart and run a chosen session.
+- Save selected setup code as a reusable session with `Ctrl+Shift+S` or `/save-selection [file]`.
+- Preview files without evaluating them with `/view <file>`.
+- Delete the whole current input line with `Ctrl+U`.
+
+### Fixed
+
+- A method documented on another page is listed by its own name alone, linked to that page, without the repeated `-- see page -- headline` after it.
+- An option's name in a documentation page no longer links to the type its entry mentions.
+- An option's default in a documentation page, `default value null`, is coloured as code: `null`, `true`, `false`, strings and names take their own colours.
+- A method a page lists without documentation of its own is set on a red-tinted background (the `MarkupMissingDoc` group) instead of being followed by "(missing documentation)".
+- `Ctrl+Left` and `Ctrl+Right` move the input's cursor by words with a preview open, instead of switching its tab; `Ctrl+PageUp` and `Ctrl+PageDown` switch tabs from either pane.
+- Documentation opened through links uses the same example computation, semantic analysis, and selected math renderer as session output; enriched results refresh both panes.
+- Double-click expansion also works for standalone outputs opened directly into the feed.
+- Split views show pickers only in the focused pane; reference pages have no enclosing border and underline hovered links.
+- Debugger entry from interactive input no longer gets stranded when M2 cannot display its source; exit commands return to a usable session.
+- Ordinary errors return to normal input by default, preserving existing session state. `--debugger` opts into automatic debugger entry.
+- Clicked documentation opens in a separate reference pane without changing the session or its feed.
+- `Ctrl+Up` and `Ctrl+Down` browse all history from any line, including after editing recalled code.
+- `Ctrl+C` dismisses an accidental continuation or draft before quitting an idle shell.
+
+### Changed
+
+- A typeset list, table or sequence that holds maths is set as one formula even when some items are words (symbols, strings, `null`): those are set in typewriter face in their code colours, and types such as `ZZ` stay in the formula, instead of the list falling back to pictures beside terminal text. A list of words only stays plain text.
+- Typeset maths pictures are encoded off the main thread, and the terminal keeps only those near the viewport: pictures no block holds are deleted at once, and past a memory budget the furthest go first. Pictures lost to tmux are sent again when its pane regains focus.
+- Picker borders take the accent colour, with the tabs on their own row beneath the top border.
+- The row of tabs is the first row of a picker: move onto it with the arrows and switch tabs with left and right.
+- A picker is as tall as its current tab needs rather than its longest tab.
+
+## [1.2.3] - 2026-11-04
+
+### Changed
+
+- A bare symbol, such as an option's name, is drawn as a name in code rather than as italic maths. A ring's variables are still maths.
+- An option on its own or in a list, `a => 1`, is drawn part by part rather than as one formula, so only actual maths in it is typeset.
+- Arrows in typeset formulas keep their normal length.
+- The input breaks long lines between words rather than mid-word.
+- Everforest's headings, pickers, punctuation, warnings and install messages take new colours.
+- A mouse selection in the feed or a preview stays marked after it is copied, as one in the input does.
+- Type annotations can be selected with a drag. A selection reads only types or only everything else, depending on where it starts.
+
+### Added
+
+- A *selection* settings tab: *copy on select* turns off copying when a mouse selection finishes, and *raw selection* selects any character as it is drawn.
+
+### Fixed
+
+- A double click in the feed or a preview marks what it selects, as it does in the input.
+- Code and examples embedded in documentation pages copy without the gutter's indentation, and without their frames and output labels.
+- Copying code, printed text or a value that only wrapped on screen gives back one line instead of a line per row. Documentation pages and table cells still copy row by row.
+
+## [1.2.2] - 2026-11-04
+
+### Changed
+
+- `settings.json` keeps its values in a section for each settings tab, `layout`, `statusline` and `rendering`. Files saved by earlier versions still load, and are rewritten in the new form the next time a setting changes; earlier versions do not read the new form.
+
+## [1.2.1] - 2026-11-04
+
+### Changed
+
+- A collection whose items all have a TeX form is drawn as one picture, with even gaps around its commas and fences that grow with what they hold. `AngleBarList` is set with stretching angle brackets and bars.
+- A formula with a glyph outside the maths fonts, such as an emoji, is left to the terminal instead of being set from a system font.
+- Documentation examples take the same semantic colours as cells, and code and result blocks share their columns and fill the documentation width.
+- Type annotations are wholly in the type colour, and a page title's separator takes its heading colour.
+
+### Fixed
+
+- What a library prints to stderr can no longer land at the cursor and stay on screen.
+
+- Documentation tables keep short columns such as a symbol's name or class whole instead of slicing them mid-word; when a table cannot fit, its cells stack, ruled apart.
+- Maths in documentation, and values M2 marks as classes, functions, booleans or strings, keep their colours instead of reading as plain text.
+
+## [1.2.0] - 2026-11-04
+
+### Added
+
+- Added `hintCompletionBelow`, a 16-bit candidate threshold for inline completion hints, adjustable in settings; 0 disables hints.
+- Completion candidates open on the first `Tab`, which also inserts a visible hint; otherwise the second `Tab` inserts, subsequent presses cycle, and `Ctrl+Tab` cycles backwards.
+- Symbol completions are ranked by usage counts from successfully evaluated source. Library-symbol counts persist; counts for session-created names stay in memory and reset with the session. Scoped locals, comments, strings, and assignment targets are excluded.
+- A *statusline* settings tab, composing the idle line: choose where it names the colour scheme, the working directory and the commands and settings keys, on the left, centre or right, or not at all.
+- A *matrix row spacing* setting, `125%` by default, for how far apart the rows of a typeset matrix stand.
+- A highlight debug panel showing the groups and palette of the current theme.
+
+### Changed
+
+- Text-editing keys can now be rebound alongside the global commands, each in a context with its own tab of the keymaps picker. Keys are labelled with words instead of symbols.
+- `null`, `pi`, `ii`, `EulerConstant`, `CatalanConstant` and `infinity` in values take the builtin colour code gives them.
+- The imaginary unit is pictured upright instead of bold.
+- `key => value` is written with a plain `=>` in Unicode output instead of `=⇒`.
+- Domain types in method installations are coloured as methods.
+- Source paths in documentation are shortened to the file and its directory; the link still leads to the full path.
+- Everforest: error titles are bold, error messages plain, and modifier keywords red. In pickers, unselected values are gray; the selected row has a blue background, a bold name and value, and orange arrows; descriptions are italic.
+- Theme files that were never edited now follow new defaults when Spectral M2 updates.
+
+### Fixed
+
+- Cancelling a computation also interrupts external programs launched by Macaulay2, so the session can resume while preserving its state.
+- Rings retain their type colour when returned as mathematical values, and a real or complex field's precision subscript shares the field's type colour in text and typeset output.
+- Typeset formulas sit on the baseline of the text around them rather than too low by an amount growing with their height, and the key of a tall value lines up with its fraction bar or brace.
+- A formula holding `\pi` or `\gamma` is no longer refused and left without colour.
+- Cancelling a cell immediately after submitting it no longer leaves the session blocked for good.
+- Output arriving late from a cancelled cell is no longer filed under the next cell.
+- An existing `groups.toml` keeps loading when a capture has since moved between the default groups.
+
+## [1.1.0] - 2026-10-27
+
+### Added
+
+- M2 startup configuration through `-q`, `-E`, `-e`, `--no-preload`, `--prefix`, `--srcdir`, `--no-backtrace`, `--no-debug`, `--debug`, `--notify`, `--print-width`, `--no-randomize`, `--no-threads`, and `--no-time`, retained across session restarts.
+- Initialization output is shown on first startup and after restarting M2.
+
+- `Ctrl+C` interrupts a running computation and discards queued work while preserving the Macaulay2 session; when idle it still quits.
+
+- `sp2 FILE` runs a file's code as the session starts, `sp2 --resume` the previous session's, and `sp2 --help` and `--version` describe the shell.
+- Optional semantic highlighting through an installed `m2-ls`, covering live input, session code, and code previews, with configurable semantic theme groups and a persisted rendering setting.
+
+- Added a *maths* setting: `unicode`, as before; `typeset`, which draws returned values as pictures typeset by the built-in RaTeX, through the kitty graphics protocol, on terminals that support it, tmux included; and `ascii`, Macaulay2's own plain-text spelling. A type holding maths, such as a matrix's rings, is typeset too, in the type colour. Where the terminal cannot show pictures, `typeset` is still offered, struck through and marked unavailable in that terminal.
+- Selecting a typeset picture copies its Macaulay2 code, once however many rows it covers; repeated formulas each copy separately.
+- Double-click selects a word, a bracketed block, or a whole formula in the input, session, and previews. `Ctrl+A` selects the whole input, and dragging against a pane edge scrolls the selection.
+
+### Changed
+
+- M2 enters its normal top level after backend initialization, so `quit`, `exit`, and `end` close the shell cleanly; writes racing with process exit are handled as termination.
+- Spectral M2 is now licensed under MIT or Apache-2.0, at your option, instead of GPL-3.0-only.
+- Built on `m2-syn` 0.7, now also MIT or Apache-2.0. The syntax tree view still nests what brackets hold under the opening bracket, and no longer lists empty groups.
+- Settings are grouped into *appearance*, *layout* and *rendering* tabs, switched with `Tab`. Each row shows only its name and value, aligned in one column at any pane width: each shows its current value between arrows. The *restore defaults* button, no longer a row of its own, and the selected row's description sit beneath the rows, and the status line names the keys the open picker answers.
+- The mouse wheel over the input moves through its lines instead of changing *input max height*, which it used to lower without showing it.
+- Semantic colours from `m2-ls` 2.0 are layered over syntax colours and retained while typing until new tokens arrive.
+- Typeset type annotations use the terminal's font for typewriter words, and wide formulas wrap across rows.
+
+### Removed
+
+- Removed the `Alt+arrow` pane shortcuts; panes remain accessible by mouse and the view commands.
+
+### Fixed
+
+- Pasting control characters or picture placeholders copied from a terminal no longer breaks the input: they are dropped and the text around them kept.
+- Inside tmux the first key pressed after starting is no longer lost: pictures are detected from what tmux reports instead of a terminal query that tmux leaves unanswered.
+- A typeset type sits beside its value with its last row on the value's last, rather than one row lower.
+- A cell sharing a line with the one before it, as in `a = 1; b = 2`, is no longer drawn indented by the space between them.
+- Input wrapping, cursor placement, and vertical movement account for the display width of wide characters.
+- Dragging outside the input copies the selection on release, and rows joined by a tall picture copy as one line.
+
+## [1.0.0] - 2026-10-19
+
+### Added
+
+- Added a *math fonts* setting, off by default: rings are drawn by the name they have in code, `ZZ`, and on as blackboard glyphs, `ℤ`; `\mathcal` and `\mathfrak` capitals are drawn as script and fraktur glyphs, and `\mathbb` covers every capital.
+- Cell numbers are laid out for three digits so a number growing a digit moves nothing.
+- Added `/values` (`Alt+V`) and `/stdout` (`Alt+P`) views beside `/code`, `/output`, and `/ast`.
+- Added completion shown as a muted hint after the cursor and taken with `Tab`, which cycles through the candidates when pressed again (`Shift+Tab` backwards), while `Alt+Tab` inserts a tab: names Macaulay2 knows, reported by Macaulay2 as it starts and after each cell; file names inside strings; command names; and the file `/save` and `/load` take.
+- Added undo (`Ctrl+Z`) and redo (`Ctrl+Shift+Z`) for the input, and `Ctrl+Backspace` and `Ctrl+Delete` to delete what `Ctrl+Left` and `Ctrl+Right` move over.
+- Added a *compute examples* setting, off by default: a time limit for each documentation example, which is then run again in a Macaulay2 of its own so its value is drawn from its structure, as a live value is.
+- Links in documentation are underlined under the pointer and run `help` for their page on Ctrl+click, without disturbing the input.
+- History is shared by every running session: input submitted in one can be recalled in the others without restarting them.
+- The prompt takes a typing form while you type and returns to rest shortly after the last keystroke that changed the input, without moving the text.
+- Added a *complete after* setting for how much of a name is typed before it completes.
+- Added `/save [file]` and `/load <file>` to write the session's code to an `.m2` file and run one in a fresh session, and `/resume` to run the code of the previous session, which is kept on every exit and restart and by a bare `/save`.
+
+### Fixed
+
+- After an evaluation error, the failed cell and unevaluated code have a red background, while unevaluated code is muted without syntax colours. Error boxes put the error prefix in the title and draw the message in light red; queued and rejected markers are configured with the other UI glyphs.
+- Centralized interface glyphs and the pending spinner in UI configuration, with simple symbols for limited terminals.
+- Documentation headings use the light blue, light yellow, and aqua highlight colours; example code blocks share the transcript width and wrap in narrow panes. Folded outputs show a three-row separator and label, recent cell numbers are darker, and the outer margin follows each adjacent row.
+- A documentation page's title is ruled off beneath, with its name in bold and its brief in italics; its usage, inputs and outputs read as headers rather than bullets; and the location of its source reads as text. Inline code has no background and links no underline of their own. Gruvbox functions are no longer bold.
+- Documentation examples are drawn without cell numbers, on the page's own surface, with values M2 wrapped joined back into one and a blank line kept after the last.
+- Text-package markup retains heading levels, emphasis, links, subscripts, nested lists and table layout. Documentation examples use the session's input, printed-text and output blocks, including multiline values and type annotations.
+- Preserved normal Macaulay2 initialization and user package paths, so packages installed in the home directory can be found as in a regular M2 shell.
+- The syntax tree view keeps one column clear on its left, sets its source between two rules with a margin inside each, and lists an opening bracket before what it encloses and the closing one after, in the order of the source. Field names and code fragments are told apart in Everforest.
+- Printed text is drawn in a lighter, less saturated shade of the string colour, in every theme.
+- Output labels keep their `oN` numbers, with the latest three in bold, and the numbers of the cells behind the latest three outputs are drawn in the colour of their labels.
+- Modules and sheaves whose matrices M2 pads with `\vphantom` are drawn from their structure instead of as raw TeX; names in typewriter face are coloured as code names them.
+- Documentation markup such as `DIV` is drawn with titled headings of three depths, links underlined on hover, muted `--` descriptions, bullet markers and code coloured as typed, instead of one flat colour.
+- A cell still evaluating shows a turning spinner and keeps the bottom margin it has once its outputs arrive, so the block no longer changes height on completion.
+- Operators, keywords, commands and scripted functors are coloured as what they are when returned: `symbol ^` as an operator, `symbol if` as a keyword, `Ext` as a function. Values built with `^^`, `**`, `@@`, `|`, `=>` and `==>` keep their operator colour instead of falling back to plain text.
+- The whole screen keeps one column clear on its left, and the hint of an empty input starts at the cursor rather than a cell after it.
+- Recent-output highlighting follows the latest lines that evaluated to something, muted ones included and null ones not.
+- A resumed or loaded session runs the cells that were entered together as one submission again, not all at once and not cell by cell.
+- `Ctrl+Left` and `Ctrl+Right` move by a word (with `Shift`, select by one), `Ctrl+Home` and `Ctrl+End` jump to the ends of the input, and `Ctrl+J`, the newline character some terminals send for `Shift+Enter`, inserts a newline. Pane focus and resizing moved to `Alt+Left`, `Alt+Right` and with `Shift`.
+- Cell numbers, output labels, borders and separators sit one cell further left, a label's last character always on its border.
+- A command being typed is drawn in a new *Command* colour and its completion as a muted hint; the picker draws the part typed of each name in bold. `Tab` completes the command and closes the picker unless a file follows, `Left`, `Right`, `Home` and `End` move the cursor as in any input, and the completion goes while the cursor is inside the name and comes back at its end.
+- Rings such as `QQ[x]/ideal(x^3-1)` and names such as `x_{1,1}` are drawn and coloured from their structure instead of falling back to plain text; a subscript with no lowered form stays on its row as `x_{1, 1}`.
+- Types are no longer italic in any theme; packages are drawn as types in italics.
+- Printed text is numbered only in the views beside the shell, not in the shell itself.
+- A returned type of any kind, such as `Type` or `WrapperType`, inside a container too, is coloured as a type, and a package as a package.
+- The code view adds no blank lines the code does not have, and the command list is only as tall as its matches.
+- `Esc` while typing a command puts the list away and keeps what was typed; a command's completion is drawn as a muted hint.
+- The status line no longer says "Ready".
+- A curly brace of even height splits its cusp over the two middle rows, as at height two, instead of putting it off-centre.
+- A mouse selection stays in the pane it starts in, and the first click after switching panes selects.
+- Copying a selection keeps the blank lines inside it, such as those printed text contains.
+- A command picked after typing part of its name is recorded in history whole.
+- `/resume` and `/load` run their code cell by cell, so the feed reads as it did when the code was typed instead of as one block.
+- Tests no longer write to the input history.
+- The `stdout` view shows only printed text, without warnings, errors, or other blocks, each numbered by its cell as in the session.
+
+### Changed
+
+- `Left` and `Right` step through all five views, not only the output projections; `/output` now shows printed text and values together.
+- Printed text carries the number of the cell that printed it, in the gutter where that cell's code carries it.
+- Every view beside the session sits on the code background, printed output included.
+- A focused view lists all five views in the middle of the status line, its own highlighted.
+
+### Removed
+
+- Removed the `/new`, `/quit`, and `/debug` commands; restarting, quitting, and the highlight inspector stay on their keys (`Alt+R`, `Ctrl+C`, `Ctrl+D`).
+- Removed the `Alt+V` shortcut that opened a view in place of the focused pane; views always open beside the session.
+
+## [0.4.0] - 2026-09-04
+
+### Added
+
+- Added a normalized action and key-event layer covering every shell command and alternate-pane activation with `Alt+V`.
+- Added retained feed rendering, render statistics, and live highlight-debug probes.
+- Added editable multiline input with selection-aware history, cursor scrolloff, configurable height, and `Shift+Space` insertion.
+
+### Changed
+
+- Split workspace state into independent sessions, editors, feeds, preview caches, and viewports.
+- Reworked output layout around aligned screen cells, consistent wrapping, shared consecutive-value boxes, and separate syntax-tree and wrapping components.
+- Made appearance hierarchical: schemes own their complete native palettes and semantic UI groups.
+- Limited redraws and retained-feed invalidation to state changes.
+
+### Fixed
+
+- Made runtime picker types available in normal builds.
+- Kept overflowing output type annotations visible on a fallback row.
+- Avoided redundant appearance persistence and feed invalidation during workspace synchronization.
+
+## [0.3.0] - 2026-08-29
+
+First crates.io release.
+
+### Added
+
+- Added two independent Macaulay2 workspaces with wide split rendering, draggable and keyboard resizing, and narrow-layout pane switching.
+- Added code, structured-output, and `m2-syn` syntax-tree previews with linked committed state, independent viewports, selection, and split opening through `Ctrl+Enter`.
+- Added command, settings, style, keymap, and highlight-debug pickers, including persistent slash-command history.
+- Added structured pending submissions with spinner and queue states, numbered cells, values, types, printed output, warnings, errors, and source-ranged syntax diagnostics.
+- Added keyboard and mouse selection across input, feed, code, and syntax-tree content with OSC 52 copying.
+- Added seven colorscheme families with ordered native variants and complete UI and Macaulay2 highlight-group mappings.
+- Added an mdBook covering shell workflows and keys, with Cargo-built `mdbook-tsitter` highlighting for Macaulay2 examples.
+
+### Changed
+
+- Replaced Tree-sitter-based interactive parsing and highlighting with `m2-syn`'s native typed parser and visitor API.
+- Reorganized the shell around workspace sessions, typed feed blocks, responsive panes, and independently rendered previews.
+- Made installation Cargo-managed and removed manual binary copying and local-bin symlinks.
+
+[Unreleased]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.3...v1.3.0
+[1.2.3]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.2...v1.2.3
+[1.2.2]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.1...v1.2.2
+[1.2.1]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v0.4.0...v1.0.0
+[0.4.0]: https://github.com/AlexanderGolys/spectral-m2/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/AlexanderGolys/spectral-m2/releases/tag/v0.3.0
