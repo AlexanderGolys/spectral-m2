@@ -162,6 +162,9 @@ ViewDivider = { link = "Faint" }
 SyntaxTreeBranch = { link = "Muted" }
 SyntaxTreeLabelSeparator = { link = "Muted" }
 SyntaxTreeBorder = { link = "Faint" }
+# The code beside a syntax tree row: the rest of the cell faint, the row's node a lighter gray.
+SyntaxTreeCode = { link = "Faint" }
+SyntaxTreeCodeSpan = { link = "Muted" }
 StatuslineScheme = { link = "Muted" }
 StatuslineSeparator = { link = "Muted" }
 StatuslineHintLabel = { link = "Muted" }

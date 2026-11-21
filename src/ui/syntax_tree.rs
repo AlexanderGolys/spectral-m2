@@ -1,18 +1,32 @@
 //! The syntax tree view's block: a committed cell's code as it was entered, over its
-//! m2-syn tree one node a row. A click on a row picks its node, shown in colour in
-//! the code above while the rest is grayed out; a row holding others folds them.
+//! m2-syn tree one node a row. Beside every row runs the cell's code once more, in a
+//! faint gray but for the row's node, a lighter one; on `right: ExprBinary` below
+//! only `(C)^1` is lighter.
+//!
+//! ```text
+//! Cell                         identity (C)^1
+//! ├─▾elems: ExprBinary         identity (C)^1
+//! │  ├─ left: Symbol           identity (C)^1
+//! │  ├─ op: Token[SPACE]       identity (C)^1
+//! │  ╰─▾right: ExprBinary      identity (C)^1
+//! ```
+//!
+//! A click on a row picks its node, shown in colour in the code above while the rest
+//! is grayed out; a row holding others folds them.
 
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-use m2_syn::{PrettyDetail, PrettyDetailRole, PrettyEdge, PrettyNode, PrettyNodeRole, Span};
+use m2_syn::{PrettyEdge, PrettyNode, PrettyNodeRole, Span};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::text::{Line, Span as Styled};
 use ratatui::widgets::{Paragraph, Widget};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::block::{Block, CodeRange, Text, TextSpan};
 use super::cell::M2CodeCell;
+use super::config::UI;
 use super::render::selection::Inclusions;
 use super::render::RenderContext;
 use crate::app::session::CommittedCell;
@@ -25,11 +39,20 @@ use crate::ui::theme::groups::{Groups, HLGroup};
 /// picked and which rows are folded.
 pub struct SyntaxTreeBlock {
     code: M2CodeCell,
+    line: CodeLine,
     tree: SyntaxTree,
     source: SourceId,
     picked: Option<usize>,
     /// Rows whose descendants are folded away.
     folded: BTreeSet<usize>,
+}
+
+/// A cell's code laid on one row, each line break drawn as a mark one column wide:
+/// `f = (\n  x)` reads `f = (↵  x)`, its `x` starting on column 7.
+struct CodeLine {
+    /// The byte each character starts at with the column it starts on, then the
+    /// code's end with its width.
+    starts: Vec<(usize, usize)>,
 }
 
 /// A cell's syntax tree as the view lists it: every node a row, each followed by
@@ -135,32 +158,90 @@ impl TreeEntry<'_> {
     }
 }
 
+impl CodeLine {
+    fn new(text: &str) -> Self {
+        let mut column = 0;
+        let mut starts = text
+            .char_indices()
+            .map(|(byte, character)| {
+                let start = (byte, column);
+                column += Self::width(character);
+                start
+            })
+            .collect::<Vec<_>>();
+        starts.push((text.len(), column));
+        Self { starts }
+    }
+
+    /// A break or tab takes the one column of the mark or space drawn for it.
+    fn width(character: char) -> usize {
+        match character.is_control() {
+            true => 1,
+            false => character.width().unwrap_or(0),
+        }
+    }
+
+    fn columns(&self) -> usize {
+        self.starts.last().map_or(0, |&(_, column)| column)
+    }
+
+    fn column_of(&self, byte: usize) -> usize {
+        self.starts[self.starts.partition_point(|&(start, _)| start < byte)].1
+    }
+
+    fn byte_at(&self, column: usize) -> usize {
+        self.starts[self.starts.partition_point(|&(_, start)| start < column)].0
+    }
+
+    /// The columns a row `room` wide shows to keep `bytes` in view: the whole code
+    /// when it fits, else moved from its start no further than `bytes` need, and to
+    /// their start when they are wider than the row.
+    fn window(&self, bytes: &Range<usize>, room: usize) -> Range<usize> {
+        let columns = self.columns();
+        if columns <= room {
+            return 0..columns;
+        }
+        let (start, end) = (self.column_of(bytes.start), self.column_of(bytes.end));
+        let shift = end.saturating_sub(room).min(start).min(columns - room);
+        shift..shift + room
+    }
+
+    /// `span` as drawn on one row, its line breaks as marks and tabs as spaces.
+    fn drawn(mut span: Styled<'static>) -> Styled<'static> {
+        if span.content.contains(char::is_control) {
+            span.content = span
+                .content
+                .replace('\n', Glyphs::LineBreak.current())
+                .replace(char::is_control, " ")
+                .into();
+        }
+        span
+    }
+}
+
 impl TreeRow {
-    /// `label: Kind text` for a node, or the text alone for a token or bracket.
+    /// `label: Kind` for a node; a token spelled as m2-syn names it, `Token[+]` or
+    /// `Token[SPACE]` for the space applying a function, and a bracket as drawn.
     fn text(label: &str, node: &PrettyNode) -> Vec<TextSpan> {
         let mut text = Vec::new();
         if !label.is_empty() {
             text.push(TextSpan::new(label, HLGroup::Property));
             text.push(TextSpan::new(": ", HLGroup::SyntaxTreeLabelSeparator));
         }
-        match node.role() {
-            PrettyNodeRole::Token | PrettyNodeRole::Delimiter => text.push(TextSpan::new(
-                node.detail().map_or(node.name(), PrettyDetail::text),
-                HLGroup::Symbol,
-            )),
-            _ => {
-                text.push(TextSpan::new(node.name(), HLGroup::Type));
-                let own = node.detail().filter(|detail| {
-                    detail.role() == PrettyDetailRole::Text
-                        && node.span().and_then(Span::text) == Some(detail.text())
-                });
-                if let Some(detail) = own {
-                    text.push(TextSpan::new(
-                        format!(" {}", detail.text()),
-                        HLGroup::Symbol,
-                    ));
-                }
+        let spelling = node
+            .name()
+            .strip_prefix("Token![")
+            .and_then(|name| name.strip_suffix(']'));
+        match (node.role(), spelling, node.detail()) {
+            (PrettyNodeRole::Token, Some(spelling), _) => text.extend([
+                TextSpan::new("Token[", HLGroup::Type),
+                TextSpan::new(spelling, HLGroup::Symbol),
+                TextSpan::new("]", HLGroup::Type),
+            ]),
+            (PrettyNodeRole::Delimiter, _, Some(bracket)) => {
+                text.push(TextSpan::new(bracket.text(), HLGroup::Symbol));
             }
+            _ => text.push(TextSpan::new(node.name(), HLGroup::Type)),
         }
         text
     }
@@ -249,6 +330,7 @@ impl SyntaxTreeBlock {
         };
         Self {
             code: M2CodeCell::highlighted(cell.code.clone(), None, cell.source_id, highlighter),
+            line: CodeLine::new(&cell.code),
             tree: SyntaxTree::new(&cell.tree, placement),
             source: cell.source_id,
             picked: None,
@@ -303,6 +385,7 @@ impl SyntaxTreeBlock {
         true
     }
 
+    /// The structure of a row: its branches, field, kind, and what folding hid.
     fn tree_line(&self, row: usize, groups: &Groups) -> Line<'static> {
         let tree_row = &self.tree.rows[row];
         let mut spans = vec![Styled::styled(tree_row.limb(), groups.syntax_tree_branch())];
@@ -318,6 +401,55 @@ impl SyntaxTreeBlock {
             ));
         }
         Line::from(spans)
+    }
+
+    /// The code beside `row` in `room` columns: its node's bytes in one colour, the
+    /// rest in another, and an ellipsis where the row cuts the code off.
+    fn code_beside(&self, row: usize, room: usize, groups: &Groups) -> Vec<Styled<'static>> {
+        let ellipsis = Glyphs::Ellipsis.current();
+        let columns = self.line.columns();
+        let room = match columns <= room {
+            true => room,
+            false => room.saturating_sub(2 * ellipsis.width()),
+        };
+        let node = &self.tree.rows[row].code;
+        let window = self.line.window(node, room);
+        let shown = self.line.byte_at(window.start)..self.line.byte_at(window.end);
+        let lit = node.start.clamp(shown.start, shown.end)..node.end.clamp(shown.start, shown.end);
+        let (text, rest) = (self.code.text(), groups.syntax_tree_code());
+        let cut = |cut: bool| Styled::styled(if cut { ellipsis } else { "" }, rest);
+        [
+            cut(window.start > 0),
+            Styled::styled(text[shown.start..lit.start].to_string(), rest),
+            Styled::styled(
+                text[lit.clone()].to_string(),
+                groups.syntax_tree_code_span(),
+            ),
+            Styled::styled(text[lit.end..shown.end].to_string(), rest),
+            cut(window.end < columns),
+        ]
+        .into_iter()
+        .map(CodeLine::drawn)
+        .collect()
+    }
+
+    /// Every row shown, its code set in one column past the widest structure.
+    fn tree_lines(&self, shown: &[usize], width: u16, groups: &Groups) -> Vec<Line<'static>> {
+        let mut lines = shown
+            .iter()
+            .map(|&row| self.tree_line(row, groups))
+            .collect::<Vec<_>>();
+        let column =
+            lines.iter().map(Line::width).max().unwrap_or(0) + usize::from(UI::TREE_CODE_GAP);
+        let room = usize::from(width).saturating_sub(column);
+        if room > 0 {
+            for (line, &row) in lines.iter_mut().zip(shown) {
+                line.spans
+                    .push(Styled::raw(" ".repeat(column - line.width())));
+                line.spans.extend(self.code_beside(row, room, groups));
+            }
+        }
+        lines
     }
 
     /// Gray out the code but for the picked node's, which keeps its colours and
@@ -377,14 +509,9 @@ impl Block for SyntaxTreeBlock {
             .render(code, buf);
         self.paint_picked(context, code, buf);
         let tree = band(&sections.tree);
-        Paragraph::new(
-            shown
-                .iter()
-                .map(|&row| self.tree_line(row, groups))
-                .collect::<Vec<_>>(),
-        )
-        .style(groups.code())
-        .render(tree, buf);
+        Paragraph::new(self.tree_lines(&shown, tree.width, groups))
+            .style(groups.code())
+            .render(tree, buf);
         for (&row, y) in shown.iter().zip(tree.y..) {
             if let Some(x) = self.tree.rows[row].marker_column() {
                 let glyph = match self.folded.contains(&row) {

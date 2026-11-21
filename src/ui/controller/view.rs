@@ -80,11 +80,10 @@ pub struct CommittedCells<'a> {
     pub revision: u64,
 }
 
-/// Parsed block model retained by one code preview pane.
+/// The code view's blocks, kept until the committed cells change.
 struct PreviewCache {
     revision: u64,
     highlight_revision: u64,
-    view: ViewKind,
     blocks: Vec<Box<dyn Block>>,
 }
 
@@ -179,49 +178,40 @@ impl Viewport {
         self.scroll = usize::MAX;
     }
 
-    /// Rebuild the cached blocks of a code view when the committed cells have
-    /// changed since they were built.
-    fn refresh_preview(
-        &mut self,
-        committed: CommittedCells<'_>,
-        view: ViewKind,
-        highlighter: &mut dyn Highlighter,
-    ) {
-        if self.preview.as_ref().is_none_or(|cache| {
-            cache.revision != committed.revision
-                || cache.view != view
-                || cache.highlight_revision != highlighter.revision()
+    /// Rebuild the cached code view when the committed cells have changed since it
+    /// was built.
+    fn refresh_code(&mut self, committed: CommittedCells<'_>, highlighter: &mut dyn Highlighter) {
+        if self.preview.as_ref().is_some_and(|cache| {
+            cache.revision == committed.revision
+                && cache.highlight_revision == highlighter.revision()
         }) {
-            let blocks: Vec<Box<dyn Block>> = match view {
-                ViewKind::Code => (!committed.cells.is_empty())
-                    .then(|| {
-                        let recalled = Recalled::latest(
-                            committed
-                                .cells
-                                .iter()
-                                .filter(|cell| cell.state.is_valued())
-                                .map(|cell| cell.number),
-                        );
-                        Box::new(CodeBlock::new(committed.cells.iter().map(|cell| {
-                            M2CodeCell::highlighted(
-                                cell.code.clone(),
-                                Some((cell.number, recalled.of(cell.number))),
-                                cell.source_id,
-                                highlighter,
-                            )
-                        }))) as Box<dyn Block>
-                    })
-                    .into_iter()
-                    .collect(),
-                _ => unreachable!("only the code view is cached"),
-            };
-            self.preview = Some(PreviewCache {
-                revision: committed.revision,
-                highlight_revision: highlighter.revision(),
-                view,
-                blocks,
-            });
+            return;
         }
+        let recalled = Recalled::latest(
+            committed
+                .cells
+                .iter()
+                .filter(|cell| cell.state.is_valued())
+                .map(|cell| cell.number),
+        );
+        let blocks = (!committed.cells.is_empty())
+            .then(|| {
+                Box::new(CodeBlock::new(committed.cells.iter().map(|cell| {
+                    M2CodeCell::highlighted(
+                        cell.code.clone(),
+                        Some((cell.number, recalled.of(cell.number))),
+                        cell.source_id,
+                        highlighter,
+                    )
+                }))) as Box<dyn Block>
+            })
+            .into_iter()
+            .collect();
+        self.preview = Some(PreviewCache {
+            revision: committed.revision,
+            highlight_revision: highlighter.revision(),
+            blocks,
+        });
     }
 }
 
@@ -483,17 +473,21 @@ impl Editor {
                 self.selection_inclusions.merge(inclusions);
             }
             ViewKind::Code | ViewKind::SyntaxTree => {
-                viewport.refresh_preview(committed, view, highlighter);
+                if view == ViewKind::Code {
+                    viewport.refresh_code(committed, highlighter);
+                }
                 let Viewport {
                     scroll, preview, ..
                 } = viewport;
-                let blocks = preview
-                    .iter()
-                    .flat_map(|cache| cache.blocks.iter().map(Box::as_ref))
-                    .collect::<Vec<_>>();
-                let empty = match view {
-                    ViewKind::Code => "no committed code",
-                    _ => "no committed syntax trees",
+                let (blocks, empty) = match view {
+                    ViewKind::Code => (
+                        preview
+                            .iter()
+                            .flat_map(|cache| cache.blocks.iter().map(Box::as_ref))
+                            .collect::<Vec<_>>(),
+                        "no committed code",
+                    ),
+                    _ => (Vec::new(), "no committed syntax trees"),
                 };
                 self.selection_inclusions
                     .merge(BlockView::new(&blocks, empty).render(

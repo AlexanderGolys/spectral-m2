@@ -13,16 +13,17 @@ Open a second look at the same session beside it: just your code, just its outpu
 : What the session answered, without the code. The *output view* setting in the [side panel settings](../reference/settings.md#side-panel) chooses what: `everything` (printed text, values and messages, the default), only returned `values` with their types, or only `printed` text, each piece numbered by the cell that printed it.
 
 `/ast`, `F6`
-: The syntax tree of every committed cell, opening at the newest: the cell's code exactly as you entered it between two rules, then its tree, one node a row. A row names the field the node fills, then what it is: `right: ExprBinary`, and for a token or bracket just its text, `op: +`. Brackets and commas are rows like any other, beside what they enclose.
-
-  Click a row to pick its node. Its code stays in colour while the rest of the cell is grayed out, and the same code is marked in the shell, scrolled into view. Clicking the code itself picks the innermost node there. A row holding others has a **▾** in its branch: click it, or double-click the row, to fold it to **▸** with the number of rows hidden. Folds and the node picked stay as you commit more cells.
+: The syntax tree of every committed cell, opening at the newest: the cell's code exactly as you entered it between two rules, then its tree, one node a row. A row names the field the node fills, then what it is, a token spelled as the parser names it: `right: ExprBinary`, `op: Token[^]`, and `op: Token[SPACE]` for the space that applies a function. Brackets are rows like any other, beside what they enclose. Beside every row the cell's code runs once more on one line, its line breaks shown as `↵`, faint but for the row's node, a lighter gray; when it is wider than the room left, each row shifts it to keep its node in view.
 
   ```text
-  ╰─▾right: ExprBinary
-     ├─ left: y
-     ├─ op: ^
-     ╰─ right: 2
+  Cell                         identity (C)^1
+  ├─▾elems: ExprBinary         identity (C)^1
+  │  ├─ left: Symbol           identity (C)^1
+  │  ├─ op: Token[SPACE]       identity (C)^1
+  │  ╰─▾right: ExprBinary      identity (C)^1
   ```
+
+  Click a row to pick its node. Its code stays in colour in the code above while the rest of the cell is grayed out, and the same code is marked in the shell, scrolled into view. Clicking the code above picks the innermost node there. A row holding others has a **▾** in its branch: click it, or double-click the row, to fold it to **▸** with the number of rows hidden. Folds and the node picked stay as you commit more cells.
 
 Code wider than the pane wraps as it does in the shell, or is cut at the right edge when *code overflow* in the [side panel settings](../reference/settings.md#side-panel) is `trim`.
 

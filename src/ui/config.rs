@@ -115,6 +115,8 @@ impl UI {
     /// Percentage points one picker step moves an arrow length.
     pub const ARROW_LENGTH_STEP: u16 = 10;
 
+    /// Columns kept between a syntax tree's widest row and the code beside each row.
+    pub const TREE_CODE_GAP: u16 = 2;
     /// Blank rows inside the band of printed output, above and below its text.
     pub const PRINTED_MARGIN: u16 = 1;
     /// Columns kept between a value and the type set beside it.

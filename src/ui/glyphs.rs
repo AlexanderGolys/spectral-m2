@@ -129,6 +129,8 @@ pub enum Glyphs {
     FoldClosed = Glyph::new("▸", ">"),
     FoldedLines = Glyph::new("⋯", "..."),
     Ellipsis = Glyph::new("…", "..."),
+    /// A line break in code laid on one row, one column wide like any character.
+    LineBreak = Glyph::new("↵", " "),
     HintSeparator = Glyph::new("·", "-"),
     UpDown = Glyph::new("↑↓", "^v"),
     LeftRight = Glyph::new("←→", "<>"),

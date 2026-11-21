@@ -561,6 +561,8 @@ accessors! {
     syntax_tree_branch: SyntaxTreeBranch,
     syntax_tree_label_separator: SyntaxTreeLabelSeparator,
     syntax_tree_border: SyntaxTreeBorder,
+    syntax_tree_code: SyntaxTreeCode,
+    syntax_tree_code_span: SyntaxTreeCodeSpan,
 
     error_border: ErrorBorder,
     error_message: ErrorMessage,

@@ -337,6 +337,10 @@ impl M2CodeCell {
         WrappedText::code(&self.text, width, &self.wrap_ranges, layout)
     }
 
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
     /// The code's rows with nothing beside them, as a view shows it.
     pub fn bare_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
         cell_lines(
