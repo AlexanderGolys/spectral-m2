@@ -5,6 +5,7 @@ All notable changes to Spectral M2 are documented here.
 ## [Unreleased]
 
 ### Changed
+- The maps of a complex and of a map of complexes are labelled by their names, `dd_i` for a differential and `f_i` for a component of a map `f` (the map's global name, or `f`), unless the new *matrix labels* rendering setting is on, which labels them by their matrices. A matrix's degrees are drawn whole in grey, braces too.
 - Matrix degrees are hidden unless the new *matrix degrees* rendering setting is on, and are greyed out when shown; a complex numbers its degrees in the same grey, a new `Degree` highlight group linked to `Muted`. The zero modules a complex begins and ends with are white, not number-coloured.
 - A map of complexes draws every component between modules both complexes are concentrated in, a zero one too, so a zero map of degree 1 still shows how it shifts degrees; none goes to or from the bounding zeros.
 - A typeset value too wide for the pane always stays a picture, shrinking as far as it takes, instead of falling back to Unicode text past 60%.

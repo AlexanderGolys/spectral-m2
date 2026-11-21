@@ -53,6 +53,9 @@ matrix row spacing
 matrix degrees
 : Show the degrees of a matrix's rows beside them, greyed out in the `Degree` colour. Default: off.
 
+matrix labels
+: Label the maps of a complex or a map of complexes by their matrices. Off, each is labelled by its name: a differential by `dd_i`, a component of a map by the map's name, or `f` when no global name holds it, as `f_i`. Default: off.
+
 compute examples
 : How long each documentation example may run when it is computed again, so its value is drawn from its structure. Default: off, which keeps the output the documentation recorded. See [Documentation](../shell/documentation.md#examples-computed-for-real).
 

@@ -123,6 +123,9 @@ pub enum Shape {
     },
     /// A hierarchy, each branch a label over its subtree.
     TreeExpression(Vec<(Shape, Shape)>),
+    /// How a map is labelled, `(matrix, name)`: by its matrix, or by its name such
+    /// as `dd_1` or `f_2`, whichever the *matrix labels* setting shows.
+    MapLabel(Box<Shape>, Box<Shape>),
 }
 
 /// A documentation page, laid out apart from any drawing: its HTML, the width
@@ -180,7 +183,8 @@ impl Shape {
             | Self::Subscript(first, second)
             | Self::Superscript(first, second)
             | Self::UnderExpression(first, second)
-            | Self::OverExpression(first, second) => vec![&**first, &**second],
+            | Self::OverExpression(first, second)
+            | Self::MapLabel(first, second) => vec![&**first, &**second],
             Self::MatrixExpression { rows, degrees } => rows
                 .iter()
                 .flatten()

@@ -153,6 +153,10 @@ impl<'a> Reading<'a> {
                 label: boxed(label),
             },
             (Shape::DiagramExpression { .. }, _) => Math::Diagram(Box::new(self.diagram(shape))),
+            (Shape::MapLabel(matrix, name), _) => match self.style.matrix_labels {
+                true => part(matrix),
+                false => part(name),
+            },
             (Shape::TreeExpression(branches), _) => Math::Grid {
                 rows: branches
                     .iter()

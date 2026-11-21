@@ -221,6 +221,9 @@ pub struct MathStyle {
     pub matrix_row_spacing_percent: u16,
     /// Whether a matrix shows the degrees of its rows beside them.
     pub matrix_degrees: bool,
+    /// Whether a map in a complex or a diagram is labelled by its matrix rather
+    /// than by its name.
+    pub matrix_labels: bool,
 }
 
 impl Default for MathStyle {
@@ -236,6 +239,7 @@ impl Default for MathStyle {
             display: MathDisplay::default(),
             matrix_row_spacing_percent: UI::MATRIX_ROW_SPACING_PERCENT,
             matrix_degrees: false,
+            matrix_labels: false,
         }
     }
 }
@@ -267,6 +271,7 @@ impl From<&RenderingSettings> for MathStyle {
                 UI::MAX_MATRIX_ROW_SPACING_PERCENT,
             ),
             matrix_degrees: rendering.matrix_degrees,
+            matrix_labels: rendering.matrix_labels,
             ..Self::default()
         }
     }

@@ -103,6 +103,9 @@ pub struct RenderingSettings {
     pub matrix_row_spacing_percent: u16,
     /// Whether a matrix shows the degrees of its rows beside them.
     pub matrix_degrees: bool,
+    /// Whether the maps of a complex or a diagram are labelled by their matrices
+    /// rather than their names.
+    pub matrix_labels: bool,
     /// Seconds each documentation example may take to be computed again, so
     /// its value is drawn from its structure; none computes nothing.
     pub example_seconds: u16,
@@ -125,6 +128,7 @@ impl Default for RenderingSettings {
             math_fonts: false,
             matrix_row_spacing_percent: UI::MATRIX_ROW_SPACING_PERCENT,
             matrix_degrees: false,
+            matrix_labels: false,
             example_seconds: 0,
             output_view: OutputView::default(),
         }
@@ -146,35 +150,16 @@ impl RenderingSettings {
         Duration::from_secs(self.example_seconds.into())
     }
 
-    /// Whether returned values lay out differently, moving their heights.
+    /// Whether returned values lay out differently, moving their heights: any
+    /// setting differs but italics, the examples' timeout and the output view.
     pub(super) fn reformats(&self, other: &Self) -> bool {
-        (
-            self.reference_code_background,
-            self.maths,
-            self.math_size_percent,
-            self.math_ink,
-            self.index_color,
-            self.exponent_color,
-            self.renderer_position,
-            self.fractions,
-            self.math_fonts,
-            self.matrix_row_spacing_percent,
-            self.matrix_degrees,
-            self.charset,
-        ) != (
-            other.reference_code_background,
-            other.maths,
-            other.math_size_percent,
-            other.math_ink,
-            other.index_color,
-            other.exponent_color,
-            other.renderer_position,
-            other.fractions,
-            other.math_fonts,
-            other.matrix_row_spacing_percent,
-            other.matrix_degrees,
-            other.charset,
-        )
+        let unlaid = Self {
+            italics: other.italics,
+            example_seconds: other.example_seconds,
+            output_view: other.output_view,
+            ..*self
+        };
+        unlaid != *other
     }
 
     /// Whether maths is drawn as typeset pictures here, not only chosen to be.
@@ -200,6 +185,7 @@ cyclic! {
         MathFonts = "math fonts",
         MatrixRowSpacing = "matrix row spacing",
         MatrixDegrees = "matrix degrees",
+        MatrixLabels = "matrix labels",
         ExampleTimeout = "compute examples",
         ReferenceCodeBackground = "swap reference backgrounds",
         OutputView = "output view",
@@ -239,6 +225,7 @@ impl SettingRow for RenderingSetting {
                 "distance between the rows of a typeset matrix, relative to TeX's own"
             }
             Self::MatrixDegrees => "show the degrees of a matrix's rows beside them, greyed out",
+            Self::MatrixLabels => "label the maps of complexes and diagrams by their matrices rather than their names, dd_i or f_i",
             Self::ExampleTimeout => {
                 "run documentation examples again, each for at most this long, to draw their values"
             }
@@ -294,6 +281,7 @@ impl SettingRow for RenderingSetting {
                 PickerValue::Stepped(format!("{}%", rendering.matrix_row_spacing_percent))
             }
             Self::MatrixDegrees => switch(rendering.matrix_degrees, "on"),
+            Self::MatrixLabels => switch(rendering.matrix_labels, "on"),
             Self::OutputView => {
                 PickerValue::among(OutputView::CHOICES, &rendering.output_view, |view| {
                     view.label().into()
@@ -344,6 +332,7 @@ impl SettingRow for RenderingSetting {
                 );
             }
             Self::MatrixDegrees => rendering.matrix_degrees = !rendering.matrix_degrees,
+            Self::MatrixLabels => rendering.matrix_labels = !rendering.matrix_labels,
             Self::OutputView => rendering.output_view = rendering.output_view.cycle(delta),
             Self::ExampleTimeout => {
                 rendering.example_seconds = rendering
