@@ -31,8 +31,13 @@ pub enum Action {
     LoadCode = "run the code in a file",
     ResumeSession = "run the previous session's code",
     Restart = "restart Macaulay2",
-    ClosePane = "close the view",
-    ReferenceBack = "return to the previous preview",
+    #[serde(alias = "ClosePane")]
+    CloseTab = "close the tab showing beside the session",
+    #[serde(alias = "ReferenceBack")]
+    HistoryBack = "go back to what the view beside the session showed before",
+    HistoryForward = "go forward again through what the view beside the session showed",
+    FocusPanel = "move between the session and the view beside it, showing the view",
+    TogglePanel = "hide the view beside the session, or show it again",
     ToggleHighlightDebug = "toggle highlight groups",
     CopySelection = "copy the selection",
     CutSelection = "cut the input's selection, or its current line",
@@ -44,4 +49,14 @@ pub enum Action {
     GoToDocumentation = "open the documentation of the name at the cursor beside the session",
     FormatInput = "format the input",
     ToggleViewCursor = "move the cursor into the feed or the view beside it, and back",
+}
+
+/// Where a link opens in the view beside the session.
+#[discriminated_str(description)]
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum Opening {
+    Here = "open the link in the tab showing",
+    Beside = "open the link in a new tab, staying on this one",
+    BesideAndJump = "open the link in a new tab and go to it",
 }

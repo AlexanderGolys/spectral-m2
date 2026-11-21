@@ -6,7 +6,7 @@ Pick a scheme in a few keystrokes, or edit any colour of any part of the shell i
 
 ## Choose a scheme
 
-Open the settings with `Ctrl+O`; the *appearance* tab has these rows, followed by the [maths colours](../reference/settings.md#appearance):
+Open the settings with `Ctrl+,`; the *appearance* tab has these rows, followed by the [maths colours](../reference/settings.md#appearance):
 
 theme
 : The scheme family: Catppuccin, Everforest, Gruvbox, Gruvbox Material, Kanagawa, Rosé Pine or Tokyo Night.

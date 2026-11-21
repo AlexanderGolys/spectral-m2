@@ -151,13 +151,12 @@ pub enum Glyphs {
     TabDocumentation = Glyph::plain("d").nerd("󰗚"),
     TabHover = Glyph::plain("i").nerd("󰋽"),
     TabSource = Glyph::plain("f").nerd("󰈮"),
-    TabBookmark = Glyph::plain("*").nerd(" "),
     TabCode = Glyph::plain("c").nerd("󰅩 "),
     TabOutput = Glyph::plain("o").nerd("󰞷 "),
     TabSyntaxTree = Glyph::plain("t").nerd("󱁉 "),
     TabNotes = Glyph::plain("n").nerd("󱓧 "),
     TabBack = Glyph::new("‹", "<"),
-    TabPin = Glyph::plain("+").nerd(" "),
+    TabForward = Glyph::new("›", ">"),
 }
 
 impl Spelled for Glyphs {

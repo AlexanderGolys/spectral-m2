@@ -89,18 +89,6 @@ impl Panes {
         self.list.len() > Self::SPLIT
     }
 
-    /// Show `view` beside the session; showing the view already beside it takes it
-    /// back down.
-    pub fn open_view(&mut self, view: ViewKind) {
-        if !self.split() {
-            self.list.push(Pane::new(view));
-        } else if self.list[Self::SPLIT].view == view {
-            self.close_view();
-        } else {
-            self.list[Self::SPLIT] = Pane::new(view);
-        }
-    }
-
     /// Close the view beside the session and return focus to the shell.
     pub fn close_view(&mut self) {
         self.list.truncate(Self::SPLIT);

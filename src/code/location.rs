@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use url::Url;
 
 /// M2 source positions have one-based lines and zero-based columns.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SourcePoint {
     pub line: usize,
     pub column: usize,
@@ -40,7 +40,7 @@ impl SourcePoint {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SourceRange {
     pub start: SourcePoint,
     pub end: Option<SourcePoint>,
@@ -75,7 +75,7 @@ impl SourceRange {
 }
 
 /// A file target retained independently of its display text.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SourceLink {
     pub path: PathBuf,
     pub range: Option<SourceRange>,
@@ -90,22 +90,5 @@ impl SourceLink {
             None => None,
         };
         Some(Self { path, range })
-    }
-
-    /// Ask M2 for source markup rather than the file's contents as a String.
-    pub fn command(&self) -> String {
-        let file =
-            serde_json::to_string(&self.path.to_string_lossy()).expect("file path serializes");
-        let coordinates = match self.range {
-            Some(range) => {
-                let end = range.end.unwrap_or(range.start);
-                format!(
-                    "{}, {}, {}, {}",
-                    range.start.line, range.start.column, end.line, end.column
-                )
-            }
-            None => format!("1, 0, # lines get {file}, 0"),
-        };
-        format!("code new FilePosition from {{{file}, {coordinates}}}")
     }
 }

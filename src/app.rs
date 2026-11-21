@@ -3,8 +3,8 @@
 mod documentation;
 mod examples;
 mod panes;
-mod previews;
 pub mod session;
+mod tabs;
 
 use crate::ui::glyphs::{Glyphs, Spelled};
 use std::collections::HashMap;
@@ -26,8 +26,8 @@ use ratatui::Frame;
 
 use self::documentation::DocumentationBrowser;
 use self::panes::{pane_layout, ratio_for_width, Pane, Panes, MIN_PANE_WIDTH};
-use self::previews::{Opened, OpenedKind, PreviewTab, PreviewTabs};
 use self::session::Session;
+use self::tabs::{TabId, Tabs, Target};
 use crate::backend::DocPage;
 use crate::backend::{Announcement, M2Backend, Versions};
 use crate::code::file as code_file;
@@ -38,7 +38,7 @@ use crate::code::semantic::SemanticHighlighter;
 use crate::code::semantic::SourceId;
 use crate::env::ENV;
 use crate::errors::Result;
-use crate::ui::action::Action;
+use crate::ui::action::{Action, Opening};
 use crate::ui::block::Block;
 use crate::ui::cell::OutputBlock;
 use crate::ui::cell::{response_blocks, SourceBlock, TextBlock};
@@ -68,17 +68,22 @@ const NO_DEFINITION: &str = "no definition found";
 const NO_NAME_AT_POINT: &str = "no name here to look up";
 /// Rows above the view beside the session: its title, then a cell for each tab.
 const PREVIEW_HEADER_ROWS: u16 = 2;
+/// Columns from one cell of that header to the next: its icon and a gap.
+const HEADER_CELL_STEP: u16 = 2;
 
-struct PreviewSnapshot {
+/// What a [`Target`] shows, kept with its scroll and folds while it does not.
+struct Page {
     pane: Pane,
     reference: Option<ReferenceEntry>,
 }
 
-#[derive(Clone, Copy)]
-enum PreviewControl {
-    Select(PreviewTab),
-    Back,
-    Bookmark,
+/// Something in the header of the view beside the session that a click works.
+#[derive(Clone, Copy, PartialEq)]
+enum PanelControl {
+    Tab(TabId),
+    View(ViewKind),
+    /// Step through history, back when negative.
+    History(isize),
 }
 /// The M2 process behind the shell, with its transcript, draft, history, and syntax state.
 struct Workspace {
@@ -124,9 +129,14 @@ struct App {
     dragging_divider: bool,
     keyboard: Keyboard,
     documentation: Option<DocumentationBrowser>,
-    documentation_requests: HashMap<u64, PreviewTab>,
-    previews: PreviewTabs<PreviewSnapshot>,
-    preview_controls: Vec<(Rect, PreviewControl)>,
+    /// The pages asked of the documentation interpreter and not yet answered.
+    documentation_requests: HashMap<u64, Target>,
+    tabs: Tabs,
+    /// The pages set aside, each under what it shows.
+    pages: HashMap<Target, Page>,
+    /// What the view beside the session shows; nothing while it is hidden.
+    shown: Option<Target>,
+    panel_controls: Vec<(Rect, PanelControl)>,
     archived_code: String,
     archived_directory: Option<PathBuf>,
     /// Questions put to the language server, by what their answers are for.
@@ -175,8 +185,10 @@ impl App {
             keyboard: Keyboard::default(),
             documentation: None,
             documentation_requests: HashMap::new(),
-            previews: PreviewTabs::default(),
-            preview_controls: Vec::new(),
+            tabs: Tabs::default(),
+            pages: HashMap::new(),
+            shown: None,
+            panel_controls: Vec::new(),
             archived_code: String::new(),
             archived_directory: None,
             asked: HashMap::new(),
@@ -234,7 +246,7 @@ impl App {
         }
         if !editor.picker_open()
             && self.panes.split()
-            && self.previews.active.is_some()
+            && self.shown.is_some()
             && !key.alt()
             && !key.shift()
             && previewing
@@ -248,9 +260,8 @@ impl App {
             } else {
                 1
             };
-            if let Some(tab) = self.previews.neighbour(direction) {
-                self.select_preview(tab);
-            }
+            self.tabs.step_along(direction);
+            self.show_current();
             return true;
         }
         if !editor.picker_open() && self.panes.focused().view == ViewKind::Reference {
@@ -267,9 +278,8 @@ impl App {
             }
         }
         if let Some(direction) = self.panes.split_step(key).filter(|_| !editor.picker_open()) {
-            if let Some(tab) = self.previews.neighbour(direction) {
-                self.select_preview(tab);
-            }
+            self.tabs.step_along(direction);
+            self.show_current();
             return true;
         }
         if !editor.picker_open() && self.panes.focused_mut().handle_key(key) {
@@ -327,12 +337,9 @@ impl App {
                     None => true,
                 };
             }
-            Action::ClosePane => {
-                return self.handle_reaction(Reaction::ClosePane);
-            }
-            Action::ReferenceBack => {
-                return self.handle_reaction(Reaction::ReferenceBack);
-            }
+            Action::CloseTab => return self.handle_reaction(Reaction::CloseTab),
+            Action::HistoryBack => return self.handle_reaction(Reaction::History(-1)),
+            Action::HistoryForward => return self.handle_reaction(Reaction::History(1)),
             _ => {}
         }
         if self.panes.focused().view == ViewKind::Reference {
@@ -366,31 +373,19 @@ impl App {
     fn handle_mouse(&mut self, mouse: MouseEvent) -> bool {
         let pointer = Position::new(mouse.column, mouse.row);
         if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-            if let Some((_, control)) = self
-                .preview_controls
+            if let Some(&(_, control)) = self
+                .panel_controls
                 .iter()
                 .find(|(area, _)| area.contains(pointer))
             {
-                match *control {
-                    PreviewControl::Select(tab) => self.select_preview(tab),
-                    PreviewControl::Back => {
-                        self.handle_reaction(Reaction::ReferenceBack);
-                    }
-                    PreviewControl::Bookmark => {
-                        if !matches!(self.previews.active, Some(PreviewTab::Recent(_))) {
-                            return true;
-                        }
-                        let previous = self.previews.active;
-                        self.documentation_requests
-                            .retain(|_, tab| *tab != PreviewTab::Bookmark);
-                        self.previews.pin();
-                        for tab in self.documentation_requests.values_mut() {
-                            if Some(*tab) == previous {
-                                *tab = PreviewTab::Bookmark;
-                            }
-                        }
+                match control {
+                    PanelControl::Tab(tab) => self.tabs.select(tab),
+                    PanelControl::View(view) => self.tabs.view(view),
+                    PanelControl::History(delta) => {
+                        self.tabs.step(delta);
                     }
                 }
+                self.show_current();
                 self.panes.focus(Panes::SPLIT);
                 return true;
             }
@@ -464,22 +459,12 @@ impl App {
         let workspace = &mut self.workspace;
         match reaction {
             Reaction::Continue => true,
-            Reaction::Documentation(target) => {
-                let label = target.trim_matches('"').to_string();
-                self.open_documentation(target, label);
-                true
-            }
-            Reaction::DocumentationInFeed(target) => {
-                let code = if target.starts_with("file:") {
-                    match SourceLink::parse(&target) {
-                        Some(source) => source.command(),
-                        None => return true,
-                    }
-                } else {
-                    format!("help {target}")
-                };
-                self.run_code(&code)
-            }
+            Reaction::Follow(link, opening) => match Target::link(&link) {
+                Some(target) => self.open(target, opening),
+                None => workspace.editor.apply(EditorUpdate::Diagnostic(format!(
+                    "cannot open source link: {link}"
+                ))),
+            },
             Reaction::RecentSession => {
                 match code_file::previous_session().filter(|path| path.is_file()) {
                     Some(path) => self.open_source_file(SourceLink { path, range: None }),
@@ -567,24 +552,42 @@ impl App {
                 true
             }
             Reaction::Open(view) => {
-                let tab = PreviewTab::Fixed(view);
-                match self.panes.split() && self.previews.active == Some(tab) {
-                    true => self.handle_reaction(Reaction::ClosePane),
+                match self.shown == Some(Target::View(view)) {
+                    true => self.hide_panel(),
                     false => {
-                        self.select_preview(tab);
-                        true
+                        self.tabs.view(view);
+                        self.show_current();
                     }
                 }
-            }
-            Reaction::ClosePane => {
-                let current = self.take_preview();
-                self.previews.save(current);
-                self.panes.close_view();
                 true
             }
-            Reaction::ReferenceBack => {
-                if let Some(previous) = self.previews.previous() {
-                    self.select_preview(previous);
+            Reaction::CloseTab => {
+                match self.tabs.close() {
+                    true => self.show_current(),
+                    false => self.hide_panel(),
+                }
+                true
+            }
+            Reaction::History(delta) => {
+                if self.tabs.step(delta) {
+                    self.show_current();
+                }
+                true
+            }
+            Reaction::FocusPanel => {
+                match self.panes.active == Panes::SPLIT {
+                    true => self.panes.focus(0),
+                    false => {
+                        self.show_panel();
+                        self.panes.focus(Panes::SPLIT);
+                    }
+                }
+                true
+            }
+            Reaction::TogglePanel => {
+                match self.panes.split() {
+                    true => self.hide_panel(),
+                    false => self.show_panel(),
                 }
                 true
             }
@@ -673,30 +676,165 @@ impl App {
         }
     }
 
-    fn take_preview(&mut self) -> Option<PreviewSnapshot> {
-        if !self.panes.split() {
-            return None;
-        }
+    /// Set what shows aside under its target, leaving the view to be filled.
+    fn set_aside(&mut self) {
+        let Some(target) = self.shown.take() else {
+            return;
+        };
         let pane = std::mem::replace(
             &mut self.panes.list[Panes::SPLIT],
             Pane::new(ViewKind::Reference),
         );
         let reference =
             (pane.view == ViewKind::Reference).then(|| self.workspace.editor.take_reference());
-        Some(PreviewSnapshot { pane, reference })
+        self.pages.insert(target, Page { pane, reference });
     }
 
-    fn open_preview(&mut self, view: ViewKind, opened: Opened) {
-        let current = self.take_preview();
-        self.previews.open(current, opened);
-        let replaced = self.previews.active;
-        self.documentation_requests
-            .retain(|_, tab| Some(*tab) != replaced);
-        if self.panes.split() {
-            self.panes.list[Panes::SPLIT] = Pane::new(view);
-        } else {
-            self.panes.open_view(view);
+    /// Hide the view beside the session, keeping its tabs and their pages.
+    fn hide_panel(&mut self) {
+        self.set_aside();
+        self.panes.close_view();
+    }
+
+    /// Show the view beside the session where it was left, or on the first of
+    /// the views always there when it never showed anything.
+    fn show_panel(&mut self) {
+        if self.tabs.current().is_none() {
+            self.tabs.view(ViewKind::PREVIEWS[0]);
         }
+        self.show_current();
+    }
+
+    /// Show what history's cursor is on, setting aside what showed before.
+    fn show_current(&mut self) {
+        self.tabs.settle();
+        let Some(target) = self.tabs.current().map(|visit| visit.target.clone()) else {
+            return;
+        };
+        if self.shown.as_ref() == Some(&target) {
+            return;
+        }
+        self.set_aside();
+        let page = match self.pages.remove(&target) {
+            Some(page) => page,
+            None => self.load(&target).unwrap_or_else(|unloaded| Page {
+                pane: Pane::new(ViewKind::Reference),
+                reference: Some(ReferenceEntry::new(
+                    vec![Box::new(TextBlock::system(unloaded))],
+                    None,
+                )),
+            }),
+        };
+        match self.panes.split() {
+            true => self.panes.list[Panes::SPLIT] = page.pane,
+            false => self.panes.list.push(page.pane),
+        }
+        if let Some(reference) = page.reference {
+            self.workspace.editor.restore_reference(reference);
+        }
+        self.shown = Some(target);
+        self.forget_far_pages();
+    }
+
+    /// Drop the pages far from the cursor in history and off the tab line, and
+    /// the answers still awaited for them; a visit fetches one again.
+    fn forget_far_pages(&mut self) {
+        let kept = self.tabs.kept();
+        self.pages
+            .retain(|target, _| matches!(target, Target::View(_)) || kept.contains(target));
+        let (pages, shown) = (&self.pages, &self.shown);
+        self.documentation_requests
+            .retain(|_, target| pages.contains_key(target) || shown.as_ref() == Some(target));
+    }
+
+    /// Open `target` beside the session as `opening` says, on the page already
+    /// kept for it when there is one. A view not showing has no tab to stay on,
+    /// so there the target shows at once.
+    fn open(&mut self, target: Target, opening: Opening) -> bool {
+        if self.shown.as_ref() != Some(&target) && !self.pages.contains_key(&target) {
+            match self.load(&target) {
+                Ok(page) => self.pages.insert(target.clone(), page),
+                Err(unloaded) => {
+                    return self
+                        .workspace
+                        .editor
+                        .apply(EditorUpdate::Diagnostic(unloaded))
+                }
+            };
+        }
+        let opening = match (opening, self.panes.split()) {
+            (Opening::Beside, false) => Opening::BesideAndJump,
+            (opening, _) => opening,
+        };
+        match self.tabs.open(target, opening) {
+            true => self.show_current(),
+            false => self.forget_far_pages(),
+        }
+        true
+    }
+
+    /// The page `target` shows, made anew: a file read, documentation asked for,
+    /// which arrives later, or what is already known laid out. Fails with why a
+    /// file cannot be read.
+    fn load(&mut self, target: &Target) -> std::result::Result<Page, String> {
+        let reference = match target {
+            Target::View(view) => {
+                return Ok(Page {
+                    pane: Pane::new(*view),
+                    reference: None,
+                })
+            }
+            Target::Documentation { topic, .. } => {
+                let request = self
+                    .documentation
+                    .get_or_insert_with(DocumentationBrowser::new)
+                    .open(topic.clone());
+                self.documentation_requests.insert(request, target.clone());
+                ReferenceEntry::new(
+                    vec![Box::new(TextBlock::system(format!(
+                        "opening documentation{}",
+                        Glyphs::Ellipsis.current()
+                    )))],
+                    None,
+                )
+            }
+            Target::Hover { text, .. } => {
+                let page = DocPage {
+                    html: markdown::html(text),
+                    example_width: self.pane_areas.last().map_or(0, |area| area.width).into(),
+                    type_names: Vec::new(),
+                };
+                let described = OutputBlock::value(text.clone(), None).documented(Some(page));
+                ReferenceEntry::new(vec![Box::new(described.without_frame())], None)
+            }
+            Target::Source(source) => {
+                let path = &source.path;
+                let code = fs::read_to_string(path).map_err(|error| unreadable(path, &error))?;
+                let page = markup::page(&format!("{}\n{code}", path.display()));
+                self.workspace
+                    .highlighter
+                    .analyse_page(page, vec![code.clone()]);
+                let focus = source.range.map(|range| range.bytes(&code));
+                let folds = FoldRanges::default();
+                if let Some(id) = self.workspace.highlighter.ask_apart(&code, Question::Folds) {
+                    self.asked.insert(id, Asked::Folds(folds.clone()));
+                }
+                let heading = TextBlock::system(format!(
+                    "{} {} F8 runs this file",
+                    path.display(),
+                    Glyphs::Dash.current()
+                ));
+                let source = SourceBlock::new(code, page, focus).with_folds(folds);
+                ReferenceEntry::new(
+                    vec![Box::new(heading), Box::new(source)],
+                    Some(path.to_string_lossy().into_owned()),
+                )
+            }
+        };
+        Ok(Page {
+            pane: Pane::new(ViewKind::Reference),
+            reference: Some(reference),
+        })
     }
 
     /// Put `lookup` to the language server about the name at `point`.
@@ -801,29 +939,8 @@ impl App {
                 },
                 Answer::Hover(Some(text)),
             ) => {
-                let html = markdown::html(&text);
-                let width = usize::from(self.pane_areas.last().map_or(0, |area| area.width));
-                let label = name.unwrap_or_else(|| ViewKind::Reference.label().to_string());
-                self.open_preview(
-                    ViewKind::Reference,
-                    Opened {
-                        label,
-                        kind: OpenedKind::Hover,
-                    },
-                );
-                self.workspace.editor.open_reference(
-                    vec![Box::new(
-                        OutputBlock::value(text, None)
-                            .documented(Some(DocPage {
-                                html,
-                                example_width: width,
-                                type_names: Vec::new(),
-                            }))
-                            .without_frame(),
-                    )],
-                    None,
-                );
-                true
+                let name = name.unwrap_or_else(|| ViewKind::Reference.label().to_string());
+                self.open(Target::Hover { name, text }, Opening::BesideAndJump)
             }
             (Asked::Lookup { .. }, Answer::Hover(None)) => {
                 editor.apply(EditorUpdate::Diagnostic(NOTHING_KNOWN.to_string()))
@@ -891,38 +1008,11 @@ impl App {
         }
     }
 
-    fn select_preview(&mut self, tab: PreviewTab) {
-        if self.previews.label(tab).is_none()
-            || (self.panes.split() && self.previews.active == Some(tab))
-        {
-            return;
-        }
-        let current = self.take_preview();
-        let snapshot = match (self.previews.select(tab, current), tab) {
-            (Some(snapshot), _) => Some(snapshot),
-            (None, PreviewTab::Fixed(view)) => Some(PreviewSnapshot {
-                pane: Pane::new(view),
-                reference: None,
-            }),
-            (None, _) => None,
-        };
-        if let Some(snapshot) = snapshot {
-            if self.panes.split() {
-                self.panes.list[Panes::SPLIT] = snapshot.pane;
-            } else {
-                self.panes.list.push(snapshot.pane);
-            }
-            if let Some(reference) = snapshot.reference {
-                self.workspace.editor.restore_reference(reference);
-            }
-        }
-    }
-
-    /// The view's title centred over its own row, the back and bookmark controls at
-    /// its start; beneath, a cell for each tab the user opened on the left and for
-    /// each view always there on the right.
+    /// The title of what shows centred over its own row, the history controls
+    /// at its start; beneath, a cell for each opened tab there is room for on
+    /// the left and for each view always there on the right.
     fn draw_preview_header(&mut self, frame: &mut Frame<'_>) {
-        self.preview_controls.clear();
+        self.panel_controls.clear();
         let Some(area) = self
             .pane_areas
             .get(Panes::SPLIT)
@@ -931,169 +1021,91 @@ impl App {
         else {
             return;
         };
-        let theme = scheme();
         let title = self
-            .previews
-            .active
-            .and_then(|tab| self.previews.label(tab))
+            .shown
+            .as_ref()
+            .map(|target| target.label().into_owned())
             .unwrap_or_default();
         frame.render_widget(
             Paragraph::new(title)
-                .style(theme.style(HLGroup::ViewLabelActive))
+                .style(scheme().style(HLGroup::ViewLabelActive))
                 .alignment(Alignment::Center),
             Rect::new(area.x, area.y, area.width, 1),
         );
-        let controls = [
-            (PreviewControl::Back, Glyphs::TabBack),
-            (PreviewControl::Bookmark, Glyphs::TabPin),
-        ];
-        for (index, (control, glyph)) in controls.into_iter().enumerate() {
-            let column = area.x + 1 + 2 * index as u16;
-            self.draw_header_cell(frame, Position::new(column, area.y), glyph, control);
-        }
-        let tabs = area.y + 1;
-        let opened = self.previews.opened_tabs().collect::<Vec<_>>();
-        for (index, tab) in opened.into_iter().enumerate() {
-            let glyph = match (tab, self.previews.opened(tab).map(|opened| opened.kind)) {
-                (PreviewTab::Bookmark, _) => Glyphs::TabBookmark,
-                (_, Some(OpenedKind::Documentation)) => Glyphs::TabDocumentation,
-                (_, Some(OpenedKind::Hover)) => Glyphs::TabHover,
-                _ => Glyphs::TabSource,
-            };
-            let column = area.x + 1 + 2 * index as u16;
-            self.draw_header_cell(
-                frame,
-                Position::new(column, tabs),
-                glyph,
-                PreviewControl::Select(tab),
-            );
-        }
         let fixed = ViewKind::PREVIEWS;
-        for (index, view) in fixed.into_iter().enumerate() {
-            let glyph = match view {
-                ViewKind::Code => Glyphs::TabCode,
-                ViewKind::SyntaxTree => Glyphs::TabSyntaxTree,
-                ViewKind::Notes => Glyphs::TabNotes,
-                _ => Glyphs::TabOutput,
-            };
-            let column = area
-                .right()
-                .saturating_sub(2 * (fixed.len() - index) as u16);
-            self.draw_header_cell(
-                frame,
-                Position::new(column, tabs),
-                glyph,
-                PreviewControl::Select(PreviewTab::Fixed(view)),
-            );
+        let fixed_start = area
+            .right()
+            .saturating_sub(HEADER_CELL_STEP * fixed.len() as u16);
+        // A cell is left empty between the opened tabs and the views always there.
+        let room = fixed_start.saturating_sub(area.x + 2) / HEADER_CELL_STEP;
+        let opened = self.tabs.window(room.into()).to_vec();
+        let history = [
+            (Glyphs::TabBack, PanelControl::History(-1)),
+            (Glyphs::TabForward, PanelControl::History(1)),
+        ];
+        let rows = [
+            (area.y, area.x + 1, history.to_vec()),
+            (
+                area.y + 1,
+                area.x + 1,
+                opened
+                    .iter()
+                    .map(|tab| (tab.target.glyph(), PanelControl::Tab(tab.id)))
+                    .collect(),
+            ),
+            (
+                area.y + 1,
+                fixed_start,
+                fixed
+                    .map(|view| (Target::View(view).glyph(), PanelControl::View(view)))
+                    .to_vec(),
+            ),
+        ];
+        for (row, start, cells) in rows {
+            for (index, (glyph, control)) in cells.into_iter().enumerate() {
+                let column = start + HEADER_CELL_STEP * index as u16;
+                self.draw_header_cell(frame, Position::new(column, row), glyph, control);
+            }
         }
     }
 
-    /// One cell of the header, highlighted when it is the tab showing.
+    /// One cell of the header, highlighted when it stands for what shows.
     fn draw_header_cell(
         &mut self,
         frame: &mut Frame<'_>,
         at: Position,
         glyph: Glyphs,
-        control: PreviewControl,
+        control: PanelControl,
     ) {
-        let theme = scheme();
-        let style = match control {
-            PreviewControl::Select(tab) if self.previews.active == Some(tab) => {
-                theme.style(HLGroup::ViewLabelActive)
-            }
-            _ => theme.style(HLGroup::Muted),
+        let showing = self
+            .tabs
+            .current()
+            .map(|visit| match (visit.tab, &visit.target) {
+                (Some(tab), _) => PanelControl::Tab(tab),
+                (None, target) => PanelControl::View(target.view()),
+            });
+        let style = match showing == Some(control) && self.shown.is_some() {
+            true => scheme().style(HLGroup::ViewLabelActive),
+            false => scheme().style(HLGroup::Muted),
         };
-        let cell = Rect::new(at.x, at.y, 1, 1);
         if frame.area().contains(at) {
             frame.buffer_mut()[at]
                 .set_symbol(glyph.current())
                 .set_style(style);
-            self.preview_controls.push((cell, control));
+            self.panel_controls
+                .push((Rect::new(at.x, at.y, 1, 1), control));
         }
     }
 
     fn open_source_file(&mut self, source: SourceLink) -> bool {
-        let path = &source.path;
-        match read_code(path) {
-            Ok(code) => {
-                let page = markup::page(&format!("{}\n{code}", path.display()));
-                self.workspace
-                    .highlighter
-                    .analyse_page(page, vec![code.clone()]);
-                let focus = source.range.map(|range| range.bytes(&code));
-                let folds = FoldRanges::default();
-                if let Some(id) = self.workspace.highlighter.ask_apart(&code, Question::Folds) {
-                    self.asked.insert(id, Asked::Folds(folds.clone()));
-                }
-                let block = SourceBlock::new(code, page, focus).with_folds(folds);
-                let blocks: Vec<Box<dyn Block>> = vec![
-                    Box::new(TextBlock::system(format!(
-                        "{} {} F8 runs this file",
-                        path.display(),
-                        Glyphs::Dash.current()
-                    ))),
-                    Box::new(block),
-                ];
-                self.open_preview(
-                    ViewKind::Reference,
-                    Opened {
-                        label: path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned(),
-                        kind: OpenedKind::Source,
-                    },
-                );
-                self.workspace
-                    .editor
-                    .open_reference(blocks, Some(path.to_string_lossy().into_owned()));
-                true
-            }
-            Err(update) => self.workspace.editor.apply(update),
-        }
+        self.open(Target::Source(source), Opening::BesideAndJump)
     }
 
-    /// Open the documentation `help target` shows in a tab titled `label`.
-    fn open_documentation(&mut self, target: String, label: String) {
-        if target.starts_with("file:") {
-            match SourceLink::parse(&target) {
-                Some(source) => {
-                    self.open_source_file(source);
-                }
-                None => {
-                    self.workspace
-                        .editor
-                        .apply(EditorUpdate::Diagnostic(format!(
-                            "cannot open source link: {target}"
-                        )));
-                }
-            }
-            return;
-        }
-        self.open_preview(
-            ViewKind::Reference,
-            Opened {
-                label,
-                kind: OpenedKind::Documentation,
-            },
-        );
-        self.workspace.editor.open_reference(
-            vec![Box::new(TextBlock::system(format!(
-                "opening documentation{}",
-                Glyphs::Ellipsis.current()
-            )))],
-            None,
-        );
-        let request = self
-            .documentation
-            .get_or_insert_with(DocumentationBrowser::new)
-            .open(target);
-        self.documentation_requests.insert(
-            request,
-            self.previews
-                .active
-                .expect("opening a preview selects a tab"),
+    /// Open the documentation `help topic` shows in a new tab titled `label`.
+    fn open_documentation(&mut self, topic: String, label: String) {
+        self.open(
+            Target::Documentation { topic, label },
+            Opening::BesideAndJump,
         );
     }
 
@@ -1121,9 +1133,9 @@ impl App {
     /// Views set aside keep their pictures, however far from showing.
     fn report_hidden_pictures(&self) {
         graphics::report_distances(
-            self.previews
-                .saved()
-                .filter_map(|snapshot| snapshot.reference.as_ref())
+            self.pages
+                .values()
+                .filter_map(|page| page.reference.as_ref())
                 .flat_map(ReferenceEntry::pictures)
                 .map(|image| (image, graphics::HIDDEN_VIEW_DISTANCE)),
         );
@@ -1299,7 +1311,7 @@ impl App {
             .map(|browser| browser.answered().collect::<Vec<_>>())
             .unwrap_or_default();
         for page in pages {
-            let Some(tab) = self.documentation_requests.remove(&page.request) else {
+            let Some(target) = self.documentation_requests.remove(&page.request) else {
                 continue;
             };
             let blocks = match page.response {
@@ -1320,10 +1332,10 @@ impl App {
                     vec![Box::new(TextBlock::system(error)) as Box<dyn Block>]
                 }
             };
-            if self.panes.split() && self.previews.active == Some(tab) {
+            if self.shown.as_ref() == Some(&target) {
                 self.workspace.editor.open_reference(blocks, None);
-            } else if let Some(snapshot) = self.previews.saved_mut(tab) {
-                snapshot.reference = Some(ReferenceEntry::new(blocks, None));
+            } else if let Some(kept) = self.pages.get_mut(&target) {
+                kept.reference = Some(ReferenceEntry::new(blocks, None));
             }
             dirty = true;
         }
@@ -1455,10 +1467,12 @@ impl App {
 }
 
 /// The code in `path`, or the diagnostic saying why it cannot be read.
+fn unreadable(path: &Path, error: &io::Error) -> String {
+    format!("cannot read {}: {error}", path.display())
+}
+
 fn read_code(path: &Path) -> std::result::Result<String, EditorUpdate> {
-    fs::read_to_string(path).map_err(|error| {
-        EditorUpdate::Diagnostic(format!("cannot read {}: {error}", path.display()))
-    })
+    fs::read_to_string(path).map_err(|error| EditorUpdate::Diagnostic(unreadable(path, &error)))
 }
 
 /// The versions of the shell, its Macaulay2 and Spectral package, and the

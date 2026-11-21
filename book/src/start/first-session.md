@@ -31,7 +31,7 @@ When the code is complete, `Enter` sends it all. Code you submit together is one
 
 ## The commands
 
-Type `/` into an empty input for the command picker, filtered as you type. `Ctrl+/` opens it with everything listed, and `Ctrl+O` opens the settings. Every command is in the [commands reference](../reference/commands.md).
+Type `/` into an empty input for the command picker, filtered as you type. `Ctrl+/` opens it with everything listed, and `Ctrl+,` opens the settings. Every command is in the [commands reference](../reference/commands.md).
 
 ## Cancel and restart { #cancel }
 

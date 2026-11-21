@@ -1,6 +1,6 @@
 # Settings
 
-Open the settings with `Ctrl+O` or `/settings`. They are kept between sessions: the scheme, contrast, mode and background in `appearance.json`, everything else, keys and the maths colours of the appearance tab included, in `settings.json`, both in the [configuration directory](files.md).
+Open the settings with `Ctrl+,` or `/settings`. They are kept between sessions: the scheme, contrast, mode and background in `appearance.json`, everything else, keys and the maths colours of the appearance tab included, in `settings.json`, both in the [configuration directory](files.md).
 
 The picker has eight tabs along its top; `Tab` and `Shift+Tab` switch them, or move onto the row of tabs and use `Left` and `Right`. `Up` and `Down` pick a row, `Left` and `Right` change it (`Space` also steps right), and the selected row describes itself under the list. *Restore defaults*, beneath the rows, resets everything: settings, keys and appearance.
 

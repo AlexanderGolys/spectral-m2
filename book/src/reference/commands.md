@@ -2,7 +2,7 @@
 
 Commands are handled by the shell, never sent to Macaulay2. Type `/` into an empty input for the picker, filtered as you type, or press `Ctrl+/` to list them all without touching your draft. A command typed out in full and submitted works too, also when recalled from history.
 
-`/settings`, `Ctrl+O`
+`/settings`, `Ctrl+,`
 : Open the settings. See [Settings](settings.md).
 
 `/keymaps`, `Ctrl+Shift+K`
@@ -63,10 +63,16 @@ Some actions have a key but no command:
 : Restart Macaulay2 and run the file shown beside the session.
 
 `Ctrl+Q`
-: Close the view beside the session.
+: Close the tab showing beside the session.
 
-`Ctrl+Shift+B`
-: Return to the previous tab of the view.
+`Ctrl+O`, `Ctrl+I`
+: Go back, and forward again, through what the view beside the session showed.
+
+`Shift+Tab`
+: Move between the session and the view beside it, showing the view.
+
+`Ctrl+B`
+: Hide the view beside the session, or show it again.
 
 `Alt+Up`, `Alt+Down`
 : Select the previous or next cell or result. See [Select and copy](../shell/select.md#whole-cells-and-results).

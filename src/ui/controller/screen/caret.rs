@@ -9,6 +9,7 @@ use ratatui::Frame;
 
 use super::{Extent, Reach, ScreenCapture, ScreenPosition, ScreenSelection};
 use crate::input::{InputAction, Traversal};
+use crate::ui::action::Opening;
 use crate::ui::controller::{CodePoint, CodeSource, Editor, Lookup, Reaction};
 use crate::ui::floating::Anchor;
 use crate::ui::key::KeyEvent;
@@ -428,7 +429,7 @@ impl Editor {
             CaretPane::View => &mut self.reference,
         };
         if let Some(link) = feed.link_at(point) {
-            return Self::open_link(link.target.to_string(), false);
+            return Reaction::Follow(link.target.to_string(), Opening::Here);
         }
         if !feed.toggle_fold(point) {
             feed.cycle_renderer(point);

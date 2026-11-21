@@ -90,6 +90,12 @@ impl UI {
     /// The fewest rows a folded value may keep: a head row, three fold rows, and a tail.
     pub const MIN_OUTPUT_ROWS: usize = 5;
 
+    /// Visits the history of the view beside the session remembers.
+    pub const TAB_HISTORY: usize = 256;
+    /// Pages kept for the visits nearest in that history; one further off is
+    /// fetched again when it is visited.
+    pub const TAB_PAGES_KEPT: usize = 16;
+
     pub const MATH_SIZE_PERCENT: u16 = 100;
     pub const MIN_MATH_SIZE_PERCENT: u16 = 50;
     pub const MAX_MATH_SIZE_PERCENT: u16 = 200;

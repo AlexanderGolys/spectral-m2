@@ -9,7 +9,7 @@ Every key below can be [rebound](../custom/keymaps.md) unless marked *fixed*. Th
 | `Enter` | Evaluate the input, or add a line to an unfinished construct. *Fixed.* |
 | `Ctrl+C` | Cancel the computation and queued work; when idle, discard a continuation or draft, then quit. |
 | `Ctrl+/` | Open the commands. |
-| `Ctrl+O` | Open the settings. |
+| `Ctrl+,` | Open the settings. |
 | `Ctrl+Shift+K` | Open the keymaps. |
 | `Alt+L` | Clear the feed. |
 | `F2`, `F5`, `F6` | Show committed code, output, or the syntax tree beside the session. |
@@ -17,8 +17,11 @@ Every key below can be [rebound](../custom/keymaps.md) unless marked *fixed*. Th
 | `F8` | Restart and run the viewed file. |
 | `Ctrl+N` | Restart Macaulay2. |
 | `Ctrl+R` | Run the previous session's code. |
-| `Ctrl+Q` | Close the view. |
-| `Ctrl+Shift+B` | Return to the previous tab of the view. |
+| `Ctrl+Q` | Close the tab showing beside the session. |
+| `Ctrl+O` | Go back to what the view beside the session showed before. |
+| `Ctrl+I` | Go forward again; `Ctrl+Shift+O` where the terminal sends `Ctrl+I` as `Tab`. |
+| `Shift+Tab` | Move between the session and the view beside it, showing the view. |
+| `Ctrl+B` | Hide the view beside the session, or show it again. |
 | `Ctrl+Shift+S` | Save the selected code to a file. |
 | `Ctrl+Y` | Copy the selection. |
 | `Ctrl+X` | Cut the input's selection, or its current line when nothing is selected. *Fixed.* |
@@ -77,7 +80,7 @@ Every key below can be [rebound](../custom/keymaps.md) unless marked *fixed*. Th
 | Key | Action |
 | --- | --- |
 | `Tab` | Show completion candidates, take the hint, or take the next candidate. *Fixed.* |
-| `Shift+Tab`, `Ctrl+Tab` | Take the previous candidate. *Fixed.* |
+| `Ctrl+Tab` | Take the previous candidate. *Fixed.* `Shift+Tab` does too while candidates are offered. |
 | `Ctrl+Up`, `Ctrl+Down` | Step to the very previous or next entry, whatever was typed and from any line. |
 
 ## In views and pickers
@@ -122,8 +125,9 @@ After `Ctrl+E` the cursor sits on the last text of the focused pane, the feed or
 | Drag | Select; releasing copies. |
 | Double-click | Select a word, a bracketed block or a formula; outside text, a whole cell or result; on a folded value, expand it. |
 | Triple-click | Select a paragraph; outside text, a whole submission. |
-| Middle-click a link | Open it in the view beside the session. |
-| `Ctrl`+click a link | Submit `help` or `get` for it to the session. |
+| `Ctrl`+click a link | Open it in the tab showing beside the session. |
+| Middle-click a link | Open it in a new tab, staying on this one. |
+| `Ctrl`+middle-click a link | Open it in a new tab and go to it. |
 | Click an output's icon | Draw that value the next available way. |
 | Click a pane | Focus it; drag the divider to resize. |
 

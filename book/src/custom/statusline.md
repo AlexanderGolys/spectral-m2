@@ -8,7 +8,7 @@ The status line at the bottom tells you what the shell is doing and which keys a
 
 The line has five fixed anchors: the left edge, a quarter in, the centre, three quarters in, and the right edge. Each component goes to one of them or is hidden. By default the theme sits on the left, the directory at left-centre, the view in the centre, the session state at right-centre and the key hints on the right.
 
-Open the *statusline* tab of the settings with `Ctrl+O`. Each component has a row; `Left` and `Right` move it between `off`, `L`, `LC`, `C`, `RC` and `R`, and `0` to `5` choose directly, `0` hiding it. The *position* row puts the whole line below the input, above it, or turns it off.
+Open the *statusline* tab of the settings with `Ctrl+,`. Each component has a row; `Left` and `Right` move it between `off`, `L`, `LC`, `C`, `RC` and `R`, and `0` to `5` choose directly, `0` hiding it. The *position* row puts the whole line below the input, above it, or turns it off.
 
 Several components can share a segment: they appear side by side in the order of the list, however you assigned them. An empty segment gives its neighbours more room without moving their anchors, and so does a component with nothing to report.
 

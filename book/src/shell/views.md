@@ -21,14 +21,36 @@ A view opens to the right of the shell and focus stays in the shell, so you can 
 
 ## Tabs { #tabs }
 
-The pane has two header rows. The first names what is showing, centred, with **‹** (back) and **☆** (bookmark) at its start. The second holds one icon per tab:
+The pane has two header rows. The first names what is showing, centred, with **‹** (back) and **›** (forward) at its start. The second holds one icon per tab:
 
-- On the left, the tabs you opened: documentation pages, files, and descriptions of names from the [language server](language-server.md#jump-from-a-name). They rotate through five slots, so the next one replaces the oldest once all five are used. Click **☆** to move the current one into the **★** bookmark tab, which never rotates out until you bookmark something else.
-- On the right, the three views above, always there, each with its own tab that never takes one of your five.
+- On the left, the tabs you opened: documentation pages, files, and descriptions of names from the [language server](language-server.md#jump-from-a-name). There is no limit to them. When there are more than fit, the row shows the ones around the tab showing, and the rest are reached through history.
+- On the right, the views above, always there.
 
-Every tab keeps its scroll position and folds. Click an icon to go to it.
+Click an icon to go to its tab. `Ctrl+Q` closes the tab showing and moves to the one beside it; closing the last one hides the pane.
 
-`Left` and `Right` step through the tabs on the same side as the one showing when the pane has focus; `Ctrl+PageUp` and `Ctrl+PageDown` do it from either pane, so the shell's arrows stay free for the input. `Ctrl+Shift+B` returns to the previous page or file, and `Ctrl+Q` closes the view from either pane.
+### Open links
+
+A link opens in one of three ways:
+
+| Click | Opens the link |
+| --- | --- |
+| `Ctrl`+click | in the tab showing, replacing its page |
+| Middle-click | in a new tab to the right, staying where you are |
+| `Ctrl`+middle-click | in a new tab to the right, and goes to it |
+
+It works the same on links in the feed and in the pane; from the feed the pane opens if it was hidden. `Enter` on a link under the [view cursor](select.md) opens it in the tab showing.
+
+### History
+
+`Ctrl+O` goes back to what the pane showed before and `Ctrl+I` forward again, across all tabs: a page replaced in its tab comes back in that tab, and a tab you closed is opened again. In a terminal that sends `Ctrl+I` as `Tab`, use `Ctrl+Shift+O` to go forward.
+
+Every page keeps its scroll position and folds, and a page is fetched once: opening the same documentation or file in a second tab shows the same page, scrolled where you left it. Pages far back in history are let go and fetched again when you return to them.
+
+### Move between the panes
+
+`Shift+Tab` moves between the session and the pane, showing the pane where you left it if it was hidden. `Ctrl+B` hides the pane and shows it again, keeping its tabs. While completion candidates or a picker are open, `Shift+Tab` steps back through those instead.
+
+`Left` and `Right` step along the tab row, on the same side as the tab showing, when the pane has focus; `Ctrl+PageUp` and `Ctrl+PageDown` do it from either pane, so the shell's arrows stay free for the input.
 
 ## Focus and size
 

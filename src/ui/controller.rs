@@ -43,7 +43,7 @@ use super::statusline::{
     StatusLocation, StatusRuntime,
 };
 use super::{
-    action::Action,
+    action::{Action, Opening},
     block::{Block, Element, HLSpan, Link, Reformatted, Rethemed, TextSpan, Ticked},
 };
 use crate::code::file::abbreviate_home;
@@ -51,7 +51,7 @@ use crate::code::highlight::Highlighter;
 use crate::code::semantic::query::Finding;
 use crate::code::semantic::SEMANTIC_GROUPS;
 use crate::env::ENV;
-use crate::input::{InputCode, InputContext};
+use crate::input::{InputAction, InputCode, InputContext};
 use crate::ui::floating::{Anchor, Floating};
 use crate::ui::glyphs::{Glyphs, Spelled};
 use crate::ui::relayout;
@@ -88,10 +88,8 @@ fn counted(count: usize, noun: &str) -> String {
 pub enum Reaction {
     Continue,
     Submit,
-    /// Show a documentation page apart from the session.
-    Documentation(String),
-    /// Show a linked documentation page in the session feed.
-    DocumentationInFeed(String),
+    /// Show what a link leads to beside the session.
+    Follow(String, Opening),
     /// Browse the archived sessions.
     BrowseSessions,
     /// Show the most recently kept session without evaluating it.
@@ -107,9 +105,11 @@ pub enum Reaction {
     /// Scroll the focused pane by rows, positive toward older content.
     ScrollView(isize),
     Open(ViewKind),
-    ClosePane,
-    /// Return to the preceding reference without evaluating it again.
-    ReferenceBack,
+    CloseTab,
+    /// Step through what the view beside the session showed, back when negative.
+    History(isize),
+    FocusPanel,
+    TogglePanel,
     /// Write the session's code to the file typed, or where the session is kept
     /// on exit when none was.
     Save(Option<String>),
@@ -847,10 +847,10 @@ impl Editor {
                 );
             }
         }
-        if let Some(in_feed) = Self::link_click(event) {
+        if let Some(opening) = Self::link_click(event) {
             if let Some(link) = self.feed.link_at(pointer) {
                 self.screen_selection = None;
-                return Self::open_link(link.target.to_string(), in_feed);
+                return Reaction::Follow(link.target.to_string(), opening);
             }
         }
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
@@ -924,24 +924,15 @@ impl Editor {
         clicked
     }
 
-    /// A middle click opens a reference; Ctrl-left opens in the transcript.
-    fn link_click(event: MouseEvent) -> Option<bool> {
-        match event.kind {
-            MouseEventKind::Down(MouseButton::Middle) => Some(false),
-            MouseEventKind::Down(MouseButton::Left)
-                if event.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                Some(true)
-            }
+    /// Where the link under a press opens: Ctrl-left in the tab showing, middle
+    /// in a new tab left for later, Ctrl-middle in a new tab shown at once.
+    fn link_click(event: MouseEvent) -> Option<Opening> {
+        let control = event.modifiers.contains(KeyModifiers::CONTROL);
+        match (event.kind, control) {
+            (MouseEventKind::Down(MouseButton::Left), true) => Some(Opening::Here),
+            (MouseEventKind::Down(MouseButton::Middle), false) => Some(Opening::Beside),
+            (MouseEventKind::Down(MouseButton::Middle), true) => Some(Opening::BesideAndJump),
             _ => None,
-        }
-    }
-
-    fn open_link(target: String, in_feed: bool) -> Reaction {
-        if in_feed {
-            Reaction::DocumentationInFeed(target)
-        } else {
-            Reaction::Documentation(target)
         }
     }
 
@@ -1002,10 +993,10 @@ impl Editor {
         {
             return Reaction::Continue;
         }
-        if let Some(in_feed) = Self::link_click(event) {
+        if let Some(opening) = Self::link_click(event) {
             if let Some(link) = self.reference.link_at(pointer) {
                 self.screen_selection = None;
-                return Self::open_link(link.target.to_string(), in_feed);
+                return Reaction::Follow(link.target.to_string(), opening);
             }
         }
         let clicks = self.clicks(event);
@@ -1127,6 +1118,12 @@ impl Editor {
             self.toggle_caret();
             return Reaction::Continue;
         }
+        // While candidates are offered, the key that leaves for the view beside
+        // the session steps back through them instead.
+        if action == Action::FocusPanel && !self.previewing && self.input.offering() {
+            self.input.edit(InputAction::PreviousCompletion);
+            return Reaction::Continue;
+        }
         if self.caret_active() {
             match action {
                 Action::Submit => return self.activate_caret(),
@@ -1233,8 +1230,11 @@ impl Editor {
             | Action::OpenOutput
             | Action::OpenNotes
             | Action::OpenSyntaxTree
-            | Action::ClosePane
-            | Action::ReferenceBack
+            | Action::CloseTab
+            | Action::HistoryBack
+            | Action::HistoryForward
+            | Action::FocusPanel
+            | Action::TogglePanel
             | Action::Restart
             | Action::Quit
             | Action::RunViewedFile
@@ -1273,8 +1273,11 @@ impl Editor {
             Action::OpenOutput => self.leave_pickers(Reaction::Open(ViewKind::Output)),
             Action::OpenNotes => self.leave_pickers(Reaction::Open(ViewKind::Notes)),
             Action::OpenSyntaxTree => self.leave_pickers(Reaction::Open(ViewKind::SyntaxTree)),
-            Action::ClosePane => self.leave_pickers(Reaction::ClosePane),
-            Action::ReferenceBack => self.leave_pickers(Reaction::ReferenceBack),
+            Action::CloseTab => self.leave_pickers(Reaction::CloseTab),
+            Action::HistoryBack => self.leave_pickers(Reaction::History(-1)),
+            Action::HistoryForward => self.leave_pickers(Reaction::History(1)),
+            Action::FocusPanel => self.leave_pickers(Reaction::FocusPanel),
+            Action::TogglePanel => self.leave_pickers(Reaction::TogglePanel),
             Action::Restart => self.leave_pickers(Reaction::Restart),
             Action::Quit => self.leave_pickers(Reaction::Quit),
             Action::RecentSession => self.leave_pickers(Reaction::RecentSession),
@@ -1539,6 +1542,10 @@ impl Editor {
         }
         if action == Action::Quit {
             return self.leave_pickers(Reaction::Quit);
+        }
+        // A picker keeps Shift+Tab, which steps back through it.
+        if action == Action::FocusPanel {
+            return self.handle_picker_key(KeyCode::BackTab.into());
         }
         if mode != PickerMode::Keymaps {
             if let Some(result) = self.handle_debug_action(action) {

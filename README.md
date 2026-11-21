@@ -57,7 +57,7 @@ cargo run --release
 
 Press `Ctrl+C` during a computation to cancel it and discard queued work while keeping the Macaulay2 session. When idle, `Ctrl+C` quits. The *cancel execution* binding can be changed in `/keymaps`; its hint appears in the status line after three seconds. Macaulay2 commands that exit the process also close the shell.
 
-Type `/` for the filtered command picker, `Ctrl+/` for all commands, or `Ctrl+O` for settings. Views open beside the session.
+Type `/` for the filtered command picker, `Ctrl+/` for all commands, or `Ctrl+,` for settings. Views open beside the session.
 
 ## Configuration
 

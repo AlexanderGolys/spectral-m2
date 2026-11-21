@@ -232,9 +232,9 @@ impl Keymaps {
                 if character.is_control() || key.is_text() {
                     return false;
                 }
-                // The terminal sends these as Tab, Enter and Esc.
-                if key.ctrl() && !key.alt() && !key.shift() && matches!(character, 'i' | 'm' | '[')
-                {
+                // A terminal without keyboard enhancement sends these as Enter and
+                // Esc; Ctrl+I, which it sends as Tab, is merely out of reach there.
+                if key.ctrl() && !key.alt() && !key.shift() && matches!(character, 'm' | '[') {
                     return false;
                 }
             }
@@ -242,7 +242,7 @@ impl Keymaps {
         }
         match context {
             KeyContext::Global => {
-                !matches!(key.code, Tab | BackTab) && (key.ctrl() || key.alt() || key.shift())
+                key.code == BackTab || (key.code != Tab && (key.ctrl() || key.alt() || key.shift()))
             }
             _ => true,
         }
@@ -377,7 +377,7 @@ impl Default for Keymaps {
             bindings: HashMap::from([
                 keymap!(A::CancelExecution => Char('c') + Ctrl),
                 keymap!(A::OpenCommands => Char('/') + Ctrl),
-                keymap!(A::OpenSettings => Char('o') + Ctrl),
+                keymap!(A::OpenSettings => Char(',') + Ctrl),
                 keymap!(A::OpenKeymaps => Char('k') + Ctrl + Shift),
                 keymap!(A::ClearFeed => Char('l') + Alt),
                 keymap!(A::OpenCode => F(2)),
@@ -385,8 +385,13 @@ impl Default for Keymaps {
                 keymap!(A::OpenSyntaxTree => F(6)),
                 keymap!(A::Restart => Char('n') + Ctrl),
                 keymap!(A::ResumeSession => Char('r') + Ctrl),
-                keymap!(A::ClosePane => Char('q') + Ctrl),
-                keymap!(A::ReferenceBack => Char('b') + Ctrl + Shift),
+                keymap!(A::CloseTab => Char('q') + Ctrl),
+                keymap!(A::HistoryBack => Char('o') + Ctrl),
+                keymap!(A::HistoryForward => Char('i') + Ctrl),
+                // A terminal without keyboard enhancement sends Ctrl+I as Tab.
+                keymap!(alias A::HistoryForward => Char('o') + Ctrl + Shift),
+                keymap!(A::FocusPanel => BackTab),
+                keymap!(A::TogglePanel => Char('b') + Ctrl),
                 keymap!(fixed A::ToggleHighlightDebug => Char('d') + Ctrl + Shift),
                 keymap!(A::SaveSelection => Char('s') + Ctrl + Shift),
                 keymap!(A::BrowseSessions => F(7)),
@@ -443,8 +448,9 @@ impl Default for Keymaps {
                 keymap!(fixed I::Undo => Char('z') + Ctrl),
                 keymap!(fixed I::Redo => Char('z') + Ctrl + Shift),
                 keymap!(fixed I::NextCompletion => Tab),
-                keymap!(fixed I::PreviousCompletion => BackTab),
-                keymap!(alias I::PreviousCompletion => Tab + Ctrl),
+                // Shift+Tab steps back too while candidates are offered, as the
+                // key moving between the session and the view beside it.
+                keymap!(fixed I::PreviousCompletion => Tab + Ctrl),
                 keymap!(I::MoveSpacedWordLeft => Left + Alt),
                 keymap!(I::MoveSpacedWordRight => Right + Alt),
                 keymap!(I::SelectSpacedWordLeft => Left + Alt + Shift),

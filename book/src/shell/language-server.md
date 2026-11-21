@@ -30,7 +30,7 @@ Three keys jump from the name under the cursor to a tab beside the session, each
 `Ctrl+K`
 : Its documentation: the page `help symbol` shows for it, as for `help symbol ideal`. Operators work too, such as `++`. This one needs no language server, since Macaulay2 itself finds the page.
 
-The tabs sit with the documentation and files you opened, so `Ctrl+Shift+B` goes back and `Ctrl+PageUp` cycles through them; see [the tabs](views.md#tabs). Each key can be remapped in the [keymaps](../custom/keymaps.md).
+The tabs sit with the documentation and files you opened, so `Ctrl+O` goes back and `Ctrl+PageUp` cycles through them; see [the tabs](views.md#tabs). Each key can be remapped in the [keymaps](../custom/keymaps.md).
 
 Code you already ran answers too. Press `Ctrl+E` to put a cursor in the feed, walk it onto a name in an earlier cell, and the keys above ask about that name as they do in the input. Cells from before a restart are no longer part of the session, and say so.
 

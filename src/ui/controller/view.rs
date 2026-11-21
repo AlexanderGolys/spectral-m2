@@ -105,6 +105,7 @@ impl ReferenceEntry {
             feed.push(block);
         }
         feed.scroll_to_top();
+        feed.focus_target();
         Self { feed, file }
     }
 }
@@ -311,15 +312,14 @@ impl Editor {
                 )
             })
             .collect();
-        let action = if self.split { "close" } else { "leave" };
         let right = self
             .keymaps
-            .key_for(Action::ClosePane)
+            .key_for(Action::CloseTab)
             .filter(|_| focused)
             .map(|key| {
                 vec![
                     TextSpan::new(format!("{key} "), HLGroup::KeymapHint),
-                    TextSpan::new(format!("{action} view"), HLGroup::StatuslineHintLabel),
+                    TextSpan::new("close tab", HLGroup::StatuslineHintLabel),
                 ]
             })
             .unwrap_or_default();

@@ -16,15 +16,17 @@ A page shows its title over a rule, its name apart from its one-line brief, its 
 
 A link keeps the colours of its text, prose or code, with only a soft underline; under the pointer its colours brighten and the underline is drawn in full.
 
-Middle-click
-: Opens the page, or the source file, in the **reference pane** beside the session. Nothing is submitted: your feed, input numbers and variables stay as they were. Links inside the reference pane open there too.
-
 `Ctrl`+click
-: Submits `help "page"`, or `get "path"` for a source file, to the live session, so the page and the command become part of your feed.
+: Opens the page, or the source file, in the tab showing in the **reference pane** beside the session, replacing what was there; `Ctrl+O` goes back to it.
+
+Middle-click
+: Opens it in a new tab and leaves you where you are; `Ctrl`+middle-click goes to the new tab.
+
+Nothing is submitted either way: your feed, input numbers and variables stay as they were. To have a page in the feed, type `help "page"`.
 
 A value that is a source position, such as the result of `locate`, is drawn as the same kind of link: it shows the file and the position, and opens the source there.
 
-Each opened page takes a tab of the pane; `Ctrl+Shift+B` returns to the previous one and `Ctrl+Q` closes the pane. See [Views beside the session](views.md#tabs). `viewHelp` still opens your browser.
+`Ctrl+O` and `Ctrl+I` go back and forward through the pages, and `Ctrl+Q` closes the tab. See [Views beside the session](views.md#tabs). `viewHelp` still opens your browser.
 
 ## Examples computed for real
 

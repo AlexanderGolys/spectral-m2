@@ -815,6 +815,11 @@ impl InputCode {
 
     /// Take the offered completion in place of the typed text; taking again
     /// cycles through the candidates instead of completing further.
+    /// Whether completion candidates are on offer for the text at the cursor.
+    pub fn offering(&self) -> bool {
+        self.offered().is_some()
+    }
+
     fn complete(&mut self, action: InputAction) {
         if self.offered().is_none() {
             return;
