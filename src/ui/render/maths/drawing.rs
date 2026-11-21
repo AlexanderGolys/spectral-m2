@@ -8,7 +8,7 @@ use super::{Diagram, GridKind, Math, MathDisplay, MathStyle};
 use crate::backend::rod::Shape;
 use crate::ui::theme::groups::HLGroup;
 
-/// The sign between the factors of a product.
+/// The sign a product sets between factors juxtaposition would misread, as in `x·2`.
 pub const PRODUCT_SIGN: &str = "·";
 /// The sign between the factors of a tensor product.
 pub const TENSOR_SIGN: &str = "⊗";

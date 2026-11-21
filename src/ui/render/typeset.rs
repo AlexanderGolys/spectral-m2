@@ -137,7 +137,7 @@ fn tex_at(math: &Math, groups: Option<&Groups>, depth: Depth) -> String {
             let content = match (kind, text.as_str()) {
                 (HLGroup::MapArrow | HLGroup::Operator, "⟵") => r"\longleftarrow".into(),
                 (HLGroup::Delimiter, "," | ", " | ";") => text.clone(),
-                (HLGroup::Operator, PRODUCT_SIGN) => r"\,".into(),
+                (HLGroup::Operator, PRODUCT_SIGN) => r"\cdot ".into(),
                 (HLGroup::Operator, TENSOR_SIGN) => r"\otimes ".into(),
                 (HLGroup::Operator, DIRECT_SUM_SIGN) => r"\oplus ".into(),
                 (HLGroup::Operator, "+" | "-" | "=") => text.clone(),
