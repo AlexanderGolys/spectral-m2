@@ -372,6 +372,9 @@ fn compose(layout: &Read, paint: &Read, colour: Rgb, spacing: u16) -> Result<Dis
         place_list(&mut diagram, list, frame.left, baseline);
     }
     let ink = Color::from(layout.ink.or(paint.ink).unwrap_or(colour));
+    // How far the labels reach left and right: one beside an arrow leaving an
+    // outer column stands past the grid, and the picture widens to hold it.
+    let mut reach = (0.0_f64, width);
     for (index, (from, to, _)) in layout.arrows.iter().enumerate() {
         let (tail, tip) = routes[index];
         diagram.items.extend(arrow(tail, tip, ink));
@@ -383,9 +386,21 @@ fn compose(layout: &Read, paint: &Read, colour: Rgb, spacing: u16) -> Result<Dis
                 true => (middle, tail.1 - LABEL_CLEARANCE - size.1),
                 false => grid.label_corner((tail, tip), *from, size),
             };
+            reach = (reach.0.min(left), reach.1.max(left + size.0));
             let baseline = top + label.height;
             place_list(&mut diagram, label, left, baseline);
         }
+    }
+    let (leftmost, rightmost) = reach;
+    if leftmost < 0.0 || rightmost > width {
+        let mut framed = DisplayList {
+            items: Vec::new(),
+            width: rightmost - leftmost,
+            height,
+            depth: 0.0,
+        };
+        place_list(&mut framed, diagram, -leftmost, height);
+        return Ok(framed);
     }
     Ok(diagram)
 }
