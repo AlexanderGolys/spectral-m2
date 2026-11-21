@@ -23,6 +23,7 @@ use ratatui::Frame;
 use self::highlight_debug::{DebugEntry, DebugSection};
 use self::picker::{Picker, PickerController, PickerMode, PickerTab};
 use self::screen::{CaretPane, ScreenCapture, ScreenCaret, ScreenSelection};
+use self::view::TreeFeed;
 pub use self::view::{CommittedCells, ReferenceEntry, ViewKind, Viewport};
 use self::{
     commands::Command,
@@ -299,6 +300,7 @@ pub struct Editor {
     feed_width: SettlingWidth,
     reference: Feed,
     reference_file: Option<String>,
+    trees: TreeFeed,
     input: InputCode,
     notes: notes::Notes,
     settings: Settings,
@@ -365,6 +367,7 @@ impl Editor {
             feed: Feed::new(Box::new(TextBlock::system(welcome))),
             reference: Feed::new(Box::new(TextBlock::system(String::new()))),
             reference_file: None,
+            trees: TreeFeed::default(),
             input,
             notes: notes::Notes::default(),
             settings,
@@ -502,14 +505,23 @@ impl Editor {
         self.input.settle_typing() | lapsed | self.feed_width.due() | self.adopt_relayouts()
     }
 
+    /// Tell every feed the editor keeps of a change their blocks understand.
+    fn tell_feeds<E>(&mut self, event: &E)
+    where
+        Feed: EventListener<E>,
+    {
+        for feed in [&mut self.feed, &mut self.reference, &mut self.trees.feed] {
+            feed.on_event(event);
+        }
+    }
+
     /// Let the feeds take up layouts workers finished since the last look; whether any did.
     fn adopt_relayouts(&mut self) -> bool {
         let delivered = relayout::delivered();
         let adopted = delivered != self.relayouts_adopted;
         if adopted {
             self.relayouts_adopted = delivered;
-            self.feed.on_event(&Reformatted);
-            self.reference.on_event(&Reformatted);
+            self.tell_feeds(&Reformatted);
         }
         adopted
     }
@@ -680,8 +692,7 @@ impl Editor {
             }
             EditorUpdate::FoldsLearned => self.reference.on_event(&Reformatted),
             EditorUpdate::ExamplesComputed => {
-                self.feed.on_event(&Reformatted);
-                self.reference.on_event(&Reformatted);
+                self.tell_feeds(&Reformatted);
             }
             EditorUpdate::Pending { id, cells } => {
                 self.continuation = None;
@@ -978,7 +989,9 @@ impl Editor {
         )
     }
 
-    pub fn handle_preview_mouse(&mut self, event: MouseEvent) -> Reaction {
+    /// Handle the mouse over a view: a link or fold of its feed, a node picked in the
+    /// syntax tree view, which the shell then marks, or text taken off the screen.
+    pub fn handle_preview_mouse(&mut self, event: MouseEvent, view: ViewKind) -> Reaction {
         if matches!(event.kind, MouseEventKind::Down(_)) {
             self.caret = None;
         }
@@ -1000,10 +1013,19 @@ impl Editor {
             }
         }
         let clicks = self.clicks(event);
-        if clicks >= 2 && self.reference.toggle_fold(pointer) {
+        if clicks >= 2
+            && self
+                .view_feed(view)
+                .is_some_and(|feed| feed.toggle_fold(pointer))
+        {
             self.last_click = None;
             self.screen_selection = None;
             return Reaction::Continue;
+        }
+        if clicks == 1 {
+            if let Some(code) = self.view_feed(view).and_then(|feed| feed.pick(pointer)) {
+                self.feed.mark(code);
+            }
         }
         let reaction = (clicks >= 2)
             .then(|| self.pick_screen_text(event, clicks))
@@ -1702,8 +1724,7 @@ impl Editor {
             self.status_runtime.language_server = LanguageServerState::Starting;
         }
         if settings.reformats(&self.settings) {
-            self.feed.on_event(&Reformatted);
-            self.reference.on_event(&Reformatted);
+            self.tell_feeds(&Reformatted);
         }
         if !settings.lsp.signature_hints {
             self.floating = None;
@@ -1732,8 +1753,7 @@ impl Editor {
         }
         self.settings.appearance = appearance;
         publish(appearance.groups());
-        self.feed.on_event(&Rethemed);
-        self.reference.on_event(&Rethemed);
+        self.tell_feeds(&Rethemed);
         appearance.save();
     }
 
@@ -2050,8 +2070,7 @@ impl Editor {
         in_debugger: bool,
     ) {
         if crate::ui::graphics::refresh_cell_size() {
-            self.feed.on_event(&Reformatted);
-            self.reference.on_event(&Reformatted);
+            self.tell_feeds(&Reformatted);
         }
         self.report_picture_distances();
         if self.pane_focused {

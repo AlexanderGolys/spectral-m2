@@ -4,8 +4,9 @@ use std::iter;
 use std::ops::Range;
 
 use crate::ui::cycle::cyclic;
+use ratatui::layout::{Position, Rect};
 use serde::{Deserialize, Serialize};
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 cyclic! {
     /// Where a long line breaks: at word/token boundaries or at terminal columns.
@@ -208,6 +209,40 @@ impl WrappedText {
         self.projections
             .iter()
             .map(|projection| (&projection.source, projection.hard_continuation))
+    }
+
+    /// Each visual row's text with the source bytes it shows.
+    fn rows(&self) -> impl Iterator<Item = (&str, &Range<usize>)> {
+        self.text
+            .split('\n')
+            .zip(self.projections.iter().map(|projection| &projection.source))
+    }
+
+    /// The cells the source bytes `bytes` are drawn on, one rectangle for each row
+    /// they reach. Wrapping `f = x -> x^2` at 8 columns, the bytes of `x^2` lie on
+    /// the second row, three columns in.
+    pub fn cells_of(&self, bytes: &Range<usize>) -> Vec<Rect> {
+        self.rows()
+            .enumerate()
+            .filter_map(|(row, (text, shown))| {
+                let start = shown.start.max(bytes.start) - shown.start;
+                let end = shown.end.min(bytes.end).saturating_sub(shown.start);
+                (start < end).then(|| {
+                    Rect::new(
+                        text[..start].width() as u16,
+                        row as u16,
+                        text[start..end].width() as u16,
+                        1,
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// The source byte drawn at `position`, the end of its row past the row's text.
+    pub fn offset_at(&self, position: Position) -> Option<usize> {
+        let (text, shown) = self.rows().nth(position.y.into())?;
+        Some(shown.start + offset_at_column(text, position.x.into()))
     }
 }
 

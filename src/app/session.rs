@@ -33,6 +33,11 @@ pub struct CommittedCell {
     pub state: CellState,
     pub code: String,
     pub tree: PrettyNode,
+    /// Where the source `tree` was parsed from starts in `code`: the tree's byte
+    /// `b` is `code[b + tree_origin]`. A later cell's code drops the break that
+    /// parted it from the one before, the first takes the blank lines entered
+    /// before it, so the two differ by that much.
+    pub tree_origin: isize,
     /// The submission it was entered with, which cells of one share.
     pub block: u64,
 }
@@ -42,6 +47,7 @@ pub struct CommittedCell {
 struct SubmittedCell {
     code: String,
     tree: PrettyNode,
+    tree_origin: isize,
 }
 
 /// What divides the submissions in code kept as a file.
@@ -422,17 +428,22 @@ impl Session {
             .take_completed()
             .into_iter()
             .enumerate()
-            .map(|(index, cell)| SubmittedCell {
-                code: match index {
-                    0 => cell.source().trim_end(),
-                    _ => separated(cell.source().trim_end()),
+            .map(|(index, cell)| {
+                let source = cell.source().trim_end();
+                let code = match index {
+                    0 => source,
+                    _ => separated(source),
+                };
+                SubmittedCell {
+                    code: code.to_string(),
+                    tree: cell.syntax().pretty_tree(),
+                    tree_origin: code.len() as isize - source.len() as isize,
                 }
-                .to_string(),
-                tree: cell.syntax().pretty_tree(),
             })
             .collect();
         if let Some(first) = cells.first_mut() {
             first.code.insert_str(0, &self.leading_whitespace);
+            first.tree_origin += self.leading_whitespace.len() as isize;
         }
         let mut updates = Vec::new();
         if !cells.is_empty() {
@@ -677,6 +688,7 @@ impl Session {
                     state,
                     code: cell.code.clone(),
                     tree: cell.tree,
+                    tree_origin: cell.tree_origin,
                     block: id,
                 });
                 self.committed_revision = self.committed_revision.wrapping_add(1);

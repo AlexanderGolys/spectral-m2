@@ -18,6 +18,9 @@ pub struct Pane {
 }
 
 impl Pane {
+    /// Rows a step of the feed scrolling keys moves a preview.
+    const FEED_STEP: isize = 10;
+
     pub fn new(view: ViewKind) -> Self {
         Self {
             view,
@@ -25,31 +28,26 @@ impl Pane {
         }
     }
 
-    /// Consume a command owned by the current preview, or return it unchanged.
-    pub fn handle_action(&mut self, action: Action) -> Option<Action> {
-        if self.view == ViewKind::Shell {
-            return Some(action);
-        }
+    /// The rows a command owned by the current preview scrolls it, positive
+    /// toward its top; none for a command it leaves to the shell.
+    pub fn action_scroll(&self, action: Action) -> Option<isize> {
         match action {
-            Action::ScrollFeedUp => self.viewport.scroll = self.viewport.scroll.saturating_sub(10),
-            Action::ScrollFeedDown => self.viewport.scroll += 10,
-            _ => return Some(action),
+            _ if self.view == ViewKind::Shell => None,
+            Action::ScrollFeedUp => Some(Self::FEED_STEP),
+            Action::ScrollFeedDown => Some(-Self::FEED_STEP),
+            _ => None,
         }
-        None
     }
 
-    /// Interpret unbound `Up` and `Down` as scrolling the current preview. The
-    /// shell and the reference pane keep their keys.
-    pub fn handle_key(&mut self, key: KeyEvent) -> bool {
-        if !self.view.is_preview() {
-            return false;
-        }
+    /// The rows unbound `Up` and `Down` scroll the current preview, positive toward
+    /// its top. The shell and the reference pane keep their keys.
+    pub fn key_scroll(&self, key: KeyEvent) -> Option<isize> {
         match key.code {
-            KeyCode::Up => self.viewport.scroll = self.viewport.scroll.saturating_sub(1),
-            KeyCode::Down => self.viewport.scroll += 1,
-            _ => return false,
+            _ if !self.view.is_preview() => None,
+            KeyCode::Up => Some(1),
+            KeyCode::Down => Some(-1),
+            _ => None,
         }
-        true
     }
 }
 

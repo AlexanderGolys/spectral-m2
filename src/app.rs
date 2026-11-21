@@ -282,8 +282,13 @@ impl App {
             self.show_current();
             return true;
         }
-        if !editor.picker_open() && self.panes.focused_mut().handle_key(key) {
-            return true;
+        if let Some(rows) = self
+            .panes
+            .focused()
+            .key_scroll(key)
+            .filter(|_| !editor.picker_open())
+        {
+            return self.scroll_view(rows);
         }
         let reaction = if previewing {
             editor.handle_preview_key(key)
@@ -363,9 +368,9 @@ impl App {
                 _ => {}
             }
         }
-        let Some(action) = self.panes.focused_mut().handle_action(action) else {
-            return true;
-        };
+        if let Some(rows) = self.panes.focused().action_scroll(action) {
+            return self.scroll_view(rows);
+        }
         let reaction = self.workspace.editor.handle_action(action);
         self.handle_reaction(reaction)
     }
@@ -417,39 +422,28 @@ impl App {
             let reaction = self.workspace.editor.notes_mouse(mouse);
             return self.handle_reaction(reaction);
         }
-        let wheel_rows = self.workspace.editor.wheel_rows().unsigned_abs();
-        let pane = self.panes.focused_mut();
-        if pane.view == ViewKind::Reference {
-            match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    let rows = self.workspace.editor.wheel_rows();
-                    self.workspace.editor.scroll_reference(rows);
-                    return true;
-                }
-                MouseEventKind::ScrollDown => {
-                    let rows = self.workspace.editor.wheel_rows();
-                    self.workspace.editor.scroll_reference(-rows);
-                    return true;
-                }
-                _ => {}
-            }
-        }
-        let reaction = if pane.view == ViewKind::Shell {
-            self.workspace.editor.handle_mouse(mouse)
-        } else {
-            match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    pane.viewport.scroll = pane.viewport.scroll.saturating_sub(wheel_rows);
-                    return true;
-                }
-                MouseEventKind::ScrollDown => {
-                    pane.viewport.scroll += wheel_rows;
-                    return true;
-                }
-                _ => self.workspace.editor.handle_preview_mouse(mouse),
-            }
+        let wheel_rows = self.workspace.editor.wheel_rows();
+        let view = self.panes.focused().view;
+        let reaction = match (view, mouse.kind) {
+            (ViewKind::Shell, _) => self.workspace.editor.handle_mouse(mouse),
+            (_, MouseEventKind::ScrollUp) => return self.scroll_view(wheel_rows),
+            (_, MouseEventKind::ScrollDown) => return self.scroll_view(-wheel_rows),
+            _ => self.workspace.editor.handle_preview_mouse(mouse, view),
         };
         self.handle_reaction(reaction)
+    }
+
+    /// Scroll the focused view by signed rows, positive toward its top; always handled.
+    fn scroll_view(&mut self, rows: isize) -> bool {
+        let editor = &mut self.workspace.editor;
+        let pane = self.panes.focused_mut();
+        match pane.view {
+            ViewKind::Shell => editor.scroll_feed(rows),
+            ViewKind::Reference => editor.scroll_reference(rows),
+            ViewKind::SyntaxTree => editor.scroll_trees(rows),
+            _ => pane.viewport.scroll = pane.viewport.scroll.saturating_add_signed(-rows),
+        }
+        true
     }
 
     fn handle_reaction(&mut self, reaction: Reaction) -> bool {
@@ -542,15 +536,7 @@ impl App {
                 let _ = execute!(io::stdout(), CopyToClipboard::to_clipboard_from(text));
                 true
             }
-            Reaction::ScrollView(rows) => {
-                let pane = self.panes.focused_mut();
-                match pane.view {
-                    ViewKind::Shell => workspace.editor.scroll_feed(rows),
-                    ViewKind::Reference => workspace.editor.scroll_reference(rows),
-                    _ => pane.viewport.scroll = pane.viewport.scroll.saturating_add_signed(-rows),
-                }
-                true
-            }
+            Reaction::ScrollView(rows) => self.scroll_view(rows),
             Reaction::Open(view) => {
                 match self.shown == Some(Target::View(view)) {
                     true => self.hide_panel(),

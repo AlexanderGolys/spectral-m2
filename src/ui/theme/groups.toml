@@ -160,7 +160,6 @@ FloatingBorder = { link = "Faint" }
 FoldMarker = { link = "Muted" }
 ViewDivider = { link = "Faint" }
 SyntaxTreeBranch = { link = "Muted" }
-SyntaxTreeTokenMarker = { link = "Info" }
 SyntaxTreeLabelSeparator = { link = "Muted" }
 SyntaxTreeBorder = { link = "Faint" }
 StatuslineScheme = { link = "Muted" }

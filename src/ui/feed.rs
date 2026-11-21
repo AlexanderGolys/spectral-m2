@@ -11,7 +11,7 @@ use ratatui::layout::{Alignment, Offset, Position, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{Block as TuiBlock, Paragraph, Widget};
 
-use super::block::{Block, CellPoint, Link, Reformatted, Resized, Rethemed, Ticked};
+use super::block::{Block, CellPoint, CodeRange, Link, Reformatted, Resized, Rethemed, Ticked};
 use super::cell::{EvaluationBlock, IncompleteBlock, Recalled};
 use super::config::UI;
 use super::element::{paste, EventListener};
@@ -29,6 +29,21 @@ struct ViewportState {
     context: RenderContext,
     /// Each visible block's index, screen rows, and first local row shown there.
     placements: Vec<(usize, Rect, u16)>,
+}
+
+impl ViewportState {
+    /// The placement of the block drawn at a screen position, and that position
+    /// in the block's own rows.
+    fn hit(&self, position: Position) -> Option<((usize, Rect, u16), Position)> {
+        let &(index, area, start) = self
+            .placements
+            .iter()
+            .find(|(_, area, _)| area.contains(position))?;
+        Some((
+            (index, area, start),
+            Position::new(position.x - area.x, start + position.y - area.y),
+        ))
+    }
 }
 
 /// Storage for an open-ended block or the one block the feed must mutate in place.
@@ -308,6 +323,11 @@ pub struct Feed {
     opened: bool,
     /// The cell or result taken whole, if one is.
     selected: Option<selection::BlockSelection>,
+    /// Code shown marked where it is drawn, as a view picked it.
+    marked: Option<CodeRange>,
+    /// Whether content shorter than the view starts at its top rather than ending
+    /// at its bottom, as a transcript does.
+    top_aligned: bool,
 }
 
 impl Feed {
@@ -322,6 +342,16 @@ impl Feed {
             recalled: Recalled::default(),
             opened: true,
             selected: None,
+            marked: None,
+            top_aligned: false,
+        }
+    }
+
+    /// The same feed, its content set from the top of the view when it is shorter.
+    pub fn top_aligned(self) -> Self {
+        Self {
+            top_aligned: true,
+            ..self
         }
     }
 
@@ -349,6 +379,7 @@ impl Feed {
     /// Append a mutable submitted-source block and follow it.
     pub fn push_evaluation(&mut self, block: EvaluationBlock) {
         self.take_incomplete();
+        self.marked = None;
         self.blocks
             .push(RetainedBlock::new(FeedContent::Evaluation(block)));
         self.scroll = 0;
@@ -395,6 +426,7 @@ impl Feed {
     pub fn clear(&mut self) {
         self.blocks.clear();
         self.selected = None;
+        self.marked = None;
         self.opened = false;
         self.scroll = 0;
         self.anchor = None;
@@ -488,7 +520,7 @@ impl Feed {
                 FeedContent::Incomplete(incomplete) => {
                     pending.is_some_and(|id| incomplete.rehighlight(id, highlighter))
                 }
-                FeedContent::Block(_) => false,
+                FeedContent::Block(block) => block.rehighlight(sources, highlighter),
             };
             if repainted {
                 block.cells = None;
@@ -501,70 +533,62 @@ impl Feed {
         }
     }
 
-    /// Expand or fold the value under a screen position, keeping the top row in place.
-    pub fn toggle_fold(&mut self, position: Position) -> bool {
-        let Some(surface) = &self.surface else {
-            return false;
-        };
-        let Some(&(index, area, start)) = surface
-            .placements
-            .iter()
-            .find(|(_, area, _)| area.contains(position))
-        else {
-            return false;
-        };
+    /// Change the block drawn at a screen position by `change`, which yields what
+    /// it changed, if anything; the block is laid out again with its top row kept.
+    fn change_at<T>(
+        &mut self,
+        position: Position,
+        change: impl FnOnce(&mut dyn Block, Position, &RenderContext) -> Option<T>,
+    ) -> Option<T> {
+        let surface = self.surface.as_ref()?;
+        let ((index, ..), local) = surface.hit(position)?;
         let (context, anchor) = (surface.context, surface.anchor);
         let block = &mut self.blocks[index];
-        let toggled = block.content.block_mut().toggle_fold(
-            Position::new(position.x - area.x, start + position.y - area.y),
-            &context,
-        );
-        if toggled {
-            block.forget_layout();
-            self.anchor = anchor;
-            self.surface = None;
-        }
-        toggled
+        let changed = change(block.content.block_mut(), local, &context)?;
+        block.forget_layout();
+        self.anchor = anchor;
+        self.surface = None;
+        Some(changed)
+    }
+
+    /// Expand or fold the value under a screen position, keeping the top row in place.
+    pub fn toggle_fold(&mut self, position: Position) -> bool {
+        self.change_at(position, |block, local, context| {
+            block.toggle_fold(local, context).then_some(())
+        })
+        .is_some()
     }
 
     /// Draw the value whose renderer icon is at a screen position by its next
     /// renderer, keeping the top row in place.
     pub fn cycle_renderer(&mut self, position: Position) -> bool {
-        let Some(surface) = &self.surface else {
-            return false;
-        };
-        let Some(&(index, area, start)) = surface
-            .placements
-            .iter()
-            .find(|(_, area, _)| area.contains(position))
-        else {
-            return false;
-        };
-        let (context, anchor) = (surface.context, surface.anchor);
-        let block = &mut self.blocks[index];
-        let cycled = block.content.block_mut().cycle_renderer(
-            Position::new(position.x - area.x, start + position.y - area.y),
-            &context,
-        );
-        if cycled {
-            block.forget_layout();
-            self.anchor = anchor;
-            self.surface = None;
+        self.change_at(position, |block, local, context| {
+            block.cycle_renderer(local, context).then_some(())
+        })
+        .is_some()
+    }
+
+    /// Pick what is drawn at a screen position, as the only thing picked in the
+    /// feed, returning the submitted code it stands for.
+    pub fn pick(&mut self, position: Position) -> Option<CodeRange> {
+        let ((picked, ..), _) = self.surface.as_ref()?.hit(position)?;
+        let code = self.change_at(position, |block, local, context| block.pick(local, context))?;
+        for (index, block) in self.blocks.iter_mut().enumerate() {
+            if index != picked && block.content.block_mut().unpick() {
+                block.invalidate();
+            }
         }
-        cycled
+        Some(code)
     }
 
     /// The link drawn at a screen position, with the cells of it on screen.
     pub fn link_at(&self, position: Position) -> Option<Link> {
         let surface = self.surface.as_ref()?;
-        let &(index, area, start) = surface
-            .placements
-            .iter()
-            .find(|(_, area, _)| area.contains(position))?;
-        let link = self.blocks[index].content.block().link_at(
-            &surface.context,
-            Position::new(position.x - area.x, start + position.y - area.y),
-        )?;
+        let ((index, area, start), local) = surface.hit(position)?;
+        let link = self.blocks[index]
+            .content
+            .block()
+            .link_at(&surface.context, local)?;
         let visible = start..start + area.height;
         let cells = link
             .cells
@@ -582,14 +606,11 @@ impl Feed {
     /// The submitted code drawn at a screen position.
     pub fn code_at(&self, position: Position) -> Option<CellPoint> {
         let surface = self.surface.as_ref()?;
-        let &(index, area, start) = surface
-            .placements
-            .iter()
-            .find(|(_, area, _)| area.contains(position))?;
-        self.blocks[index].content.block().code_at(
-            &surface.context,
-            Position::new(position.x - area.x, start + position.y - area.y),
-        )
+        let ((index, ..), local) = surface.hit(position)?;
+        self.blocks[index]
+            .content
+            .block()
+            .code_at(&surface.context, local)
     }
 
     /// Move by signed rows, positive toward older content.
@@ -725,6 +746,7 @@ impl Feed {
             target,
             self.scroll,
             canvas,
+            self.top_aligned,
         );
         if area.width > 0 {
             for y in 0..area.height {
@@ -738,6 +760,7 @@ impl Feed {
         self.surface = Some(surface);
         self.lay_out_ahead(&context, area.height);
         self.paint_selection(&context, target);
+        self.paint_mark(&context, target);
         (underfilled, inclusions)
     }
 
@@ -827,6 +850,7 @@ impl Feed {
         target: &mut Buffer,
         scroll: usize,
         canvas: Style,
+        top_aligned: bool,
     ) -> (ViewportState, bool, Inclusions) {
         let (mut visible, total) = Self::visible(blocks, context, area.height, scroll);
         let scroll = if visible.rows < area.height && total > area.height.into() {
@@ -841,7 +865,10 @@ impl Feed {
         }
         TuiBlock::default().style(canvas).render(area, target);
         let underfilled = visible.rows < area.height;
-        let mut y = area.y + area.height.saturating_sub(visible.rows);
+        let mut y = match top_aligned {
+            true => area.y,
+            false => area.y + area.height.saturating_sub(visible.rows),
+        };
         let mut crop = visible.rows.saturating_sub(area.height);
         let mut anchor = None;
         let mut inclusions = Inclusions::default();

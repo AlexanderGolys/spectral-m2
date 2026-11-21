@@ -559,7 +559,6 @@ accessors! {
     view_divider: ViewDivider,
 
     syntax_tree_branch: SyntaxTreeBranch,
-    syntax_tree_token_marker: SyntaxTreeTokenMarker,
     syntax_tree_label_separator: SyntaxTreeLabelSeparator,
     syntax_tree_border: SyntaxTreeBorder,
 

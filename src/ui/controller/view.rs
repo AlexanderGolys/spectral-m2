@@ -15,6 +15,7 @@ use super::screen::CaretPane;
 use super::Editor;
 use crate::app::session::CommittedCell;
 use crate::code::highlight::Highlighter;
+use crate::code::semantic::SourceId;
 use crate::ui::action::Action;
 use crate::ui::block::{Block, Element, TextSpan};
 use crate::ui::block::{Reformatted, Rethemed};
@@ -79,12 +80,57 @@ pub struct CommittedCells<'a> {
     pub revision: u64,
 }
 
-/// Parsed block model retained by one code or syntax-tree preview pane.
+/// Parsed block model retained by one code preview pane.
 struct PreviewCache {
     revision: u64,
     highlight_revision: u64,
     view: ViewKind,
     blocks: Vec<Box<dyn Block>>,
+}
+
+/// The syntax tree view's blocks, one a committed cell, kept with what is picked
+/// and folded in them as more cells commit.
+pub struct TreeFeed {
+    pub feed: Feed,
+    /// The cells the blocks show, in order.
+    cells: Vec<SourceId>,
+    highlight_revision: u64,
+}
+
+impl Default for TreeFeed {
+    fn default() -> Self {
+        let mut feed = Feed::new(Box::new(TextBlock::system(String::new()))).top_aligned();
+        feed.clear();
+        Self {
+            feed,
+            cells: Vec::new(),
+            highlight_revision: 0,
+        }
+    }
+}
+
+impl TreeFeed {
+    /// Add a block for each cell committed since the last look, starting over when
+    /// the ones shown are no longer the first committed, and repaint the code when
+    /// the highlighter learned more of it.
+    fn refresh(&mut self, committed: &[CommittedCell], highlighter: &mut dyn Highlighter) {
+        let ids = committed
+            .iter()
+            .map(|cell| cell.source_id)
+            .collect::<Vec<_>>();
+        if !ids.starts_with(&self.cells) {
+            *self = Self::default();
+        }
+        if self.highlight_revision != highlighter.revision() {
+            self.highlight_revision = highlighter.revision();
+            self.feed.rehighlight(&self.cells, highlighter);
+        }
+        for cell in &committed[self.cells.len()..] {
+            self.feed
+                .push(Box::new(SyntaxTreeBlock::new(cell, highlighter)));
+        }
+        self.cells = ids;
+    }
 }
 
 /// A retained reference, including its viewport and source-file action.
@@ -133,8 +179,8 @@ impl Viewport {
         self.scroll = usize::MAX;
     }
 
-    /// Rebuild the cached blocks of a code or syntax-tree view when the committed
-    /// cells have changed since they were built.
+    /// Rebuild the cached blocks of a code view when the committed cells have
+    /// changed since they were built.
     fn refresh_preview(
         &mut self,
         committed: CommittedCells<'_>,
@@ -167,22 +213,7 @@ impl Viewport {
                     })
                     .into_iter()
                     .collect(),
-                ViewKind::SyntaxTree => committed
-                    .cells
-                    .iter()
-                    .map(|cell| {
-                        Box::new(SyntaxTreeBlock::new(
-                            M2CodeCell::highlighted(
-                                cell.code.clone(),
-                                None,
-                                cell.source_id,
-                                highlighter,
-                            ),
-                            cell.tree.clone(),
-                        )) as Box<dyn Block>
-                    })
-                    .collect(),
-                _ => unreachable!("only committed previews are cached"),
+                _ => unreachable!("only the code view is cached"),
             };
             self.preview = Some(PreviewCache {
                 revision: committed.revision,
@@ -233,6 +264,20 @@ impl Editor {
         }
         self.reference.scroll_to_top();
         self.reference.focus_target();
+    }
+
+    /// Scroll the syntax tree view, positive toward its first cells.
+    pub fn scroll_trees(&mut self, rows: isize) {
+        self.trees.feed.scroll(rows);
+    }
+
+    /// The retained feed a view shows, for the views drawn from one.
+    pub fn view_feed(&mut self, view: ViewKind) -> Option<&mut Feed> {
+        match view {
+            ViewKind::Reference => Some(&mut self.reference),
+            ViewKind::SyntaxTree => Some(&mut self.trees.feed),
+            _ => None,
+        }
     }
 
     /// Scroll the reference pane independently of the transcript.
@@ -429,6 +474,14 @@ impl Editor {
                 self.selection_inclusions.merge(inclusions);
             }
             ViewKind::Shell => unreachable!("shells use Editor::draw"),
+            ViewKind::SyntaxTree if !committed.cells.is_empty() => {
+                self.trees.refresh(committed.cells, highlighter);
+                let (_, inclusions) =
+                    self.trees
+                        .feed
+                        .render(&context, sections[0], frame.buffer_mut(), canvas);
+                self.selection_inclusions.merge(inclusions);
+            }
             ViewKind::Code | ViewKind::SyntaxTree => {
                 viewport.refresh_preview(committed, view, highlighter);
                 let Viewport {
@@ -469,25 +522,25 @@ impl Editor {
             }
         }
         // Blocks such as printed text paint a band of their own; a view keeps one
-        // background under all of them.
+        // background under all of them. A view drawn from a feed keeps the
+        // backgrounds its blocks mark what is picked and found with.
         let background = canvas.bg.unwrap_or(Color::Reset);
-        let reference = view == ViewKind::Reference;
-        if !reference {
+        if self.view_feed(view).is_none() {
             for position in sections[0].positions() {
                 frame.buffer_mut()[position].set_bg(background);
             }
         }
-        if reference {
+        if view == ViewKind::Reference {
             self.paint_link_hover(
                 frame,
                 self.pointer
                     .and_then(|pointer| self.reference.link_at(pointer)),
             );
         }
-        self.feed_top = if view == ViewKind::Reference {
-            -(self.reference.offset() as i64)
-        } else {
-            viewport.scroll as i64
+        self.feed_top = match view {
+            ViewKind::Reference => -(self.reference.offset() as i64),
+            ViewKind::SyntaxTree => -(self.trees.feed.offset() as i64),
+            _ => viewport.scroll as i64,
         };
         if let Some(controller) = self.pickers.last().filter(|_| self.pane_focused) {
             controller

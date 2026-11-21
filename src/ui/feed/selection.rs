@@ -5,6 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 
 use super::{Feed, FeedContent};
+use crate::ui::block::CodeRange;
 use crate::ui::config::UI;
 use crate::ui::item::{copied_together, Item, ItemKind};
 use crate::ui::render::RenderContext;
@@ -76,9 +77,7 @@ impl Feed {
         let Some(context) = self.surface.as_ref().map(|surface| surface.context) else {
             return false;
         };
-        let Some(block) = self.blocks.iter().position(|retained| {
-            matches!(&retained.content, FeedContent::Evaluation(evaluation) if evaluation.id() == submission)
-        }) else {
+        let Some(block) = self.evaluation_index(submission) else {
             return false;
         };
         let items = self.items_of(block, &context);
@@ -98,6 +97,31 @@ impl Feed {
         });
         self.reveal(block, rows.start, rows.end);
         true
+    }
+
+    /// Where the feed holds the block of submission `submission`.
+    fn evaluation_index(&self, submission: u64) -> Option<usize> {
+        self.blocks.iter().position(|retained| {
+            matches!(&retained.content, FeedContent::Evaluation(evaluation) if evaluation.id() == submission)
+        })
+    }
+
+    /// Mark `code` where the feed draws it and scroll it into view; whether the
+    /// feed still holds it.
+    pub fn mark(&mut self, code: CodeRange) -> bool {
+        let block = self.evaluation_index(code.submission);
+        let context = self.surface.as_ref().map(|surface| surface.context);
+        if let (Some(block), Some(context)) = (block, context) {
+            let cells = self.blocks[block]
+                .content
+                .block()
+                .code_cells(&context, &code);
+            if let (Some(first), Some(last)) = (cells.first(), cells.last()) {
+                self.reveal(block, first.y, last.bottom());
+            }
+        }
+        self.marked = block.map(|_| code);
+        self.marked.is_some()
     }
 
     /// Move the selection to the previous (`delta` negative) or next cell or result,
@@ -235,6 +259,40 @@ impl Feed {
                 .map(|p| p.x)
             {
                 target[(x, y)].set_bg(tint);
+            }
+        }
+    }
+
+    /// Tint the cells of the marked code that are on screen.
+    pub(super) fn paint_mark(&self, context: &RenderContext, target: &mut Buffer) {
+        let (Some(code), Some(surface), Some(tint)) = (
+            &self.marked,
+            self.surface.as_ref(),
+            context.groups().selection().bg,
+        ) else {
+            return;
+        };
+        let Some(&(block, area, start)) =
+            self.evaluation_index(code.submission).and_then(|block| {
+                surface
+                    .placements
+                    .iter()
+                    .find(|&&(shown, ..)| shown == block)
+            })
+        else {
+            return;
+        };
+        let shown = start..start + area.height;
+        for cells in self.blocks[block].content.block().code_cells(context, code) {
+            if shown.contains(&cells.y) {
+                let on_screen = Rect {
+                    x: area.x + cells.x,
+                    y: area.y + cells.y - start,
+                    ..cells
+                };
+                for position in on_screen.intersection(area).positions() {
+                    target[position].set_bg(tint);
+                }
             }
         }
     }

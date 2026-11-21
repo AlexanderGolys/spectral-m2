@@ -13,6 +13,8 @@ use super::item::Item;
 use super::render::selection::Inclusions;
 use super::render::RenderContext;
 use super::theme::groups::{Groups, HLGroup};
+use crate::code::highlight::Highlighter;
+use crate::code::semantic::SourceId;
 
 /// The available width changed, moving every wrap boundary.
 pub struct Resized {
@@ -89,6 +91,28 @@ pub trait Block {
         None
     }
 
+    /// The cells, local to this block, that draw the submitted code `code`.
+    fn code_cells(&self, _: &RenderContext, _: &CodeRange) -> Vec<Rect> {
+        Vec::new()
+    }
+
+    /// Pick out what is drawn at local `position`, returning the submitted code it
+    /// stands for; the block then shows it picked.
+    fn pick(&mut self, _: Position, _: &RenderContext) -> Option<CodeRange> {
+        None
+    }
+
+    /// Drop whatever was picked, returning whether anything was.
+    fn unpick(&mut self) -> bool {
+        false
+    }
+
+    /// Repaint code of `sources` this block shows as the highlighter now colours
+    /// it, returning whether its colours changed.
+    fn rehighlight(&mut self, _: &[SourceId], _: &mut dyn Highlighter) -> bool {
+        false
+    }
+
     /// Retained link geometry for composing this block inside another document.
     fn links(&self, _: &RenderContext) -> Vec<Link> {
         Vec::new()
@@ -118,6 +142,14 @@ pub struct CellPoint {
     pub submission: u64,
     pub index: usize,
     pub offset: usize,
+}
+
+/// A stretch of submitted code: bytes of one cell of a submission.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodeRange {
+    pub submission: u64,
+    pub index: usize,
+    pub bytes: Range<usize>,
 }
 
 /// A drawn link: what it points to and the cells it covers, which may run over

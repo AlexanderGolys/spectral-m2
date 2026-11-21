@@ -23,7 +23,7 @@ use ratatui::widgets::{Paragraph, Widget};
 use strum::{EnumCount, FromRepr};
 use unicode_width::UnicodeWidthStr;
 
-use super::block::{Block, CellPoint, Element, HLSpan, Link, Text};
+use super::block::{Block, CellPoint, CodeRange, Element, HLSpan, Link, Text};
 use super::element::paste;
 use super::fold::{FoldRanges, LineFolds};
 use super::graphics::cell_size;
@@ -36,7 +36,7 @@ use super::render::selection::Inclusions;
 use super::render::{markup, maths, spin, typeset};
 use super::render::{Bordered, FrameLayout, Highlights, RenderContext};
 use super::settings::rendering::RendererPosition;
-use super::wrap::{offset_at_column, CodeLayout, SpanWrap, WrapPolicy, WrappedText};
+use super::wrap::{CodeLayout, SpanWrap, WrapPolicy, WrappedText};
 use crate::backend::transcript::{captured_error, captured_output, strip_m2_location};
 use crate::backend::{DocPage, M2Response, PreviewMode, Shape, ValuePreview};
 use crate::code::highlight::{Highlighter, SyntaxHighlighter};
@@ -324,7 +324,7 @@ impl M2CodeCell {
         Self::new(text, None, spans)
     }
 
-    fn rehighlight(&mut self, id: SourceId, highlighter: &mut dyn Highlighter) -> bool {
+    pub fn rehighlight(&mut self, id: SourceId, highlighter: &mut dyn Highlighter) -> bool {
         let spans = highlighter.highlight_source(id, &self.text);
         if self.spans == spans {
             return false;
@@ -333,8 +333,20 @@ impl M2CodeCell {
         true
     }
 
-    fn wrapped(&self, width: u16, layout: CodeLayout) -> WrappedText {
+    pub fn wrapped(&self, width: u16, layout: CodeLayout) -> WrappedText {
         WrappedText::code(&self.text, width, &self.wrap_ranges, layout)
+    }
+
+    /// The code's rows with nothing beside them, as a view shows it.
+    pub fn bare_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
+        cell_lines(
+            self,
+            CellMarker::Bare,
+            CellLayout::plain(),
+            context,
+            context.code_style(),
+            true,
+        )
     }
 
     fn marker(&self) -> CellMarker {
@@ -403,20 +415,9 @@ impl SourceBlock {
             context.width().saturating_sub(gutter),
             context.code_layout(),
         )
-        .source_lines()
-        .enumerate()
-        .filter_map(|(row, (range, _))| {
-            let start = range.start.max(focus.start);
-            let end = range.end.min(focus.end);
-            (start < end).then(|| {
-                Rect::new(
-                    gutter + cell.text[range.start..start].width() as u16,
-                    row as u16 + 1,
-                    cell.text[start..end].width() as u16,
-                    1,
-                )
-            })
-        })
+        .cells_of(focus)
+        .into_iter()
+        .map(|cells| cells + Offset::new(gutter.into(), 1))
         .collect()
     }
 
@@ -640,23 +641,6 @@ impl CodeBlock {
                 true,
             ));
         }
-        rendered
-    }
-
-    pub(super) fn preview_lines(&self, context: &RenderContext) -> Vec<Line<'static>> {
-        let layout = CellLayout::plain();
-        let mut rendered = Vec::new();
-        for cell in &self.cells {
-            rendered.extend(cell_lines(
-                cell,
-                CellMarker::Bare,
-                layout,
-                context,
-                context.code_style(),
-                true,
-            ));
-        }
-        rendered.push(Line::default());
         rendered
     }
 }
@@ -1097,6 +1081,24 @@ impl EvaluationBlock {
         }
     }
 
+    /// Each cell's code as wrapped, with where its first row starts: past the
+    /// gutter, on the row after the ones of the cells before it.
+    fn placed_code(&self, context: &RenderContext) -> Vec<(Position, WrappedText)> {
+        let layout = self.layout();
+        let width = self.code_width(context);
+        let mut row = 1;
+        self.cells
+            .iter()
+            .map(|(cell, state)| {
+                let prefix = state.marker().width(layout);
+                let wrapped = cell.wrapped(width.saturating_sub(prefix), context.code_layout());
+                let origin = Position::new(prefix, row);
+                row += wrapped.height();
+                (origin, wrapped)
+            })
+            .collect()
+    }
+
     fn code_height(&self, context: &RenderContext) -> u16 {
         let layout = self.layout();
         let width = self.code_width(context);
@@ -1214,26 +1216,35 @@ impl Block for EvaluationBlock {
     }
 
     fn code_at(&self, context: &RenderContext, position: Position) -> Option<CellPoint> {
-        let layout = self.layout();
-        let code_width = self.code_width(context);
-        let mut row = 1;
-        for (index, (cell, state)) in self.cells.iter().enumerate() {
-            let prefix = state.marker().width(layout);
-            let wrapped = cell.wrapped(code_width.saturating_sub(prefix), context.code_layout());
-            let next = row + wrapped.height();
-            if (row..next).contains(&position.y) {
-                let (range, _) = wrapped.source_lines().nth(usize::from(position.y - row))?;
-                let column = usize::from(position.x.checked_sub(prefix)?);
-                let offset = range.start + offset_at_column(&cell.text[range.clone()], column);
-                return Some(CellPoint {
+        self.placed_code(context)
+            .into_iter()
+            .enumerate()
+            .find_map(|(index, (origin, wrapped))| {
+                let local = Position::new(
+                    position.x.checked_sub(origin.x)?,
+                    position.y.checked_sub(origin.y)?,
+                );
+                Some(CellPoint {
                     submission: self.id,
                     index,
-                    offset,
-                });
-            }
-            row = next;
+                    offset: wrapped.offset_at(local)?,
+                })
+            })
+    }
+
+    fn code_cells(&self, context: &RenderContext, code: &CodeRange) -> Vec<Rect> {
+        if code.submission != self.id {
+            return Vec::new();
         }
-        None
+        self.placed_code(context)
+            .get(code.index)
+            .map_or_else(Vec::new, |(origin, wrapped)| {
+                wrapped
+                    .cells_of(&code.bytes)
+                    .into_iter()
+                    .map(|cells| cells + Offset::new(origin.x.into(), origin.y.into()))
+                    .collect()
+            })
     }
 
     fn height(&self, context: &RenderContext) -> u16 {
