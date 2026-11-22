@@ -1678,7 +1678,8 @@ struct ValueLayout {
 #[derive(Clone, Copy)]
 struct LayoutKey {
     renderer: PreviewMode,
-    /// Zero for a value without markup, which no markup revision moves.
+    /// Zero for a value drawn from neither markup nor code, which no revision of
+    /// documents and their colours moves.
     markup_revision: u64,
     renderer_position: RendererPosition,
     width: u16,
@@ -2020,6 +2021,9 @@ impl OutputBlock {
     /// The frame of a code cell carrying the largest number here, so a result's
     /// border runs down the column its code's separator does.
     fn border_layout(&self) -> FrameLayout {
+        if !self.framed {
+            return FrameLayout::open();
+        }
         let number = self.cells.iter().filter_map(|cell| cell.number).max();
         number
             .map_or_else(CellLayout::plain, CellLayout::numbered)
@@ -2030,31 +2034,17 @@ impl OutputBlock {
         Bordered::text_width(context, self.border_layout())
     }
 
-    /// The columns `cell`'s value wraps to: short of its type and the gap before
-    /// it, when the type is narrow enough to stand beside the value; else all of
-    /// them, the type then going below wherever the value leaves it no room.
-    fn value_width(&self, cell: &OutputCell, context: &RenderContext) -> u16 {
-        let width = self.text_width(context);
-        let column = self
-            .type_lines(cell, context)
-            .iter()
-            .map(Line::width)
-            .max()
-            .map_or(0, |type_width| type_width + UI::TYPE_GAP);
-        match column as f32 <= f32::from(width) * UI::MAX_TYPE_SHARE {
-            true => u16::try_from(usize::from(width) - column).unwrap_or(width),
-            false => width,
-        }
-    }
-
     fn unfolded_lines(&self, cell: &OutputCell, context: &RenderContext) -> Rc<Vec<Line<'static>>> {
         let style = context.math();
         let markup = cell.markup();
         let key = LayoutKey {
             renderer: cell.preview_mode(),
-            markup_revision: markup.map_or(0, |_| markup::revision()),
+            markup_revision: match (markup, cell.preview_mode()) {
+                (None, mode) if mode != PreviewMode::External => 0,
+                _ => markup::revision(),
+            },
             renderer_position: context.renderer_position(),
-            width: self.value_width(cell, context),
+            width: self.text_width(context),
             block_width: context.width(),
             pixel_cell: (style.display == MathDisplay::Typeset)
                 .then(cell_size)
@@ -2178,7 +2168,7 @@ impl OutputBlock {
             markup::inclusions(
                 html,
                 example_width,
-                &context.with_width(self.value_width(cell, context)),
+                &context.with_width(self.text_width(context)),
             )
         });
         page.unwrap_or_else(|| {
@@ -2334,7 +2324,7 @@ impl OutputBlock {
                     if markup::cycle_renderer(
                         html,
                         example_width,
-                        &context.with_width(self.value_width(cell, context)),
+                        &context.with_width(self.text_width(context)),
                         Position::new(position.x - inner.x, y),
                     ) {
                         return true;
@@ -2391,9 +2381,10 @@ impl OutputBlock {
     }
 
     /// The row the type's first row goes on: beside the value, its last row on the
-    /// value's last, when every value row it shares leaves it room; else below.
+    /// value's last, when every value row it shares leaves it room and a gap;
+    /// else below. The value takes every column, the type only what it leaves.
     fn type_start(values: &[Line<'_>], types: usize, type_width: usize, width: usize) -> usize {
-        let fits = |value: &Line<'_>| value.width() + type_width < width;
+        let fits = |value: &Line<'_>| value.width() + UI::TYPE_GAP + type_width <= width;
         let start = values.len().saturating_sub(types.max(1));
         match !values.is_empty() && values[start..].iter().all(fits) {
             true => start,
@@ -2645,7 +2636,7 @@ impl Block for OutputBlock {
                     markup::links(
                         html,
                         example_width,
-                        &context.with_width(self.value_width(cell, context)),
+                        &context.with_width(self.text_width(context)),
                     )
                     .into_iter()
                     .map(|link| self.placed_link(cell, context, Position::new(inner.x, row), link))
@@ -2686,7 +2677,7 @@ impl Block for OutputBlock {
             let link = markup::link_at(
                 html,
                 example_width,
-                &context.with_width(self.value_width(cell, context)),
+                &context.with_width(self.text_width(context)),
                 Position::new(
                     position.x.checked_sub(inner.x)?,
                     unfolded(usize::from(position.y - row))? as u16,
@@ -2795,11 +2786,9 @@ impl Block for WarningBlock {
 
 /// Bound synchronous work before wrapping flat output, retaining both ends.
 /// M2 source wrapped at its token boundaries to `width` and coloured as code.
+/// `source`, a value's `toExternalString`, in the colours its analysis found.
 fn code_lines(source: &str, width: u16, groups: &Groups) -> Vec<Line<'static>> {
-    thread_local! {
-        static CODE: RefCell<SyntaxHighlighter> = RefCell::new(SyntaxHighlighter::new());
-    }
-    let spans = CODE.with_borrow_mut(|highlighter| highlighter.highlight(source));
+    let spans = markup::source_highlights(markup::external_page(source), source);
     let boundaries: Vec<Range<usize>> = spans.iter().map(|span| span.content.clone()).collect();
     SpanWrap(&boundaries)
         .wrap(source, width)

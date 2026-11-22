@@ -5,17 +5,18 @@ use ratatui::text::Line;
 
 use crate::backend::Shape;
 use crate::ui::block::{Link, Text};
-use crate::ui::graphics::{self, ratex::Rgb, Pictured, Slicing, Typesetting};
+use crate::ui::graphics::{self, Pictured, Typesetting};
 use crate::ui::present;
 use crate::ui::theme::groups::{Groups, HLGroup};
 
 use super::maths::{
-    self, Course, Diagram, Math, MathInk, MathStyle, Reading, DIRECT_SUM_SIGN, PRODUCT_SIGN,
-    TENSOR_SIGN,
+    self, Course, Diagram, GridKind, Math, MathInk, MathStyle, Reading, DIRECT_SUM_SIGN,
+    PRODUCT_SIGN, TENSOR_SIGN,
 };
 use crate::ui::graphics::ratex::{
+    self, break_mark, delimiter,
     diagram::{ArrowLengths, Description, MIN_ARROW},
-    BREAK_MARK,
+    Rgb, Source, PERCENT_PER_ARRAYSTRETCH,
 };
 
 /// Rendered rows with their interactive links and chosen representation.
@@ -28,24 +29,40 @@ pub struct Drawn {
 
 type Picture = fn(Typesetting, Rgb, u16) -> Option<Pictured>;
 
-/// Where TeX being written lies: in the formula's top-level row, which may
-/// break into rows as the Unicode layout's does, or held whole inside a matrix,
-/// a script or brackets of its own. The brackets around the whole formula, as
-/// of a list, hold their row at the top: a long list breaks between its items.
+/// Where TeX being written lies: in a row that may break into lines, at the
+/// rank its breaks have, or held whole inside a script, a fraction or a label.
+/// A formula's own row has rank 0, and each row, bracketed part or matrix
+/// nested in a row one more than it, so a formula breaks between a list's
+/// items before it breaks inside one of them. The brackets around a row hold
+/// it at their own depth: a long list breaks between its items.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Depth {
-    Top,
+    Top(usize),
     Held,
 }
 
 impl Depth {
-    /// Where `part` of the top-level row lies: a row nested in it runs on at the
-    /// top, anything else holds its own parts whole.
-    fn of_part(part: &Math) -> Self {
-        match part {
-            Math::Row(_) => Self::Top,
-            Math::Linked { body, .. } => Self::of_part(body),
+    /// Where `part` of a row lying here lies: a row, a bracketed part or a
+    /// matrix one rank deeper, anything else holding its own parts whole.
+    fn of_part(self, part: &Math) -> Self {
+        match (self, part) {
+            (_, Math::Linked { body, .. }) => self.of_part(body),
+            (
+                Self::Top(rank),
+                Math::Row(_)
+                | Math::Delimited { .. }
+                | Math::Grid { .. }
+                | Math::AnnotatedMatrix { .. },
+            ) => Self::Top(rank + 1),
             _ => Self::Held,
+        }
+    }
+
+    /// The mark of a place a row lying here may break, when it may.
+    fn mark(self, breaks: bool) -> String {
+        match self {
+            Self::Top(rank) if breaks => break_mark(rank),
+            _ => String::new(),
         }
     }
 }
@@ -57,35 +74,46 @@ const SCRIPT_SCALE: f64 = 0.7;
 const ARROW_OVERHANG: f64 = 0.7;
 
 /// What writes a value's TeX: the colours its atoms are painted in, none when
-/// it is written to be measured alone, and how long its arrows run.
+/// it is written to be measured alone, how long its arrows run and how far
+/// apart, in percent of TeX's own spacing, a matrix's rows stand.
 #[derive(Clone, Copy)]
 struct Writer<'a> {
     groups: Option<&'a Groups>,
     arrows: ArrowLengths,
+    matrix_rows: u16,
 }
 
 impl Writer<'_> {
-    fn paint(&self, text: String, kind: HLGroup) -> String {
-        match self.groups.and_then(|groups| groups.style(kind).fg) {
-            Some(Color::Rgb(r, g, b)) => format!(r"{{\color{{#{r:02x}{g:02x}{b:02x}}}{text}}}"),
-            _ => text,
+    /// The colour `kind` is painted in, when this writer paints.
+    fn ink(&self, kind: HLGroup) -> Option<Rgb> {
+        match self.groups?.style(kind).fg? {
+            Color::Rgb(r, g, b) => Some(Rgb([r, g, b])),
+            _ => None,
         }
     }
 
-    /// What a value is set from: its TeX, or a diagram's description when the value
-    /// is a diagram, which TeX alone cannot draw.
+    /// `array` with its rows `percent` of TeX's own spacing apart. Every array
+    /// states its own spacing as it begins, so a column of lines inside a
+    /// matrix keeps the spacing of text and a matrix inside it that of matrices.
+    fn spaced(percent: u16, array: String) -> String {
+        let stretch = f64::from(percent) / f64::from(PERCENT_PER_ARRAYSTRETCH);
+        format!(r"\def\arraystretch{{{stretch}}}{array}")
+    }
+
+    fn paint(&self, text: String, kind: HLGroup) -> String {
+        match self.ink(kind) {
+            Some(ink) => ink.scope(&text),
+            None => text,
+        }
+    }
+
+    /// What one row of ink is set from: its TeX, or a diagram's description when
+    /// it is a diagram, which TeX alone cannot draw.
     fn formula(&self, math: &Math) -> String {
         let Math::Diagram(diagram) = math else {
-            return self.tex_at(math, Depth::Top);
+            return self.tex_at(math, Depth::Top(0));
         };
-        let ink = self
-            .groups
-            .and_then(|groups| groups.style(HLGroup::MapArrow).fg)
-            .and_then(|colour| match colour {
-                Color::Rgb(r, g, b) => Some(Rgb([r, g, b])),
-                _ => None,
-            });
-        let mut description = Description::new(ink, self.arrows);
+        let mut description = Description::new(self.ink(HLGroup::MapArrow), self.arrows);
         for (place, piece) in &diagram.pieces {
             // A degree numbering a column is set small, as one under a module of
             // a complex is.
@@ -106,17 +134,44 @@ impl Writer<'_> {
         description.into()
     }
 
-    /// A row of a grid. One that `breaks` may break before any column but its
-    /// first: a matrix too wide for its room is cut between columns into strips.
-    fn grid_row(&self, row: &[Math], breaks: bool) -> String {
-        row.iter()
-            .enumerate()
-            .map(|(column, entry)| {
-                let mark = if breaks && column > 0 { BREAK_MARK } else { "" };
-                format!("{mark}{}", self.tex(entry))
+    /// The rows of a grid lying at `depth`, each its entries between `&`. A grid
+    /// in a row that breaks may break before any column but its first: a matrix
+    /// too wide for its room is cut between columns, the columns after the cut
+    /// set beneath. A column's mark stands before its widest entry alone, the
+    /// one a centred column begins with; before a narrower one it would stand
+    /// inside the column.
+    fn grid_rows(&self, rows: &[Vec<Math>], depth: Depth) -> Vec<String> {
+        // Measured unpainted, so the plain and the painted TeX mark the same rows.
+        let plain = Writer {
+            groups: None,
+            ..*self
+        };
+        let width = |entry: &Math| ratex::width(&plain.tex(entry)).unwrap_or(0.0);
+        let columns = match depth {
+            Depth::Top(_) => rows.iter().map(Vec::len).max().unwrap_or(0),
+            Depth::Held => 0,
+        };
+        let widest = (0..columns)
+            .map(|column| {
+                (0..rows.len())
+                    .filter_map(|row| Some((row, width(rows[row].get(column)?))))
+                    .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                    .map(|(row, _)| row)
             })
-            .collect::<Vec<_>>()
-            .join("&")
+            .collect::<Vec<_>>();
+        rows.iter()
+            .enumerate()
+            .map(|(index, row)| {
+                row.iter()
+                    .enumerate()
+                    .map(|(column, entry)| {
+                        let leads = column > 0 && widest.get(column) == Some(&Some(index));
+                        format!("{}{}", depth.mark(leads), self.tex(entry))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("&")
+            })
+            .collect()
     }
 
     /// A diagram inside other maths, as TeX can set it: its pieces in an array, an
@@ -157,9 +212,12 @@ impl Writer<'_> {
             .map(|row| row.join(" & "))
             .collect::<Vec<_>>()
             .join(r" \\ ");
-        format!(
-            r"\begin{{array}}{{{}}}{body}\end{{array}}",
-            "c".repeat(columns)
+        Self::spaced(
+            self.matrix_rows,
+            format!(
+                r"\begin{{array}}{{{}}}{body}\end{{array}}",
+                "c".repeat(columns)
+            ),
         )
     }
 
@@ -256,20 +314,18 @@ impl Writer<'_> {
                 tex, kind, color, ..
             } => self.paint(tex.clone(), color.unwrap_or(*kind)),
             Math::Space => r"\,".into(),
-            Math::Row(parts) if depth == Depth::Top => parts
+            Math::Row(parts) => parts
                 .iter()
                 .enumerate()
                 .map(|(index, part)| {
-                    let mark = |breaks: bool| if breaks { BREAK_MARK } else { "" };
                     format!(
                         "{}{}{}",
-                        mark(index > 0 && part.is_binary()),
-                        self.tex_at(part, Depth::of_part(part)),
-                        mark(part.is_separator())
+                        depth.mark(index > 0 && part.is_binary()),
+                        self.tex_at(part, depth.of_part(part)),
+                        depth.mark(part.is_separator())
                     )
                 })
                 .collect(),
-            Math::Row(parts) => parts.iter().map(recurse).collect(),
             // Both scripts of an indexed base sit on its nucleus, stacked as in `x_2^2`:
             // a braced `{x_2}` would be one finished box, its exponent set after the index.
             Math::Power { base, exponent } => match base.as_ref() {
@@ -295,24 +351,17 @@ impl Writer<'_> {
                 ),
                 HLGroup::FractionRule,
             ),
-            Math::Delimited { left, right, body } => {
-                let fence = |c: &char| match c {
-                    '{' => r"\{".to_string(),
-                    '}' => r"\}".to_string(),
-                    '⟨' => r"\langle".to_string(),
-                    '⟩' => r"\rangle".to_string(),
-                    _ => c.to_string(),
-                };
-                self.paint(
-                    format!(
-                        r"\left{}{}\right{}",
-                        fence(left),
-                        self.tex_at(body, depth),
-                        fence(right)
-                    ),
-                    HLGroup::Punctuation,
-                )
-            }
+            // Lines between fences stand off them by the space an array keeps by
+            // its sides, not by the margins a terminal sets them between.
+            Math::Delimited { left, right, body } => self.paint(
+                format!(
+                    r"\left{}{}\right{}",
+                    delimiter(*left),
+                    self.tex_at(body.lines_alone().unwrap_or(body), depth),
+                    delimiter(*right)
+                ),
+                HLGroup::Punctuation,
+            ),
             Math::AnnotatedMatrix { rows, degrees } => {
                 let label_rows = rows
                     .iter()
@@ -326,49 +375,89 @@ impl Writer<'_> {
                     })
                     .collect::<Vec<_>>()
                     .join(r"\\");
-                let entries = rows
-                    .iter()
+                let entries = self
+                    .grid_rows(rows, depth)
+                    .into_iter()
                     .enumerate()
                     .map(|(index, row)| {
                         let phantom = degrees.get(index).map(recurse).unwrap_or_default();
-                        format!(r"\vphantom{{{phantom}}}{}", self.grid_row(row, true))
+                        format!(r"\vphantom{{{phantom}}}{row}")
                     })
                     .collect::<Vec<_>>()
                     .join(r"\\");
                 self.paint(
-                    format!(
+                    Self::spaced(self.matrix_rows, format!(
                         r"\begin{{array}}{{l}}{label_rows}\end{{array}}\left(\begin{{matrix}}{entries}\end{{matrix}}\right)"
-                    ),
+                    )),
                     HLGroup::Punctuation)
             }
             Math::Grid { rows, kind } => {
-                let breaks = matches!(kind, maths::GridKind::Matrix | maths::GridKind::Bare);
-                let body = rows
-                    .iter()
-                    .map(|row| self.grid_row(row, breaks))
-                    .collect::<Vec<_>>()
-                    .join(r"\\");
-                if matches!(
-                    kind,
-                    maths::GridKind::LeftAligned | maths::GridKind::Aligned
-                ) {
+                // Columns break apart; rows read as lines are held whole here,
+                // where they are part of a row of ink and not rows of their own.
+                let depth = match kind {
+                    GridKind::Matrix | GridKind::Bare => depth,
+                    GridKind::LeftAligned | GridKind::Aligned | GridKind::Cases => Depth::Held,
+                };
+                let body = self.grid_rows(rows, depth).join(r"\\");
+                if kind.reads_in_lines() {
                     let columns = "l".repeat(rows.iter().map(Vec::len).max().unwrap_or(0));
                     return self.paint(
-                        format!(r"\begin{{array}}{{{columns}}}{body}\end{{array}}"),
+                        Self::spaced(
+                            PERCENT_PER_ARRAYSTRETCH,
+                            format!(r"\begin{{array}}{{{columns}}}{body}\end{{array}}"),
+                        ),
                         HLGroup::Punctuation,
                     );
                 }
-                let environment = match kind {
-                    maths::GridKind::Matrix => "pmatrix",
-                    maths::GridKind::Cases => "cases",
-                    maths::GridKind::Bare => "matrix",
-                    maths::GridKind::LeftAligned | maths::GridKind::Aligned => unreachable!(),
+                let (environment, rows) = match kind {
+                    GridKind::Matrix => ("pmatrix", self.matrix_rows),
+                    GridKind::Bare => ("matrix", self.matrix_rows),
+                    GridKind::Cases => ("cases", PERCENT_PER_ARRAYSTRETCH),
+                    GridKind::LeftAligned | GridKind::Aligned => unreachable!(),
                 };
                 self.paint(
-                    format!(r"\begin{{{environment}}}{body}\end{{{environment}}}"),
+                    Self::spaced(
+                        rows,
+                        format!(r"\begin{{{environment}}}{body}\end{{{environment}}}"),
+                    ),
                     HLGroup::Punctuation,
                 )
             }
+        }
+    }
+}
+
+/// What writes a value's picture: its TeX as it is laid out, uncoloured, so no
+/// colour scope moves a glyph, and the same TeX painted.
+#[derive(Clone, Copy)]
+struct Setting<'a> {
+    plain: Writer<'a>,
+    painted: Writer<'a>,
+}
+
+impl Setting<'_> {
+    /// What `math` is set from: rows read as lines, each breaking on its own,
+    /// where they are all there is of it or of what fences hold; anything else
+    /// one row of ink.
+    fn source(&self, math: &Math) -> Source {
+        match math.alone() {
+            Math::Grid { rows, kind } if kind.reads_in_lines() => Source::Rows(
+                rows.iter()
+                    .map(|row| row.iter().map(|cell| self.source(cell)).collect())
+                    .collect(),
+            ),
+            Math::Delimited { left, right, body } if body.lines_alone().is_some() => {
+                Source::Fenced {
+                    left: *left,
+                    right: *right,
+                    ink: self.painted.ink(HLGroup::Punctuation),
+                    body: Box::new(self.source(body)),
+                }
+            }
+            _ => Source::Formula {
+                tex: self.plain.formula(math),
+                painted: self.painted.formula(math),
+            },
         }
     }
 }
@@ -391,27 +480,20 @@ fn draw(
         let writer = |groups| Writer {
             groups: Some(groups),
             arrows: style.arrows,
+            matrix_rows: style.matrix_row_spacing_percent,
         };
-        let source = writer(&layout_groups).formula(&math);
-        let painted = if style.ink == MathInk::Monochrome {
-            source.clone()
-        } else {
-            writer(groups).formula(&math)
+        let plain = writer(&layout_groups);
+        let painted = match style.ink {
+            MathInk::Monochrome => plain,
+            _ => writer(groups),
         };
+        let source = Setting { plain, painted }.source(&math);
         if let Some(Color::Rgb(r, g, b)) = groups.style(HLGroup::Value).fg {
             if let Some(Pictured { lines, baseline }) = picture(
                 Typesetting {
-                    tex: &source,
-                    painted: &painted,
+                    source: &source,
                     code,
-                    matrix_row_spacing_percent: style.matrix_row_spacing_percent,
                     scale_percent: style.scale_percent,
-                    // A diagram alone breaks between its columns; rows read as
-                    // lines cannot be cut through.
-                    slicing: match math.reads_in_lines() && !matches!(math, Math::Diagram(_)) {
-                        true => Slicing::Whole,
-                        false => Slicing::AtBreaks,
-                    },
                 },
                 Rgb([r, g, b]),
                 u16::try_from(width).unwrap_or(u16::MAX),

@@ -38,6 +38,9 @@ enum BorderPlacement {
     MiddleThird {
         content: u16,
     },
+    /// No border at all: the content spans the width, but for [`UI::OPEN_MARGIN`]
+    /// on either side, as a page set in a view of its own does.
+    Open,
 }
 
 /// Where a block is drawn and with which settings: the view it shows in, the
@@ -272,6 +275,14 @@ impl FrameLayout {
         }
     }
 
+    pub const fn open() -> Self {
+        Self {
+            prefix: 0,
+            inset: 0,
+            placement: BorderPlacement::Open,
+        }
+    }
+
     /// Width reserved before bordered content.
     pub const fn prefix(self) -> u16 {
         self.prefix
@@ -294,22 +305,27 @@ pub struct Bordered {
 
 impl Bordered {
     pub fn area(area: Rect, layout: FrameLayout) -> Rect {
-        if let BorderPlacement::MiddleThird { content } = layout.placement {
-            let left = area.width / 3;
-            let third = (area.width.saturating_mul(2) / 3 - left + 1).min(area.width - left);
-            let chrome = third.saturating_sub(Self::content_width(third, layout));
-            let width = third.max(content.saturating_add(chrome)).min(area.width);
-            let start = match width > third {
-                true => (area.width - width) / 2,
-                false => left,
-            };
-            return Rect::new(area.x + start, area.y, width, area.height);
+        match layout.placement {
+            BorderPlacement::MiddleThird { content } => {
+                let left = area.width / 3;
+                let third = (area.width.saturating_mul(2) / 3 - left + 1).min(area.width - left);
+                let chrome = third.saturating_sub(Self::content_width(third, layout));
+                let width = third.max(content.saturating_add(chrome)).min(area.width);
+                let start = match width > third {
+                    true => (area.width - width) / 2,
+                    false => left,
+                };
+                Rect::new(area.x + start, area.y, width, area.height)
+            }
+            BorderPlacement::Open => area,
+            BorderPlacement::Gutter => {
+                let width = area
+                    .width
+                    .saturating_sub(layout.inset + UI::RIGHT_MARGIN)
+                    .max(UI::MIN_BOX_WIDTH);
+                Rect::new(area.x + layout.inset, area.y, width, area.height)
+            }
         }
-        let width = area
-            .width
-            .saturating_sub(layout.inset + UI::RIGHT_MARGIN)
-            .max(UI::MIN_BOX_WIDTH);
-        Rect::new(area.x + layout.inset, area.y, width, area.height)
     }
 
     pub fn inner(area: Rect, layout: FrameLayout) -> Rect {
@@ -317,13 +333,22 @@ impl Bordered {
     }
 
     /// The border and padding drawn around content, without a title or colours.
+    /// An open frame keeps the rows a border would take, so it is as tall.
     fn frame(layout: FrameLayout) -> TuiBlock<'static> {
-        TuiBlock::bordered().padding(Padding::new(
-            layout.prefix.saturating_sub(layout.inset + 1),
-            1,
-            0,
-            0,
-        ))
+        match layout.placement {
+            BorderPlacement::Open => TuiBlock::new().padding(Padding::new(
+                UI::OPEN_MARGIN,
+                UI::OPEN_MARGIN,
+                1,
+                1,
+            )),
+            _ => TuiBlock::bordered().padding(Padding::new(
+                layout.prefix.saturating_sub(layout.inset + 1),
+                1,
+                0,
+                0,
+            )),
+        }
     }
 
     /// Columns left for content inside a frame `width` wide.
@@ -338,7 +363,8 @@ impl Bordered {
     /// Whether `position` lies on the frame's border line itself.
     pub fn on_border(area: Rect, layout: FrameLayout, position: Position) -> bool {
         let frame = Self::area(area, layout);
-        frame.contains(position)
+        !matches!(layout.placement, BorderPlacement::Open)
+            && frame.contains(position)
             && (position.x == frame.x
                 || position.x == frame.right() - 1
                 || position.y == frame.y

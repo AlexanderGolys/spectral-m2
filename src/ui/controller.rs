@@ -47,6 +47,7 @@ use super::{
     action::{Action, Opening},
     block::{Block, Element, HLSpan, Link, Reformatted, Rethemed, TextSpan, Ticked},
 };
+use crate::backend::installed::{ImportSuggestion, InstalledSymbols};
 use crate::code::file::abbreviate_home;
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::query::Finding;
@@ -122,6 +123,8 @@ pub enum Reaction {
     Lookup(Lookup, CodePoint),
     /// Have the language server format this input.
     Format(String),
+    /// Load the installed package named.
+    Import(String),
 }
 
 /// What is asked about a name in code.
@@ -184,6 +187,8 @@ pub enum EditorUpdate {
     Welcome(String),
     /// Every name a freshly started M2 knows, replacing those of any before it.
     KnownNames(Vec<String>),
+    /// The symbols installed packages document, read once per run.
+    InstalledSymbols(InstalledSymbols),
     /// Names the session bound since M2 last reported.
     BoundNames(Vec<String>),
     /// What the language server read in the session: the names its source binds,
@@ -316,6 +321,10 @@ pub struct Editor {
     spinner_turns: u64,
     /// The names M2 knows, which the input completes.
     names: Names,
+    /// The symbols installed packages document, once read.
+    installed: InstalledSymbols,
+    /// The message of the latest cell, when it failed.
+    last_error: Option<String>,
     pickers: Vec<PickerController>,
     /// Where the picker on top was drawn last, for clicks on its tabs.
     picker_area: Rect,
@@ -404,17 +413,19 @@ impl Editor {
             control_held: false,
             caret: None,
             caret_area: None,
+            installed: InstalledSymbols::default(),
+            last_error: None,
         };
         editor.refresh_status_line();
         editor
     }
 
-    /// Record the version reported by the session interpreter.
     /// Name the M2 process whose memory the debug component reports.
     pub fn set_m2_process(&mut self, process: u32) {
         self.status_runtime.m2_process = Some(process);
     }
 
+    /// Record the version reported by the session interpreter.
     pub fn set_m2_version(&mut self, version: String) {
         self.status_runtime.m2_version = Some(version);
     }
@@ -672,6 +683,10 @@ impl Editor {
                 self.names.analyse(names);
                 self.input.forget_completion();
             }
+            EditorUpdate::InstalledSymbols(installed) => {
+                self.installed = installed;
+                self.suggest_import();
+            }
             EditorUpdate::InputFindings(findings) => self.input.set_findings(findings),
             EditorUpdate::Float(floating) => self.floating = Some(floating),
             EditorUpdate::InputCursor(offset) => self.input.field_mut().place_cursor(offset),
@@ -717,6 +732,7 @@ impl Editor {
                 value,
             } => {
                 self.input.clear_diagnostic();
+                self.last_error = None;
                 let names = &mut self.names;
                 self.feed.update_evaluation(id, |evaluation| {
                     if let Some(source) = evaluation.source(index) {
@@ -735,9 +751,11 @@ impl Editor {
                 message,
             } => {
                 self.input.clear_diagnostic();
+                self.last_error = Some(message.clone());
                 self.feed.update_evaluation(id, |evaluation| {
                     evaluation.fail(index, number, outputs, printed, message)
                 });
+                self.suggest_import();
             }
         }
         self.refresh_status_line();
@@ -1012,6 +1030,14 @@ impl Editor {
                 return Reaction::Follow(link.target.to_string(), opening);
             }
         }
+        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
+            && self
+                .view_feed(view)
+                .is_some_and(|feed| feed.cycle_renderer(pointer))
+        {
+            self.screen_selection = None;
+            return Reaction::Continue;
+        }
         let clicks = self.clicks(event);
         if clicks >= 2
             && self
@@ -1266,6 +1292,7 @@ impl Editor {
             | Action::SaveSelection
             | Action::SaveSession
             | Action::LoadCode
+            | Action::ImportPackage
             | Action::ResumeSession => {
                 unreachable!("focus-independent actions perform before input handling")
             }
@@ -1330,6 +1357,24 @@ impl Editor {
                 Reaction::Continue
             }
             Action::LoadCode => self.leave_pickers(Reaction::Load(argument.to_string())),
+            Action::ImportPackage => {
+                let package = match argument {
+                    "" => self
+                        .import_suggestion()
+                        .map(|suggestion| suggestion.package().to_string()),
+                    named => Some(named.to_string()),
+                };
+                match package {
+                    Some(package) => self.leave_pickers(Reaction::Import(package)),
+                    None => {
+                        self.input.set_diagnostic(
+                            "the last error found no name an installed package documents".into(),
+                            None,
+                        );
+                        Reaction::Continue
+                    }
+                }
+            }
             Action::ResumeSession => self.leave_pickers(Reaction::Resume),
             Action::RunViewedFile
             | Action::CancelExecution
@@ -1351,6 +1396,33 @@ impl Editor {
             | Action::FormatInput
             | Action::CopySelection => return None,
         })
+    }
+
+    /// What to load for a name the latest cell failed on, once the installed
+    /// symbols are read.
+    fn import_suggestion(&self) -> Option<ImportSuggestion> {
+        self.installed.suggestion(self.last_error.as_deref()?)
+    }
+
+    /// Say above the input what loads a name the latest cell failed on, and the
+    /// key that loads it.
+    fn suggest_import(&mut self) {
+        let Some(suggestion) = self.import_suggestion() else {
+            return;
+        };
+        let import = commands::triggering(Action::ImportPackage)
+            .expect("importing has a command")
+            .literal();
+        let key = self.keymaps.key_for(Action::ImportPackage);
+        let mut hint = format!(
+            "{suggestion}: {} loads {}",
+            key.as_deref().unwrap_or(&import),
+            suggestion.package()
+        );
+        if suggestion.packages.len() > 1 {
+            hint.push_str(&format!(", {import} <package> another"));
+        }
+        self.input.suggest(hint);
     }
 
     /// Close the pickers before `reaction` takes effect outside them.
@@ -1485,6 +1557,7 @@ impl Editor {
                     pending: self.feed.incomplete_source(),
                     picked: self.picked_command(),
                     names: &self.names,
+                    installed: &self.installed,
                     complete_after: usize::from(self.settings.editor.complete_after),
                     sort: self.settings.editor.completion_sort,
                 })

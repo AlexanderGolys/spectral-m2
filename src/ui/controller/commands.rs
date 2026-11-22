@@ -27,6 +27,7 @@ pub const PREFIX: &str = "/";
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Operand {
     File = "file",
+    Package = "package",
 }
 
 /// What a command reads after its name.
@@ -157,7 +158,7 @@ impl PickerItem for CommandItem {
 }
 
 /// Every command, in the order the picker lists them.
-const COMMANDS: [Command; 14] = [
+const COMMANDS: [Command; 15] = [
     Command::new("settings", Action::OpenSettings),
     Command::new("keymaps", Action::OpenKeymaps),
     Command::new("clear", Action::ClearFeed),
@@ -180,6 +181,11 @@ const COMMANDS: [Command; 14] = [
         Action::SaveSelection,
         Argument::Optional(Operand::File),
     ),
+    Command::taking(
+        "import",
+        Action::ImportPackage,
+        Argument::Optional(Operand::Package),
+    ),
 ];
 
 /// The commands whose label or one of its words starts with `query`, ignoring
@@ -191,6 +197,13 @@ pub fn matching(query: &str) -> Vec<Command> {
         .copied()
         .filter(|command| command.matches(&query))
         .collect()
+}
+
+/// The command triggering `action`, if one does.
+pub fn triggering(action: Action) -> Option<Command> {
+    COMMANDS
+        .into_iter()
+        .find(|command| command.action == action)
 }
 
 /// The command `input` names in full, prefix included, as a submitted command

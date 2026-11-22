@@ -1,5 +1,6 @@
 //! Macaulay2 process management, protocol types, and transcript decoding.
 
+pub mod installed;
 pub mod preview;
 pub mod rod;
 pub mod transcript;

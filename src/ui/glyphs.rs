@@ -148,6 +148,9 @@ pub enum Glyphs {
     StepBack = Glyph::new("‹", "<").nerd("\u{f438}"),
     StepForward = Glyph::new("›", ">").nerd("\u{f44a}"),
     PickerRule = Glyph::new("─", "-"),
+    /// The rule under the side panel's header, and where it meets the panel's side.
+    PanelRule = Glyph::new("─", "-"),
+    PanelRuleJoint = Glyph::new("├", "+"),
     HeadingRule = Glyph::new("─", "="),
     StackedCellRule = Glyph::new("┄", "-"),
     TabDocumentation = Glyph::plain("d").nerd("󰗚"),

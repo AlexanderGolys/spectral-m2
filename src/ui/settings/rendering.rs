@@ -89,6 +89,9 @@ pub struct RenderingSettings {
     /// Whether the maps of a complex or a diagram are labelled by their matrices
     /// rather than their names.
     pub matrix_labels: bool,
+    /// Whether a module presented by matrices, a cokernel or a subquotient, is
+    /// drawn by its presentation rather than its name, `C_i` or `M`.
+    pub module_presentations: bool,
     /// How long the arrows of typeset complexes and diagrams are drawn.
     pub arrows: ArrowLengths,
 }
@@ -109,6 +112,7 @@ impl Default for RenderingSettings {
             matrix_row_spacing_percent: UI::MATRIX_ROW_SPACING_PERCENT,
             matrix_degrees: false,
             matrix_labels: false,
+            module_presentations: false,
             arrows: ArrowLengths::default(),
         }
     }
@@ -153,6 +157,7 @@ cyclic! {
         MatrixRowSpacing = "matrix row spacing",
         MatrixDegrees = "matrix degrees",
         MatrixLabels = "matrix labels",
+        ModulePresentations = "module presentations",
         ArrowLength = "arrow length",
         ArrowHeight = "arrow height",
     }
@@ -199,6 +204,7 @@ impl SettingRow for RenderingSetting {
             }
             Self::MatrixDegrees => "show the degrees of a matrix's rows beside them, greyed out",
             Self::MatrixLabels => "label the maps of complexes and diagrams by their matrices rather than their names, dd_i or f_i",
+            Self::ModulePresentations => "draw a cokernel or a subquotient by the matrices presenting it rather than its name, C_i or M; a free module is drawn as it is either way",
             Self::ArrowLength => "how long the arrows along a row of a typeset complex or diagram run, relative to the shortest; never shorter than their labels",
             Self::ArrowHeight => "how far the arrows between the rows of a typeset diagram run down, relative to the shortest; never shorter than their labels",
         }
@@ -237,6 +243,7 @@ impl SettingRow for RenderingSetting {
             }
             Self::MatrixDegrees => switch(rendering.matrix_degrees, "on"),
             Self::MatrixLabels => switch(rendering.matrix_labels, "on"),
+            Self::ModulePresentations => switch(rendering.module_presentations, "on"),
             Self::ArrowLength => {
                 PickerValue::Stepped(format!("{}%", rendering.arrows.across_percent))
             }
@@ -286,6 +293,9 @@ impl SettingRow for RenderingSetting {
             }
             Self::MatrixDegrees => rendering.matrix_degrees = !rendering.matrix_degrees,
             Self::MatrixLabels => rendering.matrix_labels = !rendering.matrix_labels,
+            Self::ModulePresentations => {
+                rendering.module_presentations = !rendering.module_presentations
+            }
             Self::ArrowLength => {
                 rendering.arrows.across_percent = arrow(rendering.arrows.across_percent)
             }

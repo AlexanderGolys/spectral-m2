@@ -128,6 +128,10 @@ pub enum Shape {
     /// How a map is labelled, `(matrix, name)`: by its matrix, or by its name such
     /// as `dd_1` or `f_2`, whichever the *matrix labels* setting shows.
     MapLabel(Box<Shape>, Box<Shape>),
+    /// How a module presented by matrices is drawn, `(presentation, name)`: as
+    /// `cokernel (…)`, or by its name such as `C_1` or `M`, whichever the
+    /// *module presentations* setting shows.
+    ModuleLabel(Box<Shape>, Box<Shape>),
 }
 
 /// A documentation page, laid out apart from any drawing: its HTML, the width
@@ -185,7 +189,8 @@ impl Shape {
             | Self::Superscript(first, second)
             | Self::UnderExpression(first, second)
             | Self::OverExpression(first, second)
-            | Self::MapLabel(first, second) => vec![&**first, &**second],
+            | Self::MapLabel(first, second)
+            | Self::ModuleLabel(first, second) => vec![&**first, &**second],
             Self::MatrixExpression { rows, degrees } => rows
                 .iter()
                 .flatten()

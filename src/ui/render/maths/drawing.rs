@@ -20,11 +20,12 @@ const LIST_SEPARATOR: &str = ", ";
 const ANGLE_BAR: &str = "|";
 /// The signs a drawing sets, each with its spelling in M2's own syntax, which a
 /// layout in ASCII shows instead.
-const ASCII_SPELLINGS: [(&str, &str); 4] = [
+const ASCII_SPELLINGS: [(&str, &str); 5] = [
     ("⟵", "<--"),
     (PRODUCT_SIGN, "*"),
     (TENSOR_SIGN, "**"),
     (DIRECT_SUM_SIGN, "++"),
+    ("∞", "infinity"),
 ];
 
 /// How a drawing is read into maths.
@@ -163,6 +164,12 @@ impl<'a> Reading<'a> {
                 true => part(matrix),
                 false => part(name),
             },
+            (Shape::ModuleLabel(presentation, name), _) => {
+                match self.style.module_presentations {
+                    true => part(presentation),
+                    false => part(name),
+                }
+            }
             (Shape::TreeExpression(branches), _) => Math::Grid {
                 rows: branches
                     .iter()
@@ -235,7 +242,7 @@ fn ascii(math: Math) -> Math {
     match math {
         Math::Atom { text, kind, color } => Math::atom(
             match kind {
-                HLGroup::Operator | HLGroup::MapArrow => ASCII_SPELLINGS
+                HLGroup::Operator | HLGroup::MapArrow | HLGroup::Number => ASCII_SPELLINGS
                     .iter()
                     .find(|(sign, _)| *sign == text)
                     .map_or(text, |(_, spelling)| (*spelling).into()),

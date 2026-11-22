@@ -588,7 +588,8 @@ pub struct InputCode {
     /// moves it no longer applies.
     completed_for: Option<(u64, usize)>,
     settings: Settings,
-    diagnostic: Option<String>,
+    /// The shell's own message above the code, and how serious it is.
+    diagnostic: Option<(String, Severity)>,
     diagnostic_range: Option<Range<usize>>,
     /// What the language server found in the input as it last saw it.
     findings: Vec<Finding>,
@@ -695,13 +696,18 @@ impl InputCode {
     pub fn accept_submission(&mut self) {
         self.field.accept_submission();
         self.hint = Hint::default();
-        self.diagnostic = None;
-        self.diagnostic_range = None;
+        self.clear_diagnostic();
     }
 
     pub fn set_diagnostic(&mut self, diagnostic: String, range: Option<Range<usize>>) {
-        self.diagnostic = Some(diagnostic);
+        self.diagnostic = Some((diagnostic, Severity::Error));
         self.diagnostic_range = range;
+    }
+
+    /// Say `hint` above the code until the next edit, as no error.
+    pub fn suggest(&mut self, hint: String) {
+        self.diagnostic = Some((hint, Severity::Hint));
+        self.diagnostic_range = None;
     }
 
     pub fn set_findings(&mut self, findings: Vec<Finding>) {
@@ -732,7 +738,7 @@ impl InputCode {
     /// server found under the cursor, else its first error.
     fn shown_diagnostic(&self) -> Option<(String, Severity)> {
         if let Some(diagnostic) = &self.diagnostic {
-            return Some((diagnostic.clone(), Severity::Error));
+            return Some(diagnostic.clone());
         }
         let cursor = self.field.cursor();
         let mut findings = self.current_findings();

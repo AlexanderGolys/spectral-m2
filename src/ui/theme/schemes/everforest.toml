@@ -120,7 +120,7 @@ light = "#dfa000"
 
 [groups]
 Accent = { fg = "aqua" }
-Attribute = { fg = "purple" }
+Attribute = { fg = "orange" }
 Bg0 = { bg = "bg0" }
 Bg1 = { bg = "bg_dim" }
 Bg2 = { bg = "bg1" }

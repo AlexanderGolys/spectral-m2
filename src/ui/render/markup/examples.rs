@@ -5,8 +5,10 @@ use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::iter;
+use std::mem::take;
+use std::ops::Range;
 use std::rc::Rc;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, PoisonError, RwLock, RwLockWriteGuard};
 
 use m2_syn::native::parse_native;
 use ratatui::buffer::Buffer;
@@ -45,8 +47,14 @@ thread_local! {
     /// What a page's analysis found in its code, by page and source.
     static TYPES: RefCell<HashMap<u64, HashSet<String>>> = RefCell::default();
     static MODES: RefCell<ExampleFormatters> = RefCell::default();
-    static COLORS: RefCell<HashMap<u64, HashMap<String, Vec<HLSpan>>>> = RefCell::default();
 }
+
+/// What each page's analysis coloured in its code, by page and source.
+type PageCodeColors = HashMap<u64, HashMap<String, Vec<HLSpan>>>;
+
+/// Shared by every thread, since values are laid out apart from the one that
+/// learns their colours.
+static COLORS: LazyLock<RwLock<PageCodeColors>> = LazyLock::new(RwLock::default);
 
 pub fn remember_types(page: u64, types: &[String]) -> bool {
     TYPES.with_borrow_mut(|known| {
@@ -60,25 +68,26 @@ pub fn remember_types(page: u64, types: &[String]) -> bool {
 }
 
 pub fn remember_colors(colors: PageColors) {
-    COLORS.with_borrow_mut(|known| {
-        known.insert(colors.page, colors.sources.into_iter().collect());
-    });
+    colors_mut().insert(colors.page, colors.sources.into_iter().collect());
 }
 
 pub fn forget_colors() {
-    COLORS.with_borrow_mut(HashMap::clear);
+    colors_mut().clear();
+}
+
+fn colors_mut() -> RwLockWriteGuard<'static, PageCodeColors> {
+    COLORS.write().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// `source` of `page` in its syntax colours, under what analysis found in it.
 pub fn highlighted(page: u64, source: &str) -> Vec<HLSpan> {
     let lexical = CODE.with_borrow_mut(|highlighter| highlighter.highlight(source));
-    let marked =
-        COLORS.with_borrow(
-            |known| match known.get(&page).and_then(|code| code.get(source)) {
-                Some(semantic) => merge(lexical.clone(), semantic),
-                None => lexical.clone(),
-            },
-        );
+    let known = COLORS.read().unwrap_or_else(PoisonError::into_inner);
+    let marked = match known.get(&page).and_then(|code| code.get(source)) {
+        Some(semantic) => merge(lexical.clone(), semantic),
+        None => lexical.clone(),
+    };
+    drop(known);
     let types = TYPES.with_borrow(|known| {
         let Some(types) = known.get(&page) else {
             return Vec::new();
@@ -453,12 +462,18 @@ pub(super) struct Painted {
 }
 
 impl Painted {
-    /// Drop the bottom row, a margin no link reaches into.
-    fn trim_last_row(&mut self) {
-        if self.lines.pop().is_some() {
-            let rows = u16::try_from(self.lines.len()).unwrap_or(u16::MAX);
-            self.inclusions = self.inclusions.project(0..rows);
-        }
+    /// Keep only `rows`, the first of them becoming row zero.
+    fn keep_rows(&mut self, rows: Range<u16>) {
+        let shift = Offset::new(0, -i32::from(rows.start));
+        self.lines = self
+            .lines
+            .drain(usize::from(rows.start)..usize::from(rows.end))
+            .collect();
+        self.inclusions = self.inclusions.project(rows);
+        self.links = take(&mut self.links)
+            .into_iter()
+            .map(|link| link.moved(shift))
+            .collect();
     }
 }
 
@@ -485,6 +500,7 @@ pub fn render(
     };
     let examples = transcript(source, example_width)?;
     let count = examples.len();
+    let mut after_code_only = false;
     for (index, example) in examples.into_iter().enumerate() {
         let number = example.number;
         let mut block = match computed(page, example.number) {
@@ -495,18 +511,27 @@ pub fn render(
             MODES.with_borrow_mut(|modes| modes.entry((page, number)).or_default().clone());
         block.share_formatter(choice);
         let mut next = painted(&block, context);
-        // An example with nothing to show keeps its code's bottom margin only
-        // when it ends the transcript: the next example's code opens with its
-        // own margin, and the two together would read as an empty line.
-        if index + 1 < count && block.outputs().next().is_none() {
-            next.trim_last_row();
-        }
+        // Code with nothing shown under it runs straight on into the next
+        // example's code, without the margins that would part them.
+        let code_only = block.outputs().next().is_none();
+        let top_margin = u16::from(after_code_only);
+        let bottom_margin = u16::from(code_only && index + 1 < count);
+        let height = next.lines.len() as u16;
+        next.keep_rows(top_margin..height - bottom_margin);
+        after_code_only = code_only;
         let top = i32::try_from(rendered.lines.len()).unwrap_or(i32::MAX);
         rendered
             .inclusions
             .merge(next.inclusions + Offset::new(0, top));
+        // The control still spans its block's dropped top row, so a position
+        // in it is local to the whole block.
         rendered.controls.push(EmbeddedControl {
-            area: Rect::new(0, top as u16, context.width(), next.lines.len() as u16),
+            area: Rect::new(
+                0,
+                top as u16 - top_margin,
+                context.width(),
+                next.lines.len() as u16 + top_margin,
+            ),
             block: Rc::new(RefCell::new(block)),
             context: context.with_inline_layout(),
         });

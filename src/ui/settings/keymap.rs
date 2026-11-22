@@ -517,6 +517,7 @@ impl Default for Keymaps {
                 keymap!(alias A::GoToDefinition => Char('5') + Ctrl),
                 keymap!(A::GoToDocumentation => Char('k') + Ctrl),
                 keymap!(A::FormatInput => Char('f') + Alt + Shift),
+                keymap!(A::ImportPackage => Char('i') + Alt),
                 keymap!(fixed A::Submit => Enter),
                 keymap!(fixed A::ScrollFeedUp => PageUp),
                 keymap!(fixed A::ScrollFeedDown => PageDown),

@@ -11,6 +11,7 @@ use ratex_types::color::Color;
 use ratex_types::display_item::{DisplayItem, DisplayList};
 use ratex_types::path_command::PathCommand;
 
+use super::layout::shift;
 use super::{set, Rgb, Unset};
 use crate::ui::config::UI;
 
@@ -32,7 +33,7 @@ const LABEL_CLEARANCE: f64 = 0.15;
 /// Ems kept beside a label set over an arrow along a row.
 const LABEL_SIDE: f64 = 0.4;
 /// Height of TeX's maths axis above the baseline, where arrows along a row run.
-const AXIS: f64 = 0.25;
+pub const AXIS: f64 = 0.25;
 /// Thickness of an arrow's shaft: TeX's default rule.
 const RULE: f64 = 0.04;
 /// Length of an arrowhead, and half its width, in ems.
@@ -268,20 +269,14 @@ impl Frame {
 
 /// The diagram `tex` describes, laid out with each piece set as `painted`
 /// paints it; `None` when `tex` describes no diagram.
-pub fn composed(
-    tex: &str,
-    painted: &str,
-    colour: Rgb,
-    matrix_row_spacing_percent: u16,
-) -> Option<Result<DisplayList, Unset>> {
+pub fn composed(tex: &str, painted: &str, colour: Rgb) -> Option<Result<DisplayList, Unset>> {
     let layout = Read::from(tex)?;
     let paint = Read::from(painted).unwrap_or_default();
-    Some(compose(&layout, &paint, colour, matrix_row_spacing_percent))
+    Some(compose(&layout, &paint, colour))
 }
 
-fn compose(layout: &Read, paint: &Read, colour: Rgb, spacing: u16) -> Result<DisplayList, Unset> {
-    let set_piece =
-        |tex: &str, painted: Option<&str>| set(tex, painted.unwrap_or(tex), colour, spacing);
+fn compose(layout: &Read, paint: &Read, colour: Rgb) -> Result<DisplayList, Unset> {
+    let set_piece = |tex: &str, painted: Option<&str>| set(tex, painted.unwrap_or(tex), colour);
     let small = |tex: &str| format!(r"{{\scriptsize {tex}}}");
     let pieces = layout
         .pieces
@@ -434,11 +429,14 @@ fn compose(layout: &Read, paint: &Read, colour: Rgb, spacing: u16) -> Result<Dis
     }
 
     let (width, height) = grid.size();
+    // As a TeX array does, the diagram stands centred on the maths axis, so
+    // what is set beside it lines up with its middle.
+    let above = height / 2.0 + AXIS;
     let mut diagram = DisplayList {
         items: Vec::new(),
         width,
-        height,
-        depth: 0.0,
+        height: above,
+        depth: height - above,
     };
     let routes = grid.routes(&sizes, &layout.arrows);
     for (place, list) in pieces {
@@ -486,10 +484,10 @@ fn compose(layout: &Read, paint: &Read, colour: Rgb, spacing: u16) -> Result<Dis
         let mut framed = DisplayList {
             items: Vec::new(),
             width: rightmost - leftmost,
-            height,
-            depth: 0.0,
+            height: above,
+            depth: height - above,
         };
-        place_list(&mut framed, diagram, -leftmost, height);
+        place_list(&mut framed, diagram, -leftmost, above);
         return Ok(framed);
     }
     Ok(diagram)
@@ -652,18 +650,10 @@ impl Grid {
 }
 
 /// Draw `list` into `diagram` with its left edge at `left` and baseline at `baseline`.
-fn place_list(diagram: &mut DisplayList, list: DisplayList, left: f64, baseline: f64) {
+pub fn place_list(diagram: &mut DisplayList, list: DisplayList, left: f64, baseline: f64) {
     let (dx, dy) = (left, baseline - list.height);
     diagram.items.extend(list.items.into_iter().map(|mut item| {
-        match &mut item {
-            DisplayItem::GlyphPath { x, y, .. }
-            | DisplayItem::Line { x, y, .. }
-            | DisplayItem::Rect { x, y, .. }
-            | DisplayItem::Path { x, y, .. } => {
-                *x += dx;
-                *y += dy;
-            }
-        }
+        shift(&mut item, dx, dy);
         item
     }));
 }

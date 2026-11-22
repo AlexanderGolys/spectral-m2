@@ -4,6 +4,32 @@ All notable changes to Spectral M2 are documented here.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-22
+
+### Added
+
+- A *module presentations* rendering setting: off, as it starts, a cokernel or subquotient in a complex or a map's type is drawn by its name, `C_1` for a term of `C` (`C` for a complex with no name) or `M`, instead of by the matrices presenting it; free modules are drawn as they are either way.
+- A value's `toExternalString` view is coloured by the language server too, as code is, so `QQ`, `Degrees` and `Heft` in a ring's spelling take their colours.
+- When a cell fails on a name M2 shows as a bare symbol, such as `tropicalVariety (of class Symbol)`, and an installed package documents that name, the message row above the input says which package: `Alt+I` loads it with `needsPackage`, and `/import <package>` loads the package named, completing package names. The packages are found from the documentation installed with them, without loading any.
+
+### Changed
+
+- The side panel opens from the screen's right edge: rounded corners on its left, no border on its right, its left side the divider the panes are resized by, and its header ruled off from the view, the title in bold.
+- Documentation beside the session runs from one column of its side to one of the screen's edge, instead of keeping the margins of a framed output.
+- A value takes the whole width of its output frame; its type stands beside the value's last rows only where they leave it room, and below the value otherwise, instead of keeping a column of its own all the way down.
+- A typeset vertical list, such as the degrees `{2 : {1,0}, 3 : {0,1}}` of a ring's description, keeps its entries as close as lines of text and its braces as close to them as an array's sides, instead of as far apart as a matrix's rows with a space more on each side. The *matrix row spacing* setting now spaces only matrices and diagrams, however deep inside other values they stand.
+- The Everforest scheme colours attributes orange instead of purple.
+- Spectral 1.1.0, installed in place of an older one as the shell starts: a module is drawn as `ModuleLabel{module, name}`, its presentation or its name, the shell choosing; a complex's terms and differentials and a map's components are labelled by their names.
+
+### Fixed
+
+- Code-only documentation examples one after another, such as a run of `assert` lines, read as one block of code instead of with an empty line between each.
+- A page's TeX reads more of what authors write instead of being left as TeX: `\operatorname{Hom}`, LaTeX's named operators such as `\deg h` and `\ker`, every Greek letter, `\xleftarrow{g}` and `\xrightarrow{g}`, amsmath's `\dotsb` and `\dotsc`, `\colon`, and `\phantom`, which is left out.
+- A documentation page whose examples stopped being computed short, as when the shell could not read an answer, computes them again the next time it is shown, instead of never for the rest of the session.
+- A documentation page beside the session no longer opens with the warnings M2 gave while assembling it, such as an ambiguous link.
+- The output mode icons of documentation examples in the side panel switch how the example's value is drawn when clicked, as they do in the session.
+- An indexed variable is set in maths italic, as `x_1` after `R = QQ[x_1..x_3]` and `y_2` with `y` unbound, inside a ring's description too, instead of in typewriter.
+
 ## [1.4.1] - 2026-11-21
 
 ### Added

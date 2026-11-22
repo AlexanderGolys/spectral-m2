@@ -13,6 +13,7 @@ use m2_syn::{lex_str_recovering, CommentKind, LexError, LexErrorKind, Spanned, T
 
 use self::usage::Usage;
 use super::commands::{self, Command, Operand};
+use crate::backend::installed::InstalledSymbols;
 use crate::code::file::{self, Entries};
 use crate::input::Completion;
 use crate::ui::settings::editor::CompletionSort;
@@ -209,6 +210,8 @@ pub struct Request<'a> {
     /// The command picked while its name is being typed.
     pub picked: Option<Command>,
     pub names: &'a Names,
+    /// The installed packages a command naming one completes from.
+    pub installed: &'a InstalledSymbols,
     /// Characters of a name or a string typed before it is completed.
     pub complete_after: usize,
     pub sort: CompletionSort,
@@ -222,6 +225,7 @@ pub fn complete(request: Request<'_>) -> Option<Completion> {
         pending,
         picked,
         names,
+        installed,
         complete_after,
         sort,
     } = request;
@@ -236,8 +240,12 @@ pub fn complete(request: Request<'_>) -> Option<Completion> {
         return Completion::new(text, 0..text.len(), candidates);
     }
     if text.starts_with(commands::PREFIX) {
-        let (Operand::File, range) = commands::operand(text).filter(|_| cursor == text.len())?;
-        let candidates = file::completions(&text[range.clone()], Entries::Code);
+        let (operand, range) = commands::operand(text).filter(|_| cursor == text.len())?;
+        let typed = &text[range.clone()];
+        let candidates = match operand {
+            Operand::File => file::completions(typed, Entries::Code),
+            Operand::Package => installed.packages_starting_with(typed),
+        };
         return Completion::new(text, range, candidates);
     }
     let pending = pending.map_or(String::new(), |pending| format!("{pending}\n"));

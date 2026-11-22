@@ -67,6 +67,9 @@ impl UI {
     /// growing a digit never moves a block.
     pub const MIN_NUMBER_DIGITS: u16 = 3;
     pub const RIGHT_MARGIN: u16 = 3;
+    /// Columns on either side of a page drawn without a frame, such as the
+    /// documentation beside the session.
+    pub const OPEN_MARGIN: u16 = 1;
     pub const MIN_BOX_WIDTH: u16 = 8;
     pub const MIN_INPUT_HEIGHT: u16 = 3;
 
@@ -124,9 +127,6 @@ impl UI {
     pub const PRINTED_MARGIN: u16 = 1;
     /// Columns kept between a value and the type set beside it.
     pub const TYPE_GAP: usize = 2;
-    /// The largest share of an output's width its type may keep beside the value,
-    /// gap included; a wider type goes below the value instead.
-    pub const MAX_TYPE_SHARE: f32 = 0.3;
 
     /// The first picker tab stop leaving at least a column gap after `width` cells.
     pub const fn picker_tab_stop(width: usize) -> usize {
@@ -138,9 +138,6 @@ impl UI {
 pub struct TypesetSizing;
 
 impl TypesetSizing {
-    /// A formula's em as a share of one cell's height, so its letters stand as tall
-    /// as the text around them.
-    pub const EM_PER_CELL_HEIGHT: f32 = 0.65;
     /// How far down its row the text baseline runs, as a share of the cell's height.
     /// A one-row formula is set on it, so neighbouring formulas share a baseline
     /// with the terminal text beside them rather than each centring its own ink.

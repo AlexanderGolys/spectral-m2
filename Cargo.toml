@@ -1,6 +1,6 @@
 [package]
 name = "spectral-m2"
-version = "1.4.1"
+version = "1.5.0"
 edition = "2021"
 description = "A syntax-aware terminal shell for Macaulay2"
 license = "MIT OR Apache-2.0"
@@ -13,6 +13,7 @@ include = [
     "src/**/*.rs",
     "src/backend/m2_startup.m2",
     "src/backend/m2_spectral_package.m2",
+    "src/backend/m2_installed_symbols.m2",
     "Spectral/Spectral.m2",
     "Spectral/Spectral/*.m2",
     "src/**/*.toml",

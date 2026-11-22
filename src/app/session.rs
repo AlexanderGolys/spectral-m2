@@ -15,7 +15,9 @@ use nix::unistd::Pid;
 use m2_syn::{NativeCellParser, NativeCellState, PrettyNode, PrettyTree};
 
 use super::examples::{ExamplePage, ExampleRunner};
-use crate::backend::{Announcement, DocPage, M2Backend, M2Response, Versions};
+use crate::backend::{
+    Announcement, DocPage, M2Backend, M2Response, PreviewMode, ValuePreview, Versions,
+};
 use crate::code::highlight::Highlighter;
 use crate::code::semantic::{Document, SourceId};
 use crate::errors::Error;
@@ -171,10 +173,31 @@ impl Session {
         mem::take(&mut self.pages_to_analyse)
     }
 
-    /// Prepare a page for the same example rendering and semantic analysis as session output.
-    pub fn prepare_documentation(&mut self, document: Option<&DocPage>) {
-        self.compute_examples(document);
-        self.analyse_page(document);
+    /// Prepare what a response shows for the same example rendering and semantic
+    /// analysis as session output: the page it documents and its code.
+    pub fn prepare_response(&mut self, response: &M2Response) {
+        self.compute_examples(response.document.as_ref());
+        self.analyse_response(response);
+    }
+
+    fn analyse_response(&mut self, response: &M2Response) {
+        self.analyse_page(response.document.as_ref());
+        self.analyse_external(response);
+    }
+
+    /// The value's `toExternalString`, code by M2's own account, analysed as a
+    /// page of its own. One cut for its length is never drawn as analysed.
+    fn analyse_external(&mut self, response: &M2Response) {
+        let external = response
+            .previews
+            .iter()
+            .find(|preview| preview.mode == PreviewMode::External);
+        if let Some(ValuePreview { text, .. }) = external {
+            let page = markup::external_page(text);
+            if self.analysed_pages.insert(page) {
+                self.pages_to_analyse.push((page, vec![text.clone()]));
+            }
+        }
     }
 
     fn analyse_page(&mut self, document: Option<&DocPage>) {
@@ -623,10 +646,14 @@ impl Session {
                 WorkerEvent::Restarted(result) => updates.push(self.resolve_restart(result)),
             }
         }
+        // A page stopped short is computed again the next time it is shown.
+        for page in self.examples.stopped() {
+            self.computed_pages.remove(&page);
+        }
         let computed = self.examples.answered();
         if !computed.is_empty() {
             for example in computed {
-                self.analyse_page(example.response.document.as_ref());
+                self.analyse_response(&example.response);
                 markup::remember_example(example.page, example.number, example.response);
             }
             updates.push(EditorUpdate::ExamplesComputed);
@@ -677,7 +704,7 @@ impl Session {
                 self.in_debugger = response.depth > 1;
                 self.next_input_number = number + 1;
                 let state = CellState::of(&response);
-                self.prepare_documentation(response.document.as_ref());
+                self.prepare_response(&response);
                 self.committed.push(CommittedCell {
                     source_id: SourceId::Cell {
                         generation: self.generation,

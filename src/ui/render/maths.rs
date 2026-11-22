@@ -104,6 +104,15 @@ pub enum GridKind {
     Cases,
 }
 
+impl GridKind {
+    /// Whether a grid of this kind holds rows read one after another, as lines
+    /// of text are, each breaking on its own: a vertical list's entries, a
+    /// table's keys beside their values. Any other is columns side by side.
+    pub fn reads_in_lines(self) -> bool {
+        matches!(self, Self::LeftAligned | Self::Aligned)
+    }
+}
+
 /// Why a TeX source could not be parsed.
 ///
 /// Carrying the reason rather than a bare `None` is what lets a fallback be reported
@@ -224,6 +233,9 @@ pub struct MathStyle {
     /// Whether a map in a complex or a diagram is labelled by its matrix rather
     /// than by its name.
     pub matrix_labels: bool,
+    /// Whether a module presented by matrices is drawn by its presentation
+    /// rather than by its name.
+    pub module_presentations: bool,
     /// How long the arrows of typeset complexes and diagrams are drawn.
     pub arrows: ArrowLengths,
 }
@@ -242,6 +254,7 @@ impl Default for MathStyle {
             matrix_row_spacing_percent: UI::MATRIX_ROW_SPACING_PERCENT,
             matrix_degrees: false,
             matrix_labels: false,
+            module_presentations: false,
             arrows: ArrowLengths::default(),
         }
     }
@@ -275,6 +288,7 @@ impl From<&RenderingSettings> for MathStyle {
             ),
             matrix_degrees: rendering.matrix_degrees,
             matrix_labels: rendering.matrix_labels,
+            module_presentations: rendering.module_presentations,
             arrows: rendering.arrows.clamped(),
             ..Self::default()
         }
@@ -353,14 +367,23 @@ fn hierarchy_rows(
                 };
                 // A hierarchy can be deeper than the terminal is wide. Clip only
                 // its indentation, leaving at least one column for the label.
-                let clipped = leading.chars().count().saturating_sub(width.saturating_sub(1));
+                let clipped = leading
+                    .chars()
+                    .count()
+                    .saturating_sub(width.saturating_sub(1));
                 let leading: String = leading.chars().skip(clipped).collect();
                 let mut row = vec![TextSpan::new(leading, HLGroup::Punctuation)];
                 row.extend(content);
                 rows.push(row);
             }
             if let Shape::TreeExpression(branches) = subtree {
-                append(branches, &format!("{prefix}{continuation}"), width, style, rows)?;
+                append(
+                    branches,
+                    &format!("{prefix}{continuation}"),
+                    width,
+                    style,
+                    rows,
+                )?;
             }
         }
         Ok(())
@@ -767,6 +790,25 @@ impl<'a> Input<'a> {
                 self.highlights.truncate(inferred);
                 Ok(body)
             }
+            // A named operator, `\operatorname{Hom}`: one word, not letters multiplied.
+            "operatorname" => {
+                let name = self.text_group()?;
+                Ok(self.named_operator(&name))
+            }
+            // Room left blank to line formulas up, which a row of text has no use for.
+            "phantom" => self.atom().map(|_| Math::Space),
+            // An arrow stretched under its label, which one row raises beside it.
+            arrow @ ("xleftarrow" | "xrightarrow") => Ok(Math::Power {
+                base: Box::new(Math::atom(
+                    match arrow {
+                        "xleftarrow" => "\u{27F5}",
+                        _ => "\u{27F6}",
+                    },
+                    HLGroup::Operator,
+                )),
+                exponent: Box::new(self.atom()?),
+            }),
+            "colon" => Ok(Math::atom(":", HLGroup::Punctuation)),
             text if TEXT_COMMANDS.contains(&text) => {
                 let words = Math::atom(self.text_group()?, HLGroup::Text);
                 Ok(match text {
@@ -802,9 +844,36 @@ impl<'a> Input<'a> {
                 .iter()
                 .find(|(command, _)| *command == other)
                 .map(|(_, glyph)| Math::atom(*glyph, HLGroup::Builtin))
+                .or_else(|| {
+                    GREEK
+                        .iter()
+                        .find(|(command, _)| *command == other)
+                        .map(|(_, letter)| Math::atom(*letter, HLGroup::Variable))
+                })
+                .or_else(|| {
+                    NAMED_OPERATORS
+                        .contains(&other)
+                        .then(|| self.named_operator(other))
+                })
                 .or_else(|| self.operator(other))
                 .ok_or_else(|| UnsupportedTeX(format!("\\{other}"))),
         }
+    }
+
+    /// An operator set as its name, kept apart from an operand that runs on as a
+    /// word, `deg h` rather than `degh`, as TeX spaces it; a bracket follows close.
+    fn named_operator(&self, name: &str) -> Math {
+        let spaced = self
+            .rest()
+            .trim_start()
+            .starts_with(|next: char| next.is_alphanumeric());
+        Math::atom(
+            match spaced {
+                true => format!("{name} "),
+                false => name.to_string(),
+            },
+            HLGroup::Function,
+        )
     }
 
     /// The operator a command name spells, which may run on into the next word:
@@ -958,6 +1027,53 @@ const CONSTANT_COMMANDS: [(&str, &str); 3] = [
     ("gamma", "\u{03B3}"),
     ("infty", "\u{221E}"),
 ];
+/// The Greek letters TeX names, set as the variables they stand for; `\pi` and
+/// `\gamma` are M2's constants above.
+const GREEK: [(&str, &str); 36] = [
+    ("alpha", "α"),
+    ("beta", "β"),
+    ("delta", "δ"),
+    ("epsilon", "ϵ"),
+    ("varepsilon", "ε"),
+    ("zeta", "ζ"),
+    ("eta", "η"),
+    ("theta", "θ"),
+    ("vartheta", "ϑ"),
+    ("iota", "ι"),
+    ("kappa", "κ"),
+    ("lambda", "λ"),
+    ("mu", "μ"),
+    ("nu", "ν"),
+    ("xi", "ξ"),
+    ("rho", "ρ"),
+    ("varrho", "ϱ"),
+    ("sigma", "σ"),
+    ("tau", "τ"),
+    ("upsilon", "υ"),
+    ("phi", "ϕ"),
+    ("varphi", "φ"),
+    ("chi", "χ"),
+    ("psi", "ψ"),
+    ("omega", "ω"),
+    ("Gamma", "Γ"),
+    ("Delta", "Δ"),
+    ("Theta", "Θ"),
+    ("Lambda", "Λ"),
+    ("Xi", "Ξ"),
+    ("Pi", "Π"),
+    ("Sigma", "Σ"),
+    ("Upsilon", "Υ"),
+    ("Phi", "Φ"),
+    ("Psi", "Ψ"),
+    ("Omega", "Ω"),
+];
+/// The operators TeX sets upright as words, as `\log` is: LaTeX's own and
+/// `\hom`, `\coker`, which algebra writes alike.
+const NAMED_OPERATORS: [&str; 34] = [
+    "arg", "cos", "cosh", "cot", "coth", "csc", "deg", "det", "dim", "exp", "gcd", "hom", "inf",
+    "ker", "lg", "lim", "liminf", "limsup", "ln", "log", "max", "min", "Pr", "sec", "sin",
+    "sinh", "sup", "tan", "tanh", "coker", "rank", "Hom", "Ext", "Tor",
+];
 /// M2's constants TeX spells as one letter in a font: `ii`, as M2 sets it and as it
 /// is drawn, and `CatalanConstant`.
 const CONSTANT_LETTERS: [(&str, &str); 3] = [("mathbf", "i"), ("mathrm", "i"), ("mathrm", "G")];
@@ -968,7 +1084,7 @@ const NULL_WORD: &str = "null";
 
 // @##issue non-ascii glyphs set in random place
 /// Operators TeX spells as a command, with the glyph a terminal draws for each.
-const OPERATOR_COMMANDS: [(&str, &str); 19] = [
+const OPERATOR_COMMANDS: [(&str, &str); 24] = [
     ("wedge", "\u{2227}"),
     ("vee", "\u{2228}"),
     ("otimes", "\u{2297}"),
@@ -987,6 +1103,13 @@ const OPERATOR_COMMANDS: [(&str, &str); 19] = [
     ("leq", "\u{2264}"),
     ("geq", "\u{2265}"),
     ("cdots", "\u{22EF}"),
+    // amsmath's dots by what they stand between: centred between operators and
+    // factors, low between commas.
+    ("dotsb", "\u{22EF}"),
+    ("dotsm", "\u{22EF}"),
+    ("dotsi", "\u{22EF}"),
+    ("dotsc", "..."),
+    ("dots", "..."),
     // U+2026 is East Asian Ambiguous, so the low ellipsis is three full stops.
     ("ldots", "..."),
 ];
@@ -1425,31 +1548,36 @@ impl Math {
         }
     }
 
-    /// Whether this holds rows read one after another, as lines of text are: a
-    /// vertical list's entries, an aligned grid's. Cut into strips, a picture of it
-    /// would scatter the rows' tails beneath it.
-    pub fn reads_in_lines(&self) -> bool {
+    /// This once what shows nothing is set aside: the one part of a row whose
+    /// others are blank, as a vertical list's rows are between its margins, and
+    /// what a link links.
+    pub fn alone(&self) -> &Self {
         match self {
-            Self::Grid {
-                kind: GridKind::LeftAligned | GridKind::Aligned,
-                ..
+            Self::Linked { body, .. } => body.alone(),
+            Self::Row(parts) => {
+                let mut shown = parts.iter().filter(|part| !part.is_blank());
+                match (shown.next(), shown.next()) {
+                    (Some(only), None) => only.alone(),
+                    _ => self,
+                }
             }
-            | Self::Diagram(_) => true,
-            Self::Grid { rows, .. } | Self::AnnotatedMatrix { rows, .. } => {
-                rows.iter().flatten().any(Self::reads_in_lines)
-            }
-            Self::Row(pieces) => pieces.iter().any(Self::reads_in_lines),
-            Self::Linked { body, .. } | Self::Delimited { body, .. } => body.reads_in_lines(),
-            Self::Over { base, label } | Self::Under { base, label } => {
-                base.reads_in_lines() || label.reads_in_lines()
-            }
-            Self::Power { base, exponent } => base.reads_in_lines() || exponent.reads_in_lines(),
-            Self::Index { base, subscript } => base.reads_in_lines() || subscript.reads_in_lines(),
-            Self::Fraction {
-                numerator,
-                denominator,
-            } => numerator.reads_in_lines() || denominator.reads_in_lines(),
-            Self::Atom { .. } | Self::Native { .. } | Self::Space => false,
+            _ => self,
+        }
+    }
+
+    /// The grid of rows read as lines this alone is, as a vertical list's
+    /// entries are between their margins.
+    pub fn lines_alone(&self) -> Option<&Self> {
+        Some(self.alone())
+            .filter(|alone| matches!(alone, Self::Grid { kind, .. } if kind.reads_in_lines()))
+    }
+
+    /// Whether nothing of this shows.
+    fn is_blank(&self) -> bool {
+        match self {
+            Self::Space => true,
+            Self::Atom { text, .. } => text.trim().is_empty(),
+            _ => false,
         }
     }
 

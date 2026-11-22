@@ -1,7 +1,6 @@
 //! Views of the session shown beside its shell: what each shows, the pane state
 //! it scrolls with, and how the editor draws it.
 
-use crate::ui::glyphs::{Glyphs, Spelled};
 use crate::ui::settling::SettlingWidth;
 use std::fs;
 use std::path::PathBuf;
@@ -383,18 +382,6 @@ impl Editor {
         match view_focused && self.pickers.is_empty() && !self.cancel_hint_shown {
             true => StatusLine::default().render(&status, area, buffer),
             false => self.status_line.render(&status, area, buffer),
-        }
-    }
-
-    /// The column between a split's panes, a faint frame line over the canvas of
-    /// the view on its right.
-    pub fn draw_divider(&self, frame: &mut Frame, area: Rect) {
-        let style = self.view_canvas().patch(scheme().view_divider());
-        let buffer = frame.buffer_mut();
-        for y in area.top()..area.bottom() {
-            buffer[(area.x, y)]
-                .set_symbol(Glyphs::SplitDivider.current())
-                .set_style(style);
         }
     }
 

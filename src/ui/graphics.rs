@@ -23,16 +23,15 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Size;
 use ratatui::text::Line;
 use ratatui_image::picker::{Picker, ProtocolType};
-use std::ops::Range;
 
-use resvg::tiny_skia::{Pixmap, PixmapPaint, Transform};
+use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg::{Options, Tree};
 
 use crate::env::ENV;
 use crate::ui::config::{TypesetSizing, UI};
 use crate::ui::debug::mebibytes;
 use kitty::{ImageId, KittyImage, Passthrough, Piece};
-use ratex::{Break, Rgb, EM, PADDING};
+use ratex::{Rgb, Set, Source, EM, PADDING};
 
 // @##magic
 /// Lets this pane's escape sequences through tmux to the terminal.
@@ -52,6 +51,9 @@ pub const HIDDEN_VIEW_DISTANCE: usize = usize::MAX;
 const TERMINAL_IMAGE_BUDGET: usize = 96 * 1024 * 1024;
 /// Bytes a pixel takes once the terminal has decoded a picture.
 const DECODED_PIXEL_BYTES: usize = 4;
+/// Dots an inch at which a point, the unit RaTeX sizes its pictures in, is one
+/// pixel, so a picture is read in the units it was drawn in.
+const POINT_PER_PIXEL_DPI: f32 = 72.0;
 
 /// A terminal that shows pictures: the pixels in one of its cells, and how escape
 /// sequences reach it.
@@ -191,32 +193,14 @@ pub fn refresh_cell_size() -> bool {
     true
 }
 
-/// A formula to draw: its TeX, that TeX with theme colour scopes, the M2 code
-/// a copy of its picture gives, and how far apart its matrix rows stand.
+/// A formula to draw: what it is set from and the M2 code a copy of its picture
+/// gives.
 #[derive(Clone, Copy, Debug)]
 pub struct Typesetting<'a> {
-    pub tex: &'a str,
-    pub painted: &'a str,
+    pub source: &'a Source,
     pub code: &'a str,
-    pub matrix_row_spacing_percent: u16,
     /// Preferred size relative to terminal text.
     pub scale_percent: u16,
-    pub slicing: Slicing,
-}
-
-/// What a formula too wide for its room may do about it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Slicing {
-    /// Be cut into strips at the breaks its writer marked, set one under
-    /// another, as a long sum is.
-    AtBreaks,
-    /// Be cut into strips after its separators, as TeX written without marks
-    /// can only be.
-    AtSeparators,
-    /// Stay whole, shrinking as little as a picture may: its rows read as lines,
-    /// and a cut through all of them at once would scatter their tails beneath
-    /// the picture.
-    Whole,
 }
 
 /// A formula's placeholder lines and the one its baseline runs through.
@@ -238,7 +222,7 @@ enum Placement {
 
 /// Typeset `formula` in `colour` to stand beside text, retaining its code for
 /// copying. Returns placeholder lines no wider than `width`: the formula broken
-/// into rows where it may be, shrunk only for a row no break shortens, by at most
+/// into lines where it may be, shrunk only for what no break shortens, by at most
 /// [`UI::MAX_MATH_SHRINK_PERCENT`] and never below the smallest maths size, then
 /// cut off at the right edge; or none when
 /// pictures are unavailable.
@@ -389,17 +373,18 @@ fn gallery() -> MutexGuard<'static, Gallery> {
         .expect("the gallery lock is never held across a panic")
 }
 
-/// A formula as set in one colour at one matrix row spacing.
-type FormulaKey = (String, Rgb, u16);
+/// A formula as set in one colour.
+type FormulaKey = (Source, Rgb);
+/// A formula as laid out for a room: the room in ems, bit for bit, or none when
+/// it has all the room it wants, where every wider room lays it out the same.
+type LayoutKey = (FormulaKey, Option<u64>);
 /// A formula's picture at a column count and cell pixel size, for its copied code.
 /// Values sharing TeX but not code each get their own picture to copy from.
-type ImageKey = (FormulaKey, u16, Size, String, Placement, u16, Slicing);
+type ImageKey = (LayoutKey, u16, Size, String, Placement, u16);
 
-/// A formula's vector picture and the places it may be cut into rows.
+/// A formula's vector picture, as laid out for one room.
 struct Formula {
     tree: Tree,
-    breaks: Vec<Break>,
-    separators: Vec<Break>,
     /// Where the text baseline runs down the picture, as a share of its height.
     baseline: f32,
 }
@@ -408,8 +393,10 @@ struct Formula {
 /// what draws a picture again is kept, never its pixels: those are made when the
 /// terminal is sent them, and the terminal holds no more than its budget.
 struct Gallery {
-    /// Each formula's vector picture, or none when RaTeX refused it.
-    formulas: HashMap<FormulaKey, Option<Arc<Formula>>>,
+    /// Each formula typeset, or none when RaTeX refused it.
+    sets: HashMap<FormulaKey, Option<Arc<Set>>>,
+    /// Each formula's vector picture in each room it was laid out for.
+    formulas: HashMap<LayoutKey, Option<Arc<Formula>>>,
     /// Each formula rasterised to a number of columns at a cell pixel size.
     images: HashMap<ImageKey, Option<Arc<KittyImage>>>,
     last_id: ImageId,
@@ -495,6 +482,7 @@ impl Default for Gallery {
     fn default() -> Self {
         let (jobs, encoded) = encoder();
         Self {
+            sets: Default::default(),
             formulas: Default::default(),
             images: Default::default(),
             last_id: ImageId::from(rand::random::<u32>()),
@@ -517,45 +505,48 @@ impl Gallery {
     fn formula(
         &mut self,
         Typesetting {
-            tex,
-            painted,
+            source,
             code,
-            matrix_row_spacing_percent,
             scale_percent,
-            slicing,
         }: Typesetting,
         colour: Rgb,
         canvas: Canvas,
         width: u16,
         placement: Placement,
     ) -> Option<(Arc<KittyImage>, usize)> {
-        let key = (painted.to_string(), colour, matrix_row_spacing_percent);
+        let key = (source.clone(), colour);
+        let set = self
+            .sets
+            .entry(key.clone())
+            .or_insert_with(|| Set::new(source, colour).ok().map(Arc::new))
+            .clone()?;
+        let fit = Fit::new(canvas, width, scale_percent);
+        let layout = (key, (set.width() > fit.room).then(|| fit.room.to_bits()));
         let formula = self
             .formulas
-            .entry(key.clone())
+            .entry(layout.clone())
             .or_insert_with(|| {
-                let typeset =
-                    ratex::svg_colored(tex, painted, colour, matrix_row_spacing_percent).ok()?;
-                let tree = Tree::from_str(&typeset.svg, &Options::default()).ok()?;
+                let picture = set.picture(fit.room, f64::from(fit.least)).ok()?;
+                let options = Options {
+                    dpi: POINT_PER_PIXEL_DPI,
+                    ..Options::default()
+                };
+                let tree = Tree::from_str(&picture.svg, &options).ok()?;
                 Some(Arc::new(Formula {
                     tree,
-                    breaks: typeset.breaks,
-                    separators: typeset.separators,
-                    baseline: typeset.baseline,
+                    baseline: picture.baseline,
                 }))
             })
             .clone()?;
-        let raster =
-            Raster::fitted_at_scale(&formula, canvas, width, placement, scale_percent, slicing);
-        let baseline = raster.baseline_row();
+        let raster = Raster::fitted(&formula, canvas, width, placement, fit);
+        let baseline = usize::from(raster.baseline);
         let image_key = (
-            key,
+            layout,
             raster.cells.width,
             canvas.cell,
             code.to_string(),
             placement,
             scale_percent,
-            slicing,
         );
         if let Some(image) = self.images.get(&image_key) {
             return image.clone().map(|image| (image, baseline));
@@ -664,7 +655,7 @@ impl Gallery {
 
     fn usage(&self) -> Usage {
         Usage {
-            formulas: self.formulas.values().flatten().count(),
+            formulas: self.sets.values().flatten().count(),
             images: self.recipes.len(),
             resident: self.resident.len(),
             resident_bytes: self.resident_bytes(),
@@ -672,32 +663,60 @@ impl Gallery {
     }
 }
 
-/// How a vector picture lands on the cell grid: its scale, the slices of it
-/// stacked as rows, and the cells it covers.
+/// How a formula fits a room some cells wide.
+#[derive(Clone, Copy, Debug)]
+struct Fit {
+    /// Pixels in an em of the formula at its own size.
+    em: f32,
+    /// Ems of ink the room holds at that size.
+    room: f64,
+    /// The least of its size the formula may shrink to: by a little at most,
+    /// and never below the smallest size the maths size setting offers.
+    least: f32,
+}
+
+impl Fit {
+    /// The fit of a formula set at `scale_percent` in `width` cells of `canvas`.
+    /// Typewriter text in a formula stands in cells
+    /// [`ratex::typewriter_advance`] of an em wide; the em is the one that
+    /// makes those the terminal's own cells, so code in a formula is the size
+    /// of the code around it.
+    fn new(canvas: Canvas, width: u16, scale_percent: u16) -> Self {
+        let cell_width = f32::from(canvas.cell.width);
+        let em = cell_width / ratex::typewriter_advance() as f32 * f32::from(scale_percent) / 100.0;
+        let smallest = f32::from(UI::MIN_MATH_SIZE_PERCENT) / f32::from(scale_percent);
+        let least = 1.0 - f32::from(UI::MAX_MATH_SHRINK_PERCENT) / 100.0;
+        Self {
+            em,
+            room: f64::from(f32::from(width) * cell_width / em - 2.0 * PADDING / EM),
+            least: smallest.max(least).min(1.0),
+        }
+    }
+}
+
+/// How a vector picture lands on the cell grid: its scale and the cells it
+/// covers.
 #[derive(Clone)]
 struct Raster {
+    /// Pixels to one of the picture's units.
     scale: f32,
     top: f32,
-    /// Where the picture's top edge lands within a row, in pixels.
+    /// Where the picture's top edge lands within its rows, in pixels.
     offset: f32,
-    /// The picture's slices, left to right, each drawn below the one before.
-    rows: Vec<Range<f32>>,
-    /// Terminal rows each slice stands in.
-    row_cells: u16,
-    /// Which of a slice's rows its baseline runs through.
-    slice_baseline: u16,
+    /// Which of its rows its baseline runs through, the one a neighbour lines
+    /// up with.
+    baseline: u16,
     cells: Size,
     cell: Size,
 }
 
 impl Raster {
-    fn fitted_at_scale(
+    fn fitted(
         formula: &Formula,
         canvas: Canvas,
         width: u16,
         placement: Placement,
-        scale_percent: u16,
-        slicing: Slicing,
+        fit: Fit,
     ) -> Self {
         let tree = &formula.tree;
         // Font ascender/descender metrics can reserve more space than the ink,
@@ -707,31 +726,12 @@ impl Raster {
         let height = bounds.height() + 2.0 * PADDING;
         let cell_width = f32::from(canvas.cell.width);
         let cell_height = f32::from(canvas.cell.height);
-        let natural =
-            cell_height * TypesetSizing::EM_PER_CELL_HEIGHT / EM * f32::from(scale_percent) / 100.0;
-        let room = f32::from(width) * cell_width / natural;
+        let natural = fit.em / EM;
         let across = tree.size().width();
-        let breaks = match slicing {
-            Slicing::AtBreaks => formula.breaks.as_slice(),
-            Slicing::AtSeparators => formula.separators.as_slice(),
-            Slicing::Whole => &[],
-        };
-        let breaks = breaks
-            .iter()
-            .map(|cut| cut.across(across))
-            .collect::<Vec<_>>();
-        let rows = wrapped(across, &breaks, room);
-        let widest = rows
-            .iter()
-            .map(|row| row.end - row.start)
-            .fold(0.0, f32::max);
         // A picture keeps its size wherever breaking brings it inside, so text
-        // reads at one size throughout the feed. Only a row no break shortens
-        // shrinks, by a little at most and never below the smallest size the
-        // maths size setting offers; what still passes the edge is cut off.
-        let smallest = f32::from(UI::MIN_MATH_SIZE_PERCENT) / f32::from(scale_percent);
-        let least = 1.0 - f32::from(UI::MAX_MATH_SHRINK_PERCENT) / 100.0;
-        let shrink = (room / widest).clamp(smallest.max(least).min(1.0), 1.0);
+        // reads at one size throughout the feed. Only what no break shortens
+        // shrinks, as little as it may; what still passes the edge is cut off.
+        let shrink = (f32::from(width) * cell_width / (across * natural)).clamp(fit.least, 1.0);
         let scale = natural * shrink;
         let cover = |extent: f32, cell: f32| ((extent * scale / cell).ceil() as u16).max(1);
         let above = (formula.baseline * tree.size().height() - top) * scale;
@@ -745,7 +745,7 @@ impl Raster {
                 .max(0.0) as u16
         };
         let covered = cover(height, cell_height);
-        let (row_cells, slice_baseline) = match placement {
+        let (rows, baseline) = match placement {
             _ if covered == 1 => (1, 0),
             Placement::Alone => (covered, (covered - 1) / 2),
             Placement::AmongText => {
@@ -754,14 +754,14 @@ impl Raster {
                 (rows_above + 1 + rows_below, rows_above)
             }
         };
-        let row_height = f32::from(row_cells) * cell_height;
+        let rows_height = f32::from(rows) * cell_height;
         let offset = if placement == Placement::Alone && covered > 1 {
-            (row_height - height * scale) / 2.0
+            (rows_height - height * scale) / 2.0
         } else {
             // On the text baseline where the ink leaves room for it, else as close
             // as it can sit without its ink being cut off.
-            (f32::from(slice_baseline) * cell_height + text_baseline)
-                .min(row_height - below)
+            (f32::from(baseline) * cell_height + text_baseline)
+                .min(rows_height - below)
                 .max(above - padding)
                 - above
         };
@@ -769,69 +769,22 @@ impl Raster {
             scale,
             top,
             offset,
-            cells: Size::new(
-                cover(widest, cell_width).min(width),
-                row_cells * rows.len() as u16,
-            ),
-            rows,
-            row_cells,
-            slice_baseline,
+            baseline,
+            cells: Size::new(cover(across, cell_width).min(width), rows),
             cell: canvas.cell,
         }
     }
 
-    /// The row a neighbour lines up with: the baseline's in a picture of one slice,
-    /// the middle one of several.
-    fn baseline_row(&self) -> usize {
-        match self.rows.len() {
-            1 => usize::from(self.slice_baseline),
-            _ => usize::from(self.cells.height.saturating_sub(1) / 2),
-        }
-    }
-
-    /// The picture's rows drawn across exactly its cells, as PNG.
+    /// The picture drawn across exactly its cells, as PNG; what passes them is
+    /// cut away.
     fn png(&self, tree: &Tree) -> Option<Vec<u8>> {
-        let width = u32::from(self.cells.width) * u32::from(self.cell.width);
-        let row_height = u32::from(self.row_cells) * u32::from(self.cell.height);
-        let mut pixmap = Pixmap::new(width, row_height * self.rows.len() as u32)?;
-        for (index, row) in self.rows.iter().enumerate() {
-            // A slice as wide as its row, so what follows its end is cut away.
-            let slice = (((row.end - row.start) * self.scale).ceil() as u32).clamp(1, width);
-            let mut strip = Pixmap::new(slice, row_height)?;
-            let transform = Transform::from_scale(self.scale, self.scale)
-                .post_translate(-row.start * self.scale, self.offset - self.top * self.scale);
-            resvg::render(tree, transform, &mut strip.as_mut());
-            pixmap.draw_pixmap(
-                0,
-                (row_height * index as u32) as i32,
-                strip.as_ref(),
-                &PixmapPaint::default(),
-                Transform::identity(),
-                None,
-            );
-        }
+        let mut pixmap = Pixmap::new(
+            u32::from(self.cells.width) * u32::from(self.cell.width),
+            u32::from(self.cells.height) * u32::from(self.cell.height),
+        )?;
+        let transform = Transform::from_scale(self.scale, self.scale)
+            .post_translate(0.0, self.offset - self.top * self.scale);
+        resvg::render(tree, transform, &mut pixmap.as_mut());
         pixmap.encode_png().ok()
     }
-}
-
-/// The slices of a picture `width` units wide, each at most `room` wide where
-/// `breaks` allow: every row takes the last break that still fits, and a row
-/// with none that fits runs on to the first it can.
-fn wrapped(width: f32, breaks: &[Break], room: f32) -> Vec<Range<f32>> {
-    let mut rows = Vec::new();
-    let mut start = 0.0;
-    while width - start > room {
-        let ahead = || breaks.iter().filter(|cut| cut.start > start);
-        let Some(cut) = ahead()
-            .take_while(|cut| cut.end - start <= room)
-            .last()
-            .or_else(|| ahead().next())
-        else {
-            break;
-        };
-        rows.push(start..cut.end);
-        start = cut.start;
-    }
-    rows.push(start..width);
-    rows
 }

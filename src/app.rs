@@ -12,6 +12,7 @@ use std::fs;
 use std::io;
 use std::iter;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use crossterm::clipboard::CopyToClipboard;
@@ -28,8 +29,9 @@ use self::documentation::DocumentationBrowser;
 use self::panes::{pane_layout, ratio_for_width, Pane, Panes, MIN_PANE_WIDTH};
 use self::session::Session;
 use self::tabs::{TabId, Tabs, Target};
+use crate::backend::installed::InstalledSymbols;
 use crate::backend::DocPage;
-use crate::backend::{Announcement, M2Backend, Versions};
+use crate::backend::{m2_string_literal, Announcement, M2Backend, Versions};
 use crate::code::file as code_file;
 use crate::code::location::SourceLink;
 use crate::code::location::{SourcePoint, SourceRange};
@@ -66,8 +68,9 @@ const NOTHING_KNOWN: &str = "nothing is known about this";
 const CODE_NOT_IN_SESSION: &str = "that code is not part of the running session";
 const NO_DEFINITION: &str = "no definition found";
 const NO_NAME_AT_POINT: &str = "no name here to look up";
-/// Rows above the view beside the session: its title, then a cell for each tab.
-const PREVIEW_HEADER_ROWS: u16 = 2;
+/// Rows above the view beside the session: its title, a cell for each tab, and
+/// the rule setting them off from the view.
+const PREVIEW_HEADER_ROWS: u16 = 3;
 /// Columns from one cell of that header to the next: its icon and a gap.
 const HEADER_CELL_STEP: u16 = 2;
 
@@ -146,6 +149,9 @@ struct App {
     /// The cursor as last seen, and since when it holds.
     cursor_seen: Option<(CursorAt, Instant)>,
     updates: UpdateChecks,
+    /// The symbols installed packages document, until they are read and handed
+    /// to the editor.
+    installed: Option<Receiver<InstalledSymbols>>,
     /// When the session was last seen evaluating.
     last_busy: Option<Instant>,
 }
@@ -195,6 +201,7 @@ impl App {
             asked_at: None,
             cursor_seen: None,
             updates: UpdateChecks::new(),
+            installed: Some(InstalledSymbols::read_in_background()),
             last_busy: None,
         };
         let _ = code_file::archive_previous_session();
@@ -607,6 +614,9 @@ impl App {
                     Err(update) => workspace.editor.apply(update),
                 }
             }
+            Reaction::Import(package) => {
+                self.run_code(&format!("needsPackage {}", m2_string_literal(package)))
+            }
             Reaction::Quit => false,
         }
     }
@@ -1014,9 +1024,21 @@ impl App {
             .unwrap_or_default();
         frame.render_widget(
             Paragraph::new(title)
-                .style(scheme().style(HLGroup::ViewLabelActive))
+                .style(scheme().style(HLGroup::PanelTitle))
                 .alignment(Alignment::Center),
             Rect::new(area.x, area.y, area.width, 1),
+        );
+        // The rule joins the panel's left side, a column before its inside.
+        let rule = Glyphs::PanelRuleJoint.current().to_string()
+            + &Glyphs::PanelRule.current().repeat(area.width.into());
+        frame.render_widget(
+            Paragraph::new(rule).style(scheme().view_divider()),
+            Rect::new(
+                area.x.saturating_sub(1),
+                area.y + PREVIEW_HEADER_ROWS - 1,
+                area.width + 1,
+                1,
+            ),
         );
         let fixed = ViewKind::PREVIEWS;
         let fixed_start = area
@@ -1159,20 +1181,23 @@ impl App {
             .get_mut(Panes::SPLIT)
             .filter(|area| !area.is_empty())
         {
+            // The panel slides in from the screen's right edge, open on that side;
+            // its left side is the divider the panes are resized by.
+            let outline = self.divider.map_or(*area, |divider| Rect {
+                x: divider.x,
+                width: area.width + divider.width,
+                ..*area
+            });
             let border = TuiBlock::default()
                 .style(self.workspace.editor.view_canvas())
-                .borders(Borders::ALL)
-                .border_set(Glyphs::SQUARE_BORDER.current())
+                .borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM)
+                .border_set(Glyphs::ROUNDED_BORDER.current())
                 .border_style(scheme().view_divider());
-            let inner = border.inner(*area);
-            frame.render_widget(border, *area);
-            *area = inner;
+            *area = border.inner(outline);
+            frame.render_widget(border, outline);
         }
         self.draw_preview_header(frame);
         let workspace = &mut self.workspace;
-        if let Some(divider) = self.divider {
-            workspace.editor.draw_divider(frame, divider);
-        }
         for pane in (0..self.panes.list.len())
             .filter(|pane| *pane != active)
             .chain(iter::once(active))
@@ -1304,8 +1329,11 @@ impl App {
                 Ok(response) => {
                     self.workspace
                         .session
-                        .prepare_documentation(response.document.as_ref());
-                    let (mut blocks, printed, value) = response_blocks(&response, "");
+                        .prepare_response(&response);
+                    // The warnings M2 gives while it assembles a page, such as an
+                    // ambiguous link, concern the documentation's sources, not its reader.
+                    let (_, printed, value) = response_blocks(&response, "");
+                    let mut blocks: Vec<Box<dyn Block>> = Vec::new();
                     if let Some(printed) = printed {
                         blocks.push(Box::new(printed));
                     }
@@ -1328,6 +1356,18 @@ impl App {
         for update in self.workspace.session.poll() {
             dirty = true;
             running &= self.workspace.editor.apply(update);
+        }
+        if let Some(installed) = self
+            .installed
+            .as_ref()
+            .and_then(|read| read.try_recv().ok())
+        {
+            self.installed = None;
+            dirty = true;
+            running &= self
+                .workspace
+                .editor
+                .apply(EditorUpdate::InstalledSymbols(installed));
         }
         if self.workspace.session.take_restarted() {
             self.updates.forget();

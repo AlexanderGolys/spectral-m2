@@ -441,6 +441,12 @@ pub fn page(html: &str) -> u64 {
     hasher.finish()
 }
 
+/// The page a value's `toExternalString` is analysed as: its code alone, as a
+/// page holding nothing else.
+pub fn external_page(code: &str) -> u64 {
+    page(code)
+}
+
 /// Every example the page records, in the order M2 ran them.
 pub fn examples(html: &str, example_width: usize) -> Vec<ArchivedExample> {
     preformatted_sources(html)
@@ -1079,7 +1085,8 @@ fn decorate_inline(node: &Handle, described: &mut bool, page: u64) {
     }
     if tag.as_deref() == Some("a") && attribute(node, TOPIC_ATTRIBUTE).is_some() {
         let children = node.children.take();
-        node.children.replace(vec![group_link(HLGroup::MarkupTopicLink, children)]);
+        node.children
+            .replace(vec![group_link(HLGroup::MarkupTopicLink, children)]);
     } else if tag.as_deref() == Some("a") && is_code_link(node) {
         let children = node.children.take();
         node.children.replace(vec![adopt("code", children)]);

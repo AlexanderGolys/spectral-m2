@@ -48,6 +48,8 @@ pub enum Action {
     GoToDefinition = "go to where the name at the cursor is defined",
     GoToDocumentation = "open the documentation of the name at the cursor beside the session",
     FormatInput = "format the input",
+    ImportPackage =
+        "load the package documenting a name the last error found unbound, or the one named",
     ToggleViewCursor = "move the cursor into the feed or the view beside it, and back",
 }
 

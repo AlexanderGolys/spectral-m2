@@ -174,4 +174,6 @@ StatuslineHintLabel = { link = "Muted" }
 StatuslineState = { link = "Muted" }
 ViewLabelActive = { link = "Info" }
 ViewLabelInactive = { link = "Muted" }
+# What the view beside the session shows, as its header names it.
+PanelTitle = { link = "ViewLabelActive", bold = true }
 Command = { link = "Accent" }
